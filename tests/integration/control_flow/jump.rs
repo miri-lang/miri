@@ -170,3 +170,94 @@ print(f"{count}")
         "9", // outer: 3 iters; inner: 3 each (skips j=2) = 9
     );
 }
+
+#[test]
+fn test_postfix_if_on_break() {
+    assert_runs_with_output(
+        r#"
+use system.io
+var x = 0
+while true
+    x = x + 1
+    break if x >= 5
+print(f"{x}")
+    "#,
+        "5",
+    );
+}
+
+#[test]
+fn test_postfix_unless_on_break() {
+    assert_runs_with_output(
+        r#"
+use system.io
+var x = 0
+while true
+    x = x + 1
+    break unless x < 5
+print(f"{x}")
+    "#,
+        "5",
+    );
+}
+
+#[test]
+fn test_postfix_if_on_continue() {
+    assert_runs_with_output(
+        r#"
+use system.io
+var sum = 0
+for i in 1..10
+    continue if i % 2 == 0
+    sum = sum + i
+print(f"{sum}")
+    "#,
+        "25", // 1+3+5+7+9 = 25
+    );
+}
+
+#[test]
+fn test_postfix_unless_on_continue() {
+    assert_runs_with_output(
+        r#"
+use system.io
+var sum = 0
+for i in 1..10
+    continue unless i % 2 == 1
+    sum = sum + i
+print(f"{sum}")
+    "#,
+        "25", // keeps only odd i
+    );
+}
+
+#[test]
+fn test_postfix_if_on_bare_return() {
+    assert_runs_with_output(
+        r#"
+use system.io
+fn classify(n int)
+    print("[small]")
+    return if n < 10
+    print("[big]")
+classify(3)
+classify(42)
+    "#,
+        "[small][small][big]",
+    );
+}
+
+#[test]
+fn test_postfix_if_false_does_not_jump() {
+    assert_runs_with_output(
+        r#"
+use system.io
+var sum = 0
+for i in 1..5
+    break if i > 100
+    sum = sum + i
+print(f"{sum}")
+    "#,
+        "10", // 1+2+3+4, never breaks
+    );
+}

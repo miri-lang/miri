@@ -773,35 +773,60 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn return_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Return)?;
-        let expression = if self.lookahead_is_expression_end() {
+        let expression = if self.lookahead_is_expression_end() || self.lookahead_is_postfix_guard()
+        {
             None
         } else {
             opt_expr(self.expression()?)
         };
+        let statement = self.apply_postfix_jump_guard(ast::return_statement(expression))?;
         self.eat_statement_end()?;
-        Ok(ast::return_statement(expression))
+        Ok(statement)
     }
 
     /*
         BreakStatement
-            : 'break' EXPRESSION_END
+            : 'break' ('if' | 'unless' Expression)? EXPRESSION_END
             ;
     */
     pub(crate) fn break_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Break)?;
+        let statement = self.apply_postfix_jump_guard(ast::break_statement())?;
         self.eat_statement_end()?;
-        Ok(ast::break_statement())
+        Ok(statement)
     }
 
     /*
         ContinueStatement
-            : 'continue' EXPRESSION_END
+            : 'continue' ('if' | 'unless' Expression)? EXPRESSION_END
             ;
     */
     pub(crate) fn continue_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Continue)?;
+        let statement = self.apply_postfix_jump_guard(ast::continue_statement())?;
         self.eat_statement_end()?;
-        Ok(ast::continue_statement())
+        Ok(statement)
+    }
+
+    fn lookahead_is_postfix_guard(&self) -> bool {
+        self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless)
+    }
+
+    /// Wraps a jump statement in a trailing `if`/`unless` guard when one
+    /// follows: `break if cond` is equivalent to `if cond: break`. Returns the
+    /// jump unchanged when no guard is present.
+    fn apply_postfix_jump_guard(&mut self, jump: Statement) -> Result<Statement, SyntaxError> {
+        if self.match_lookahead_type(|t| t == &Token::If) {
+            self.eat_token(&Token::If)?;
+            let condition = self.expression()?;
+            return Ok(ast::if_statement(condition, jump, None));
+        }
+        if self.match_lookahead_type(|t| t == &Token::Unless) {
+            self.eat_token(&Token::Unless)?;
+            let condition = self.expression()?;
+            return Ok(ast::unless_statement(condition, jump, None));
+        }
+        Ok(jump)
     }
 
     /*
