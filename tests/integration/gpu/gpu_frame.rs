@@ -832,3 +832,50 @@ println(f"{h[0]}")
 // (1) Compiles without error
 // (2) Runs natively with correct deterministic output
 // Both are tested via the demo_game_of_life_web test in tests/gpu/demos.rs
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_repeat_unrolls_passes() {
+    // A `for _ in 0..k` repeat inside a `gpu frame` block unrolls to `k` copies
+    // of its passes. Two passes ping-pong a<->b adding 1 each, over 3 iterations
+    // (6 increments): a starts at 1.0, ends at 7.0.
+    let code = r#"use system.collections.array
+use system.io
+
+gpu var a = Array<f32, 16>()
+gpu var b = Array<f32, 16>()
+
+gpu forall i in 0..16
+    a[i] = 1.0
+    b[i] = 0.0
+
+gpu frame
+    for _ in 0..3
+        gpu forall i in 0..16
+            b[i] = a[i] + 1.0
+        gpu forall i in 0..16
+            a[i] = b[i] + 1.0
+
+let h = a
+println(f"a0={h[0]}")
+"#;
+    crate::integration::utils::assert_runs_with_output(code, "a0=7");
+}
+
+#[test]
+fn test_gpu_frame_repeat_non_forall_body_rejected() {
+    // A repeat body may only contain `gpu forall` passes.
+    let code = r#"use system.collections.array
+use system.io
+
+gpu var a = Array<f32, 16>()
+
+gpu frame
+    for _ in 0..3
+        println("not a pass")
+"#;
+    assert_compiler_error(code, "gpu forall");
+}

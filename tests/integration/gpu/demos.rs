@@ -238,3 +238,22 @@ fn demo_particles_web() {
     let source = include_str!("../../../examples/gpu/web/particles.mi");
     assert_gpu_runs_with_output(source, "surface_total=35753440");
 }
+
+/// fluid_web: Stam-style stable-fluids simulation, the frame-graph stress test.
+/// A `gpu frame` block runs the full pressure-projection pipeline as ordered
+/// passes over ping-ponged fields: splat, semi-Lagrangian advect (velocity then
+/// dye, manual bilinear), divergence, an 18-iteration Jacobi pressure solve
+/// (written as `for _ in 0..9` of two ping-pong passes — the repeated-pass
+/// unroll), gradient subtraction, and a gamma tone-mapped display. The native
+/// run uses zero pointer input, so an ambient swirl drives the field; the smoke
+/// value is the whole-field dye-green total (scaled to milli-units), a finite
+/// deterministic integer that proves the chain runs without NaN blow-up.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_fluid_web() {
+    let source = include_str!("../../../examples/gpu/web/fluid.mi");
+    assert_gpu_runs_with_output(source, "dye_sum_milli=10266");
+}
