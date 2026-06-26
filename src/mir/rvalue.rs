@@ -229,6 +229,7 @@ impl fmt::Display for Rvalue {
 /// | BlockIdx     | blockIdx        | threadgroup_position_in_grid | WorkgroupId         | workgroup_id            |
 /// | BlockDim     | blockDim        | threads_per_threadgroup  | WorkgroupSize       | workgroup_size (const)  |
 /// | GridDim      | gridDim         | threadgroups_per_grid    | NumWorkgroups       | num_workgroups          |
+/// | GlobalIdx    | blockIdx*blockDim+threadIdx | thread_position_in_grid | GlobalInvocationId | global_invocation_id   |
 /// | SyncThreads  | __syncthreads() | threadgroup_barrier()    | OpControlBarrier    | workgroupBarrier()      |
 ///
 /// *Note: SPIR-V/WGSL use flat global IDs by default. ThreadIdx requires computing
@@ -259,6 +260,13 @@ pub enum GpuIntrinsic {
     /// - SPIR-V: `NumWorkgroups`
     /// - WebGPU: `num_workgroups`
     GridDim(Dimension),
+    /// Globally-unique thread index across the whole grid
+    /// (`block_idx * block_dim + thread_idx`).
+    /// - CUDA: `blockIdx * blockDim + threadIdx`
+    /// - Metal: `thread_position_in_grid`
+    /// - SPIR-V: `GlobalInvocationId`
+    /// - WebGPU: `global_invocation_id`
+    GlobalIdx(Dimension),
     /// Synchronize all threads within a block/workgroup.
     /// - CUDA: `__syncthreads()`
     /// - Metal: `threadgroup_barrier(mem_flags::mem_threadgroup)`
@@ -380,6 +388,7 @@ impl fmt::Display for GpuIntrinsic {
             GpuIntrinsic::BlockIdx(d) => write!(f, "gpu_block_idx.{}", d),
             GpuIntrinsic::BlockDim(d) => write!(f, "gpu_block_dim.{}", d),
             GpuIntrinsic::GridDim(d) => write!(f, "gpu_grid_dim.{}", d),
+            GpuIntrinsic::GlobalIdx(d) => write!(f, "gpu_global_idx.{}", d),
             GpuIntrinsic::SyncThreads => write!(f, "gpu_sync_threads"),
         }
     }

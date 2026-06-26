@@ -307,6 +307,7 @@ fn try_gpu_intrinsic(
                         "block_idx" => Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(dim)),
                         "block_dim" => Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(dim)),
                         "grid_dim" => Rvalue::GpuIntrinsic(GpuIntrinsic::GridDim(dim)),
+                        "global_idx" => Rvalue::GpuIntrinsic(GpuIntrinsic::GlobalIdx(dim)),
                         _ => {
                             return Err(LoweringError::unsupported_expression(
                                 format!("Unknown GPU intrinsic: {}", sym),
