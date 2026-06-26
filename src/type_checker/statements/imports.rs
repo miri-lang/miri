@@ -779,6 +779,26 @@ impl TypeChecker {
         Self::scan_dir_for_class_definition(&stdlib_base, type_name, &stdlib_base)
     }
 
+    /// Emits a unified "unknown type, consider importing" diagnostic when
+    /// `type_name` names a stdlib type that exists but is not imported into the
+    /// current scope. Returns `true` if the hint was emitted, signalling the
+    /// caller to suppress its own fallback error so the two "named hidden type"
+    /// paths (the bare collection identifier and the sized-array constructor)
+    /// surface the same actionable message.
+    pub(crate) fn report_hidden_type_import_hint(&mut self, type_name: &str, span: Span) -> bool {
+        match self.suggest_module_for_type(type_name) {
+            Some(module) => {
+                self.report_error_with_help(
+                    format!("Unknown type: {}", type_name),
+                    span,
+                    format!("Consider importing '{}'", module),
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Recursively scans `dir` for a `.mi` file whose top-level declarations
     /// include `class <type_name>`.  Returns the dot-separated module path
     /// (e.g. `"system.collections.array"`) derived from the file's position

@@ -288,6 +288,13 @@ impl TypeChecker {
             "variable"
         };
 
+        // A capitalized identifier that names an unimported stdlib type (e.g.
+        // `List` used without `system.collections.list`) gets the unified
+        // import hint rather than a nearest-name guess.
+        if entity_kind == "type" && self.report_hidden_type_import_hint(name, span) {
+            return;
+        }
+
         let capacity = context.scopes.iter().map(|s| s.len()).sum::<usize>()
             + self.global_scope.len()
             + self.global_type_definitions.len();

@@ -155,3 +155,31 @@ class Foo implements Accelerable
         "Accelerable",
     );
 }
+
+#[test]
+fn test_unimported_list_constructor_suggests_import() {
+    // A named generic collection constructor used without its module must
+    // produce a unified "unknown type, consider importing" hint, not a bare
+    // "Undefined type: List".
+    assert_compiler_error(
+        r#"
+fn main()
+    let x = List<int>()
+        "#,
+        "Consider importing 'system.collections.list'",
+    );
+}
+
+#[test]
+fn test_unimported_array_constructor_suggests_import() {
+    // The sized-array constructor takes a different parse/type path than the
+    // bare collection identifier; it must surface the same import hint instead
+    // of "Type 'Array(int, 3)' is not callable".
+    assert_compiler_error(
+        r#"
+fn main()
+    let x = Array<int, 3>(1, 2, 3)
+        "#,
+        "Consider importing 'system.collections.array'",
+    );
+}
