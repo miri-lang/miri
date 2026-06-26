@@ -161,6 +161,7 @@ gpu fn my_kernel()
     let bx = kernel.block_idx.x
     let bd = kernel.block_dim.x
     let gd = kernel.grid_dim.x
+    let gi = kernel.global_idx.x
 ";
     type_checker_test(input);
 }

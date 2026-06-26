@@ -1230,6 +1230,7 @@ impl<'a> BodyEmitter<'a> {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 self.write_indent()?;
                 let rhs = self.render_rvalue(rvalue)?;
+                let rhs = self.coerce_intrinsic_to_dest(place, rvalue, rhs);
                 if self.is_atomic_buffer_element_write(place) {
                     // Wrap bare writes to atomic buffer elements with atomicStore
                     let rendered = self.render_place(place)?;
@@ -1245,6 +1246,37 @@ impl<'a> BodyEmitter<'a> {
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
             | StatementKind::Nop => Ok(()),
+        }
+    }
+
+    /// Coerces a kernel dimension-intrinsic read to the destination scalar
+    /// width. The WGSL thread/block builtins are `vec3<u32>`, but their MIR
+    /// destination local is `Int` (i32), so a bare assignment is a width
+    /// mismatch naga rejects. When the rvalue is a value-producing dim read and
+    /// the destination is a non-projected `Int` local, wrap it in `i32(...)`.
+    fn coerce_intrinsic_to_dest(&self, place: &Place, rvalue: &Rvalue, rhs: String) -> String {
+        let is_dim_read = matches!(
+            rvalue,
+            Rvalue::GpuIntrinsic(
+                GpuIntrinsic::ThreadIdx(_)
+                    | GpuIntrinsic::BlockIdx(_)
+                    | GpuIntrinsic::BlockDim(_)
+                    | GpuIntrinsic::GridDim(_)
+                    | GpuIntrinsic::GlobalIdx(_),
+            )
+        );
+        if !is_dim_read || !place.projection.is_empty() {
+            return rhs;
+        }
+        let dest_is_int = self
+            .body
+            .local_decls
+            .get(place.local.0)
+            .is_some_and(|decl| matches!(decl.ty.kind, TypeKind::Int));
+        if dest_is_int {
+            format!("i32({})", rhs)
+        } else {
+            rhs
         }
     }
 
@@ -1645,6 +1677,7 @@ impl BodyEmitter<'_> {
                 format!("{}u", self.workgroup_size[dim as usize])
             }
             GpuIntrinsic::GridDim(dim) => format!("{}.{}", NUM_WORKGROUPS, dimension_field(dim)),
+            GpuIntrinsic::GlobalIdx(dim) => format!("{}.{}", GLOBAL_ID, dimension_field(dim)),
             GpuIntrinsic::SyncThreads => "workgroupBarrier()".into(),
         }
     }

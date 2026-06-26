@@ -88,6 +88,11 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
                     dim3_type(),
                     MemberVisibility::Public,
                 ),
+                (
+                    "global_idx".to_string(),
+                    dim3_type(),
+                    MemberVisibility::Public,
+                ),
             ],
             generics: None,
             has_drop: false,

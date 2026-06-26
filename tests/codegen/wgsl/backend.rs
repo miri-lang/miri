@@ -373,6 +373,36 @@ fn block_dim_intrinsic_substitutes_workgroup_size_literal() {
     assert_wgsl_valid(source);
 }
 
+#[test]
+fn global_idx_intrinsic_reads_global_invocation_id() {
+    let span = dummy_span();
+    let mut body = single_buffer_kernel();
+    let u32_ty = Type::new(TypeKind::U32, span);
+    let idx_local = body.new_local(LocalDecl::new(u32_ty, span));
+    finish_body(
+        &mut body,
+        vec![Statement {
+            kind: StatementKind::Assign(
+                Place::new(idx_local),
+                Rvalue::GpuIntrinsic(GpuIntrinsic::GlobalIdx(Dimension::X)),
+            ),
+            span,
+        }],
+    );
+
+    let backend = WgslBackend;
+    let artifact = backend
+        .compile(&[("global_idx_kernel", &body)], &WgslOptions::default())
+        .expect("WGSL backend should succeed");
+    let source = std::str::from_utf8(&artifact.bytes).expect("WGSL output is UTF-8");
+    assert!(
+        source.contains("_global_id.x"),
+        "expected global_invocation_id read _global_id.x, got:\n{}",
+        source
+    );
+    assert_wgsl_valid(source);
+}
+
 fn single_buffer_kernel() -> Body {
     let span = dummy_span();
     let mut body = Body::new(1, span, ExecutionModel::GpuKernel);
