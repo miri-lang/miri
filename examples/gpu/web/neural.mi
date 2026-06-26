@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// On-device neural-network training (the capstone): a 2-12-12-1 MLP with 205
+// parameters is trained, entirely on the GPU, to classify a two-arm spiral.
+// JS only paints the result and reads back the loss/accuracy HUD — every bit
+// of training (forward, gradient, weight update) is a Miri GPU kernel.
+//
+// The gradient is embarrassingly parallel: one thread per parameter computes
+// that parameter's gradient by forward-difference over all 220 samples
+// (loss(w + eps) minus a shared base loss), so no cross-thread reduction is
+// needed. A momentum-SGD pass then updates every weight (lr 0.25, momentum
+// 0.9). Weights and velocities ping-pong (a -> b); the host swaps a/b between
+// frames, so each displayed frame is one training step.
+//
+// A `gpu frame` block runs five buffer-disjoint passes:
+// 1. Base loss:  one thread, mean-squared loss of the current weights.
+// 2. Gradient:   one thread per parameter, forward-difference gradient.
+// 3. Update:     momentum SGD, wa -> wb (and va -> vb).
+// 4. Stats:      one thread, post-step loss + accuracy for the HUD readback.
+// 5. Render:     per-pixel decision field (blue/gold) with a data-point overlay.
+//
+// Weight buffer layout (205 floats):
+//   W1 [24] @0   b1 [12] @24   W2 [144] @36   b2 [12] @180   W3 [12] @192   b3 @204
+// Every math-intrinsic result is anchored to f32 so the device path stays 32-bit.
+
+use system.collections.array
+use system.math
+use system.io
+
+// Weights and velocities (ping-ponged a -> b), and the per-parameter gradient.
+gpu var wa = Array<f32, 205>()
+gpu var wb = Array<f32, 205>()
+gpu var va = Array<f32, 205>()
+gpu var vb = Array<f32, 205>()
+gpu var grad = Array<f32, 205>()
+
+// Dataset: 220 points, each (x, y, label in {-1, +1}).
+gpu var data = Array<f32, 220 * 3>()
+
+// HUD stats: [loss, accuracy]. Decision-field paint output (64x64 RGBA).
+gpu var stats = Array<f32, 2>()
+gpu var paint = Array<f32, 64 * 64 * 4>()
+
+fn rand_unit(key i32) f32
+    let h = hash_u32(key as u32)
+    return (h as f32) / (4294967295.0 as f32)
+
+// Seed weights small and deterministic; zero the velocities.
+gpu forall i in 0..205
+    wa[i] = (rand_unit(i + 1) * 2.0 - 1.0) * 0.5
+    va[i] = 0.0
+
+// Seed a two-arm spiral: even index = class -1, odd index = class +1.
+gpu forall s in 0..220
+    let cls = s % 2
+    let i = s / 2
+    let r = ((i as f32) / 110.0) as f32
+    let theta = (((i as f32) / 110.0) * 5.0 + (cls as f32) * 3.14159) as f32
+    data[s * 3] = (r * (cos(theta) as f32)) as f32
+    data[s * 3 + 1] = (r * (sin(theta) as f32)) as f32
+    data[s * 3 + 2] = 1.0 if cls == 1 else 0.0 - 1.0
+
+gpu frame
+    // Pass 1: base loss of the current weights (shared by every gradient thread).
+    gpu forall t in 0..1
+        var loss = 0.0
+        var s = 0
+        while s < 220
+            let x0 = data[s * 3]
+            let x1 = data[s * 3 + 1]
+            let lbl = data[s * 3 + 2]
+            var y = wa[204]
+            var k = 0
+            while k < 12
+                var a2 = wa[180 + k]
+                var j = 0
+                while j < 12
+                    let a1 = (wa[24 + j] + wa[j * 2] * x0 + wa[j * 2 + 1] * x1) as f32
+                    a2 = (a2 + wa[36 + k * 12 + j] * (tanh(a1) as f32)) as f32
+                    j = j + 1
+                y = (y + wa[192 + k] * (tanh(a2) as f32)) as f32
+                k = k + 1
+            let d = ((tanh(y) as f32) - lbl) as f32
+            loss = (loss + d * d) as f32
+            s = s + 1
+        stats[0] = (loss / 220.0) as f32
+
+    // Pass 2: forward-difference gradient, one thread per parameter. Each thread
+    // perturbs only its own weight (index == p) by eps and measures the loss
+    // change against the shared base loss in stats[0].
+    gpu forall p in 0..205
+        let eps = 0.02
+        var loss = 0.0
+        var s = 0
+        while s < 220
+            let x0 = data[s * 3]
+            let x1 = data[s * 3 + 1]
+            let lbl = data[s * 3 + 2]
+            let bb = wa[204] + (eps if 204 == p else 0.0)
+            var y = bb
+            var k = 0
+            while k < 12
+                let pb2 = wa[180 + k] + (eps if (180 + k) == p else 0.0)
+                var a2 = pb2
+                var j = 0
+                while j < 12
+                    let wb1 = wa[24 + j] + (eps if (24 + j) == p else 0.0)
+                    let w1a = wa[j * 2] + (eps if (j * 2) == p else 0.0)
+                    let w1b = wa[j * 2 + 1] + (eps if (j * 2 + 1) == p else 0.0)
+                    let a1 = (wb1 + w1a * x0 + w1b * x1) as f32
+                    let w2 = wa[36 + k * 12 + j] + (eps if (36 + k * 12 + j) == p else 0.0)
+                    a2 = (a2 + w2 * (tanh(a1) as f32)) as f32
+                    j = j + 1
+                let w3 = wa[192 + k] + (eps if (192 + k) == p else 0.0)
+                y = (y + w3 * (tanh(a2) as f32)) as f32
+                k = k + 1
+            let d = ((tanh(y) as f32) - lbl) as f32
+            loss = (loss + d * d) as f32
+            s = s + 1
+        let loss_plus = (loss / 220.0) as f32
+        grad[p] = ((loss_plus - stats[0]) / eps) as f32
+
+    // Pass 3: momentum SGD update (lr 0.25, momentum 0.9), wa/va -> wb/vb.
+    gpu forall p in 0..205
+        let nv = (0.9 * va[p] - 0.25 * grad[p]) as f32
+        vb[p] = nv
+        wb[p] = (wa[p] + nv) as f32
+
+    // Pass 4: post-step loss + accuracy over the dataset for the HUD readback.
+    gpu forall t in 0..1
+        var loss = 0.0
+        var correct = 0.0
+        var s = 0
+        while s < 220
+            let x0 = data[s * 3]
+            let x1 = data[s * 3 + 1]
+            let lbl = data[s * 3 + 2]
+            var y = wb[204]
+            var k = 0
+            while k < 12
+                var a2 = wb[180 + k]
+                var j = 0
+                while j < 12
+                    let a1 = (wb[24 + j] + wb[j * 2] * x0 + wb[j * 2 + 1] * x1) as f32
+                    a2 = (a2 + wb[36 + k * 12 + j] * (tanh(a1) as f32)) as f32
+                    j = j + 1
+                y = (y + wb[192 + k] * (tanh(a2) as f32)) as f32
+                k = k + 1
+            let outv = tanh(y) as f32
+            let d = (outv - lbl) as f32
+            loss = (loss + d * d) as f32
+            let hit = 1.0 if outv * lbl > 0.0 else 0.0
+            correct = (correct + hit) as f32
+            s = s + 1
+        stats[0] = (loss / 220.0) as f32
+        stats[1] = (correct / 220.0) as f32
+
+    // Pass 5: decision field. Evaluate the trained net per pixel over the input
+    // square [-1.5, 1.5]^2, blue for class -1 and gold for class +1, then overlay
+    // the data points as bright dots colored by their true label.
+    gpu forall px in 0..4096
+        let ix = px % 64
+        let iy = px / 64
+        let gx = (((ix as f32) / 64.0) * 3.0 - 1.5) as f32
+        let gy = (((iy as f32) / 64.0) * 3.0 - 1.5) as f32
+        var y = wb[204]
+        var k = 0
+        while k < 12
+            var a2 = wb[180 + k]
+            var j = 0
+            while j < 12
+                let a1 = (wb[24 + j] + wb[j * 2] * gx + wb[j * 2 + 1] * gy) as f32
+                a2 = (a2 + wb[36 + k * 12 + j] * (tanh(a1) as f32)) as f32
+                j = j + 1
+            y = (y + wb[192 + k] * (tanh(a2) as f32)) as f32
+            k = k + 1
+        let outv = tanh(y) as f32
+        let tt = ((outv + 1.0) * 0.5) as f32
+        var cr = (0.15 + (1.0 - 0.15) * tt) as f32
+        var cg = (0.35 + (0.78 - 0.35) * tt) as f32
+        var cb = (0.85 + (0.25 - 0.85) * tt) as f32
+
+        // Data-point overlay: brighten pixels close to any sample.
+        var s = 0
+        while s < 220
+            let dx = (gx - data[s * 3]) as f32
+            let dy = (gy - data[s * 3 + 1]) as f32
+            if dx * dx + dy * dy < 0.0016
+                let lbl = data[s * 3 + 2]
+                cr = 1.0 if lbl > 0.0 else 0.2
+                cg = 0.9 if lbl > 0.0 else 0.5
+                cb = 0.3 if lbl > 0.0 else 1.0
+            s = s + 1
+
+        let base = px * 4
+        paint[base] = cr
+        paint[base + 1] = cg
+        paint[base + 2] = cb
+        paint[base + 3] = 1.0
+
+// Native smoke: after the seed and one training step, report the post-step loss
+// and accuracy. Training reduces the loss below the ~1.0 random-init baseline,
+// verifying the on-device forward + gradient + update chain end to end.
+let h = stats
+let loss_milli = (h[0] * 1000.0) as i32
+let acc_milli = (h[1] * 1000.0) as i32
+println(f"loss_milli={loss_milli} acc_milli={acc_milli}")
