@@ -99,8 +99,49 @@ fn optional_shader_features() -> Features {
     Features::SHADER_INT64 | Features::SHADER_F64
 }
 
+/// Number of times device creation is attempted before giving up. A shared
+/// GPU box can momentarily report the adapter's device as lost (the Metal
+/// adapter is recycled between concurrent processes); a fresh instance plus a
+/// short backoff almost always recovers on the next attempt.
+const DEVICE_CREATION_ATTEMPTS: u32 = 3;
+
+/// Returns true for device-creation errors that are worth retrying because the
+/// underlying adapter is in a transient bad state rather than permanently
+/// unusable. "Parent device is lost" is the canonical wgpu/Metal message seen
+/// when a sibling process recycled the shared device mid-acquisition.
+fn is_transient_device_error(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("lost")
+}
+
 impl GpuContext {
     pub fn new() -> Result<Self, GpuError> {
+        let mut last_error = GpuError::NoAdapter;
+        for attempt in 0..DEVICE_CREATION_ATTEMPTS {
+            match Self::try_new() {
+                Ok(context) => return Ok(context),
+                Err(GpuError::DeviceCreationFailed(message))
+                    if is_transient_device_error(&message)
+                        && attempt + 1 < DEVICE_CREATION_ATTEMPTS =>
+                {
+                    log::warn!(
+                        "GPU device creation reported a transient failure ({}); retrying",
+                        message
+                    );
+                    last_error = GpuError::DeviceCreationFailed(message);
+                    // Brief, growing backoff: the lost adapter typically
+                    // recovers within a few milliseconds once the sibling
+                    // process releases it.
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        50 * u64::from(attempt + 1),
+                    ));
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        Err(last_error)
+    }
+
+    fn try_new() -> Result<Self, GpuError> {
         // Honor `WGPU_BACKEND` (e.g. `vulkan`) so headless CI can pin the
         // software Vulkan adapter (Mesa lavapipe). Only the backend selection
         // is taken from the environment; all other options stay at their
@@ -296,5 +337,29 @@ pub extern "C" fn miri_gpu_sync() {
 pub extern "C" fn miri_gpu_shutdown() {
     if let Ok(ctx) = get_gpu_context() {
         let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient_device_error;
+
+    #[test]
+    fn parent_device_lost_is_transient() {
+        assert!(is_transient_device_error("Parent device is lost"));
+    }
+
+    #[test]
+    fn device_lost_message_is_transient_regardless_of_case() {
+        assert!(is_transient_device_error(
+            "Device LOST while creating queue"
+        ));
+    }
+
+    #[test]
+    fn unrelated_failure_is_not_transient() {
+        assert!(!is_transient_device_error(
+            "requested features not supported by adapter"
+        ));
     }
 }
