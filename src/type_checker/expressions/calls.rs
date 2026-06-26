@@ -143,6 +143,11 @@ impl TypeChecker {
             return return_type;
         }
 
+        // Check for GPU atomic operations (atomic_add, atomic_sub, etc.).
+        if let Some(return_type) = self.try_infer_atomic_builtin_call(func, positional_args, span) {
+            return return_type;
+        }
+
         match &func_type.kind {
             TypeKind::Function(func_data) => self.infer_function_call(
                 func_data,
@@ -557,6 +562,42 @@ impl TypeChecker {
             "cross" => self.infer_vec_cross(positional_args, first_arg_type, vec_dimension, span),
             "reflect" => self.infer_vec_reflect(positional_args, first_arg_type, vec_args, span),
             "mix" => self.infer_vec_mix(positional_args, first_arg_type, vec_args, span),
+            _ => None,
+        }
+    }
+
+    fn try_infer_atomic_builtin_call(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        _span: Span,
+    ) -> Option<Type> {
+        // Extract the function name from direct identifier only (no module member access).
+        let func_name = match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            _ => None,
+        }?;
+
+        // Check if this is an atomic operation.
+        match func_name {
+            "atomic_add" | "atomic_sub" | "atomic_max" | "atomic_min" | "atomic_and"
+            | "atomic_or" | "atomic_xor" | "atomic_exchange" => {
+                // atomic_* operations return the type of the value argument (arg 2).
+                // The return value is the old value from the buffer element.
+                if positional_args.len() >= 3 {
+                    Some(positional_args[2].1.clone())
+                } else {
+                    None
+                }
+            }
+            "atomic_compare_exchange" => {
+                // compare_exchange also returns the type of the value argument (arg 2).
+                if positional_args.len() >= 4 {
+                    Some(positional_args[2].1.clone())
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

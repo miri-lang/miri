@@ -926,6 +926,16 @@ pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
             }
         }
     }
+
+    // Atomic<u32> and Atomic<i32> are scalar wrappers — unwrap to inner type size
+    if let TypeKind::Custom(name, Some(args)) = kind {
+        if name == types::ATOMIC_TYPE_NAME && args.len() == 1 {
+            if let ExpressionKind::Type(inner_ty, _) = &args[0].node {
+                return compute_elem_size_from_type(&inner_ty.kind);
+            }
+        }
+    }
+
     match kind {
         TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
         TypeKind::I16 | TypeKind::U16 => 2,

@@ -423,30 +423,58 @@ impl TypeChecker {
     }
 
     /// Resolves the element type of a collection.
+    /// If the element type is Atomic<T>, unwraps it to T.
     fn resolve_collection_element_type(
         &mut self,
         args: &Option<Vec<Expression>>,
         context: &mut Context,
     ) -> Type {
-        if let Some(args) = args {
+        let elem_type = if let Some(args) = args {
             if let Some(inner_type_expr) = args.first() {
-                return self.resolve_type_expression(inner_type_expr, context);
+                self.resolve_type_expression(inner_type_expr, context)
+            } else {
+                if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
+                    make_type(TypeKind::Generic(
+                        g.name.clone(),
+                        g.constraint.clone().map(Box::new),
+                        g.kind,
+                    ))
+                } else {
+                    make_type(TypeKind::Generic(
+                        "T".to_string(),
+                        None,
+                        TypeDeclarationKind::None,
+                    ))
+                }
+            }
+        } else {
+            if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
+                make_type(TypeKind::Generic(
+                    g.name.clone(),
+                    g.constraint.clone().map(Box::new),
+                    g.kind,
+                ))
+            } else {
+                make_type(TypeKind::Generic(
+                    "T".to_string(),
+                    None,
+                    TypeDeclarationKind::None,
+                ))
+            }
+        };
+
+        // Unwrap Atomic<T> to T: reading an atomic buffer element yields the inner scalar
+        if let TypeKind::Custom(name, Some(inner_args)) = &elem_type.kind {
+            if name == crate::ast::types::ATOMIC_TYPE_NAME && !inner_args.is_empty() {
+                if let Some(inner_expr) = inner_args.first() {
+                    if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
+                        return Type::new(inner_ty.kind.clone(), elem_type.span);
+                    }
+                }
             }
         }
 
-        if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-            make_type(TypeKind::Generic(
-                g.name.clone(),
-                g.constraint.clone().map(Box::new),
-                g.kind,
-            ))
-        } else {
-            make_type(TypeKind::Generic(
-                "T".to_string(),
-                None,
-                TypeDeclarationKind::None,
-            ))
-        }
+        elem_type
     }
 
     fn infer_index_map(

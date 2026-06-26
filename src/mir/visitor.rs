@@ -199,6 +199,20 @@ pub trait Visitor {
                 self.visit_operand(align, location);
                 self.visit_operand(alloc, location);
             }
+            Rvalue::AtomicOp {
+                buffer,
+                index,
+                value,
+                compare_expected,
+                ..
+            } => {
+                self.visit_operand(buffer, location);
+                self.visit_operand(index, location);
+                self.visit_operand(value, location);
+                if let Some(expected) = compare_expected {
+                    self.visit_operand(expected, location);
+                }
+            }
         }
     }
 
@@ -398,6 +412,20 @@ pub trait MutVisitor {
                 self.visit_operand(size, location);
                 self.visit_operand(align, location);
                 self.visit_operand(alloc, location);
+            }
+            Rvalue::AtomicOp {
+                buffer,
+                index,
+                value,
+                compare_expected,
+                ..
+            } => {
+                self.visit_operand(buffer, location);
+                self.visit_operand(index, location);
+                self.visit_operand(value, location);
+                if let Some(expected) = compare_expected {
+                    self.visit_operand(expected, location);
+                }
             }
         }
     }

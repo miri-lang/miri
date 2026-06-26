@@ -176,6 +176,11 @@ fn is_perceus_managed_inner(
                 return false;
             }
 
+            // Atomic<u32> and Atomic<i32> are NOT managed - they are scalar wrappers
+            if name == crate::ast::types::ATOMIC_TYPE_NAME {
+                return false;
+            }
+
             // After normalization, builtin collection types are Custom("List", Some([...]))
             if BuiltinCollectionKind::from_name(name).is_some() {
                 return args.is_some();
@@ -271,6 +276,19 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
                                     | TypeKind::I32
                                     | TypeKind::U32
                             )
+                        } else {
+                            false
+                        }
+                    });
+            }
+            // Atomic types are GPU-compatible if their element type is u32 or i32
+            if name == crate::ast::types::ATOMIC_TYPE_NAME {
+                return type_args
+                    .as_ref()
+                    .and_then(|args| args.first())
+                    .is_some_and(|first_arg| {
+                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                            matches!(elem_ty.kind, TypeKind::U32 | TypeKind::I32)
                         } else {
                             false
                         }
@@ -377,6 +395,19 @@ fn accelerable_inner(
                                     | TypeKind::I32
                                     | TypeKind::U32
                             )
+                        } else {
+                            false
+                        }
+                    });
+            }
+            // Atomic types are accelerable if their element type is u32 or i32
+            if name == crate::ast::types::ATOMIC_TYPE_NAME {
+                return args
+                    .as_ref()
+                    .and_then(|args| args.first())
+                    .is_some_and(|first_arg| {
+                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                            matches!(elem_ty.kind, TypeKind::U32 | TypeKind::I32)
                         } else {
                             false
                         }
@@ -516,6 +547,14 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
                 )
             )
         }
+        // An Atomic<T> is a valid storage-buffer element when T is u32 or i32.
+        // WGSL atomics only support 32-bit integers; no float or 64-bit atomics.
+        TypeKind::Custom(name, Some(args)) if name == crate::ast::types::ATOMIC_TYPE_NAME => {
+            matches!(
+                atomic_component_kind(args),
+                Some(TypeKind::I32 | TypeKind::U32)
+            )
+        }
         TypeKind::I128
         | TypeKind::U128
         | TypeKind::Boolean
@@ -543,6 +582,15 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
 /// Extracts the component `TypeKind` from a vector type's argument list
 /// (`VecN<T>` → `T`), or `None` if the first argument is not a resolved type.
 fn vector_component_kind(args: &[Expression]) -> Option<&TypeKind> {
+    match &args.first()?.node {
+        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        _ => None,
+    }
+}
+
+/// Extracts the inner `TypeKind` from an `Atomic<T>` type's argument list,
+/// or `None` if the argument is not a resolved type.
+fn atomic_component_kind(args: &[Expression]) -> Option<&TypeKind> {
     match &args.first()?.node {
         ExpressionKind::Type(ty, _) => Some(&ty.kind),
         _ => None,

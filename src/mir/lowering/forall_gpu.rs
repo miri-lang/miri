@@ -435,9 +435,25 @@ fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
 }
 
 fn visit_written_expr(expr: &Expression, written: &mut HashSet<String>) {
-    if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
-        extract_written_lhs(lhs, written);
-        visit_written_expr(rhs, written);
+    match &expr.node {
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            extract_written_lhs(lhs, written);
+            visit_written_expr(rhs, written);
+        }
+        // An atomic builtin (`atomic_add(buf, ..)`) mutates its buffer argument,
+        // so the buffer capture must be bound `read_write`, not read-only.
+        ExpressionKind::Call(func, args) => {
+            if let ExpressionKind::Identifier(name, _) = &func.node {
+                if crate::mir::backend::gpu::GpuAtomicOp::from_builtin_name(name).is_some() {
+                    if let Some(buf) = args.first() {
+                        if let ExpressionKind::Identifier(buf_name, _) = &buf.node {
+                            written.insert(buf_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -514,11 +530,16 @@ pub fn collect_capture_infos(
             ));
         }
 
+        // Atomic-element buffers must bind `read_write`: WGSL requires
+        // `atomic<u32>` storage to be read_write even when a pass only
+        // atomicLoads it, so they are never treated as read-only.
+        let is_written = written.contains(&name) || buffer_has_atomic_element(&ty.kind);
+
         captures.push(CaptureInfo {
             name: name.clone(),
             ty,
             outer_local,
-            is_written: written.contains(&name),
+            is_written,
             is_scalar,
         });
     }
@@ -530,6 +551,27 @@ pub fn collect_capture_infos(
 /// storage binding. Scalars and non-buffer managed types pass the broader
 /// `is_gpu_compatible` predicate (used for kernel-body type checking) but
 /// would be misinterpreted as MiriArray pointers by `gpu_launch::translate`.
+/// Returns `true` if `kind` is an array whose element is an `Atomic<...>`.
+/// Such buffers must bind `read_write` because WGSL forbids read-only
+/// `atomic<T>` storage even for atomicLoad-only access.
+fn buffer_has_atomic_element(kind: &TypeKind) -> bool {
+    let elem_node = match kind {
+        TypeKind::Custom(name, Some(args))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+                && !args.is_empty() =>
+        {
+            &args[0].node
+        }
+        TypeKind::Array(elem_expr, _) => &elem_expr.node,
+        _ => return false,
+    };
+    matches!(
+        elem_node,
+        crate::ast::expression::ExpressionKind::Type(elem_ty, _)
+            if matches!(&elem_ty.kind, TypeKind::Custom(n, _) if n == crate::ast::types::ATOMIC_TYPE_NAME)
+    )
+}
+
 fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
     match kind {
         TypeKind::Array(_, _) => true,

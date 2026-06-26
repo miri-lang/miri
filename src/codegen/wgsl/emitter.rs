@@ -42,7 +42,17 @@ impl Emitter {
         body: &Body,
         default_workgroup_size: [u32; 3],
     ) -> Result<(), CodegenError> {
-        let bindings = collect_buffer_bindings(body)?;
+        let mut bindings = collect_buffer_bindings(body)?;
+
+        // For GPU kernels, wrap atomic<T> element types if the original declaration
+        // has Atomic<T> elements. This allows atomicAdd, atomicSub, etc. to work.
+        for binding in &mut bindings {
+            if is_atomic_buffer_element(body, binding.param_local) {
+                binding.element_typename = Some(format!("atomic<{}>", binding.element_type.name()));
+                binding.read_write = true;
+            }
+        }
+
         self.emit_bindings(&bindings)?;
         let workgroup_size = resolve_workgroup_size(body, default_workgroup_size);
         self.emit_entry_point(name, body, &bindings, workgroup_size)
@@ -396,6 +406,42 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
     }
 
     Ok(bindings)
+}
+
+/// Check if a kernel parameter is an Array of Atomic elements.
+fn is_atomic_buffer_element(body: &Body, param_local: crate::mir::Local) -> bool {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::types::BuiltinCollectionKind;
+
+    let decl = match body.local_decls.get(param_local.0) {
+        Some(d) => d,
+        None => return false,
+    };
+
+    let elem_kind = match &decl.ty.kind {
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
+            ) =>
+        {
+            match args.first() {
+                Some(expr) => match &expr.node {
+                    ExpressionKind::Type(ty, _) => &ty.kind,
+                    _ => return false,
+                },
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+
+    match elem_kind {
+        TypeKind::Custom(name, Some(inner_args)) => {
+            name == crate::ast::types::ATOMIC_TYPE_NAME && inner_args.len() == 1
+        }
+        _ => false,
+    }
 }
 
 fn sanitize_identifier(name: &str) -> String {
@@ -1183,9 +1229,15 @@ impl<'a> BodyEmitter<'a> {
         match kind {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 self.write_indent()?;
-                let lhs = self.render_place(place)?;
                 let rhs = self.render_rvalue(rvalue)?;
-                writeln!(self.output, "{} = {};", lhs, rhs).map_err(emit_err)
+                if self.is_atomic_buffer_element_write(place) {
+                    // Wrap bare writes to atomic buffer elements with atomicStore
+                    let rendered = self.render_place(place)?;
+                    writeln!(self.output, "atomicStore(&{}, {});", rendered, rhs).map_err(emit_err)
+                } else {
+                    let lhs = self.render_place(place)?;
+                    writeln!(self.output, "{} = {};", lhs, rhs).map_err(emit_err)
+                }
             }
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
@@ -1263,9 +1315,64 @@ impl<'a> BodyEmitter<'a> {
 
     fn render_operand(&self, op: &Operand) -> Result<String, CodegenError> {
         match op {
-            Operand::Move(place) | Operand::Copy(place) => self.render_place(place),
+            Operand::Move(place) | Operand::Copy(place) => {
+                let rendered = self.render_place(place)?;
+                // Wrap bare reads of atomic buffer elements with atomicLoad
+                if self.is_atomic_buffer_element_read(place) {
+                    Ok(format!("atomicLoad(&{})", rendered))
+                } else {
+                    Ok(rendered)
+                }
+            }
             Operand::Constant(c) => render_constant(c),
         }
+    }
+
+    /// Check if a place refers to an indexed element of an atomic buffer.
+    fn is_atomic_buffer_element(&self, place: &Place) -> bool {
+        // Only apply to indexed buffer accesses
+        if !place
+            .projection
+            .iter()
+            .any(|e| matches!(e, PlaceElem::Index(_)))
+        {
+            return false;
+        }
+
+        let decl = match self.body.local_decls.get(place.local.0) {
+            Some(d) => d,
+            None => return false,
+        };
+
+        // Check if the buffer element type is Atomic
+        match &decl.ty.kind {
+            TypeKind::Custom(name, Some(args))
+                if matches!(
+                    crate::ast::BuiltinCollectionKind::from_name(name),
+                    Some(crate::ast::BuiltinCollectionKind::Array)
+                        | Some(crate::ast::BuiltinCollectionKind::List)
+                ) =>
+            {
+                if let Some(elem_expr) = args.first() {
+                    if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
+                        if let TypeKind::Custom(elem_name, Some(inner_args)) = &elem_ty.kind {
+                            return elem_name == crate::ast::types::ATOMIC_TYPE_NAME
+                                && !inner_args.is_empty();
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn is_atomic_buffer_element_read(&self, place: &Place) -> bool {
+        self.is_atomic_buffer_element(place)
+    }
+
+    fn is_atomic_buffer_element_write(&self, place: &Place) -> bool {
+        self.is_atomic_buffer_element(place)
     }
 
     fn render_rvalue(&self, rvalue: &Rvalue) -> Result<String, CodegenError> {
@@ -1304,6 +1411,13 @@ impl<'a> BodyEmitter<'a> {
                 ))
             }
             Rvalue::Aggregate(kind, operands) => self.render_aggregate(kind, operands),
+            Rvalue::AtomicOp {
+                op,
+                buffer,
+                index,
+                value,
+                compare_expected,
+            } => self.render_atomic_op(*op, buffer, index, value, compare_expected.as_deref()),
             Rvalue::Len(_) | Rvalue::Ref(_) | Rvalue::Phi(_) | Rvalue::Allocate(_, _, _) => {
                 Err(CodegenError::Internal(format!(
                     "WGSL backend: rvalue {:?} not yet supported",
@@ -1336,6 +1450,48 @@ impl<'a> BodyEmitter<'a> {
                 kind
             ))),
         }
+    }
+
+    fn render_atomic_op(
+        &self,
+        op: crate::mir::backend::gpu::GpuAtomicOp,
+        buffer: &Operand,
+        index: &Operand,
+        value: &Operand,
+        compare_expected: Option<&Operand>,
+    ) -> Result<String, CodegenError> {
+        let buffer_str = self.render_operand(buffer)?;
+        let index_str = self.render_operand(index)?;
+        let value_str = self.render_operand(value)?;
+
+        // Format: atomicAdd(&buf[i], v)
+        let addr = format!("&{}[{}]", buffer_str, index_str);
+
+        let op_name = match op {
+            crate::mir::backend::gpu::GpuAtomicOp::Add => "atomicAdd",
+            crate::mir::backend::gpu::GpuAtomicOp::Sub => "atomicSub",
+            crate::mir::backend::gpu::GpuAtomicOp::And => "atomicAnd",
+            crate::mir::backend::gpu::GpuAtomicOp::Or => "atomicOr",
+            crate::mir::backend::gpu::GpuAtomicOp::Xor => "atomicXor",
+            crate::mir::backend::gpu::GpuAtomicOp::Min => "atomicMin",
+            crate::mir::backend::gpu::GpuAtomicOp::Max => "atomicMax",
+            crate::mir::backend::gpu::GpuAtomicOp::Exchange => "atomicExchange",
+            crate::mir::backend::gpu::GpuAtomicOp::CompareExchange => {
+                let expected_str = compare_expected
+                    .ok_or_else(|| {
+                        CodegenError::Internal(
+                            "compare_exchange requires an expected value".to_string(),
+                        )
+                    })
+                    .and_then(|e| self.render_operand(e))?;
+                return Ok(format!(
+                    "atomicCompareExchangeWeak({}, {}, {}).old_value",
+                    addr, expected_str, value_str
+                ));
+            }
+        };
+
+        Ok(format!("{}({}, {})", op_name, addr, value_str))
     }
 
     fn zero_init_value(&self, kind: &TypeKind) -> Result<String, CodegenError> {

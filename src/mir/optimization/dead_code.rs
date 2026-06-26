@@ -99,5 +99,6 @@ fn is_side_effect_free(rvalue: &Rvalue) -> bool {
         Rvalue::GpuIntrinsic(intrinsic) => !matches!(intrinsic, GpuIntrinsic::SyncThreads),
         Rvalue::MathIntrinsic(..) => true,
         Rvalue::Allocate(..) => false,
+        Rvalue::AtomicOp { .. } => false,
     }
 }

@@ -121,6 +121,18 @@ impl TypeChecker {
             "dot" | "length" | "normalize" | "cross" | "reflect" => Some(ast_factory::make_type(
                 TypeKind::Meta(Box::new(ast_factory::make_type(TypeKind::Void))),
             )),
+            // GPU atomic operations are placeholders; dispatch happens in try_lower_atomic_builtin.
+            "atomic_add"
+            | "atomic_sub"
+            | "atomic_max"
+            | "atomic_min"
+            | "atomic_and"
+            | "atomic_or"
+            | "atomic_xor"
+            | "atomic_exchange"
+            | "atomic_compare_exchange" => Some(ast_factory::make_type(TypeKind::Meta(Box::new(
+                ast_factory::make_type(TypeKind::Void),
+            )))),
             _ => None,
         }
     }

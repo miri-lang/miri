@@ -219,3 +219,22 @@ fn demo_raymarch_web() {
         "center=0.06467816978693008 0.08995301276445389 0.13298241794109344",
     );
 }
+
+/// particles_web: 147,456 particles advected through a two-octave curl-noise
+/// flow field, scattered with additive GPU atomics into a fixed-point intensity
+/// surface, tone-mapped to a white/blue field. A `gpu frame` block runs four
+/// buffer-disjoint passes (advect / fade / atomic-scatter / present) over
+/// ping-ponged particle state and a ping-ponged `Array<Atomic<u32>, N>` surface.
+/// The native run uses zero pointer input; the smoke value is the whole-surface
+/// intensity total — the per-particle deposit summed over every particle, so it
+/// is independent of atomic contention order and verifies the advect + atomic
+/// scatter chain end to end.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_particles_web() {
+    let source = include_str!("../../../examples/gpu/web/particles.mi");
+    assert_gpu_runs_with_output(source, "surface_total=35753440");
+}
