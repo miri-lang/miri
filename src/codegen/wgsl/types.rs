@@ -61,6 +61,18 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         TypeKind::I64 => Ok(WgslScalar::I64), // Explicit i64 still uses i64
         TypeKind::U64 => Ok(WgslScalar::U64),
         TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
+        // Atomic<u32> and Atomic<i32> unwrap to their inner scalar types
+        TypeKind::Custom(name, Some(args)) if name == crate::ast::types::ATOMIC_TYPE_NAME => {
+            if args.len() == 1 {
+                if let ExpressionKind::Type(inner_ty, _) = &args[0].node {
+                    return scalar(&inner_ty.kind);
+                }
+            }
+            Err(CodegenError::Internal(format!(
+                "WGSL backend cannot represent type {:?} as a scalar",
+                kind
+            )))
+        }
         TypeKind::I128
         | TypeKind::U128
         | TypeKind::String

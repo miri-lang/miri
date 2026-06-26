@@ -77,6 +77,10 @@ pub const VEC3_TYPE_NAME: &str = "Vec3";
 /// Canonical class name for the compiler-builtin `Vec4<T>` generic vector type.
 pub const VEC4_TYPE_NAME: &str = "Vec4";
 
+/// Canonical class name for the compiler-builtin `Atomic<T>` generic atomic type.
+/// Used to recognize atomic values in GPU kernels (GPU-only; CPU references are errors).
+pub const ATOMIC_TYPE_NAME: &str = "Atomic";
+
 /// Canonical class name for the compiler-builtin `GpuContext` struct made
 /// available inside `gpu fn` bodies.
 pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
@@ -620,6 +624,17 @@ pub fn vec_dim(name: &str) -> Option<u8> {
         VEC3_TYPE_NAME => Some(3),
         VEC4_TYPE_NAME => Some(4),
         _ => None,
+    }
+}
+
+/// Returns `Some(&T)` if `args` represents a single-parameter generic list for
+/// `Atomic<T>`, or `None` otherwise. Used to extract the inner type from
+/// `TypeKind::Custom(ATOMIC_TYPE_NAME, args)`.
+pub fn atomic_inner_type(args: &[Type]) -> Option<&Type> {
+    if args.len() == 1 {
+        Some(&args[0])
+    } else {
+        None
     }
 }
 

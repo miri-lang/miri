@@ -28,9 +28,11 @@ impl<'a> FunctionTranslator<'a> {
             TypeKind::Set(_) => ElementShape::Builtin(BuiltinCollectionKind::Set),
             TypeKind::Map(_, _) => ElementShape::Builtin(BuiltinCollectionKind::Map),
             TypeKind::Custom(name, _) => {
-                // Vector types (Vec2/3/4) are value types stored inline — they
-                // carry no per-element drop/clone callback.
-                if crate::ast::types::vec_dim(name).is_some() {
+                // Vector types (Vec2/3/4) and `Atomic<scalar>` are value types
+                // stored inline — they carry no per-element drop/clone callback.
+                if crate::ast::types::vec_dim(name).is_some()
+                    || name == crate::ast::types::ATOMIC_TYPE_NAME
+                {
                     return ElementShape::Other;
                 }
                 match BuiltinCollectionKind::from_name(name) {

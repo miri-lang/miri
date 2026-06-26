@@ -47,6 +47,11 @@ pub fn is_managed_type(
                 return false;
             }
 
+            // Atomic<u32> and Atomic<i32> are scalar wrappers, not managed.
+            if name == crate::ast::types::ATOMIC_TYPE_NAME {
+                return false;
+            }
+
             // After normalization, builtin collection types arrive as
             // Custom("List", Some([...])) — these ARE heap-managed.
             // However, inside stdlib class bodies the names appear as

@@ -1640,7 +1640,11 @@ impl<'a> FunctionTranslator<'a> {
 /// pointer, so they must never be DecRef'd here.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, _) = kind {
-        if crate::ast::types::vec_dim(name).is_some() {
+        // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
+        // stored by value, never reference-counted — exclude them from the
+        // managed-element drop path.
+        if crate::ast::types::vec_dim(name).is_some() || name == crate::ast::types::ATOMIC_TYPE_NAME
+        {
             return false;
         }
     }

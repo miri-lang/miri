@@ -1,0 +1,197 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Particle flow field: 147,456 particles advected through a two-octave
+// curl-noise velocity field and scattered, with additive GPU atomics, into a
+// fixed-point intensity surface that is tone-mapped to a white/blue field.
+// Moving the pointer injects a swirling vortex that stirs the flow.
+//
+// All simulation state lives on the device and never touches the CPU between
+// frames. A `gpu frame` block runs four buffer-disjoint passes:
+// 1. Advect: read pstate_a + frame.* → write pstate_b (curl flow + pointer
+//    vortex + age/respawn). One thread owns one particle.
+// 2. Fade: read accum_a → write accum_b (multiply the persistent intensity
+//    surface by a decay factor, leaving motion trails).
+// 3. Scatter: read pstate_b → atomically deposit each particle's intensity
+//    into accum_b at its pixel (many particles contend for one cell).
+// 4. Present: read accum_b → write paint RGBA (tone-mapped white/blue).
+//
+// Particle state and the accumulator both ping-pong (a→b); the host swaps the
+// a/b bindings between frames. Every math-intrinsic result is anchored to f32
+// so the device path stays 32-bit (browser WGSL has no f64).
+
+use system.collections.array
+use system.gpu.atomic
+use system.math
+use system.io
+
+// Canvas: 192x192 intensity cells, RGBA paint output.
+// Particles: 384x384 = 147,456, four loose f32 components each
+// (px, py in [-1, 1]; age in seconds; seed in [0, 1)).
+gpu var pstate_a = Array<f32, 384 * 384 * 4>()
+gpu var pstate_b = Array<f32, 384 * 384 * 4>()
+
+// Persistent fixed-point intensity surface (ping-ponged for the decay pass).
+gpu var accum_a = Array<Atomic<u32>, 192 * 192>()
+gpu var accum_b = Array<Atomic<u32>, 192 * 192>()
+
+// Paint output (RGBA: 4 floats per pixel).
+gpu var paint = Array<f32, 192 * 192 * 4>()
+
+// Integer hash to a unit float in [0, 1) — used to seed particles uniformly.
+// Integer mixing avoids the precision collapse of `sin`-based hashes at large
+// indices (which would pile every particle onto a handful of cells).
+fn rand_unit(key i32) f32
+    let h = hash_u32(key as u32)
+    return (h as f32) / (4294967295.0 as f32)
+
+// Hash a 2D point to a pseudo-random scalar in [0, 1).
+fn hash2(x f32, y f32) f32
+    let d = (x * 127.1 + y * 311.7) as f32
+    let s = (sin(d) as f32) * (43758.5453 as f32)
+    return (s - (floor(s) as f32)) as f32
+
+// Value noise: bilinear blend of hashed lattice corners with a smoothstep fade.
+fn pf_value_noise(x f32, y f32) f32
+    let ix = floor(x) as f32
+    let iy = floor(y) as f32
+    let fx = (x - ix) as f32
+    let fy = (y - iy) as f32
+    let ux = fx * fx * (3.0 - 2.0 * fx)
+    let uy = fy * fy * (3.0 - 2.0 * fy)
+    let a = hash2(ix, iy)
+    let b = hash2(ix + 1.0, iy)
+    let c = hash2(ix, iy + 1.0)
+    let d = hash2(ix + 1.0, iy + 1.0)
+    let top = (a + (b - a) * ux) as f32
+    let bot = (c + (d - c) * ux) as f32
+    return (top + (bot - top) * uy) as f32
+
+// Curl of the value-noise field at p, giving a divergence-free flow direction.
+// Returned as the loose components (out_x, out_y) packed into the caller's vars
+// via the standard finite-difference curl (∂n/∂y, -∂n/∂x).
+fn curl_x(x f32, y f32) f32
+    let e = 0.04
+    let n1 = pf_value_noise(x, y + e)
+    let n2 = pf_value_noise(x, y - e)
+    return ((n1 - n2) / (2.0 * e)) as f32
+
+fn curl_y(x f32, y f32) f32
+    let e = 0.04
+    let n3 = pf_value_noise(x + e, y)
+    let n4 = pf_value_noise(x - e, y)
+    return ((n4 - n3) / (2.0 * e)) as f32
+
+// Seed: scatter particles uniformly with randomized age and seed.
+gpu forall i in 0..147456
+    let sx = rand_unit(i * 4)
+    let sy = rand_unit(i * 4 + 1)
+    let sa = rand_unit(i * 4 + 2)
+    let ss = rand_unit(i * 4 + 3)
+    let base = i * 4
+    pstate_a[base] = sx * 2.0 - 1.0
+    pstate_a[base + 1] = sy * 2.0 - 1.0
+    pstate_a[base + 2] = sa * 6.0
+    pstate_a[base + 3] = ss
+
+// Clear both intensity surfaces.
+gpu forall i in 0..36864
+    accum_a[i] = 0
+    accum_b[i] = 0
+
+gpu frame
+    // Pass 1: advect every particle through the curl field plus the pointer
+    // vortex, then age and respawn expired or escaped particles.
+    gpu forall i in 0..147456
+        let base = i * 4
+        let px = pstate_a[base]
+        let py = pstate_a[base + 1]
+        let age = pstate_a[base + 2]
+        let seed = pstate_a[base + 3]
+        let life = (4.0 + seed * 6.0) as f32
+        let t = frame.time
+
+        // Two-octave curl flow.
+        var vx = (curl_x(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.16) as f32
+        var vy = (curl_y(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.16) as f32
+        vx = (vx + curl_x(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.10) as f32
+        vy = (vy + curl_y(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.10) as f32
+
+        // Pointer vortex: swirl plus inward pull with an exponential falloff.
+        if frame.mouse_down
+            let mx = frame.mouse_x * 2.0 - 1.0
+            let my = frame.mouse_y * 2.0 - 1.0
+            let dx = (mx - px) as f32
+            let dy = (my - py) as f32
+            let r = (sqrt(dx * dx + dy * dy) as f32) + 0.0001
+            let dirx = dx / r
+            let diry = dy / r
+            let g = exp(0.0 - r * 3.2) as f32
+            vx = (vx + (dirx * 0.45 - diry * 0.85) * g) as f32
+            vy = (vy + (diry * 0.45 + dirx * 0.85) * g) as f32
+
+        let dt = frame.dt
+        var nx = (px + vx * dt) as f32
+        var ny = (py + vy * dt) as f32
+        var nage = (age + dt) as f32
+
+        let escaped = 1.0 if (abs(nx) as f32) > 1.05 else 0.0
+        let escaped_y = 1.0 if (abs(ny) as f32) > 1.05 else 0.0
+        if nage > life or escaped > 0.5 or escaped_y > 0.5
+            nx = hash2(seed * 53.0 + t, 1.0) * 2.0 - 1.0
+            ny = hash2(seed * 53.0 - t, 7.31) * 2.0 - 1.0
+            nage = 0.0
+
+        pstate_b[base] = nx
+        pstate_b[base + 1] = ny
+        pstate_b[base + 2] = nage
+        pstate_b[base + 3] = seed
+
+    // Pass 2: decay the persistent intensity surface (motion trails).
+    gpu forall p in 0..36864
+        let prev = accum_a[p] as f32
+        accum_b[p] = (prev * 0.90) as u32
+
+    // Pass 3: scatter — additively deposit each particle's intensity into its
+    // pixel. Contended cells are correct because the deposit is atomic.
+    gpu forall i in 0..147456
+        let base = i * 4
+        let px = pstate_b[base]
+        let py = pstate_b[base + 1]
+        let seed = pstate_b[base + 3]
+        let sx = ((px * 0.5 + 0.5) * 192.0) as i32
+        let sy = ((py * 0.5 + 0.5) * 192.0) as i32
+        let cx = max(0, min(191, sx)) as i32
+        let cy = max(0, min(191, sy)) as i32
+        let cell = cy * 192 + cx
+        // Warm (yellow-ish) particles deposit more; tone maps to white highs.
+        let warm = 1.0 if seed > 0.86 else 0.0
+        let amount = (220.0 + warm * 160.0) as u32
+        atomic_add(accum_b, cell, amount)
+
+    // Pass 4: present — tone-map the intensity surface to a white/blue field.
+    gpu forall p in 0..36864
+        let v = (accum_b[p] as f32) / 4096.0
+        let bright = v / (1.0 + v)
+        let fade = (smoothstep(0.0, 0.6, bright) as f32) * 0.85 + 0.15
+        // Base blue with a white core as intensity rises.
+        let r = ((0.22 + (1.0 - 0.22) * bright) as f32) * fade
+        let g = ((0.42 + (1.0 - 0.42) * bright) as f32) * fade
+        let b = fade
+        let base = p * 4
+        paint[base] = (r + 0.012) as f32
+        paint[base + 1] = (g + 0.02) as f32
+        paint[base + 2] = (b * 0.9 + 0.046) as f32
+        paint[base + 3] = 1.0
+
+// Native smoke: after the seed and one frame, sum the whole intensity surface.
+// The total is the per-particle deposit summed over all 147,456 particles, so
+// it is independent of atomic contention order — a deterministic value that
+// verifies the full advect + atomic-scatter chain end to end.
+let host = accum_b
+var total = 0
+var k = 0
+while k < 36864
+    total = total + (host[k] as i32)
+    k = k + 1
+println(f"surface_total={total}")

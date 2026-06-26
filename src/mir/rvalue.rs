@@ -64,6 +64,19 @@ pub enum Rvalue {
     GpuIntrinsic(GpuIntrinsic),
     /// Math intrinsic operation (abs, sin, sqrt, etc.)
     MathIntrinsic(MathIntrinsic, Vec<Operand>),
+    /// Atomic operation on a GPU buffer (GPU-only).
+    /// - `op`: the atomic operation (add, sub, max, min, and, or, xor, exchange, compare_exchange)
+    /// - `buffer`: the Array<Atomic<T>, N> operand to access
+    /// - `index`: the array index
+    /// - `value`: the value to add/sub/compare/exchange (for compare_exchange, this is the new value)
+    /// - `compare_expected`: for compare_exchange only, the expected old value; None for other ops
+    AtomicOp {
+        op: crate::mir::backend::gpu::GpuAtomicOp,
+        buffer: Box<Operand>,
+        index: Box<Operand>,
+        value: Box<Operand>,
+        compare_expected: Option<Box<Operand>>,
+    },
     /// Construct an aggregate value from operands.
     /// - Tuple: operands are tuple elements in order
     /// - Array/List: operands are elements in order
@@ -172,6 +185,19 @@ impl fmt::Display for Rvalue {
             Rvalue::MathIntrinsic(intrinsic, args) => {
                 write!(f, "{}(", intrinsic)?;
                 write_comma_separated(f, args)?;
+                write!(f, ")")
+            }
+            Rvalue::AtomicOp {
+                op,
+                buffer,
+                index,
+                value,
+                compare_expected,
+            } => {
+                write!(f, "atomic_{}({}, {}, {}", op, buffer, index, value)?;
+                if let Some(expected) = compare_expected {
+                    write!(f, ", {}", expected)?;
+                }
                 write!(f, ")")
             }
             Rvalue::Aggregate(kind, ops) => write_aggregate(f, kind, ops),
