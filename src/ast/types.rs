@@ -89,7 +89,8 @@ pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
 pub const KERNEL_TYPE_NAME: &str = "Kernel";
 
 /// Canonical implicit identifier bound to the kernel context inside `gpu fn`
-/// bodies. Exposes `thread_idx` / `block_idx` / `block_dim` / `grid_dim`.
+/// bodies. Exposes `thread_idx` / `block_idx` / `block_dim` / `grid_dim` /
+/// `global_idx`.
 pub const KERNEL_CONTEXT_IDENT: &str = "kernel";
 
 /// Deprecated spelling of [`KERNEL_CONTEXT_IDENT`]. Still bound for one release

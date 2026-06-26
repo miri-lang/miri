@@ -68,3 +68,16 @@ fn test_kernel_block_dim_and_grid_dim() {
     mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::BlockDim(Dimension::X));
     mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GridDim(Dimension::Y));
 }
+
+#[test]
+fn test_kernel_global_idx_all_dimensions() {
+    let source = "
+    gpu fn main()
+        let gx = kernel.global_idx.x
+        let gy = kernel.global_idx.y
+        let gz = kernel.global_idx.z
+";
+    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::X));
+    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::Y));
+    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::Z));
+}

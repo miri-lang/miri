@@ -53,6 +53,29 @@ fn main()
     );
 }
 
+/// A `gpu fn` reading `kernel.global_idx` lowers through the real pipeline to
+/// the `global_invocation_id` builtin and emits naga-valid WGSL.
+#[test]
+fn kernel_global_idx_emits_global_invocation_id() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu fn my_kernel(src Array<i32, 4>)
+    let i = kernel.global_idx.x
+    let v = src[i]
+";
+    let wgsl = super::helpers::compile_to_wgsl(source);
+    // The u32 builtin is coerced to the i32 destination local so naga accepts
+    // the assignment into the kernel's `Int`-typed index variable.
+    assert!(
+        wgsl.contains("i32(_global_id.x)"),
+        "expected global_invocation_id coerced to i32, got:\n{}",
+        wgsl
+    );
+    assert_gpu_wgsl_valid(source);
+}
+
 /// Per-(scalar, op-kind) coverage grid for the WGSL backend.
 ///
 /// For every Miri primitive that today round-trips into a WGSL storage buffer
