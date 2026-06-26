@@ -237,6 +237,12 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
+        // `out` is a contextual keyword reserved only in parameter position: it
+        // is the `name out Type` out-parameter marker, so it cannot also name a
+        // parameter. Elsewhere `out` parses as an ordinary identifier.
+        if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
+            return Err(self.error_unexpected_token("identifier", "out"));
+        }
         let name = self.simple_identifier()?;
 
         let is_out = if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
