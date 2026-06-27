@@ -7,8 +7,6 @@ use super::utils::*;
 fn test_string_iteration_basic() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 for ch in "abc"
     print(ch)
@@ -21,7 +19,6 @@ for ch in "abc"
 fn test_string_iteration_empty() {
     assert_runs(
         r#"
-use system.string
 
 for ch in ""
     let _ = ch
@@ -33,8 +30,6 @@ for ch in ""
 fn test_string_iteration_println() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 for ch in "hi"
     println(ch)

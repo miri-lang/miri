@@ -54,7 +54,6 @@ fn test_not_with_and_or() {
 fn test_and_short_circuits_on_false_lhs() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var x = 0
 let result = if false and (1 / x == 0)
@@ -71,7 +70,6 @@ println(f"{result}")
 fn test_or_short_circuits_on_true_lhs() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var x = 0
 let result = if true or (1 / x == 0)
@@ -88,7 +86,6 @@ println(f"{result}")
 fn test_comparison_result_in_bool_var() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = 5
 let b = 10
@@ -110,7 +107,6 @@ println(f"{r3}")
 fn test_bool_var_chained_logic() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 7
 let in_range = x > 0 and x < 10

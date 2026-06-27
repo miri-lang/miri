@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_fstring_int() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 42
 print(f"{x}")
@@ -20,7 +19,6 @@ print(f"{x}")
 fn test_fstring_float() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 3.14
 print(f"{x}")
@@ -33,7 +31,6 @@ print(f"{x}")
 fn test_fstring_bool() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = true
 print(f"{x}")
@@ -46,7 +43,6 @@ print(f"{x}")
 fn test_fstring_mixed_types() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let name = "Miri"
 let version = 1
@@ -61,7 +57,6 @@ print(f"{name} v{version} active={active}")
 fn test_fstring_nested_expressions() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = 10
 let b = 20

@@ -4,7 +4,6 @@
 // Tests for `Sequenced<T>` defaults: take, skip, sorted_by, unique, reversed,
 // zip, enumerate. Exercised via List.
 
-use system.io
 use system.collections.list
 use system.collections.tuple
 use system.testing

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_until_loop() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 var i = 0
 until i >= 5
@@ -23,7 +22,6 @@ print(f"{x}")
 fn test_until_loop_never_enters() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 42
 until true
     x = 0

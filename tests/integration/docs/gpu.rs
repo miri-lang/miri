@@ -28,7 +28,6 @@ fn doc_vector_add() {
     assert_gpu_runs_with_output(
         "
 use system.gpu
-use system.io
 use system.collections.array
 
 const N = 4
@@ -71,7 +70,6 @@ fn doc_buffer_reuse() {
     assert_gpu_runs_with_output(
         "
 use system.gpu
-use system.io
 
 const N = 8
 
@@ -111,7 +109,6 @@ fn doc_matmul() {
     assert_gpu_runs_with_output(
         "
 use system.gpu
-use system.io
 use system.collections.array
 
 gpu let a = [1.0, 2.0, 3.0, 4.0]
@@ -154,7 +151,6 @@ fn doc_saxpy() {
     assert_gpu_runs_with_output(
         "
 use system.gpu
-use system.io
 
 const N = 4
 
@@ -191,7 +187,6 @@ fn doc_readback_then_host_loop() {
     assert_gpu_runs_with_output(
         "
 use system.gpu
-use system.io
 
 gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
 
@@ -225,7 +220,6 @@ fn doc_forbidden_element_read() {
     assert_compiler_error(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]

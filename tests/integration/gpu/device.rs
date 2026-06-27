@@ -38,7 +38,6 @@ pub fn gpu_adapter_available() -> bool {
     *GPU_ADAPTER_AVAILABLE.get_or_init(|| {
         let probe_source = "
 use system.gpu
-use system.io
 use system.collections.array
 
 gpu let probe_a = [1, 2, 3, 4]

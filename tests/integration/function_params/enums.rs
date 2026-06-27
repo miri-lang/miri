@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_enum_param_single_variant() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Ok
@@ -30,7 +29,6 @@ fn main()
 fn test_enum_param_error_variant() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Ok
@@ -53,7 +51,6 @@ fn main()
 fn test_enum_param_three_variants() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Color
     Red
@@ -79,7 +76,6 @@ fn main()
 fn test_enum_return_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Toggle
     On

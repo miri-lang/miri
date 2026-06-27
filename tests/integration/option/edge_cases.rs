@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_nested_options() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let opt Option<Option<int>> = Some(Some(42))
@@ -32,7 +31,6 @@ fn main()
 fn test_options_in_collections() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -52,7 +50,6 @@ fn main()
 fn test_option_equality() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let a int? = Some(1)
@@ -78,7 +75,6 @@ fn main()
 fn test_function_returning_option_early_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn get_value(condition bool) String?
     if condition

@@ -15,7 +15,6 @@ fn test_unless_inline() {
 fn test_unless_block() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 3
 unless x > 10
     x = x + 1
@@ -29,7 +28,6 @@ print(f"{x}")
 fn test_unless_block_condition_true() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 20
 unless x > 10
     x = 0
@@ -43,7 +41,6 @@ print(f"{x}")
 fn test_unless_block_with_else() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 15
 unless x < 10
     x = 99

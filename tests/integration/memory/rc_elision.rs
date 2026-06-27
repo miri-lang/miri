@@ -15,7 +15,6 @@ use super::super::utils::*;
 fn test_linear_element_access_correct() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -33,7 +32,6 @@ fn main()
 fn test_multiple_linear_accesses_correct() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -55,7 +53,6 @@ fn main()
 fn test_param_element_access_no_corruption() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn first(items [int]) int:
@@ -81,7 +78,6 @@ fn main()
 fn test_aliased_list_correct() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -101,7 +97,6 @@ fn main()
 fn test_resource_type_destructor_fires() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Counter
     value int
@@ -122,7 +117,6 @@ fn main()
 fn test_linear_access_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -139,7 +133,6 @@ fn main()
 fn test_linear_pass_through_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn get_elem(items [int], idx int) int:
@@ -164,8 +157,6 @@ fn main()
 fn test_string_linear_access_correct() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn greet(name String) String:
     return f"Hello, {name}!"
@@ -184,7 +175,6 @@ fn main()
 fn test_mixed_linear_and_aliased_correct() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_destructuring() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let t = (10, 20)
 let sum = match t

@@ -11,7 +11,6 @@ use super::super::utils::*;
 fn test_list_use_after_move_error() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -33,7 +32,6 @@ println(f"{x.length()}")
 fn test_list_clone_fixes_use_after_move() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -55,7 +53,6 @@ println(f"{x.length()}")
 fn test_auto_copy_struct_exempt_from_move() {
     assert_runs(
         r#"
-use system.io
 
 struct Point
     x float
@@ -79,7 +76,6 @@ println(f"{p.x}")
 fn test_string_use_after_move_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 fn consume(s String)
     return
@@ -100,7 +96,6 @@ println(s)
 fn test_no_move_compiles_fine() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -120,7 +115,6 @@ process(x)
 fn test_primitive_int_always_copied() {
     assert_runs(
         r#"
-use system.io
 
 fn double(n int) int
     return n * 2
@@ -140,7 +134,6 @@ println(f"{n}")
 fn test_method_receiver_not_consumed() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 let x = List([1, 2, 3])
@@ -160,7 +153,6 @@ println(f"{l2}")
 fn test_consuming_one_var_does_not_affect_other() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -182,7 +174,6 @@ println(f"{y.length()}")
 fn test_custom_class_use_after_move_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 class Buffer
     var data String
@@ -206,7 +197,6 @@ println(b.data)
 fn test_reassignment_revives_consumed_variable() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -229,7 +219,6 @@ println(f"{x.length()}")
 fn test_use_after_move_error_still_reported_after_fresh_consume() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -253,7 +242,6 @@ println(f"{x.length()}")
 fn test_map_use_after_move_error() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.map
 
 fn consume(m Map<String, int>)
@@ -275,7 +263,6 @@ println(f"{m.length()}")
 fn test_set_use_after_move_error() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.set
 
 fn consume(s Set<int>)
@@ -297,7 +284,6 @@ println(f"{s.length()}")
 fn test_consume_in_then_branch_only_not_flagged_after_if() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -320,7 +306,6 @@ println("ok")
 fn test_else_branch_not_poisoned_by_then_consume() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -344,7 +329,6 @@ else
 fn test_consume_in_both_branches_is_consumed_after_if() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn process(x [int])
@@ -366,7 +350,6 @@ println(f"{x.length()}")
 fn test_resource_consumed_twice_in_function_body() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -390,7 +373,6 @@ handle(Conn(handle: 1))
 fn test_managed_type_not_consumed_in_function_body() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn step(l [int])
@@ -410,7 +392,6 @@ println("ok")
 fn test_resource_consumed_at_top_level_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Res
     x int
@@ -432,7 +413,6 @@ sink(r)
 fn test_resource_consumed_once_in_function_body_ok() {
     assert_runs(
         r#"
-use system.io
 
 struct Res
     x int
@@ -455,7 +435,6 @@ println("ok")
 fn test_resource_alias_then_use_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -481,7 +460,6 @@ log_conn(c)
 fn test_resource_alias_then_use_in_function_body_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -505,7 +483,6 @@ handle_conn(Conn(handle: 1))
 fn test_managed_alias_compiles_cleanly() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 let xs = List([1, 2, 3])
@@ -519,7 +496,6 @@ println(f"{xs.length()}")
 fn test_resource_alias_reassignment_revives() {
     assert_runs(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -543,7 +519,6 @@ println("ok")
 fn test_resource_passed_to_fn_consumed_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -565,7 +540,6 @@ println(f"{c.handle}")
 fn test_resource_consumed_in_body_second_use_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -589,7 +563,6 @@ process(Conn(handle: 1))
 fn test_managed_type_in_function_body_no_error() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn helper(items [int])
@@ -609,7 +582,6 @@ println("ok")
 fn test_resource_conditional_consume_no_else_compiles() {
     assert_runs(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -632,7 +604,6 @@ println("ok")
 fn test_dynamic_fn_param_callee_consumes_managed_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn apply(items [int], f fn(xs [int]) int)
@@ -650,7 +621,6 @@ fn test_dynamic_fn_param_diagnostic_names_dynamic_fn() {
     // The sink description must mention the dynamic-fn fallback so that the
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn apply(items [int], f fn(xs [int]) int)
@@ -667,7 +637,6 @@ apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
 fn test_dynamic_fn_let_bound_branch_consumes_managed_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn save(xs [int]) int
@@ -691,7 +660,6 @@ process(List([1, 2, 3]), true)
 fn test_dynamic_fn_param_clone_workaround_compiles() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -708,7 +676,6 @@ apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
 fn test_literal_free_fn_does_not_trigger_dynamic_fallback() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn helper(xs [int])
@@ -727,7 +694,6 @@ process(List([1, 2, 3]))
 fn test_dynamic_fn_lambda_param_callee_consumes_managed_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn run()
@@ -747,7 +713,6 @@ run()
 fn test_dynamic_fn_for_loop_pattern_callee_consumes_managed_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn run(fns [fn(xs [int]) int], items [int])
@@ -768,7 +733,6 @@ fn test_dynamic_fn_for_loop_does_not_leak_binding_past_loop() {
     // calls to the free `helper` to be classified as dynamic.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn helper(xs [int])

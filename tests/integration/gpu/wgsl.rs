@@ -455,7 +455,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [1.0, 4.0, 9.0, 16.0]
@@ -535,7 +534,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [0.0]
@@ -578,7 +576,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [3.0]
@@ -621,7 +618,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [8.0]
@@ -664,7 +660,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [2.25]
@@ -707,7 +702,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [-3.0, 0.0, 2.0]
@@ -751,7 +745,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [1.0]
@@ -796,7 +789,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let edge = [0.5]
@@ -840,7 +832,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [-1.0, 0.5, 5.0]
@@ -885,7 +876,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [0.0]
@@ -929,7 +919,6 @@ fn main()
 use system.gpu
 use system.collections.array
 use system.math
-use system.io
 
 fn main()
     gpu let a = [0.5]
@@ -1498,7 +1487,6 @@ mod int_marshalling {
     fn small_int_values_round_trip_with_marshalling() {
         // Small values (< i32::MAX) should round-trip correctly.
         let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -1520,7 +1508,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]}')
     fn int_arithmetic_after_marshalling_is_correct() {
         // Arithmetic on marshalled values should be correct.
         let source = "
-use system.io
 use system.gpu
 use system.collections.array
 

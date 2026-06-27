@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_result_ok_match() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn divide(a int, b int) Result<int, String>
@@ -28,7 +27,6 @@ fn main()
 fn test_result_err_match() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn divide(a int, b int) Result<int, String>
@@ -49,7 +47,6 @@ fn main()
 fn test_result_ok_construction() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -66,7 +63,6 @@ fn main()
 fn test_result_err_construction() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -83,7 +79,6 @@ fn main()
 fn test_result_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn parse_positive(n int) Result<int, String>

@@ -59,7 +59,6 @@ fn test_float_ge() {
 fn test_f64_eq() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn cmp_f64(a f64, b f64) int
     if a == b
@@ -79,7 +78,6 @@ fn main()
 fn test_f64_lt() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn lt_f64(a f64, b f64) int
     if a < b
@@ -99,7 +97,6 @@ fn main()
 fn test_f64_gt() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn gt_f64(a f64, b f64) int
     if a > b
@@ -119,7 +116,6 @@ fn main()
 fn test_f64_le_boundary() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn le_f64(a f64, b f64) int
     if a <= b
@@ -140,7 +136,6 @@ fn main()
 fn test_f64_ge_boundary() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn ge_f64(a f64, b f64) int
     if a >= b
@@ -161,7 +156,6 @@ fn main()
 fn test_f32_all_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn eq_f32(a f32, b f32) int
     if a == b

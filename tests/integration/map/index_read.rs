@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_index_read_int_value() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let m = {"a": 1, "b": 2, "c": 3}
 let a = m["a"]
@@ -25,7 +24,6 @@ println(f"{c}")
 fn map_index_read_single_entry() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let m = {"key": 42}
 let v = m["key"]

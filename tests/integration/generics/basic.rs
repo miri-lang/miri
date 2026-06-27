@@ -9,7 +9,6 @@ use super::utils::*;
 fn test_identity_int() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -25,7 +24,6 @@ fn main()
 fn test_identity_string() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -41,7 +39,6 @@ fn main()
 fn test_identity_two_instantiations() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -58,7 +55,6 @@ fn main()
 fn test_identity_float() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -75,7 +71,6 @@ fn main()
 fn test_identity_bool() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -93,7 +88,6 @@ fn main()
 fn test_generic_wrap_int() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn wrap<T>(val T) T
     val
@@ -110,7 +104,6 @@ fn main()
 fn test_generic_result_used_in_expression() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x
@@ -128,7 +121,6 @@ fn main()
 fn test_generic_called_multiple_times_same_type() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<T>(x T) T
     x

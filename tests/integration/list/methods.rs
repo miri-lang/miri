@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_push_pop() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List<int>()
@@ -25,7 +24,6 @@ println(f\"{l.length()}\")
 fn list_insert_remove_at() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 3])
@@ -42,7 +40,6 @@ println(f\"{l.length()}\")
 fn list_remove_by_value() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -59,7 +56,6 @@ println(f\"{l[1]}\")
 fn list_clear() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 2, 3])
@@ -75,7 +71,6 @@ println(f\"{l.is_empty()}\")
 fn list_reverse() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 2, 3])
@@ -90,7 +85,6 @@ println(f\"{l[0]} {l[1]} {l[2]}\")
 fn list_baselist_queries() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -108,7 +102,6 @@ println(f\"{l.last_index()}\")
 fn list_sort() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([30, 10, 20, 5])
@@ -123,7 +116,6 @@ println(f\"{l[0]} {l[1]} {l[2]} {l[3]}\")
 fn list_get_method() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -138,7 +130,6 @@ println(f\"{l.get(2)}\")
 fn list_set_method() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -153,7 +144,6 @@ println(f\"{l[0]} {l[1]} {l[2]}\")
 fn list_element_at() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -167,7 +157,6 @@ println(f\"{l.element_at(1)}\")
 fn list_remove_duplicate() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 20, 30])

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_recursive_factorial() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn factorial(n int) int
     if n <= 1
@@ -26,7 +25,6 @@ fn main()
 fn test_recursive_fibonacci() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn fib(n int) int
     if n <= 1

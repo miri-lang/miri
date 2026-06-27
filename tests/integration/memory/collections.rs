@@ -12,7 +12,6 @@ fn test_list_of_lists_no_leak() {
     // Inner Lists are managed objects; outer List must DecRef each on drop.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -32,7 +31,6 @@ fn test_list_of_lists_aliased_inner_no_double_free() {
     // After outer is dropped inner must still have RC = 1.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -50,7 +48,6 @@ fn test_list_push_many_then_drop() {
     // Grow a list via push; all pushed managed values must be freed on drop.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -74,7 +71,6 @@ fn test_list_clear_then_drop() {
     // must not attempt to free ghost elements.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -91,7 +87,6 @@ fn test_list_remove_at_frees_element() {
     // remove_at must DecRef the removed element.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -107,7 +102,6 @@ fn main()
 fn test_map_with_list_values_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.list
 
@@ -124,7 +118,6 @@ fn test_map_set_replaces_value_frees_old() {
     // Overwriting an existing key must DecRef the old value list.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.list
 
@@ -143,7 +136,6 @@ fn test_map_remove_key_frees_value() {
     // Removing a key must DecRef the associated value.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.list
 
@@ -160,7 +152,6 @@ fn main()
 fn test_map_clear_frees_all_values() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.list
 
@@ -177,7 +168,6 @@ fn main()
 fn test_map_with_class_values_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Point
@@ -197,7 +187,6 @@ fn test_set_add_remove_no_leak() {
     // add + remove pairs must balance IncRef/DecRef.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -214,7 +203,6 @@ fn main()
 fn test_set_clear_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -231,7 +219,6 @@ fn test_array_of_lists_no_leak() {
     // Fixed-size Array whose elements are managed Lists.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 
@@ -248,7 +235,6 @@ fn test_three_level_list_nesting_no_leak() {
     // List<List<List<int>>>: three independent RC layers.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -267,7 +253,6 @@ fn test_array_of_lists_set_method_no_leak() {
     // local alias still lives, causing a use-after-free crash.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 
@@ -290,7 +275,6 @@ fn test_array_of_lists_set_preserves_alias() {
     // once — net result RC=1 on the alias, which must remain readable.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 
@@ -310,7 +294,6 @@ fn test_list_of_lists_set_method_no_leak() {
     // on the old inner list so it is properly released.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -332,7 +315,6 @@ fn test_list_of_lists_remove_at_loop_no_leak() {
     // elem_drop_fn on the outer list must DecRef each removed inner list.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -355,7 +337,6 @@ fn test_list_of_arrays_remove_at_no_leak() {
     // removed inner array.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -378,7 +359,6 @@ fn test_list_of_sets_remove_at_no_leak() {
     // removed inner set.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 use system.collections.set
 
@@ -404,7 +384,6 @@ fn test_array_of_lists_scope_exit_and_mutation_combined() {
     // If both paths fire on the same element, RC hits 0 twice → use-after-free crash.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 

@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_runtime_oob_crash() {
     assert_runtime_crash(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 2, 3])

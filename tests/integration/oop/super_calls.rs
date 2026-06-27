@@ -8,7 +8,6 @@ fn test_super_method_calls_self_method() {
     // Parent method calls another method on self — verifies self pointer is valid (not null)
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -39,7 +38,6 @@ fn test_super_method_reads_own_field_via_self() {
     // real self pointer so the value set in child's init is visible.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -65,7 +63,6 @@ fn test_super_method_modifies_field_visible_in_child() {
     // Parent method mutates `self.value`; after super.reset() the child sees 0.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Base
     var value int
@@ -92,7 +89,6 @@ fn test_super_method_call_basic() {
     // Dog.speak() calls super.speak() then prints its own message
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -118,7 +114,6 @@ fn test_super_method_call_only() {
     // Dog.speak() only calls super.speak() — output should be just the parent's
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -143,7 +138,6 @@ fn test_super_method_with_return_value() {
     // Child adds 1 to parent's returned value via super call
     assert_runs_with_output(
         r#"
-use system.io
 
 class Shape
     var id int
@@ -169,7 +163,6 @@ fn test_super_method_multi_level() {
     // Poodle.speak() → super.speak() resolves to Dog.speak() (not Animal.speak())
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -200,7 +193,6 @@ fn test_super_method_skips_one_level() {
     // Poodle.speak() → super.speak() → Dog.speak() → super.speak() → Animal.speak()
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String

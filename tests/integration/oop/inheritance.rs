@@ -8,7 +8,6 @@ fn test_inherited_method_basic() {
     // Dog extends Animal but does not override speak — must resolve to Animal_speak
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -31,7 +30,6 @@ fn test_overridden_method_uses_child_impl() {
     // Dog overrides speak — must call Dog_speak, not Animal_speak
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -56,7 +54,6 @@ fn test_multi_level_inheritance_calls_grandparent() {
     // Poodle extends Dog extends Animal — speak only on Animal
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -82,7 +79,6 @@ fn test_override_at_middle_level_of_chain() {
     // Poodle extends Dog extends Animal — Dog overrides speak, Poodle does not
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -110,7 +106,6 @@ fn test_inherited_method_with_return_value() {
     // Inherited method that returns int
     assert_runs_with_output(
         r#"
-use system.io
 
 class Shape
     var id int
@@ -133,7 +128,6 @@ fn test_both_own_and_inherited_methods() {
     // Dog has its own method AND inherits speak from Animal
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -159,7 +153,6 @@ fn test_inherited_init_no_own_fields() {
     // Dog has no own fields; constructor must detect and call Animal_init
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -181,7 +174,6 @@ fn test_parent_method_reads_inherited_field() {
     // Animal.speak reads self.name; must use correct offset when called on Dog instance
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -205,7 +197,6 @@ fn test_subclass_method_reads_inherited_field() {
     // DoubleCounter.doubled() reads self.count which is an inherited field
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -230,7 +221,6 @@ fn test_extends_generic_base_substitutes_param_int() {
     // `push(value int)` must be accepted: T = int after substitution.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Stack<T>
     var marker int
@@ -259,7 +249,6 @@ fn test_extends_generic_base_rejects_wrong_param() {
     // with the substituted expected type, not the bare `T`.
     assert_compiler_error(
         r#"
-use system.io
 
 class Stack<T>
     var top T
@@ -285,7 +274,6 @@ fn test_extends_generic_base_rejects_wrong_return() {
     // with `unwrap() int` must be rejected; substituted return type is String.
     assert_compiler_error(
         r#"
-use system.io
 
 class Box<T>
     var item T
@@ -312,7 +300,6 @@ fn test_extends_generic_chain_composition_propagates() {
     // in C must be accepted.
     assert_runs_with_output(
         r#"
-use system.io
 
 class A<V>
     fn ancestor_method(value V) int
@@ -340,7 +327,6 @@ fn test_extends_generic_chain_composition_works_out_of_order() {
     // generic ancestors.
     assert_runs_with_output(
         r#"
-use system.io
 
 class C extends B<int>
     fn ancestor_method(value int) int
@@ -389,7 +375,6 @@ fn test_field_layout_base_fields_before_derived() {
     // Animal.init sets self.name; Dog.init calls super.init then sets self.breed.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -421,7 +406,6 @@ fn test_self_field_read_modify_write_scalar() {
     // Perceus to DecRef an integer value as if it were a managed pointer.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -449,7 +433,6 @@ fn test_self_field_unary_negate_scalar() {
     // causing Perceus to mis-type the result and the program to crash.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Signed
     var v int

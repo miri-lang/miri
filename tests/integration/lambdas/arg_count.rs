@@ -66,7 +66,6 @@ fn main()
 fn test_lambda_correct_call() {
     assert_type_checks(
         r#"
-use system.io
 
 fn main()
     let add = fn(a int, b int) int: a + b
@@ -80,7 +79,6 @@ fn test_lambda_passed_to_function_correct_arity() {
     // Lambda passed as a higher-order function argument — arity must still check.
     assert_type_checks(
         r#"
-use system.io
 
 fn apply(f fn(x int) int, n int) int
     f(n)

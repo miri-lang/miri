@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_indexing() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -23,7 +22,6 @@ println(f\"{l[2]}\")
 fn list_indexing_first_element() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([42, 99])
@@ -37,7 +35,6 @@ println(f\"{l[0]}\")
 fn list_fstring_element() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([7, 8, 9])
@@ -51,7 +48,6 @@ println(f\"{l[1]}\")
 fn list_for_loop() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 2, 3])
@@ -66,7 +62,6 @@ for x in l
 fn list_for_loop_with_index() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([10, 20, 30])
@@ -81,7 +76,6 @@ for x, idx in l
 fn list_push_multiple_then_iterate() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List<int>()

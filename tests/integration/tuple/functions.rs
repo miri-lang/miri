@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_passed_to_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn print_tuple(t (int, String))
     println(f"{t.0} {t.1}")
@@ -24,7 +23,6 @@ fn main()
 fn test_tuple_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn make_tuple() (int, bool)
     return (99, true)
@@ -41,7 +39,6 @@ fn main()
 fn test_tuple_passed_to_function_with_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 fn sum_tuple(t (int, int, int)) int
@@ -62,7 +59,6 @@ fn main()
 fn test_tuple_returned_from_function_with_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 fn make_triple() (int, int, int)

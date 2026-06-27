@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_struct_with_nested_collections() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 struct Complex
@@ -30,7 +29,6 @@ fn main()
 fn test_struct_equality_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int

@@ -8,7 +8,6 @@
 // compiler (constant comes through as i64 even when declared as float).
 // Tracked separately; once fixed, the qualified prefix can be dropped.
 
-use system.io
 use system.math as M
 use system.testing
 

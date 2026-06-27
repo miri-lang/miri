@@ -26,7 +26,6 @@ fn two_stage_pipeline_reuses_one_device_buffer() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()
@@ -60,7 +59,6 @@ fn third_capture_adds_launch_not_upload() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()
@@ -101,7 +99,6 @@ fn redeclared_binding_in_repeated_call_reuploads() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn run() int
     gpu var data = [0, 0, 0, 0]
@@ -136,7 +133,6 @@ fn two_readbacks_each_fence_and_survive() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()
@@ -168,7 +164,6 @@ fn gpu_var_assignment_from_host_array_uploads() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()
@@ -206,7 +201,6 @@ fn gpu_var_assignment_uploads_count() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()

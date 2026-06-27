@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_enum_match_in_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Direction
     North
@@ -34,7 +33,6 @@ fn main()
 fn test_enum_param_match_all_variants() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Signal
     Red
@@ -63,7 +61,6 @@ fn main()
 fn test_enum_match_returns_enum() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Toggle
     On

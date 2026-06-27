@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_passed_to_function() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn get_value(m Map<String, int>, key String) int
@@ -26,7 +25,6 @@ fn main()
 fn map_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn make_map() Map<String, int>

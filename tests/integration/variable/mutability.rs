@@ -7,7 +7,6 @@ use super::utils::*;
 fn mutability_checks() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var x = 10
 x = 20

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_option_some() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     let result = match input
@@ -25,7 +24,6 @@ test("Hello")
 fn test_match_option_none() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     let result = match input
@@ -43,7 +41,6 @@ test(None)
 fn test_if_let_some() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     if let Some(s) = input
@@ -59,7 +56,6 @@ test("Hello")
 fn test_if_let_some_none_skips() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     if let Some(s) = input
@@ -76,7 +72,6 @@ test(None)
 fn test_if_var_some_mutable() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     if var Some(s) = input
@@ -93,7 +88,6 @@ test("Hello")
 fn test_if_var_some_none_skips() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     if var Some(s) = input
@@ -110,7 +104,6 @@ test(None)
 fn test_while_let_some() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     while let Some(s) = input
@@ -127,7 +120,6 @@ test("Hello")
 fn test_while_let_some_none_skips() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     while let Some(s) = input
@@ -145,7 +137,6 @@ test(None)
 fn test_while_var_some_mutable() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn test(input String?)
     while var Some(s) = input

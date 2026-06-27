@@ -10,7 +10,6 @@ fn test_abstract_method_override_executes() {
     // Concrete subclass overrides abstract fn speak() — must call Dog_speak.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Animal
     abstract fn speak()
@@ -32,7 +31,6 @@ fn test_two_subclasses_each_override_abstract() {
     // Two concrete subclasses — each must call their own override.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Shape
     abstract fn area() int
@@ -64,7 +62,6 @@ fn test_abstract_class_concrete_method_inherited() {
     // The concrete method is inherited by the subclass and works independently.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Vehicle
     abstract fn fuel_type() String
@@ -90,7 +87,6 @@ fn test_abstract_chain_intermediate_abstract() {
     // Only the leaf class is concrete and provides the override.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Base
     abstract fn greet()
@@ -114,7 +110,6 @@ fn test_multiple_abstract_methods_all_overridden() {
     // Concrete class must override all abstract methods.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Printer
     abstract fn header()
@@ -144,7 +139,6 @@ fn test_abstract_method_with_parameters() {
     // Abstract method with parameters and return value.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Adder
     abstract fn add(a int, b int) int
@@ -169,7 +163,6 @@ fn test_virtual_dispatch_via_abstract_variable() {
     // dispatch to the concrete override at runtime.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Animal
     abstract fn speak()
@@ -192,7 +185,6 @@ fn test_virtual_dispatch_multiple_concrete_types() {
     // must go to the right override at runtime.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Animal
     abstract fn speak()
@@ -223,7 +215,6 @@ fn test_concrete_method_in_abstract_calls_abstract_method() {
     // It must resolve to the subclass override without a linker error.
     assert_runs_with_output(
         r#"
-use system.io
 
 abstract class Greeter
     abstract fn name() String

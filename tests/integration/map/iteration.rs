@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_for_loop_custom_type() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let items = Map<int, int>()
@@ -25,7 +24,6 @@ for k, v in items
 fn map_for_loop_keys() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {1: 10, 2: 20, 3: 30}
@@ -42,7 +40,6 @@ println(f"{sum}")
 fn map_for_loop_keys_and_values() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {1: 10, 2: 20, 3: 30}
@@ -62,7 +59,6 @@ println(f"{val_sum}")
 fn map_iterate_empty_instantiated() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = Map<int, int>()

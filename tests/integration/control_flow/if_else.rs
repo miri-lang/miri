@@ -12,7 +12,6 @@ fn test_if_else_inline() {
 fn test_if_else_block() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 10
 let y = if x > 5
@@ -29,7 +28,6 @@ print(f"{y}")
 fn test_if_else_if_else() {
     assert_runs_with_output(
         r#"
-use system.io
 let x = 5
 let y = if x > 10
     100
@@ -47,7 +45,6 @@ print(f"{y}")
 fn test_nested_if() {
     assert_runs_with_output(
         r#"
-use system.io
 let x = 15
 let y = if x > 10
     if x > 20

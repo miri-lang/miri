@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_cast_int_to_float() {
     assert_runs_with_output(
         r#"
-        use system.io
         let x = 3 as float
         let result = x * 0.25
         println(f'{result}')
@@ -21,7 +20,6 @@ fn test_cast_float_to_int() {
     assert_runs_with_output(
         r#"
         use system.math
-        use system.io
         let y = floor(3.9) as int
         println(f'{y}')
         "#,
@@ -33,7 +31,6 @@ fn test_cast_float_to_int() {
 fn test_cast_float_to_int_truncates_toward_zero() {
     assert_runs_with_output(
         r#"
-        use system.io
         let x = 2.7 as int
         println(f'{x}')
         "#,
@@ -45,7 +42,6 @@ fn test_cast_float_to_int_truncates_toward_zero() {
 fn test_cast_precedence_multiply() {
     assert_runs_with_output(
         r#"
-        use system.io
         let i = 4
         let result = i as float * 0.25
         println(f'{result}')
@@ -58,7 +54,6 @@ fn test_cast_precedence_multiply() {
 fn test_cast_precedence_subtract() {
     assert_runs_with_output(
         r#"
-        use system.io
         let i = 5
         let result = (i as float) - (1 as float)
         println(f'{result}')
@@ -71,7 +66,6 @@ fn test_cast_precedence_subtract() {
 fn test_cast_int_to_float_roundtrip() {
     assert_runs_with_output(
         r#"
-        use system.io
         let x = 42
         let fx = x as float
         let ix = fx as int
@@ -85,7 +79,6 @@ fn test_cast_int_to_float_roundtrip() {
 fn test_cast_i32_to_float() {
     assert_runs_with_output(
         r#"
-        use system.io
         let x = 300 as i32
         let fx = x as float
         println(f'{fx}')
@@ -98,7 +91,6 @@ fn test_cast_i32_to_float() {
 fn test_cast_rejects_string() {
     assert_compiler_error(
         r#"
-        use system.io
         let x = "hello" as int
         "#,
         "cast",
@@ -109,7 +101,6 @@ fn test_cast_rejects_string() {
 fn test_cast_rejects_list() {
     assert_compiler_error(
         r#"
-        use system.io
         let x = [1, 2] as int
         "#,
         "cast",
@@ -120,7 +111,6 @@ fn test_cast_rejects_list() {
 fn test_cast_rejects_bool() {
     assert_compiler_error(
         r#"
-        use system.io
         let x = true as float
         "#,
         "cast",

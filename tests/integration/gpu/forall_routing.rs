@@ -23,7 +23,6 @@ fn bare_forall_with_gpu_resident_capture_routes_to_gpu() {
         "
 use system.gpu
 use system.collections.array
-use system.io
 
 fn main()
     gpu let g = [1, 2, 3]
@@ -43,7 +42,6 @@ fn main()
 fn bare_forall_with_only_host_captures_routes_to_cpu() {
     assert_runs_with_output(
         "
-use system.io
 
 fn main()
     let a = [10, 20, 30]

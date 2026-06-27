@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_set_clear_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1}
 s.clear()
@@ -35,7 +34,6 @@ let x = s.element_at(99)
 fn test_set_large_reallocation() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 var s = {0}

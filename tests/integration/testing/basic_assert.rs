@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_assert_true_passes_silently() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -61,7 +60,6 @@ fn main()
 fn test_assert_true_with_message_does_not_panic() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -78,7 +76,6 @@ fn test_assert_inside_user_function_pass() {
     // a function with an explicit allocator parameter.
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn require(x int)

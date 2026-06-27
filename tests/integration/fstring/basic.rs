@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_fstring_expression() {
     assert_runs_with_output(
         r#"
-use system.io
 
 print(f"{2 + 3 * 4}")
 "#,
@@ -19,7 +18,6 @@ print(f"{2 + 3 * 4}")
 fn test_fstring_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 
 print(f"")
 "#,
@@ -31,7 +29,6 @@ print(f"")
 fn test_fstring_no_interpolation() {
     assert_runs_with_output(
         r#"
-use system.io
 
 print(f"just a plain string")
 "#,
@@ -43,7 +40,6 @@ print(f"just a plain string")
 fn test_fstring_same_variable_twice() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 5
 print(f"{x} + {x} = {x + x}")

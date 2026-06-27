@@ -9,8 +9,6 @@ use super::utils::*;
 fn test_string_alias_then_reassign_original() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     var x = "hello"
@@ -28,8 +26,6 @@ fn main()
 fn test_string_simple_reassignment() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     var s = "hello"
@@ -46,8 +42,6 @@ fn main()
 fn test_string_consume_in_function() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn consume(s String)
     println(s)
@@ -65,8 +59,6 @@ fn main()
 fn test_string_alias_survives_callee() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn take(s String)
     let x = 1
@@ -86,8 +78,6 @@ fn main()
 fn test_string_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn make() String
     let s = "returned"
@@ -106,8 +96,6 @@ fn main()
 fn test_string_rc_aliasing() {
     assert_runs(
         r#"
-use system.io
-use system.string
 
 fn consume(s String)
     // s goes out of scope here, should not drop underlying buffer if RC > 1

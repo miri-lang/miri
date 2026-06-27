@@ -17,7 +17,6 @@ fn element_cross_read_from_host_is_rejected() {
     assert_compiler_error(
         "
 use system.collections.array
-use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -82,7 +81,6 @@ fn println_gpu_resident_is_rejected() {
     assert_compiler_error(
         "
 use system.collections.array
-use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
@@ -170,7 +168,6 @@ fn vector_add_demo_compiles_and_runs() {
     assert_runs(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
@@ -197,7 +194,6 @@ fn two_readbacks_compile() {
     assert_runs(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
@@ -224,7 +220,6 @@ fn vector_add_demo_value_correctness() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
@@ -256,7 +251,6 @@ fn two_readbacks_produce_independent_host_arrays() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]

@@ -19,7 +19,6 @@ fn variable_declaration() {
 fn implicit_typing() {
     assert_runs_with_output(
         r#"
-use system.io
 let x = 10
 println(f"{x}")
         "#,
@@ -27,7 +26,6 @@ println(f"{x}")
     );
     assert_runs_with_output(
         r#"
-use system.io
 var x = 20
 println(f"{x}")
         "#,
@@ -41,7 +39,6 @@ fn out_is_usable_as_identifier() {
     // marker); everywhere else it parses as an ordinary identifier.
     assert_runs_with_output(
         r#"
-use system.io
 
 var out = 10
 out = out + 5
@@ -51,7 +48,6 @@ println(f"{out}")
     );
     assert_runs_with_output(
         r#"
-use system.io
 
 let out = 42
 println(f"{out}")
@@ -62,7 +58,6 @@ println(f"{out}")
     // member-access property — every position that goes through `identifier()`.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Box
     out int
@@ -78,7 +73,6 @@ println(f"{b.out}")
 fn explicit_typing() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x int = 42
 println(f"{x}")
@@ -87,7 +81,6 @@ println(f"{x}")
     );
     assert_runs_with_output(
         r#"
-use system.io
 
 var y i64 = 100
 println(f"{y}")

@@ -11,7 +11,6 @@ use super::super::utils::*;
 fn test_list_reassigned_many_times_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -30,7 +29,6 @@ fn main()
 fn test_map_reassigned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -47,7 +45,6 @@ fn main()
 fn test_class_reassigned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Payload
@@ -66,7 +63,6 @@ fn main()
 fn test_set_reassigned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -83,7 +79,6 @@ fn test_reassign_while_alias_alive_no_double_free() {
     // After reassigning l1, l2 still holds the old object (RC stayed at 1).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -101,7 +96,6 @@ fn main()
 fn test_chain_of_aliases_then_reassign_each() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -123,7 +117,6 @@ fn main()
 fn test_class_managed_field_reassigned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Bucket
@@ -142,7 +135,6 @@ fn main()
 fn test_class_field_reassigned_many_times_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Holder
@@ -163,7 +155,6 @@ fn main()
 fn test_nested_class_field_reassigned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Inner
     var x int
@@ -187,7 +178,6 @@ fn test_conditional_reassignment_both_branches_no_leak() {
     // the old value must be freed and only the new one survives.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn pick(flag int) int
@@ -212,7 +202,6 @@ fn test_array_reassign_old_freed_no_leak() {
     // var x = [1,2,3]; x = [4,5,6] — old array must be freed, new value printed.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var x = [1, 2, 3]
@@ -229,7 +218,6 @@ fn test_for_range_loop_list_per_iter_no_leak() {
     // iteration end.  Leak check fails if any escapes.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -247,8 +235,6 @@ fn test_string_multiple_reassignments_no_leak() {
     // var s = "hello"; s = "world"; s = "!" — two old strings freed, final printed.
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     var s = "hello"
@@ -265,7 +251,6 @@ fn test_reassign_to_alias_of_self_no_double_free() {
     // x = x: IncRef before DecRef of old, net change zero, no premature free.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_struct_param_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -29,7 +28,6 @@ fn main()
 fn test_struct_param_sum_fields() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -51,7 +49,6 @@ fn main()
 fn test_struct_and_int_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -73,7 +70,6 @@ fn main()
 fn test_struct_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int

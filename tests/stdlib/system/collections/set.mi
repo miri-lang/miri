@@ -3,7 +3,6 @@
 //
 // Tests for `system.collections.set`.
 
-use system.io
 use system.collections.set
 use system.testing
 

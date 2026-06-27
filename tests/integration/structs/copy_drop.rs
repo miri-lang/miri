@@ -9,7 +9,6 @@ fn test_auto_copy_struct_assignment() {
     // Assignment produces a bitwise copy — both variables are usable.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x float
@@ -30,7 +29,6 @@ fn test_auto_copy_struct_pass_to_function() {
     // Auto-copy struct: passing to a function copies — original still usable.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -54,7 +52,6 @@ fn test_auto_copy_nested_struct() {
     // A struct of auto-copy structs is itself auto-copy.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Vec2
     x int
@@ -80,7 +77,6 @@ fn test_drop_struct_with_string_field() {
     // (heap-allocated with RC). When dropped, the String field must be DecRef'd.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Named
     label String
@@ -101,7 +97,6 @@ fn test_drop_struct_with_managed_fields_in_scope() {
     // and the nested String must be released correctly (no leak, no crash).
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Record
     name String
@@ -125,7 +120,6 @@ fn test_drop_struct_with_array_field() {
     // must be freed correctly on drop.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Container
     data [int; 3]
@@ -145,7 +139,6 @@ fn test_auto_copy_negative_managed_struct_aliasing() {
     // Therefore, assignment creates an alias, and mutating one mutates the other.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct ManagedRecord
     label String
@@ -171,7 +164,6 @@ fn test_drop_struct_with_string_and_list_fields() {
     // specialization test.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 struct Container
@@ -193,7 +185,6 @@ fn test_drop_struct_with_list_field_in_scope() {
     // The List must be released (no crash, no leak).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 struct DataBag
@@ -218,7 +209,6 @@ fn test_drop_deeply_nested_struct() {
     // All managed fields must be released transitively.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 struct Inner

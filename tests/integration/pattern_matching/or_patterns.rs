@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_or_patterns_first() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 1
 let result = match x
@@ -24,7 +23,6 @@ print(f"{result}")
 fn test_match_or_patterns_second_arm() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 5
 let result = match x
@@ -41,7 +39,6 @@ print(f"{result}")
 fn test_match_or_patterns_default() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 7
 let result = match x

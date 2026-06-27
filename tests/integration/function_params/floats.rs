@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_f32_param_and_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn double_f32(x f32) f32
     x * 2.0
@@ -28,7 +27,6 @@ fn main()
 fn test_f64_param_and_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn double_f64(x f64) f64
     x * 2.0
@@ -49,7 +47,6 @@ fn main()
 fn test_f32_two_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn add_f32(a f32, b f32) f32
     a + b
@@ -70,7 +67,6 @@ fn main()
 fn test_f64_two_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn add_f64(a f64, b f64) f64
     a + b
@@ -91,7 +87,6 @@ fn main()
 fn test_f64_negative_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn negate_f64(x f64) f64
     -x

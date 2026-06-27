@@ -4,7 +4,6 @@
 // Tests for `system.collections.list`. Covers construction, indexed read /
 // write, structural mutation, contains / index_of, sort / reverse and clone.
 
-use system.io
 use system.collections.list
 use system.testing
 

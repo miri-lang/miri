@@ -11,7 +11,6 @@ fn test_list_of_custom_clear_no_crash() {
     // properly DecRefs each Point instance instead of leaking it.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Point
@@ -32,7 +31,6 @@ fn test_list_of_custom_remove_at_no_crash() {
     // remove_at on List<Point> must call __decref_Point on the removed element.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Item
@@ -53,7 +51,6 @@ fn test_list_of_custom_aliased_element_outlives_clear() {
     // (RC still > 0) while the rest are freed.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Node
@@ -99,7 +96,6 @@ fn test_list_of_strings_clear_no_crash() {
     // each string element instead of leaking them.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -116,7 +112,6 @@ fn test_list_of_strings_remove_no_crash() {
     // remove_at on a List<String> must call the elem_drop_fn on the removed element.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -172,7 +167,6 @@ l = List([4, 5])
 fn test_list_passed_to_function_no_dangle() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 fn consume(l [int])
@@ -191,7 +185,6 @@ fn main()
 fn test_list_returned_from_function_with_rc() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 fn make_and_alias() [int]
@@ -212,7 +205,6 @@ fn list_value_semantics_push_isolates_original() {
     // CoW: l1 and l2 share data until l1.push mutates l1 → l2 must be unchanged.
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l1 = List([10, 20, 30])
@@ -232,7 +224,6 @@ fn test_list_push_managed_val_incref() {
     // must still hold a valid reference (IncRef'd at push time).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn push_string() [String]
@@ -256,7 +247,6 @@ fn test_list_insert_managed_val_incref() {
     // the list must still hold a valid reference.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn insert_string() [String]
@@ -282,7 +272,6 @@ fn test_list_index_write_managed_no_leak() {
     // Perceus IncRefs the source before storing.  Same fix as Array case.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -306,7 +295,6 @@ fn test_list_set_overwrite_managed_no_leak() {
     // on use-after-free if the old RC is never decremented.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -327,7 +315,6 @@ fn test_list_of_arrays_clear_no_leak() {
     // clear() properly DecRefs each inner array.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -349,7 +336,6 @@ fn test_list_of_maps_clear_no_leak() {
     // that clear() properly DecRefs each inner map.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -371,7 +357,6 @@ fn test_list_of_sets_clear_no_leak() {
     // clear() properly DecRefs each inner set.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 use system.collections.set
 
@@ -398,7 +383,6 @@ fn test_list_of_arrays_of_strings_clear_no_leak() {
     // must be released with no leak.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -420,7 +404,6 @@ fn test_list_of_lists_set_method_frees_old() {
     // Without elem_drop_fn the old inner list leaks; 100 iterations stress-tests this.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -443,7 +426,6 @@ fn test_list_of_lists_set_preserves_aliased_element() {
     // The alias must remain readable — double-decref would crash on length().
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -463,7 +445,6 @@ fn test_list_of_arrays_of_lists_remove_at_no_leak() {
     // array's elem_drop_fn (miri_rt_list_decref_element) to free inner lists.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -487,7 +468,6 @@ fn test_list_of_custom_index_write_calls_decref_thunk() {
     // RC was skipped (ElementShape::UserClass arm).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Point
@@ -515,7 +495,6 @@ fn test_list_of_tuple_with_string_index_write_no_leak() {
     // catches it.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -538,7 +517,6 @@ fn test_list_of_optional_string_index_write_no_leak() {
     // emit_drop_option.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -560,7 +538,6 @@ fn test_list_of_100_strings_clear_no_leak() {
     // MIRI_LEAK_CHECK=1 catches any string that was not DecRef'd by elem_drop_fn.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()

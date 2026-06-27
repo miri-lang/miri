@@ -18,7 +18,6 @@ x = 20
 fn test_some_constructor() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = Some(42)
 println(f"{x ?? 0}")

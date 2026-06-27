@@ -24,7 +24,6 @@ fn test_gpu_i32_range_inrange_roundtrip() {
 
     let code = "
 use system.gpu
-use system.io
 use system.collections.array
 
 gpu let probe_max = [2147483647]
@@ -55,7 +54,6 @@ fn test_gpu_i32_range_outofrange_runtime_error() {
 
     let code = "
 use system.gpu
-use system.io
 use system.collections.array
 
 let overflow_val = 2147483647 + 1
@@ -126,7 +124,6 @@ fn test_gpu_i32_range_negative_overflow_runtime_error() {
 
     let code = "
 use system.gpu
-use system.io
 use system.collections.array
 
 let negative_overflow_val = -2147483648 - 1

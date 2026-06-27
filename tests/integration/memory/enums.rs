@@ -13,7 +13,6 @@ use super::super::utils::*;
 fn test_enum_string_payload_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Message
     Text(String)
@@ -33,7 +32,6 @@ fn main()
 fn test_enum_list_payload_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 enum Container
@@ -54,7 +52,6 @@ fn main()
 fn test_enum_reassignment_drops_old_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Msg
     Text(String)
@@ -76,7 +73,6 @@ fn main()
 fn test_enum_passed_to_function_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Ok(String)
@@ -100,7 +96,6 @@ fn main()
 fn test_enum_match_string_payload_extraction_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Outcome
     Ok(String)
@@ -126,7 +121,6 @@ fn main()
 fn test_enum_int_payload_match_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Opt
     Some(int)
@@ -153,7 +147,6 @@ fn main()
 fn test_enum_with_payload_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Msg
     Text(String)
@@ -173,7 +166,6 @@ fn main()
 fn test_enum_alias_then_function_call_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Active(String)

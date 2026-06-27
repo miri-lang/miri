@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_struct_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -29,7 +28,6 @@ fn main()
 fn test_struct_passed_and_returned() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -52,7 +50,6 @@ fn main()
 fn test_struct_nested_function_calls() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
