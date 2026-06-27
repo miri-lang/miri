@@ -21,6 +21,7 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod loops;
+pub mod reduce_gpu;
 pub mod statement;
 pub mod variable;
 

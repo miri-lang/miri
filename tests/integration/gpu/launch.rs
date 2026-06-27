@@ -767,6 +767,276 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     assert_gpu_runs_with_output(source, "100 0 0 100");
 }
 
+/// End-to-end reduce test: sum of 8 elements via `.reduce(0, +)`.
+/// All 256 threads will process the 8-element array, but each thread accumulates
+/// a partial sum via grid-stride loop, then participates in tree reduction.
+/// Expected: 1+2+3+4+5+6+7+8 = 36.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_addition_small_array_computes_correct_sum() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    println(f'{sum}')
+";
+    assert_gpu_runs_with_output(source, "36");
+}
+
+/// End-to-end reduce test: product of 4 elements via `.reduce(1, *)`.
+/// Expected: 1*2*3*4 = 24.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_multiplication_computes_correct_product() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    let product = a.reduce(1, fn(acc i32, x i32) i32: acc * x)
+    println(f'{product}')
+";
+    assert_gpu_runs_with_output(source, "24");
+}
+
+/// End-to-end reduce test: array with N < 256 and not a power of 2.
+/// N=5 elements means some threads idle after the grid-stride loop,
+/// and the tree reduction must handle a non-power-of-2 array length.
+/// Expected: 1+2+3+4+5 = 15.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_non_power_of_two_length_computes_correct_sum() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4, 5]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    println(f'{sum}')
+";
+    assert_gpu_runs_with_output(source, "15");
+}
+
+/// End-to-end reduce test: large N (300) > 256 (block size).
+/// Each of the 256 threads must iterate the grid-stride loop more than once
+/// (300 > 256), so this exercises the multi-iteration accumulation path that a
+/// sub-block-size array cannot. Sum should be 1+2+...+300 = 45150.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_large_array_exceeding_block_size_computes_correct_sum() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+                 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+                 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+                 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+                 81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+                 91, 92, 93, 94, 95, 96, 97, 98, 99, 100,
+                 101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+                 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
+                 121, 122, 123, 124, 125, 126, 127, 128, 129, 130,
+                 131, 132, 133, 134, 135, 136, 137, 138, 139, 140,
+                 141, 142, 143, 144, 145, 146, 147, 148, 149, 150,
+                 151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
+                 161, 162, 163, 164, 165, 166, 167, 168, 169, 170,
+                 171, 172, 173, 174, 175, 176, 177, 178, 179, 180,
+                 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
+                 191, 192, 193, 194, 195, 196, 197, 198, 199, 200,
+                 201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
+                 211, 212, 213, 214, 215, 216, 217, 218, 219, 220,
+                 221, 222, 223, 224, 225, 226, 227, 228, 229, 230,
+                 231, 232, 233, 234, 235, 236, 237, 238, 239, 240,
+                 241, 242, 243, 244, 245, 246, 247, 248, 249, 250,
+                 251, 252, 253, 254, 255, 256, 257, 258, 259, 260,
+                 261, 262, 263, 264, 265, 266, 267, 268, 269, 270,
+                 271, 272, 273, 274, 275, 276, 277, 278, 279, 280,
+                 281, 282, 283, 284, 285, 286, 287, 288, 289, 290,
+                 291, 292, 293, 294, 295, 296, 297, 298, 299, 300]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    println(f'{sum}')
+";
+    // 1+2+...+300 = 300*301/2 = 45150
+    assert_gpu_runs_with_output(source, "45150");
+}
+
+/// `.reduce` on a HOST (non-gpu) array falls through to the CPU `Foldable::reduce`
+/// — the gpu intercept fires only for gpu-resident receivers. Runs everywhere
+/// (no GPU), guarding the fall-through path.
+#[test]
+fn reduce_host_array_uses_cpu_foldable_path() {
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let a = [1, 2, 3, 4, 5]
+    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    println(f'{s}')
+",
+        "15",
+    );
+}
+
+/// Float product reduction exercises the f32 path and the multiplication
+/// identity (1.0). Expected: 1.0*2.0*3.0*4.0 = 24.0.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_float_multiplication_computes_correct_product() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1.0, 2.0, 3.0, 4.0]
+    let p = a.reduce(1.0, fn(x f32, y f32) f32: x * y)
+    println(f'{p}')
+",
+        "24",
+    );
+}
+
+/// Reduction over negative integers exercises sign handling through the
+/// i64→i32 narrow/widen path. Expected: -5 + -3 + 2 + 8 = 2.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_negative_integers_computes_correct_sum() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [0 - 5, 0 - 3, 2, 8]
+    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    println(f'{s}')
+",
+        "2",
+    );
+}
+
+/// A non-identity `init` must be folded in exactly once (seeded on lane 0).
+/// Expected: 100 + (1+2+3+4) = 110.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_non_identity_init_is_folded_once() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    let s = a.reduce(100, fn(x i32, y i32) i32: x + y)
+    println(f'{s}')
+",
+        "110",
+    );
+}
+
+/// Single-element array: only lane 0 reads input; all other lanes seed the
+/// identity. Expected: 42.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_single_element_array_computes_correct_sum() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [42]
+    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    println(f'{s}')
+",
+        "42",
+    );
+}
+
+/// N exactly equal to the 256-thread block size: each thread processes exactly
+/// one element (the grid-stride loop runs once), the boundary case between the
+/// sub-block and multi-stride regimes. Expected: 1+2+...+256 = 32896.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduce_exact_block_size_boundary_computes_correct_sum() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+                 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+                 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+                 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+                 81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+                 91, 92, 93, 94, 95, 96, 97, 98, 99, 100,
+                 101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+                 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
+                 121, 122, 123, 124, 125, 126, 127, 128, 129, 130,
+                 131, 132, 133, 134, 135, 136, 137, 138, 139, 140,
+                 141, 142, 143, 144, 145, 146, 147, 148, 149, 150,
+                 151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
+                 161, 162, 163, 164, 165, 166, 167, 168, 169, 170,
+                 171, 172, 173, 174, 175, 176, 177, 178, 179, 180,
+                 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
+                 191, 192, 193, 194, 195, 196, 197, 198, 199, 200,
+                 201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
+                 211, 212, 213, 214, 215, 216, 217, 218, 219, 220,
+                 221, 222, 223, 224, 225, 226, 227, 228, 229, 230,
+                 231, 232, 233, 234, 235, 236, 237, 238, 239, 240,
+                 241, 242, 243, 244, 245, 246, 247, 248, 249, 250,
+                 251, 252, 253, 254, 255, 256]
+    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    println(f'{s}')
+";
+    // 1+2+...+256 = 256*257/2 = 32896
+    assert_gpu_runs_with_output(source, "32896");
+}
+
 // NOTE: Game of Life correctness test is not included here because multiple if-else
 // statements in GPU kernels currently hit a SwitchInt limitation in the WGSL structurizer.
 // The demo test (in tests/integration/gpu/demos.rs) will serve as the acceptance criterion

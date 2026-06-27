@@ -1731,3 +1731,113 @@ gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
         );
     }
 }
+
+mod reduce {
+    use super::super::utils::assert_build_error;
+    use super::assert_gpu_wgsl_valid;
+
+    /// A `.reduce()` on a gpu-resident Array with a simple binary fold operator
+    /// (addition) lowers to a GPU tree-reduction kernel that emits naga-valid WGSL
+    /// with workgroup-shared storage, barriers, and reduction loops.
+    #[test]
+    fn simple_gpu_array_reduce_addition_emits_naga_valid_wgsl() {
+        use super::super::helpers::compile_to_wgsl;
+
+        let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+";
+        assert_gpu_wgsl_valid(source);
+
+        // Strengthen the test to prevent greenwashing: validate actual kernel contents.
+        let wgsl = compile_to_wgsl(source);
+
+        // BUG FIX 1: Shared array must be sized to workgroup size (256), not input length.
+        assert!(
+            wgsl.contains("array<i32, 256>"),
+            "expected shared array sized to 256, got:\n{}",
+            wgsl
+        );
+
+        // BUG FIX 2: Must store accumulator to sdata[local_id] after grid-stride loop.
+        assert!(
+            wgsl.contains("_sdata[") && wgsl.contains("] = "),
+            "expected sdata[idx] assignment after grid-stride loop, got:\n{}",
+            wgsl
+        );
+
+        // BUG FIX: Two workgroup barriers (one before, one during tree reduction).
+        let barrier_count = wgsl.matches("workgroupBarrier").count();
+        assert_eq!(
+            barrier_count, 2,
+            "expected 2 workgroupBarrier() calls, got {}, WGSL:\n{}",
+            barrier_count, wgsl
+        );
+
+        // BUG FIX 3+4: Output buffer must exist and be written.
+        assert!(
+            wgsl.contains("var<storage, read_write> output"),
+            "expected output storage buffer, got:\n{}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("output[") && wgsl.contains("] = "),
+            "expected output[idx] write to store result, got:\n{}",
+            wgsl
+        );
+    }
+
+    /// Reduce fold operands must be the two closure parameters, not arbitrary expressions.
+    /// `fn(a,b): a + 1` should be rejected because the right operand is a constant, not `b`.
+    #[test]
+    fn reduce_fold_operand_not_parameter_is_rejected() {
+        assert_build_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + 1)
+",
+            "reduce fold operands must be the two fold parameters",
+        );
+    }
+
+    /// Reduce fold body must be a binary operation, not a block or function call.
+    #[test]
+    fn reduce_fold_non_binop_body_is_rejected() {
+        assert_build_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc)
+",
+            "reduce fold body must be a single binary operation",
+        );
+    }
+
+    /// Reduce fold operator must be associative and commutative (+ or *).
+    /// Subtraction is not supported because (a - b) - c ≠ a - (b - c).
+    #[test]
+    fn reduce_fold_non_associative_operator_is_rejected() {
+        assert_build_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc - x)
+",
+            "reduce fold must use an associative binary operator (+ or *)",
+        );
+    }
+}
