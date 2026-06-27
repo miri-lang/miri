@@ -12,7 +12,6 @@ use super::super::utils::*;
 fn test_read_list_field_length_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Box
@@ -30,7 +29,6 @@ fn main()
 fn test_read_map_field_length_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Store
@@ -48,7 +46,6 @@ fn main()
 fn test_read_set_field_length_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 class Unique
@@ -66,7 +63,6 @@ fn main()
 fn test_list_field_passed_to_function_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Container
@@ -89,7 +85,6 @@ fn main()
 fn test_map_field_passed_to_function_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Registry
@@ -111,7 +106,6 @@ fn main()
 fn test_for_loop_over_list_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Batch
@@ -132,7 +126,6 @@ fn main()
 fn test_element_at_on_list_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Sequence
@@ -155,7 +148,6 @@ fn main()
 fn test_nested_field_list_access_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Inner
@@ -177,7 +169,6 @@ fn main()
 fn test_deeply_nested_field_list_loop_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Level2
@@ -206,7 +197,6 @@ fn test_field_alias_outlives_parent_no_double_free() {
     // the alias must keep the list alive.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Wrapper
@@ -229,7 +219,6 @@ fn main()
 fn test_multiple_reads_of_same_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Box

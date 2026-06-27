@@ -10,7 +10,6 @@ fn test_class_drop_with_string_field() {
     // the drop path runs without crashing.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Person
     var name String
@@ -31,7 +30,6 @@ fn test_class_drop_with_list_field() {
     // instance is dropped. Without the fix, the List would leak (RC stays 2).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Container
@@ -52,7 +50,6 @@ fn test_class_drop_with_string_and_list_fields() {
     // Both String and List fields must be handled correctly on drop.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Record
@@ -74,7 +71,6 @@ fn test_class_drop_in_function_scope() {
     // be released when the local goes out of scope, not just at program exit.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Record
@@ -98,7 +94,6 @@ fn test_class_drop_multiple_instances() {
     // Multiple class instances with managed fields all going out of scope.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Item
@@ -120,7 +115,6 @@ fn test_class_list_field_reassign() {
     // Reassigning a managed field variable frees the old value.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -140,7 +134,6 @@ fn test_class_with_nested_class_field_drops_correctly() {
     // DecRef Inner; if Inner's RC reaches zero, Inner is freed too.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Inner
     var x int
@@ -165,7 +158,6 @@ fn test_reassign_class_field_drops_old_value() {
     // Reassigning a class-typed field must DecRef the old object.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Node
     var value int
@@ -188,7 +180,6 @@ fn test_object_shared_between_two_variables_not_freed_early() {
     // Neither variable alone should free it.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -206,7 +197,6 @@ fn test_drop_in_loop() {
     // not accumulated until the loop exits.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -226,7 +216,6 @@ fn main()
 fn test_user_drop_hook_called_at_scope_exit() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Res
     handle int
@@ -244,7 +233,6 @@ fn main()
 fn test_user_drop_hook_called_before_parent_returns() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Token
     id int
@@ -269,7 +257,6 @@ fn test_user_drop_hook_multiple_fields_access() {
     // but here we just verify the hook is called even when struct has multiple fields.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Handle
     fd int
@@ -291,7 +278,6 @@ fn main()
 fn test_scope_exit_warning_emitted_for_unconsumed_resource() {
     assert_compiler_warning(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -311,7 +297,6 @@ fn test_scope_exit_warning_suppressed_when_resource_consumed() {
     // Passing to a consuming function suppresses the warning.
     assert_type_checks(
         r#"
-use system.io
 
 struct Conn
     handle int
@@ -333,7 +318,6 @@ fn test_scope_exit_warning_in_nested_scope() {
     // Resource declared inside a helper function warns at function exit.
     assert_compiler_warning(
         r#"
-use system.io
 
 struct Token
     id int
@@ -356,7 +340,6 @@ fn test_scope_exit_no_warning_for_non_resource_struct() {
     // Structs without fn drop are not resource types — no warning.
     assert_type_checks(
         r#"
-use system.io
 
 struct Point
     x int

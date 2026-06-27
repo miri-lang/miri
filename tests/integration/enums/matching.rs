@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_enum_match() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Ok
@@ -28,7 +27,6 @@ fn main()
 fn test_enum_match_multiple_variants() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Color
     Red
@@ -51,7 +49,6 @@ fn main()
 fn test_enum_match_with_wildcard() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Direction
     North
@@ -75,7 +72,6 @@ fn main()
 fn test_enum_match_with_guard() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Ok
@@ -117,7 +113,6 @@ fn main()
 fn test_enum_data_extraction() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Wrapper
     Value(int)
@@ -138,7 +133,6 @@ fn main()
 fn test_enum_data_extraction_empty_arm() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Wrapper
     Value(int)

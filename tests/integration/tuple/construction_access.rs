@@ -22,7 +22,6 @@ fn test_tuple_mixed_types() {
 fn test_tuple_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let t = (10, 20, 30)
 print(f"{t.0 + t.1}")
@@ -35,7 +34,6 @@ print(f"{t.0 + t.1}")
 fn test_tuple_nested() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let t = ((1, 2), (3, 4))
 let sum = t.0.0 + t.0.1 + t.1.0 + t.1.1

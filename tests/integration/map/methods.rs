@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_set_method() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -24,7 +23,6 @@ println(f"{m.length()}")
 fn map_contains_key() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"a": 1, "b": 2}
@@ -41,7 +39,6 @@ println(f"{has_z}")
 fn map_get_method_returns_option() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"a": 42}
@@ -67,7 +64,6 @@ println(missing_str)
 fn map_remove() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1, "b": 2}
@@ -84,7 +80,6 @@ println(f"{has_a}")
 fn map_clear() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1, "b": 2}
@@ -100,7 +95,6 @@ println(f"{m.is_empty()}")
 fn map_is_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -116,7 +110,6 @@ println(f"{m.is_empty()}")
 fn map_remove_nonexistent_key() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -131,7 +124,6 @@ println(f"{m.length()}")
 fn map_get_after_remove() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -152,7 +144,6 @@ println(f"{has_a}")
 fn map_method_remove_returns_bool() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -169,7 +160,6 @@ println(f"{r2}")
 fn map_method_element_and_value_at() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"single": 100}

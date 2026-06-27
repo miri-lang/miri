@@ -9,7 +9,6 @@ use super::utils::*;
 fn test_public_field_readable_externally() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     public var name String
@@ -28,7 +27,6 @@ fn main()
 fn test_public_method_callable_externally() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     public fn sound() String
@@ -48,7 +46,6 @@ fn main()
 fn test_private_field_accessible_within_same_class() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class BankAccount
     private var balance int
@@ -69,7 +66,6 @@ fn main()
 fn test_private_method_callable_within_same_class() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Calculator
     private fn double(x int) int
@@ -91,7 +87,6 @@ fn main()
 fn test_protected_field_accessible_in_subclass() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     protected var age int
@@ -114,7 +109,6 @@ fn main()
 fn test_protected_method_callable_in_subclass() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     protected fn describe() String
@@ -136,7 +130,6 @@ fn main()
 fn test_protected_field_accessible_in_deep_subclass() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     protected var name String
@@ -245,7 +238,6 @@ fn test_private_init_still_constructible_within_class() {
     // Document the actual behavior: either it works or gives a clear error.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Token
     private var value int
@@ -304,7 +296,6 @@ fn test_visibility_defaults_to_public() {
     // (default visibility is public in Miri).
     assert_runs_with_output(
         r#"
-use system.io
 
 class Box
     var side int

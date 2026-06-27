@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_set_passed_to_and_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn modify_and_return_set(s Set<int>) Set<int>

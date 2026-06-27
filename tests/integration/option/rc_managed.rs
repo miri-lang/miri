@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_option_wrapping_collection() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()

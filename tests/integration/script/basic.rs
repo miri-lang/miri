@@ -6,7 +6,6 @@ use super::utils::*;
 #[test]
 fn test_script_with_functions() {
     let code = r#"
-use system.io
 
 fn fib(n int) int
     if n <= 1: n
@@ -20,7 +19,6 @@ print(f"{fib(10)}")
 #[test]
 fn test_script_with_main() {
     let code = r#"
-use system.io
 
 fn main()
     print("from main")
@@ -31,7 +29,6 @@ fn main()
 #[test]
 fn test_script_without_main_or_functions() {
     let code = r#"
-use system.io
 print("just script")
 "#;
     assert_runs_with_output(code, "just script");

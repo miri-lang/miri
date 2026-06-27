@@ -7,8 +7,6 @@ use super::utils::*;
 fn test_string_identity_param() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn identity_str(s String) String
     s
@@ -25,8 +23,6 @@ fn main()
 fn test_string_param_size() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn str_len(s String) int
     s.size()
@@ -43,8 +39,6 @@ fn main()
 fn test_string_two_params_concat() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn join(a String, b String) String
     a.concat(b)
@@ -61,8 +55,6 @@ fn main()
 fn test_string_param_equality_check() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn is_empty_str(s String) bool
     s.is_empty()

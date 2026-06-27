@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_assert_panics_when_closure_panics() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -22,7 +21,6 @@ fn main()
 fn test_assert_panics_with_expected_substring_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -37,7 +35,6 @@ fn main()
 fn test_assert_panics_when_closure_does_not_panic() {
     assert_runtime_error(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -51,7 +48,6 @@ fn main()
 fn test_assert_panics_expected_substring_mismatch() {
     assert_runtime_error(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -68,7 +64,6 @@ fn test_assert_panics_with_capturing_closure() {
     // catch path.
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -86,7 +81,6 @@ fn test_assert_panics_inside_user_function() {
     // function with an injected allocator parameter (not just main).
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn check_boom()

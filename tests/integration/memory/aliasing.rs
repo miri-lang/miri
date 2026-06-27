@@ -27,7 +27,6 @@ fn test_list_alias_then_original_dropped_via_reassign() {
     // buffer must survive until the alias is also dropped.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -47,7 +46,6 @@ fn test_list_alias_mutation_cow_isolates() {
     // CoW: a.push(3) clones a's data (RC=3 → new ptr for a); b and c retain the original.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -69,7 +67,6 @@ fn test_list_alias_in_nested_scope() {
     // leaving the outer binding intact (no use-after-free).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -101,7 +98,6 @@ let m3 = m2
 fn test_map_alias_survives_original_reassign() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -132,7 +128,6 @@ fn test_set_alias_mutation_cow_isolates() {
     // CoW: s1.add(4) clones s1's data; s2 retains original 3 elements.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -150,7 +145,6 @@ fn main()
 fn test_class_three_way_alias() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Node
     var value int
@@ -170,7 +164,6 @@ fn test_class_alias_mutation_visible() {
     // Mutation on one alias is visible through another.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -190,7 +183,6 @@ fn test_class_alias_in_function_scope_no_leak() {
     // Alias passed into a function; function's copy goes out of scope first.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Box
     var val int
@@ -214,7 +206,6 @@ fn test_multiple_managed_types_aliased_simultaneously() {
     // Several different managed types alive at once; all must be freed exactly once.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 use system.collections.map
 use system.collections.set

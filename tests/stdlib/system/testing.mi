@@ -5,7 +5,6 @@
 // themselves. Every assertion below is on the happy path: a failure here means
 // the assertion harness itself is broken.
 
-use system.io
 use system.testing
 
 fn test_assert_true()

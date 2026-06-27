@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_simple_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn add(a int, b int) int
     a + b
@@ -23,7 +22,6 @@ fn main()
 fn test_function_no_args() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn answer() int
     42
@@ -39,7 +37,6 @@ fn main()
 fn test_function_single_arg() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn double(x int) int
     x * 2
@@ -55,7 +52,6 @@ fn main()
 fn test_function_multiple_calls() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn square(x int) int
     x * x

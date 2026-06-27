@@ -7,7 +7,6 @@ use crate::integration::utils::assert_runs_with_output;
 fn test_complex_data_structures() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 enum UserStatus

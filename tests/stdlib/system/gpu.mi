@@ -7,7 +7,6 @@
 // and the FFI call returns without panicking.
 
 use system.gpu
-use system.io
 use system.testing
 
 fn test_is_gpu_available_returns_a_bool()

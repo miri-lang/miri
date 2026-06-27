@@ -8,7 +8,6 @@ fn test_list_cow_push_isolates_original() {
     // The canonical CoW test from the spec.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -26,7 +25,6 @@ fn test_list_cow_push_new_has_element() {
     // After CoW push, the mutated alias contains the new element.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -45,7 +43,6 @@ fn test_list_cow_insert_isolates_original() {
     // insert triggers CoW — original must be unaffected.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -64,7 +61,6 @@ fn test_list_cow_clear_isolates_original() {
     // clear triggers CoW — original must be unaffected.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -82,7 +78,6 @@ fn test_list_cow_set_isolates_original() {
     // set (indexed mutation) triggers CoW — original element unchanged.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -100,7 +95,6 @@ fn test_list_cow_remove_at_isolates_original() {
     // remove_at triggers CoW — original must retain all elements.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -119,7 +113,6 @@ fn test_list_cow_no_copy_when_rc_one() {
     // Verify by observing the element is updated in place.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -137,7 +130,6 @@ fn test_list_cow_triple_alias_isolates_all() {
     // Three aliases — each push triggers its own CoW.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -159,7 +151,6 @@ fn test_list_cow_pop_isolates_original() {
     // pop triggers CoW — original must be unaffected.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -177,7 +168,6 @@ fn test_list_cow_sort_isolates_original() {
     // sort triggers CoW — original order must be unchanged.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -195,7 +185,6 @@ fn test_list_cow_remove_isolates_original() {
     // remove(item) triggers CoW — original must retain all elements.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -214,7 +203,6 @@ fn test_list_cow_no_leak_on_cow_and_free() {
     // CoW and then immediate scope exit must not leak.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn mutate(l [int]) [int]

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_forever_with_break() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 forever
     x = x + 1
@@ -23,7 +22,6 @@ print(f"{x}")
 fn test_forever_with_continue() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 var i = 0
 forever

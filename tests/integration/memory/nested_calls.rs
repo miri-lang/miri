@@ -15,7 +15,6 @@ use super::super::utils::*;
 fn test_nested_call_two_managed_intermediates_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_single(n int) [int]
@@ -39,7 +38,6 @@ fn main()
 fn test_nested_call_three_managed_args_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn single(n int) [int]
@@ -61,7 +59,6 @@ fn main()
 fn test_nested_call_inner_makes_outer_consumes_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make(n int) [int]
@@ -83,7 +80,6 @@ fn main()
 fn test_nested_call_triple_chain_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make(n int) [int]
@@ -107,7 +103,6 @@ fn main()
 fn test_nested_call_class_through_two_hops_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Rect
     var w int
@@ -132,7 +127,6 @@ fn main()
 fn test_nested_call_class_with_list_field_through_calls_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Bag
@@ -158,7 +152,6 @@ fn main()
 fn test_nested_call_two_results_combined_inline_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_a() [int]
@@ -183,7 +176,6 @@ fn main()
 fn test_nested_call_four_function_tree_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_a() [int]
@@ -210,7 +202,6 @@ fn main()
 fn test_nested_call_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make(n int) [int]

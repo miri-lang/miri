@@ -5,7 +5,6 @@
 // covered is read / write at index, contains / index_of from `Queryable<T>`,
 // sort / reverse and clone.
 
-use system.io
 use system.collections.array
 use system.testing
 

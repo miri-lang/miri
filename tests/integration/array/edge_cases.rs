@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_array_nested_modification() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let row1 = [1, 2]
@@ -30,7 +29,6 @@ fn test_array_zero_length_methods() {
     // this test will correctly capture that as a missing language feature or a type checker bound.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -46,7 +44,6 @@ fn main()
 fn test_array_deep_nested_sort_and_reverse() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -71,7 +68,6 @@ fn main()
 fn test_array_of_optional_elements_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -99,7 +95,6 @@ fn test_array_deep_nested_contains_and_index_of() {
     // Tests if `==` logic properly compares struct/array types, or if it errors out correctly during codegen.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -118,7 +113,6 @@ fn main()
 fn test_array_reverse_odd_and_even_lengths() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -139,7 +133,6 @@ fn main()
 fn test_array_element_at_and_set_complex_expressions() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn compute_offset() int

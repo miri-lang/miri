@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_while_loop() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 var i = 0
 while i < 5
@@ -23,7 +22,6 @@ print(f"{x}")
 fn test_for_loop_range() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..5
     sum = sum + i
@@ -37,7 +35,6 @@ print(f"{sum}")
 fn test_nested_loops() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..4
     for j in 1..4
@@ -52,7 +49,6 @@ print(f"{sum}")
 fn test_for_range_inclusive() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..=5
     sum = sum + i
@@ -66,7 +62,6 @@ print(f"{sum}")
 fn test_for_range_inclusive_single() {
     assert_runs_with_output(
         r#"
-use system.io
 var count = 0
 for i in 3..=3
     count = count + 1

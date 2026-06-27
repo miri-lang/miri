@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_result_must_use_ignored() {
     assert_compiler_error(
         r#"
-use system.io
 use system.result
 
 fn divide(a int, b int) Result<int, String>
@@ -26,7 +25,6 @@ fn main()
 fn test_result_must_use_ok_literal() {
     assert_compiler_error(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -40,7 +38,6 @@ fn main()
 fn test_result_must_use_err_literal() {
     assert_compiler_error(
         r#"
-use system.io
 use system.result
 
 fn main()

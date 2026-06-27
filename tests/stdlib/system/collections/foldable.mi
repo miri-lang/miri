@@ -8,7 +8,6 @@
 // generic trait method (`xs.reduce(0, add)`) is currently miscompiled and
 // segfaults at runtime.
 
-use system.io
 use system.collections.list
 use system.testing
 

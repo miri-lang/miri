@@ -69,7 +69,6 @@ fn mixed_basic_program() {
 fn multiline_parenthesized_expression_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 fn main()
     let x = (1 +
         2 +
@@ -85,7 +84,6 @@ fn main()
 fn multiline_list_literal_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -106,7 +104,6 @@ fn main()
 fn multiline_map_literal_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -126,7 +123,6 @@ fn main()
 fn multiline_set_literal_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -146,7 +142,6 @@ fn main()
 fn multiline_function_call_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn add(a int, b int, c int) int
     a + b + c
@@ -168,7 +163,6 @@ fn main()
 fn multiline_nested_collections_inside_function_body() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -192,7 +186,6 @@ fn main()
 fn multiline_binary_op_at_line_start_inside_parens() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let x = (10

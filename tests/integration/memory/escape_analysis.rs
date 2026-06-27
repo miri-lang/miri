@@ -21,7 +21,6 @@ fn test_method_receiver_not_consumed_without_summary() {
     // consume the receiver when no escape summary marks self as escaping.
     assert_runs(
         r#"
-use system.io
 
 class Square
     var side int
@@ -47,7 +46,6 @@ fn test_method_arg_not_consumed_without_summary() {
     // consume the argument variable (no escape summary for the method).
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 class Lens
@@ -75,7 +73,6 @@ fn test_inherited_method_receiver_not_consumed() {
     // must not consume the receiver — the lookup walks the base_class chain.
     assert_runs(
         r#"
-use system.io
 
 class Base
     var x int
@@ -107,7 +104,6 @@ fn test_trait_receiver_not_consumed_without_implementer_summary() {
     // are present, virtual dispatch must NOT falsely consume the receiver.
     assert_runs(
         r#"
-use system.io
 
 trait Measurable
     fn size() int
@@ -138,7 +134,6 @@ fn test_method_chain_no_false_consume() {
     // consume the receiver between calls.
     assert_runs(
         r#"
-use system.io
 
 class Stats
     var min int
@@ -167,7 +162,6 @@ fn test_managed_param_passed_to_readonly_fn_no_error() {
     // Passing a list to a function that only reads it must never be flagged.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn length_of(items [int]) int
@@ -190,7 +184,6 @@ fn test_managed_param_multi_pass_no_error() {
     // must not consume it.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn sum(items [int]) int
@@ -218,7 +211,6 @@ fn test_managed_param_passed_transitively_no_error() {
     // must not be flagged.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn inner(items [int]) int
@@ -242,7 +234,6 @@ fn test_managed_param_recursive_no_error() {
     // must not be flagged.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn count_down(items [int], n int) int
@@ -262,7 +253,6 @@ fn test_resource_param_inside_fn_body_still_errors() {
     // function bodies — resource semantics remain unchanged.
     assert_compiler_error(
         r#"
-use system.io
 
 struct Conn
     host String
@@ -301,7 +291,6 @@ fn test_unbounded_generic_param_not_consumed_in_fn_body() {
     // to a read-only helper twice inside a fn body must not be flagged.
     assert_runs(
         r#"
-use system.io
 
 fn pass_through<T>(x T)
     return
@@ -323,7 +312,6 @@ fn test_managed_bounded_generic_not_consumed_in_fn_body() {
     // a function body.
     assert_runs(
         r#"
-use system.io
 
 class Greeter
     var name String
@@ -352,7 +340,6 @@ fn test_resource_bounded_generic_strict_consume_in_fn_body() {
     // must trigger the strict-consume rule even inside a function body.
     assert_compiler_error(
         r#"
-use system.io
 
 class Conn
     var host String
@@ -382,7 +369,6 @@ fn test_resource_bounded_generic_assignment_is_a_move() {
     // in use_after_move.rs that calls is_resource directly.
     assert_compiler_error(
         r#"
-use system.io
 
 class Conn
     var host String
@@ -413,7 +399,6 @@ fn test_resource_bounded_generic_method_arg_strict_consume() {
     // own resource-bounded generic param into it.
     assert_compiler_error(
         r#"
-use system.io
 
 class Conn
     var host String
@@ -448,7 +433,6 @@ fn test_generic_function_two_monomorphizations_no_re_analysis() {
     // clean, every monomorphization is clean.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn pass_through<T>(x T)
@@ -486,7 +470,6 @@ println("ok")
 fn test_single_hop_escape_via_return_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn pass_through(xs [int]) [int]
@@ -511,7 +494,6 @@ check(data)
 fn test_two_hop_escape_via_return_chain_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn pass_through(xs [int]) [int]
@@ -540,7 +522,6 @@ check(data)
 fn test_escape_via_non_return_call_site_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn pass_through(xs [int]) [int]
@@ -568,7 +549,6 @@ check(data)
 fn test_pure_borrow_summary_no_consume() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn count(xs [int]) int
@@ -593,7 +573,6 @@ use_twice(data)
 fn test_recursive_fn_no_false_positive() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn sum_n(xs [int], n int) int
@@ -617,7 +596,6 @@ println(f"{data.length()}")
 fn test_mutual_scc_no_false_positive() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn count_from_a(xs [int], i int) int
@@ -647,7 +625,6 @@ println(f"{data.length()}")
 fn test_method_calls_on_param_no_false_consume_with_summaries() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn describe(xs [int]) int
@@ -674,7 +651,6 @@ report(data)
 fn test_escape_via_call_in_match_arm_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn pass_through(xs [int]) [int]
@@ -704,7 +680,6 @@ caller(data)
 fn test_pure_borrow_in_match_arm_no_consume() {
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn count(xs [int]) int

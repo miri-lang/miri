@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_passed_to_function() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 fn sum_list(l [int]) int
@@ -28,7 +27,6 @@ fn main()
 fn list_returned_from_function() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 fn make_list() [int]
@@ -46,7 +44,6 @@ fn main()
 fn list_in_struct_field() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 struct Data

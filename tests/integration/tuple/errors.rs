@@ -43,7 +43,6 @@ fn test_heterogeneous_tuple_methods_error() {
     // A heterogeneous tuple (int, String) correctly does not support these methods.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.tuple
 let t = (1, "hello")
 println(f"{t.contains(1)}")

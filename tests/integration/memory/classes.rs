@@ -10,7 +10,6 @@ use super::super::utils::*;
 fn test_class_with_list_and_another_list_fields_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Report
@@ -32,7 +31,6 @@ fn main()
 fn test_class_with_set_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 class Unique
@@ -51,7 +49,6 @@ fn test_list_of_class_instances_no_leak() {
     // Each class instance is heap-allocated; List holds an alias (RC bump).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Point
@@ -72,7 +69,6 @@ fn test_list_of_classes_aliased_element_outlives_list() {
     // element must survive because its RC is still > 0.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Item
@@ -93,7 +89,6 @@ fn main()
 fn test_map_of_class_instances_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Config
@@ -113,7 +108,6 @@ fn test_four_level_class_chain_no_leak() {
     // A → B → C → D: each holds a managed reference to the next.
     assert_runs_with_output(
         r#"
-use system.io
 
 class D
     var value int
@@ -140,7 +134,6 @@ fn test_class_chain_in_function_scope_no_leak() {
     // Same deep chain but allocated inside a helper; must be fully freed on return.
     assert_runs_with_output(
         r#"
-use system.io
 
 class D
     var v int
@@ -171,7 +164,6 @@ fn test_class_holding_list_aliased_externally_no_leak() {
     // After the class drops, the external binding still holds a live reference.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Wrapper
@@ -192,7 +184,6 @@ fn test_class_list_field_mutation_no_leak() {
     // Appending to a List field; the List is shared, push is in-place.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Bag
@@ -213,7 +204,6 @@ fn test_replacing_class_list_field_drops_old_list() {
     // Assign a brand-new List to a class field; old List must be DecRef'd.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Holder
@@ -232,7 +222,6 @@ fn main()
 fn test_class_instance_passed_through_chain_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Packet
@@ -263,7 +252,6 @@ fn test_set_of_class_instances_clear_no_crash() {
     // properly DecRefs each instance.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 use system.collections.list
 
@@ -285,7 +273,6 @@ fn test_map_value_custom_remove_no_crash() {
     // remove() properly DecRefs the removed value.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Config
@@ -305,7 +292,6 @@ fn test_map_value_custom_clear_no_crash() {
     // Map<String, Config>: clear() must DecRef all values via val_drop_fn.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 class Config

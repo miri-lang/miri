@@ -120,7 +120,6 @@ inc(n)
 fn test_out_param_managed_type_not_consumed_after_call() {
     assert_type_checks(
         r#"
-use system.string
 
 fn append_excl(s out String)
     s = f"{s}!"

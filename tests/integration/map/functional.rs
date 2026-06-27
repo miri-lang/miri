@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_filter_by_value() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.map
 
 let m = Map({\"a\": 1, \"b\": 2, \"c\": 3})
@@ -22,7 +21,6 @@ println(f\"{filtered.length()}\")
 fn map_map_transforms_values() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.map
 
 let m = Map({\"a\": 1, \"b\": 2, \"c\": 3})
@@ -38,7 +36,6 @@ println(f\"{total}\")
 fn map_reduce_sums_values() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.map
 
 let m = Map({\"a\": 1, \"b\": 2, \"c\": 3})

@@ -10,7 +10,6 @@ use super::utils::*;
 fn test_enum_value_dps_in_match_result() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum MyOption: Some(int), None
 
@@ -34,7 +33,6 @@ fn main()
 fn test_enum_variant_constructor_call_dps() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Result: Ok(int), Err(int)
 

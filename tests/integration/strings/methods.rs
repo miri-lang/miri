@@ -7,8 +7,6 @@ use super::utils::*;
 fn test_string_to_upper() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello"
 print(s.to_upper())
@@ -21,8 +19,6 @@ print(s.to_upper())
 fn test_string_to_lower() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "HELLO"
 print(s.to_lower())
@@ -35,8 +31,6 @@ print(s.to_lower())
 fn test_string_trim() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "  hello  "
 print(s.trim())
@@ -49,8 +43,6 @@ print(s.trim())
 fn test_string_trim_start() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "  hello"
 print(s.trim_start())
@@ -63,8 +55,6 @@ print(s.trim_start())
 fn test_string_trim_end() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello  "
 print(s.trim_end())
@@ -77,8 +67,6 @@ print(s.trim_end())
 fn test_string_contains() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello world"
 if s.contains("world")
@@ -94,8 +82,6 @@ else
 fn test_string_starts_with() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello world"
 if s.starts_with("hello")
@@ -111,8 +97,6 @@ else
 fn test_string_ends_with() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello world"
 if s.ends_with("world")
@@ -128,8 +112,6 @@ else
 fn test_string_replace() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello world"
 print(s.replace("world", "miri"))
@@ -142,8 +124,6 @@ print(s.replace("world", "miri"))
 fn test_string_substring() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello"
 print(s.substring(1, 4))
@@ -156,8 +136,6 @@ print(s.substring(1, 4))
 fn test_string_is_empty() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = ""
 if s.is_empty()
@@ -173,8 +151,6 @@ else
 fn test_string_length_method() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "hello"
 println(f"{s.length()}")
@@ -187,8 +163,6 @@ println(f"{s.length()}")
 fn test_string_unicode_length_and_size() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "🦀"
 println(f"length: {s.length()}")
@@ -202,8 +176,6 @@ println(f"size: {s.size()}")
 fn test_string_chained_methods() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 let s = "  HELLO  "
 print(s.trim().to_lower())

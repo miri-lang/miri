@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_bool_identity_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity_bool(b bool) bool
     b
@@ -27,7 +26,6 @@ fn main()
 fn test_bool_negate_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn logical_not(b bool) bool
     not b
@@ -51,7 +49,6 @@ fn main()
 fn test_bool_two_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn both_true(a bool, b bool) bool
     a and b
@@ -71,7 +68,6 @@ fn main()
 fn test_bool_param_false() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity_bool(b bool) bool
     b

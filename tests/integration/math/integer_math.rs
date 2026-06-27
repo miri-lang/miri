@@ -9,7 +9,6 @@ fn test_abs_integer() {
     assert_runs_with_output(
         r#"
         use system.math.{abs}
-        use system.io
 
         let x = 0 - 5
         let result = abs(x)
@@ -24,7 +23,6 @@ fn test_min_integer() {
     assert_runs_with_output(
         r#"
         use system.math.{min}
-        use system.io
 
         let result = min(7, 2)
         println(f'{result}')
@@ -38,7 +36,6 @@ fn test_max_integer() {
     assert_runs_with_output(
         r#"
         use system.math.{max}
-        use system.io
 
         let result = max(2, 9)
         println(f'{result}')
@@ -52,7 +49,6 @@ fn test_abs_float_still_works() {
     assert_runs_with_output(
         r#"
         use system.math.{abs}
-        use system.io
 
         let result = abs(0.0 - 5.5)
         println(f'{result}')
@@ -66,7 +62,6 @@ fn test_min_float_still_works() {
     assert_runs_with_output(
         r#"
         use system.math.{min}
-        use system.io
 
         let result = min(7.5, 2.3)
         println(f'{result}')
@@ -80,7 +75,6 @@ fn test_max_float_still_works() {
     assert_runs_with_output(
         r#"
         use system.math.{max}
-        use system.io
 
         let result = max(2.1, 9.9)
         println(f'{result}')
@@ -179,7 +173,6 @@ fn test_max_rejects_too_many_args() {
 fn test_user_defined_function_not_polymorphic() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn double(x int) int
     x * 2
@@ -198,7 +191,6 @@ fn main()
 fn test_cast_float_overflow_saturates_positive() {
     assert_runs_with_output(
         r#"
-        use system.io
 
         let x = 1.0e30
         let result = x as int
@@ -214,7 +206,6 @@ fn test_cast_float_overflow_saturates_positive() {
 fn test_cast_float_overflow_saturates_negative() {
     assert_runs_with_output(
         r#"
-        use system.io
 
         let x = 0.0 - 1.0e30
         let result = x as int
@@ -232,7 +223,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{tanh}
-            use system.io
 
             let result = tanh(0.0)
             println(f'{result}')
@@ -246,7 +236,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{exp2}
-            use system.io
 
             let result = exp2(3.0)
             println(f'{result}')
@@ -260,7 +249,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{log2}
-            use system.io
 
             let result = log2(8.0)
             println(f'{result}')
@@ -274,7 +262,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{fract}
-            use system.io
 
             let result = fract(2.25)
             println(f'{result}')
@@ -288,7 +275,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{sign}
-            use system.io
 
             let neg = sign(0.0 - 3.0)
             let zero = sign(0.0)
@@ -304,7 +290,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{atan2}
-            use system.io
 
             let result = atan2(1.0, 1.0)
             println(f'{result}')
@@ -318,7 +303,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{step}
-            use system.io
 
             let below = step(0.5, 0.3)
             let above = step(0.5, 0.7)
@@ -333,7 +317,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{clamp}
-            use system.io
 
             let lo = clamp(0.0 - 1.0, 0.0, 1.0)
             let mid = clamp(0.5, 0.0, 1.0)
@@ -349,7 +332,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{mix}
-            use system.io
 
             let result = mix(0.0, 10.0, 0.25)
             println(f'{result}')
@@ -363,7 +345,6 @@ mod new_math_intrinsics {
         assert_runs_with_output(
             r#"
             use system.math.{smoothstep}
-            use system.io
 
             let result = smoothstep(0.0, 1.0, 0.5)
             println(f'{result}')

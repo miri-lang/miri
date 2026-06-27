@@ -4,7 +4,6 @@
 // Comprehensive tests for `system.string` using `system.testing` assertions.
 // Miri tests Miri: every check below executes in a real `miri run` invocation.
 
-use system.io
 use system.testing
 
 fn test_length_and_size()

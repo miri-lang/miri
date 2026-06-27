@@ -24,7 +24,6 @@ use super::utils::*;
 fn gpu_for_dispatch_does_not_crash() {
     assert_runs(
         "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -73,7 +72,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn vector_add_int_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -98,7 +96,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn scalar_multiply_int_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -121,7 +118,6 @@ println(f'{host[0]} {host[7]}')
 )]
 fn elementwise_madd_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -150,7 +146,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn bounds_check_preserves_sentinel_past_range_end() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -173,7 +168,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 )]
 fn reduction_fixed_sum_writes_single_total() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -197,7 +191,6 @@ println(f'{host[0]}')
 )]
 fn while_loop_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -226,7 +219,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn inner_loop_continue_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -255,7 +247,6 @@ println(f'{host[0]} {host[1]}')
 )]
 fn inner_loop_break_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -284,7 +275,6 @@ println(f'{host[0]} {host[1]}')
 )]
 fn nested_loop_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -316,7 +306,6 @@ println(f'{host[0]} {host[1]}')
 )]
 fn multi_if_sequential_with_accumulation_value_correctness() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -350,7 +339,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn multi_if_nested_with_accumulation_value_correctness() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -387,7 +375,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn multi_if_else_value_correctness() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -420,7 +407,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn gpu_for_2d_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -445,7 +431,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 )]
 fn gpu_for_2d_runtime_bounds_value_round_trips() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -471,7 +456,6 @@ fn main()
 )]
 fn gpu_for_2d_mixed_literal_x_runtime_y_bounds() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -501,7 +485,6 @@ fn main()
 )]
 fn gpu_for_2d_mixed_runtime_x_literal_y_bounds() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -540,7 +523,6 @@ fn main()
 fn ping_pong_three_generations_value_and_telemetry() {
     let source = "
 use system.gpu
-use system.io
 use system.collections.array
 
 gpu_reset_telemetry()
@@ -769,7 +751,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 )]
 fn or_condition_value_round_trips_through_device() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_init_body_executes() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Greeter
     var name String
@@ -27,7 +26,6 @@ fn main()
 fn test_init_with_self_field_assignment() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Dog
     var name String
@@ -48,7 +46,6 @@ fn main()
 fn test_init_with_logic() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int = 0
@@ -67,7 +64,6 @@ fn main()
 fn test_class_without_init_still_works() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Point
     var x int
@@ -85,7 +81,6 @@ fn main()
 fn test_super_init_chaining() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     var name String
@@ -116,7 +111,6 @@ fn test_base_class_no_arg_init_called_automatically() {
     // the base constructor should still run (auto-inherited constructor).
     assert_runs_with_output(
         r#"
-use system.io
 
 class Base
     var ready bool
@@ -163,7 +157,6 @@ fn test_init_callable_as_method() {
     // This test documents current behavior — adjust expected output as needed.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -208,7 +201,6 @@ fn test_init_multiple_super_levels() {
     // Three-level chain: Leaf → Mid → Root, all inits called.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Root
     var r int

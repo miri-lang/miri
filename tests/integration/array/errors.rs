@@ -39,7 +39,6 @@ let x = a["x"]
 fn test_array_index_out_of_bounds_runtime() {
     assert_runtime_error(
         r#"
-use system.io
 
 fn get_index() int
     5
@@ -57,7 +56,6 @@ fn main()
 fn test_array_index_assignment_out_of_bounds_runtime() {
     assert_runtime_error(
         r#"
-use system.io
 
 fn get_index() int
     5
@@ -76,7 +74,6 @@ fn main()
 fn test_array_negative_index_runtime() {
     assert_runtime_error(
         r#"
-use system.io
 
 fn get_index() int
     -1

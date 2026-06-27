@@ -139,7 +139,6 @@ fn main()
 fn test_constructor_correct_positional() {
     assert_type_checks(
         r#"
-use system.io
 
 class Pt
     var x int
@@ -159,7 +158,6 @@ fn main()
 fn test_constructor_correct_named_args() {
     assert_type_checks(
         r#"
-use system.io
 
 class Rect
     var w int
@@ -181,7 +179,6 @@ fn test_constructor_no_init_field_style_still_works() {
     // named field arguments — this must not regress.
     assert_type_checks(
         r#"
-use system.io
 
 class Coord
     var x int

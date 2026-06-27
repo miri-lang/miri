@@ -12,7 +12,6 @@ use super::utils::*;
 fn value_generic_class_accepts_matching_field_literal() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 
 class Wrap<T, Size>

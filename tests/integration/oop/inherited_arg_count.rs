@@ -89,7 +89,6 @@ fn test_inherited_constructor_correct_call_passes() {
     // Passing the right arg to an inherited constructor must type-check fine.
     assert_type_checks(
         r#"
-use system.io
 
 class Base
     var x int
@@ -189,7 +188,6 @@ fn main()
 fn test_inherited_method_correct_call_passes() {
     assert_type_checks(
         r#"
-use system.io
 
 class Animal
     fn speak(msg String)
@@ -269,7 +267,6 @@ fn main()
 fn test_trait_method_correct_call_passes() {
     assert_type_checks(
         r#"
-use system.io
 
 trait Adder
     fn add(a int, b int) int
@@ -291,7 +288,6 @@ fn main()
 fn test_trait_default_method_too_many_args() {
     assert_compiler_error(
         r#"
-use system.io
 
 trait Printable
     fn describe() String

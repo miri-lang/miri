@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_index_write() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var m = {"a": 1}
 m["a"] = 10
@@ -22,7 +21,6 @@ println(f"{v}")
 fn map_index_write_new_key() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var m = {"a": 1}
 m["b"] = 2

@@ -10,7 +10,6 @@ fn test_trait_basic_definition_and_implementation() {
     // A class implements a trait and the method is callable on a concrete instance.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Greetable
     fn greet()
@@ -32,7 +31,6 @@ fn test_trait_method_with_return_value() {
     // Trait method returns a value; concrete class provides the implementation.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Named
     fn name() String
@@ -54,7 +52,6 @@ fn test_trait_method_with_parameters() {
     // Trait method takes parameters; the implementing class must match the signature.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Adder
     fn add(a int, b int) int
@@ -81,7 +78,6 @@ fn test_trait_default_method_used_when_not_overridden() {
     // list and check for a concrete (non-abstract) method in the trait body.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Printable
     fn print()
@@ -102,7 +98,6 @@ fn test_trait_default_method_overridden_by_class() {
     // When the class provides its own implementation it must take precedence.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Printable
     fn print()
@@ -127,7 +122,6 @@ fn test_class_implements_two_traits() {
     // A class may implement multiple traits; all methods must be reachable.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Runnable
     fn run()
@@ -155,7 +149,6 @@ fn test_class_extends_and_implements_trait() {
     // A class can both extend a base class AND implement a trait.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Animal
     fn breathe()
@@ -184,7 +177,6 @@ fn test_child_trait_inherits_parent_trait_methods() {
     // `trait B extends A` — a class implementing B must also provide A's methods.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Shape
     fn area() int
@@ -213,7 +205,6 @@ fn test_trait_chain_three_levels() {
     // Class implementing C must provide all methods from the entire chain.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait A
     fn a()
@@ -260,7 +251,6 @@ fn test_trait_typed_variable_dispatches_correctly() {
     // dispatch to the concrete implementation at runtime (needs trait vtable).
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Greetable
     fn greet()
@@ -282,7 +272,6 @@ fn test_trait_typed_variable_two_implementations() {
     // Two different concrete types behind a shared trait-typed variable.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Speaker
     fn speak()
@@ -310,7 +299,6 @@ fn test_function_accepting_trait_parameter() {
     // A function whose parameter type is a trait — concrete object passed in.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Describable
     fn describe() String
@@ -434,7 +422,6 @@ fn test_trait_method_uses_self_type() {
     // the "already defined" clash.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait SameAs
     fn same(other Self) bool
@@ -498,7 +485,6 @@ fn test_implements_trait_with_matching_generic_substitution_passes() {
     // Sanity check: after substitution, the signatures line up.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Container<T>
     fn get() T
@@ -522,7 +508,6 @@ fn test_parent_trait_generic_substitution_propagates() {
     // whose param/return type matches Parent<int> compiles; mismatches fail.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Parent<T>
     fn parent_method() T
@@ -575,7 +560,6 @@ fn test_implements_trait_with_nested_generic_arg_matches() {
     // the trait arg's inner type (`int`) must be preserved through resolution.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Box implements Iterable<List<int>>
@@ -640,7 +624,6 @@ fn test_generic_class_with_implements_emits_vtable() {
     // every `<T>` instantiation.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Box<T> implements Iterable<List<T>>
@@ -689,7 +672,6 @@ fn test_trait_method_out_param_writeback_via_vtable() {
     // the scalar `out` arg through the caller's stack slot, mirroring direct Call.
     assert_runs_with_output(
         r#"
-use system.io
 
 trait Counter
     fn inc(n out int)
@@ -714,7 +696,6 @@ fn test_class_method_out_param_writeback_static_dispatch() {
     // the out_args flag flows through class-method dispatch, not just virtual.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Tally
     fn inc(n out int)

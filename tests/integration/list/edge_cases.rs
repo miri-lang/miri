@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_empty_boundary_conditions() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List<int>()
@@ -23,7 +22,6 @@ println(f\"{l.last() ?? -1}\")
 fn list_capacity_reallocation_stress() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List<int>()
@@ -53,7 +51,6 @@ l.insert(5, 99)
 fn list_nested_management() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let inner1 = List([1, 2])
@@ -76,7 +73,6 @@ println(f\"{first_inner[2]}\")
 fn list_insert_at_length() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 
 let l = List([1, 2])

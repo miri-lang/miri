@@ -54,7 +54,6 @@ swap(x, x)
 fn test_out_param_int_writeback() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn inc(x out int)
     x = x + 1
@@ -72,7 +71,6 @@ fn main()
 fn test_out_param_list_push() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn append(list out [int])
@@ -91,7 +89,6 @@ fn main()
 fn test_out_param_int_multiple() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn swap(a out int, b out int)
     let tmp = a
@@ -127,7 +124,6 @@ fn test_out_param_string_mutation() {
     // Callee appends to a string via an `out` parameter.
     assert_type_checks(
         r#"
-use system.string
 
 fn append_excl(s out String)
     s = f"{s}!"
@@ -160,7 +156,6 @@ fn test_out_param_bool_writeback() {
     // Bool maps to i8 in Cranelift — exercises a distinct scalar path from i64.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn toggle(flag out bool)
     flag = not flag
@@ -179,7 +174,6 @@ fn test_out_param_float_writeback() {
     // f32 out param — exercises the float stack-slot path in codegen.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn double(x out f32)
     x = x * 2.0

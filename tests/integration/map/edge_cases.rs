@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_overwrite_existing_key() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1}
@@ -24,7 +23,6 @@ println(f"{m.length()}")
 fn map_many_entries() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
@@ -44,7 +42,6 @@ println(f"{m.length()}")
 fn map_int_keys() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let m = {1: "one", 2: "two", 3: "three"}
 println(m[1])
@@ -59,7 +56,6 @@ println(m[3])
 fn map_clear_and_reuse() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = {"a": 1, "b": 2}
@@ -78,7 +74,6 @@ println(f"{c_val}")
 fn map_large_scale_operations() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = Map<int, int>()
@@ -100,7 +95,6 @@ println(f"{m.length()}")
 fn map_nested_maps_rc() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn make_nested() Map<String, Map<String, int>>
@@ -122,7 +116,6 @@ fn main()
 fn map_super_deeply_nested() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"a": {"b": {"c": {"d": 42}}}}
@@ -137,7 +130,6 @@ println(f"{v1}")
 fn map_complex_struct_objects() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 struct User
@@ -157,7 +149,6 @@ fn main()
 fn map_array_as_value() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.array
 
@@ -175,7 +166,6 @@ println(f"{val}")
 fn map_complex_object_keys() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let p = (10, 20)

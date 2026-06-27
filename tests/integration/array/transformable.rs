@@ -7,7 +7,6 @@ use super::utils::*;
 fn array_map_doubles_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -24,7 +23,6 @@ for item in doubled
 fn array_filter_keeps_positives() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -40,7 +38,6 @@ println(f\"{pos.length()}\")
 fn array_reduce_product() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -56,7 +53,6 @@ println(f\"{product}\")
 fn array_any_all() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -72,7 +68,6 @@ println(f\"{a.all(fn(x int) bool: x % 2 == 0)}\")
 fn array_take_and_skip() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -90,7 +85,6 @@ println(f\"{d.length()}\")
 fn array_flat_map_flattens_results() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 use system.collections.list
@@ -109,7 +103,6 @@ for item in result
 fn array_sorted_by_comparator() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -126,7 +119,6 @@ for item in s
 fn array_sum_of_integers() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -141,7 +133,6 @@ println(f\"{a.sum() ?? 0}\")
 fn array_min_and_max() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -157,7 +148,6 @@ println(f\"{a.max() ?? 0}\")
 fn array_unique_deduplicates() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -173,7 +163,6 @@ println(f\"{u.length()}\")
 fn array_zip_pairs_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.list
 use system.collections.transformable
@@ -196,7 +185,6 @@ while i < z.length()
 fn array_enumerate_indexes_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -217,7 +205,6 @@ while i < e.length()
 fn array_sum_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -232,7 +219,6 @@ println(f\"{a.sum() ?? -1}\")
 fn array_min_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -247,7 +233,6 @@ println(f\"{a.min() ?? -1}\")
 fn array_max_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 
@@ -262,7 +247,6 @@ println(f\"{a.max() ?? -1}\")
 fn array_sum_min_max_single_element() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.array
 use system.collections.transformable
 

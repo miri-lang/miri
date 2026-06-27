@@ -11,7 +11,6 @@ fn test_set_of_strings_remove_no_crash() {
     // the string element instead of leaking it.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -28,7 +27,6 @@ fn test_set_of_strings_clear_no_crash() {
     // Set<String>: clear() must DecRef all string elements via elem_drop_fn.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -48,7 +46,6 @@ fn test_set_int_clear_no_crash() {
     // elem_drop_fn.  Verifies the set itself is freed without crashing.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -87,7 +84,6 @@ s = {4, 5} // old set should be freed here
 fn test_set_passed_to_function_no_dangle() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn consume(s Set<int>)
@@ -108,7 +104,6 @@ fn test_set_cow_add_isolates_original() {
     // CoW: s2 shares s1's data until s2.add mutates → s1 must be unchanged.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s1 = {1}
 var s2 = s1
@@ -126,7 +121,6 @@ fn test_set_cow_remove_isolates_original() {
     // CoW: s2.remove triggers a clone — s1 must retain the removed element.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s1 = {1, 2, 3}
 var s2 = s1
@@ -144,7 +138,6 @@ fn test_set_cow_clear_isolates_original() {
     // CoW: s2.clear clones s1's data — s1 must be unaffected.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s1 = {1, 2, 3}
 var s2 = s1
@@ -164,7 +157,6 @@ fn test_set_of_lists_clear_no_leak() {
     // clear() properly DecRefs each inner list.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 use system.collections.set
 
@@ -188,7 +180,6 @@ fn test_empty_set_of_strings_add_clear_no_leak() {
     // MIRI_LEAK_CHECK=1 catches any string not DecRef'd by elem_drop_fn.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_int_and_bool_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn conditional_double(x int, flag bool) int
     if flag
@@ -29,7 +28,6 @@ fn main()
 fn test_multiple_same_width_int_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn sum_i32(a i32, b i32, c i32) i32
     a + b + c

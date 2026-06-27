@@ -4,7 +4,6 @@
 // Tests for `system.collections.tuple`. A homogeneous tuple gains the
 // `Queryable<T>` methods after importing this module.
 
-use system.io
 use system.collections.tuple
 use system.testing
 

@@ -24,7 +24,6 @@ use system.memory
 fn test_string_clone_produces_independent_copy() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 
 let s = "hello"
@@ -39,7 +38,6 @@ println(c)
 fn test_string_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 
 let a = "world"
@@ -59,7 +57,6 @@ println(a)
 fn test_list_int_clone_produces_copy() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -77,7 +74,6 @@ println(f"{c[2]}")
 fn test_list_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -122,7 +118,6 @@ class CloneablePoint implements Cloneable
 fn test_struct_clone_method_works() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 
 class Point implements Cloneable
@@ -153,7 +148,6 @@ println(f"{c.y}")
 fn test_list_string_clone_elements_are_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -171,7 +165,6 @@ println(f"{c.length()}")
 fn test_list_string_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -186,7 +179,6 @@ println(f"{c.length()}")
 fn test_empty_list_clone() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -206,7 +198,6 @@ println(f"{c.length()}")
 fn test_array_clone_produces_copy() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.array
 
@@ -224,7 +215,6 @@ println(f"{b[2]}")
 fn test_array_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.array
 
@@ -241,7 +231,6 @@ println(f"{b.length()}")
 fn test_array_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.array
 
@@ -260,7 +249,6 @@ println(f"{b.length()}")
 fn test_set_clone_produces_copy() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -276,7 +264,6 @@ println(f"{c.length()}")
 fn test_set_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -293,7 +280,6 @@ println(f"{c.length()}")
 fn test_set_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -312,7 +298,6 @@ println(f"{c.length()}")
 fn test_map_clone_produces_copy() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -328,7 +313,6 @@ println(f"{c.length()}")
 fn test_map_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -345,7 +329,6 @@ println(f"{c.length()}")
 fn test_map_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -364,7 +347,6 @@ println(f"{c.length()}")
 fn test_set_string_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -379,7 +361,6 @@ println(f"{c.length()}")
 fn test_set_string_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -400,7 +381,6 @@ println(f"{c.length()}")
 fn test_map_string_string_clone_no_leak() {
     assert_runs(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -415,7 +395,6 @@ println(f"{c.length()}")
 fn test_map_string_string_clone_is_independent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -482,7 +461,6 @@ fn test_array_of_custom_objects_clone_is_deep() {
     // arrays share the same Point allocations, and p.x = 99 would corrupt a[0].
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.array
 
@@ -513,7 +491,6 @@ fn test_array_of_custom_objects_clone_no_leak() {
     // Point objects must be freed when they go out of scope.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.array
 
@@ -542,7 +519,6 @@ fn test_list_of_custom_objects_clone_is_deep() {
     // Same independence test for List<Point>.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -577,7 +553,6 @@ fn test_empty_constructor_list_of_custom_objects_clone_is_deep() {
     // elem_clone_fn must be wired so that .clone() deep-copies elements.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -607,7 +582,6 @@ println(f"{l[0].x}")
 fn test_empty_constructor_list_of_custom_objects_clone_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -641,7 +615,6 @@ fn test_set_of_custom_objects_clone_no_leak() {
     // translate_rvalue.rs. Verify no RC leak or double-free on clone + drop.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -671,7 +644,6 @@ fn test_empty_constructor_set_of_custom_objects_clone_no_leak() {
     // wire elem_clone_fn so that .clone() deep-copies elements without leaking.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.set
 
@@ -706,7 +678,6 @@ fn test_map_of_custom_objects_clone_is_deep() {
     // of the clone must NOT affect the original map.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -736,7 +707,6 @@ println(f"{orig.x}")
 fn test_map_of_custom_objects_clone_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.map
 
@@ -770,7 +740,6 @@ fn test_list_clone_push_to_clone_does_not_affect_original() {
     // Clone a list, push to the clone, original must still have its original length.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -793,7 +762,6 @@ fn test_struct_managed_list_field_clone_is_deep() {
     // must NOT change the original's list length.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -820,7 +788,6 @@ fn test_struct_managed_list_field_clone_no_leak() {
     // Both the original and the clone must be freed without leaks.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 use system.collections.list
 
@@ -848,7 +815,6 @@ fn test_struct_string_field_clone_no_double_free() {
     // both the original and the clone have independent RC lifecycles.
     assert_runs_with_output(
         r#"
-use system.io
 use system.memory
 
 class Tagged implements Cloneable

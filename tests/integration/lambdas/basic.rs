@@ -8,7 +8,6 @@ use super::super::utils::*;
 fn test_lambda_basic() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let f = fn(x int) int: x * x
@@ -23,7 +22,6 @@ fn main()
 fn test_lambda_called_multiple_times() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let double = fn(x int) int: x * 2
@@ -39,7 +37,6 @@ fn main()
 fn test_lambda_multiple_params() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let add = fn(a int, b int) int: a + b
@@ -54,7 +51,6 @@ fn main()
 fn test_lambda_passed_as_argument() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn apply(f fn(x int) int, n int) int
     f(n)

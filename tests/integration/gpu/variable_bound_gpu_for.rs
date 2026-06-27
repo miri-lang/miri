@@ -33,7 +33,6 @@ fn main()
 )]
 fn runtime_int_variable_bound_dispatches_correctly() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -60,7 +59,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn runtime_bound_via_gpu_buffer_length() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -84,7 +82,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 )]
 fn empty_runtime_range_is_noop() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -107,7 +104,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn negative_runtime_range_is_noop() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -130,7 +126,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 )]
 fn inclusive_runtime_range_includes_end() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -154,7 +149,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 )]
 fn runtime_bound_threads_beyond_n_do_not_write() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -189,7 +183,6 @@ fn runtime_bound_uniform_is_not_counted_as_upload() {
     assert_runs_with_output(
         "
 use system.gpu
-use system.io
 
 fn main()
     gpu_reset_telemetry()
@@ -222,7 +215,6 @@ fn bound_exceeds_u32_max_errors() {
     }
     let source = "
 use system.gpu
-use system.io
 use system.collections.array
 
 fn main()
@@ -247,7 +239,6 @@ fn negative_bound_is_noop_no_error() {
     }
     let source = "
 use system.gpu
-use system.io
 use system.collections.array
 
 fn main()
@@ -278,7 +269,6 @@ fn bound_2_to_31_exceeds_device_grid_limit_errors() {
     }
     let source = "
 use system.gpu
-use system.io
 use system.collections.array
 
 fn main()
@@ -307,7 +297,6 @@ fn wraparound_runtime_range_is_noop() {
         return;
     }
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 

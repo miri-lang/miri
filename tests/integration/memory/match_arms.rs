@@ -15,7 +15,6 @@ use super::super::utils::*;
 fn test_match_temp_list_per_arm_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn label(n int) int
@@ -38,7 +37,6 @@ fn main()
 fn test_match_only_taken_arm_allocates_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn maybe_alloc(flag int) int
@@ -59,7 +57,6 @@ fn main()
 fn test_match_outer_list_used_in_arm_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -79,7 +76,6 @@ fn main()
 fn test_match_class_temp_in_arm_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Tag
     var code int
@@ -105,7 +101,6 @@ fn main()
 fn test_match_class_with_list_field_in_arm_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Packet
@@ -130,7 +125,6 @@ fn main()
 fn test_match_selects_between_two_lists_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -152,7 +146,6 @@ fn main()
 fn test_match_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn score(n int) int
@@ -175,7 +168,6 @@ fn main()
 fn test_match_on_bool_arm_allocates_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn check(flag bool) int
@@ -197,7 +189,6 @@ fn main()
 fn test_match_multiple_class_arms_called_repeatedly_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Node
     var value int

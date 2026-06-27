@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_array_for_loop() {
     assert_runs_with_output(
         r#"
-use system.io
 
 for x in [1, 2, 3]
     println(f"{x}")
@@ -20,7 +19,6 @@ for x in [1, 2, 3]
 fn test_array_for_loop_strings() {
     assert_runs_with_output(
         r#"
-use system.io
 
 for s in ["a", "b"]
     println(s)
@@ -33,7 +31,6 @@ for s in ["a", "b"]
 fn test_array_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn make_array() [int; 3]
     [10, 20, 30]
@@ -50,7 +47,6 @@ fn main()
 fn test_array_in_struct_field() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Data
     values [int; 3]
@@ -69,7 +65,6 @@ fn test_array_of_structs_elem_size() {
     // because structs are heap-allocated.
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -94,7 +89,6 @@ fn test_nested_arrays() {
     // Nested arrays: inner arrays are pointer-sized elements.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let a = [10, 20, 30]

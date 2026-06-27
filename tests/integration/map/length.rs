@@ -7,7 +7,6 @@ use super::utils::*;
 fn map_length() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = {"a": 1, "b": 2, "c": 3}

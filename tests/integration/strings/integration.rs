@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_string_equality() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = "hello"
 let b = "hello"
@@ -25,7 +24,6 @@ if a != c
 fn test_string_function_parameter() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn greet(name String)
     println(f"Hello, {name}!")
@@ -40,7 +38,6 @@ greet("Miri")
 fn test_string_function_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn get_greeting() String
     return "Hello from function"
@@ -56,7 +53,6 @@ println(s)
 fn test_string_in_conditional() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let s = "yes"
 if s == "yes"

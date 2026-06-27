@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_set_length() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 let s = {1, 2, 3}
 println(f"{s.length()}")
@@ -20,7 +19,6 @@ println(f"{s.length()}")
 fn test_set_length_dedup() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 let s = {1, 2, 2, 3, 3, 3}
 println(f"{s.length()}")
@@ -33,7 +31,6 @@ println(f"{s.length()}")
 fn test_set_contains() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 let s = {10, 20, 30}
 println(f"{s.contains(20)}")
@@ -47,7 +44,6 @@ println(f"{s.contains(99)}")
 fn test_set_in_operator() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 let s = {1, 2, 3}
 if 2 in s
@@ -61,7 +57,6 @@ if 2 in s
 fn test_set_add() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2}
 s.add(3)
@@ -76,7 +71,6 @@ println(f"{s.contains(3)}")
 fn test_set_add_duplicate() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2}
 s.add(2)
@@ -90,7 +84,6 @@ println(f"{s.length()}")
 fn test_set_remove() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2, 3}
 s.remove(2)
@@ -105,7 +98,6 @@ println(f"{s.contains(2)}")
 fn test_set_is_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 let s = {1}
 println(f"{s.is_empty()}")
@@ -118,7 +110,6 @@ println(f"{s.is_empty()}")
 fn test_set_clear() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2, 3}
 s.clear()
@@ -133,7 +124,6 @@ println(f"{s.is_empty()}")
 fn test_set_remove_nonexistent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2, 3}
 let removed = s.remove(99)

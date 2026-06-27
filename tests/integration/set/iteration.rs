@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_set_for_loop() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 // Order in a Set is not strictly guaranteed by definition,
@@ -27,7 +26,6 @@ println(f"{sum}")
 fn test_set_empty_iteration() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 var s = {1, 2, 3}
 s.clear()

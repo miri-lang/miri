@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_struct_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Point
     x int
@@ -25,7 +24,6 @@ fn main()
 fn test_struct_field_mutation() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Counter
     value int
@@ -43,7 +41,6 @@ fn main()
 fn test_struct_mixed_types_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Record
     name String

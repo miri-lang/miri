@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_string_interpolation() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let name = "Miri"
 print(f"Hello, {name}!")
@@ -20,7 +19,6 @@ print(f"Hello, {name}!")
 fn test_string_interpolation_expression() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 5
 print(f"5 + 3 = {x + 3}")
@@ -33,7 +31,6 @@ print(f"5 + 3 = {x + 3}")
 fn test_formatted_string_escape_newline() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 42
 print(f"value:\t{x}\n")

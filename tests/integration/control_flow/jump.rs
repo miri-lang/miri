@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_break_in_while() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 while true
     x = x + 1
@@ -23,7 +22,6 @@ print(f"{x}")
 fn test_continue_in_for() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..10
     if i % 2 == 0
@@ -39,7 +37,6 @@ print(f"{sum}")
 fn test_until_loop_with_break() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 until false
     x = x + 1
@@ -55,7 +52,6 @@ print(f"{x}")
 fn test_do_while_with_break() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 do
     x = x + 1
@@ -72,7 +68,6 @@ print(f"{x}")
 fn test_do_while_with_continue() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 var i = 0
 do
@@ -91,7 +86,6 @@ print(f"{sum}")
 fn test_break_in_for() {
     assert_runs_with_output(
         r#"
-use system.io
 var found = 0
 for i in 1..10
     if i == 5
@@ -107,7 +101,6 @@ print(f"{found}")
 fn test_continue_in_while() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 var i = 0
 while i < 10
@@ -125,7 +118,6 @@ print(f"{sum}")
 fn test_break_in_for_skips_rest() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..10
     if i > 4
@@ -141,7 +133,6 @@ print(f"{sum}")
 fn test_break_exits_inner_loop_only() {
     assert_runs_with_output(
         r#"
-use system.io
 var count = 0
 for i in 1..4
     for j in 1..10
@@ -158,7 +149,6 @@ print(f"{count}")
 fn test_continue_inner_loop_only() {
     assert_runs_with_output(
         r#"
-use system.io
 var count = 0
 for i in 1..4
     for j in 1..5
@@ -175,7 +165,6 @@ print(f"{count}")
 fn test_postfix_if_on_break() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 while true
     x = x + 1
@@ -190,7 +179,6 @@ print(f"{x}")
 fn test_postfix_unless_on_break() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 while true
     x = x + 1
@@ -205,7 +193,6 @@ print(f"{x}")
 fn test_postfix_if_on_continue() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..10
     continue if i % 2 == 0
@@ -220,7 +207,6 @@ print(f"{sum}")
 fn test_postfix_unless_on_continue() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..10
     continue unless i % 2 == 1
@@ -235,7 +221,6 @@ print(f"{sum}")
 fn test_postfix_if_on_bare_return() {
     assert_runs_with_output(
         r#"
-use system.io
 fn classify(n int)
     print("[small]")
     return if n < 10
@@ -251,7 +236,6 @@ classify(42)
 fn test_postfix_if_false_does_not_jump() {
     assert_runs_with_output(
         r#"
-use system.io
 var sum = 0
 for i in 1..5
     break if i > 100
