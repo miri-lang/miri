@@ -8,7 +8,6 @@ fn test_i8_all_comparisons() {
     // For a=10, b=20: ne=1, lt=1, le=1; eq=0, gt=0, ge=0 → sum = 3
     assert_runs_with_output(
         r#"
-use system.io
 
 fn cmp_i8(a i8, b i8) int
     let eq = if a == b: 1 else: 0
@@ -30,7 +29,6 @@ fn main()
 fn test_i16_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn eq_i16(a i16, b i16) int
     if a == b
@@ -64,7 +62,6 @@ fn main()
 fn test_i32_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn cmp_i32(a i32, b i32) int
     if a < b
@@ -87,7 +84,6 @@ fn main()
 fn test_i64_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn le_i64(a i64, b i64) int
     if a <= b
@@ -114,7 +110,6 @@ fn main()
 fn test_i8_negative_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn lt_i8(a i8, b i8) int
     if a < b
@@ -135,7 +130,6 @@ fn main()
 fn test_i8_boundary_comparisons() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn eq_i8(a i8, b i8) int
     if a == b

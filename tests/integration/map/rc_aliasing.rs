@@ -12,7 +12,6 @@ fn test_map_string_values_remove_no_crash() {
     // element type is visible to codegen at construction time.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -29,7 +28,6 @@ fn test_map_string_values_clear_no_crash() {
     // Map<String, String>: clear() must DecRef all string values via val_drop_fn.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -47,7 +45,6 @@ fn test_map_string_key_variable_no_crash() {
     // Previously only string *constant* keys were detected; now Copy/Move locals work too.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -88,7 +85,6 @@ fn test_map_string_list_values_clear_no_crash() {
     // values via key_drop_fn / val_drop_fn before the map goes out of scope.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 use system.collections.list
 
@@ -128,7 +124,6 @@ m = {"b": 2} // frees old
 fn test_map_passed_to_function_no_dangle() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn consume(m Map<String, int>)
@@ -148,7 +143,6 @@ fn test_map_cow_set_isolates_original() {
     // CoW: m2 shares m1's data until m2.set mutates → m1 must be unchanged.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -168,7 +162,6 @@ fn test_map_cow_remove_isolates_original() {
     // remove triggers CoW — original key must remain.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -188,7 +181,6 @@ fn test_map_cow_clear_isolates_original() {
     // clear triggers CoW — original must be unaffected.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -209,7 +201,6 @@ fn test_map_index_write_managed_val_incref() {
     // still hold a valid reference (IncRef'd at write time).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn make_map() Map<String, String>
@@ -233,7 +224,6 @@ fn test_map_index_write_managed_key_incref() {
     // hold a valid key pointer (IncRef'd at write time via key_drop_fn).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn make_map() Map<String, int>
@@ -259,7 +249,6 @@ fn test_map_index_write_overwrite_managed_no_leak() {
     // val_drop_fn. Overwriting 100 times with concat strings verifies no leak.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -282,7 +271,6 @@ fn test_map_of_arrays_remove_no_leak() {
     // so that remove() properly DecRefs the inner array.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var m = {"x": [1, 2, 3]}
@@ -303,7 +291,6 @@ fn test_map_of_maps_remove_no_leak() {
     // so that overwriting a key properly DecRefs the old inner map.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var m = {"x": {"a": 1}}
@@ -327,7 +314,6 @@ fn test_map_100_string_keys_clear_no_leak() {
     // are DecRef'd on each clear() cycle.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()

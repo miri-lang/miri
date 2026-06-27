@@ -12,7 +12,6 @@ fn type_alias_simple() {
 fn type_alias_string() {
     assert_runs_with_output(
         r#"
-use system.io
 type ID is String
 let id ID = "abc-123"
 println(id)
@@ -25,7 +24,6 @@ println(id)
 fn type_alias_in_variable() {
     assert_runs_with_output(
         r#"
-use system.io
 type MyInt is int
 let x MyInt = 42
 println(f"{x}")
@@ -38,7 +36,6 @@ println(f"{x}")
 fn type_alias_chain() {
     assert_runs_with_output(
         r#"
-use system.io
 type A is int
 type B is A
 let x B = 99

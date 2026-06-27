@@ -8,7 +8,6 @@ use super::super::utils::*;
 fn test_capture_int() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var x = 10
@@ -24,7 +23,6 @@ fn main()
 fn test_capture_with_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let base = 10
@@ -40,7 +38,6 @@ fn main()
 fn test_capture_multiple() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let a = 3
@@ -57,7 +54,6 @@ fn main()
 fn test_capture_string() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let greeting = "Hello"

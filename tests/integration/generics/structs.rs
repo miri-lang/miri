@@ -9,7 +9,6 @@ use super::utils::*;
 fn test_generic_struct_int_construction_and_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T
@@ -26,7 +25,6 @@ fn main()
 fn test_generic_struct_string_construction_and_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T
@@ -43,7 +41,6 @@ fn main()
 fn test_generic_struct_two_instantiations() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T
@@ -64,7 +61,6 @@ fn main()
 fn test_generic_struct_bool_field() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T
@@ -81,7 +77,6 @@ fn main()
 fn test_generic_struct_two_fields() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Pair<T>
     first T
@@ -100,7 +95,6 @@ fn main()
 fn test_generic_struct_field_in_expression() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T
@@ -118,7 +112,6 @@ fn main()
 fn test_generic_struct_same_type_multiple_instances() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<T>
     value T

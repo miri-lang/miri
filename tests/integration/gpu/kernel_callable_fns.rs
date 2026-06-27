@@ -313,7 +313,6 @@ fn kernel_cannot_call_function_that_calls_host_intrinsic() {
     assert_compiler_error(
         "
 use system.gpu
-use system.io
 use system.collections.array
 
 fn bad_fn(x float) float

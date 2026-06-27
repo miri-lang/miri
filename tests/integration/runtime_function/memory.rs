@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_runtime_alloc_free() {
     assert_runs_with_output(
         r#"
-use system.io
 
 runtime fn miri_alloc(size int, align int) i64
 runtime fn miri_free(ptr i64, size int, align int)
@@ -29,7 +28,6 @@ fn main()
 fn test_runtime_realloc() {
     assert_runs_with_output(
         r#"
-use system.io
 
 runtime fn miri_alloc(size int, align int) i64
 runtime fn miri_realloc(ptr i64, old_size int, align int, new_size int) i64

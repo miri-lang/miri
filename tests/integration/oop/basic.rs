@@ -48,7 +48,6 @@ fn main()
 fn test_class_field_access() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Point
     var x int
@@ -69,7 +68,6 @@ fn test_mutable_field_on_mutable_object() {
     // `var p` binds a mutable variable — reassigning fields should compile and run.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Point
     var x int
@@ -118,7 +116,6 @@ fn test_class_field_holding_another_class() {
     // Fields whose type is another class should work and keep their RC alive.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Inner
     var value int
@@ -139,7 +136,6 @@ fn test_multiple_instances_independent() {
     // Two instances of the same class must not share field storage.
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var count int
@@ -160,7 +156,6 @@ fn test_deeply_chained_field_access() {
     // Three levels of nested class field access.
     assert_runs_with_output(
         r#"
-use system.io
 
 class C
     var val int

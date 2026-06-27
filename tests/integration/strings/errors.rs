@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_string_invalid_method_error() {
     assert_compiler_error(
         r#"
-use system.string
 
 let s = "hello"
 let _ = s.nonexistent()

@@ -118,7 +118,6 @@ fn main()
 fn test_function_correct_call() {
     assert_type_checks(
         r#"
-use system.io
 
 fn add(a int, b int) int
     a + b
@@ -133,7 +132,6 @@ fn main()
 fn test_function_named_args_reordered() {
     assert_type_checks(
         r#"
-use system.io
 
 fn sub(a int, b int) int
     a - b
@@ -148,7 +146,6 @@ fn main()
 fn test_function_default_param_can_be_omitted() {
     assert_type_checks(
         r#"
-use system.io
 
 fn greet(name String, prefix String = "Hello") String
     prefix

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_length() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -21,7 +20,6 @@ println(f"{t.length()}")
 fn test_tuple_length_single() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (42,)
@@ -35,7 +33,6 @@ println(f"{t.length()}")
 fn test_tuple_length_pair() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (1, 2)
@@ -49,7 +46,6 @@ println(f"{t.length()}")
 fn test_tuple_element_at() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -65,7 +61,6 @@ println(f"{t.element_at(2)}")
 fn test_tuple_is_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (1, 2, 3)
@@ -79,7 +74,6 @@ println(f"{t.is_empty()}")
 fn test_tuple_first() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -93,7 +87,6 @@ println(f"{t.first() ?? -1}")
 fn test_tuple_last() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -107,7 +100,6 @@ println(f"{t.last() ?? -1}")
 fn test_tuple_first_single() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (42,)
@@ -122,7 +114,6 @@ println(f"{t.last() ?? -1}")
 fn test_tuple_contains() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -137,7 +128,6 @@ println(f"{t.contains(99)}")
 fn test_tuple_index_of() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -152,7 +142,6 @@ println(f"{t.index_of(99)}")
 fn test_tuple_index_of_first_element() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -166,7 +155,6 @@ println(f"{t.index_of(10)}")
 fn test_tuple_index_of_last_element() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 30)
@@ -180,7 +168,6 @@ println(f"{t.index_of(30)}")
 fn test_tuple_string_queryable_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = ("hello", "world", "foo")

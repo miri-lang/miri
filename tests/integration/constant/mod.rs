@@ -17,7 +17,6 @@ fn const_declaration() {
 fn const_print_value() {
     assert_runs_with_output(
         r#"
-use system.io
 
 const x = 42
 print(f"{x}")
@@ -30,7 +29,6 @@ print(f"{x}")
 fn const_in_expression() {
     assert_runs_with_output(
         r#"
-use system.io
 
 const x = 10
 print(f"{x + 5}")
@@ -43,7 +41,6 @@ print(f"{x + 5}")
 fn const_multiple_declarations() {
     assert_runs_with_output(
         r#"
-use system.io
 
 const x = 10
 const y = 20

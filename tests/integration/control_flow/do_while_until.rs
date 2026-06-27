@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_do_while_basic() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 do
     x = x + 1
@@ -22,7 +21,6 @@ print(f"{x}")
 fn test_do_while_executes_once() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 do
     x = x + 1
@@ -37,7 +35,6 @@ print(f"{x}")
 fn test_do_until_basic() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 do
     x = x + 1
@@ -52,7 +49,6 @@ print(f"{x}")
 fn test_do_until_executes_once() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 0
 do
     x = x + 1

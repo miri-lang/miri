@@ -79,10 +79,7 @@ pub fn assert_operation_outputs(operations: &[(&str, &str)]) {
         .map(|(_, expected_output)| *expected_output)
         .collect::<Vec<_>>()
         .join("\n");
-    assert_runs_with_output(
-        format!("use system.io\n{statements}").as_str(),
-        &expected_output,
-    );
+    assert_runs_with_output(statements.as_str(), &expected_output);
 }
 
 /// Assert that the code fails during compilation with a specific error message.

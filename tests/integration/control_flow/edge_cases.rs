@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_while_zero_iterations() {
     assert_runs_with_output(
         r#"
-use system.io
 var x = 99
 while false
     x = 0
@@ -21,7 +20,6 @@ print(f"{x}")
 fn test_for_empty_range() {
     assert_runs_with_output(
         r#"
-use system.io
 var count = 0
 for i in 5..5
     count = count + 1
@@ -35,7 +33,6 @@ print(f"{count}")
 fn test_deeply_nested_if_else() {
     assert_runs_with_output(
         r#"
-use system.io
 let x = 7
 let r = if x < 0
     -1

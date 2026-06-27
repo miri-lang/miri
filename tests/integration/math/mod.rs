@@ -10,7 +10,6 @@ fn test_math_constants() {
     assert_runs_with_output(
         r#"
         use system.math as M
-        use system.io
 
         print(f"{M.PI}\n")
         print(f"{M.E}\n")
@@ -24,7 +23,6 @@ fn test_math_functions_basic() {
     assert_runs_with_output(
         r#"
         use system.math.{sqrt, abs, sin, cos, pow, min, max}
-        use system.io
 
         print(f"{sqrt(16.0)}\n")
         print(f"{abs(-5.0)}\n")
@@ -42,7 +40,6 @@ fn test_math_functions_trig() {
     assert_runs_with_output(
         r#"
         use system.math.{sin, cos, tan}
-        use system.io
 
         print(f"{sin(0.0)}\n")
         print(f"{cos(0.0)}\n")
@@ -57,7 +54,6 @@ fn test_math_functions_rounding() {
     assert_runs_with_output(
         r#"
         use system.math.{floor, ceil, round}
-        use system.io
 
         print(f"{floor(1.9)}\n")
         print(f"{ceil(1.1)}\n")
@@ -74,7 +70,6 @@ fn test_math_functions_log_exp() {
         r#"
         use system.math as M
         use system.math.{log, exp}
-        use system.io
 
         print(f"{log(M.E)}\n")
         print(f"{exp(0.0)}\n")
@@ -88,7 +83,6 @@ fn test_math_inf_constant() {
     assert_runs_with_output(
         r#"
         use system.math as M
-        use system.io
 
         print(f"{M.INF}\n")
         "#,
@@ -100,7 +94,6 @@ fn test_math_inf_constant() {
 fn test_math_sigmoid_cpu() {
     let source = r#"
 use system.math
-use system.io
 
 print(f"{sigmoid(0.0)}\n")
 print(f"{sigmoid(1.0)}\n")
@@ -118,7 +111,6 @@ print(f"{sigmoid(2.0)}\n")
 fn test_math_tanh_cpu() {
     let source = r#"
 use system.math
-use system.io
 
 print(f"{tanh(0.0)}\n")
 print(f"{tanh(1.0)}\n")

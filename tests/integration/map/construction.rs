@@ -22,7 +22,6 @@ fn map_literal_string_values() {
 fn map_explicit_constructor_with_literal() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = Map({"a": 1, "b": 2})
@@ -40,7 +39,6 @@ println(f"{b}")
 fn map_explicit_constructor_with_literal_string_values() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 let m = Map({"name": "Alice", "city": "NYC"})
@@ -55,7 +53,6 @@ println(m["name"])
 fn map_explicit_constructor_empty_typed() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 var m = Map<String, int>()

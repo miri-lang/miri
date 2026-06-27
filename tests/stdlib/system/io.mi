@@ -4,7 +4,6 @@
 // Smoke tests for `system.io`. IO is side-effecting, so we mainly check that
 // the calls execute and `line_end` returns a sensible platform terminator.
 
-use system.io
 use system.testing
 
 fn test_print_and_println()

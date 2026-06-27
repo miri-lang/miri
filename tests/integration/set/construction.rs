@@ -22,7 +22,6 @@ fn test_set_creation_single() {
 fn test_set_explicit_constructor_with_literal_int() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 let s = Set({1, 2, 3})
@@ -36,7 +35,6 @@ println(f"{s.length()}")
 fn test_set_explicit_constructor_with_literal_string() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 let s = Set({"alpha", "beta", "gamma"})
@@ -52,7 +50,6 @@ println(f"{has_beta}")
 fn test_set_explicit_constructor_empty_typed() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 var s = Set<int>()

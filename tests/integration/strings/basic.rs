@@ -19,7 +19,6 @@ fn test_string_with_escapes() {
 fn test_string_println() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let s = "hello"
 println(s)
@@ -32,7 +31,6 @@ println(s)
 fn test_string_concatenation() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = "hello"
 let b = " world"
@@ -46,7 +44,6 @@ print(a + b)
 fn test_string_empty() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let s = ""
 println(s)
@@ -59,7 +56,6 @@ println(s)
 fn test_string_multiple_variables() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let first = "foo"
 let second = "bar"
@@ -74,7 +70,6 @@ print(first + second + third)
 fn test_string_escape_newline() {
     assert_runs_with_output(
         r#"
-use system.io
 
 print("line1\nline2")
 "#,
@@ -86,7 +81,6 @@ print("line1\nline2")
 fn test_string_escape_tab() {
     assert_runs_with_output(
         r#"
-use system.io
 
 print("col1\tcol2")
 "#,

@@ -7,8 +7,6 @@ use super::utils::*;
 fn test_runtime_string_len() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "Hello, Miri!"
@@ -22,8 +20,6 @@ fn main()
 fn test_runtime_string_empty() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s1 = ""
@@ -46,8 +42,6 @@ fn main()
 fn test_runtime_string_concat() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let a = "Hello, "
@@ -69,8 +63,6 @@ fn main()
 fn test_runtime_string_case_conversion() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "Mixed CASE"
@@ -91,8 +83,6 @@ fn main()
 fn test_runtime_string_trim() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "  val  "
@@ -112,8 +102,6 @@ fn main()
 fn test_runtime_string_contains_starts_ends() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "foobarbaz"
@@ -132,8 +120,6 @@ fn main()
 fn test_runtime_string_substring() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "hello world"
@@ -153,8 +139,6 @@ fn main()
 fn probe_string_len() {
     assert_runs_with_output(
         r#"
-use system.io
-use system.string
 
 fn main()
     let s = "hello"

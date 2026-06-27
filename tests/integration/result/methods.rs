@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_is_ok_true() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -22,7 +21,6 @@ fn main()
 fn test_is_ok_false() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -37,7 +35,6 @@ fn main()
 fn test_is_err_true() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -52,7 +49,6 @@ fn main()
 fn test_is_err_false() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -67,7 +63,6 @@ fn main()
 fn test_unwrap_or_ok() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -82,7 +77,6 @@ fn main()
 fn test_unwrap_or_err() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -97,7 +91,6 @@ fn main()
 fn test_match_extracts_ok_value() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()
@@ -114,7 +107,6 @@ fn main()
 fn test_match_extracts_err_value() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.result
 
 fn main()

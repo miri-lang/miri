@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_contains_duplicates() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (10, 20, 10, 30)
@@ -22,7 +21,6 @@ println(f"{t.index_of(10)}")
 fn test_tuple_large() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.tuple
 
 let t = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
@@ -51,7 +49,6 @@ let t = ()
 fn test_tuple_equality() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let t1 = (1, 2)
 let t2 = (1, 2)

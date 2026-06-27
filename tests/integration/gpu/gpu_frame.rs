@@ -811,7 +811,6 @@ fn test_gpu_frame_block_top_level_two_passes() {
     // Previously, lower_gpu_frame_block didn't properly chain blocks, causing
     // the top-level main's CFG to be disconnected.
     let code = r#"use system.collections.array
-use system.io
 gpu var a = Array<int, 16>()
 gpu var c = Array<int, 16>()
 gpu forall i in 0..16
@@ -843,7 +842,6 @@ fn test_gpu_frame_repeat_unrolls_passes() {
     // of its passes. Two passes ping-pong a<->b adding 1 each, over 3 iterations
     // (6 increments): a starts at 1.0, ends at 7.0.
     let code = r#"use system.collections.array
-use system.io
 
 gpu var a = Array<f32, 16>()
 gpu var b = Array<f32, 16>()
@@ -869,7 +867,6 @@ println(f"a0={h[0]}")
 fn test_gpu_frame_repeat_non_forall_body_rejected() {
     // A repeat body may only contain `gpu forall` passes.
     let code = r#"use system.collections.array
-use system.io
 
 gpu var a = Array<f32, 16>()
 

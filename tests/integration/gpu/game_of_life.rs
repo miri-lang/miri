@@ -387,7 +387,6 @@ fn test_multipass_game_of_life_manifest() {
     // The full demo should compile to a manifest with 5 frame passes
     let source = r#"
 use system.collections.array
-use system.io
 
 fn main()
     gpu var grid_a = Array<int, 16>()

@@ -7,7 +7,6 @@ use super::utils::*;
 fn list_map_doubles_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -24,7 +23,6 @@ for item in doubled
 fn list_filter_keeps_positives() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -42,7 +40,6 @@ for item in pos
 fn list_reduce_sums_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -58,7 +55,6 @@ println(f\"{sum}\")
 fn list_filter_then_reduce() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -74,7 +70,6 @@ println(f\"{result}\")
 fn list_any_returns_true_when_element_matches() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -90,7 +85,6 @@ println(f\"{l.any(fn(x int) bool: x > 10)}\")
 fn list_all_returns_true_when_all_match() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -106,7 +100,6 @@ println(f\"{l.all(fn(x int) bool: x > 3)}\")
 fn list_flat_map_flattens_results() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -124,7 +117,6 @@ for item in result
 fn list_take_returns_first_n() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -142,7 +134,6 @@ for item in t
 fn list_skip_skips_first_n() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -160,7 +151,6 @@ for item in d
 fn list_unique_deduplicates() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -176,7 +166,6 @@ println(f\"{u.length()}\")
 fn list_sorted_by_comparator() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -193,7 +182,6 @@ for item in s
 fn list_sum_of_integers() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -208,7 +196,6 @@ println(f\"{l.sum() ?? 0}\")
 fn list_min_and_max() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -224,7 +211,6 @@ println(f\"{l.max() ?? 0}\")
 fn list_zip_pairs_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -246,7 +232,6 @@ while i < z.length()
 fn list_zip_truncates_to_shorter() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -268,7 +253,6 @@ while i < z.length()
 fn list_zip_empty_yields_empty() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -285,7 +269,6 @@ println(f\"{z.length()}\")
 fn list_enumerate_indexes_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -306,7 +289,6 @@ while i < e.length()
 fn list_enumerate_empty_yields_empty() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -322,7 +304,6 @@ println(f\"{e.length()}\")
 fn list_zip_for_loop_iterates_tuples() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -339,7 +320,6 @@ for p in a.zip(b)
 fn list_enumerate_for_loop_iterates_tuples() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -355,7 +335,6 @@ for p in l.enumerate()
 fn list_sum_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -370,7 +349,6 @@ println(f\"{l.sum() ?? -1}\")
 fn list_min_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -385,7 +363,6 @@ println(f\"{l.min() ?? -1}\")
 fn list_max_on_empty_returns_none() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -400,7 +377,6 @@ println(f\"{l.max() ?? -1}\")
 fn list_sum_min_max_single_element() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -417,7 +393,6 @@ println(f\"{l.max() ?? 0}\")
 fn list_multiline_filter_then_map_chain() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -436,7 +411,6 @@ fn main()
 fn list_multiline_chain_inside_function_body() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -457,7 +431,6 @@ fn main()
 fn list_multiline_chain_at_top_level() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -476,7 +449,6 @@ for item in result
 fn list_multiline_chain_with_many_steps() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 
@@ -496,7 +468,6 @@ fn main()
 fn list_multiline_chain_with_blank_line_breaks_chain() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.list
 use system.collections.transformable
 

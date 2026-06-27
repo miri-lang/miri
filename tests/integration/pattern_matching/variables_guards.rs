@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_variable() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 42
 let result = match x
@@ -24,7 +23,6 @@ print(f"{result}")
 fn test_match_identifier_binding() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 42
 let result = match x
@@ -39,7 +37,6 @@ print(f"{result}")
 fn test_match_with_guards() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 15
 let result = match x
@@ -56,7 +53,6 @@ print(f"{result}")
 fn test_match_guard_binding_used() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 15
 let result = match x
@@ -73,7 +69,6 @@ print(f"{result}")
 fn test_match_guard_second_arm() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 7
 let result = match x
@@ -90,7 +85,6 @@ print(f"{result}")
 fn test_match_guard_catch_all() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 3
 let result = match x

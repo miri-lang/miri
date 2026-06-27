@@ -4,7 +4,6 @@
 // Tests for `system.result`. Covers Ok/Err discrimination, unwrap_or, and the
 // canonical match-on-Result pattern documented at the top of result.mi.
 
-use system.io
 use system.result
 use system.testing
 

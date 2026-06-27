@@ -10,7 +10,6 @@ use super::super::utils::*;
 fn test_empty_list_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -25,7 +24,6 @@ fn main()
 fn test_empty_map_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -42,7 +40,6 @@ fn test_list_push_then_clear_no_leak() {
     // then grow and clear; all elements must be freed.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -61,7 +58,6 @@ fn main()
 fn test_empty_map_set_then_clear_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -79,7 +75,6 @@ fn main()
 fn test_single_element_list_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -95,7 +90,6 @@ fn main()
 fn test_single_element_list_pop_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -113,7 +107,6 @@ fn test_large_list_no_leak() {
     // Seed with one typed element, push 999 more; 1000 total.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -130,7 +123,6 @@ fn main()
 fn test_large_list_of_classes_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Item
@@ -151,7 +143,6 @@ fn test_large_map_no_leak() {
     // Stress the map with many insertions; all must be freed at drop.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -168,7 +159,6 @@ fn main()
 fn test_managed_object_created_only_in_true_branch_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn maybe_alloc(flag int) int
@@ -189,7 +179,6 @@ fn main()
 fn test_managed_object_created_only_in_false_branch_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn maybe_alloc(flag int) int
@@ -210,7 +199,6 @@ fn main()
 fn test_list_of_strings_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -225,7 +213,6 @@ fn main()
 fn test_class_with_string_and_list_in_loop_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Entry
@@ -245,7 +232,6 @@ fn main()
 fn test_map_string_keys_clear_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn main()
@@ -261,7 +247,6 @@ fn main()
 fn test_list_pop_until_empty_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -278,7 +263,6 @@ fn main()
 fn test_list_of_optional_values_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class MaybeInt

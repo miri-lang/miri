@@ -11,7 +11,6 @@ use super::super::utils::*;
 fn test_list_passed_and_returned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn identity(l [int]) [int]
@@ -30,7 +29,6 @@ fn main()
 fn test_map_passed_and_returned_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn identity(m Map<String, int>) Map<String, int>
@@ -50,7 +48,6 @@ fn test_list_consumed_in_callee_caller_alias_survives() {
     // Caller keeps an alias; callee's copy drops at function exit, leaving RC=1.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(l [int])
@@ -70,7 +67,6 @@ fn main()
 fn test_class_consumed_in_callee_caller_alias_survives() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Node
     var v int
@@ -92,7 +88,6 @@ fn main()
 fn test_list_passed_to_two_functions_sequentially_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn count(l [int]) int
@@ -114,7 +109,6 @@ fn main()
 fn test_deeply_nested_calls_with_managed_return_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn level3() [int]
@@ -138,7 +132,6 @@ fn main()
 fn test_class_built_in_nested_calls_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Tree
@@ -167,7 +160,6 @@ fn test_function_return_used_inline_no_leak() {
     // the temporary must be DecRef'd after use.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make() [int]
@@ -188,7 +180,6 @@ fn test_recursive_function_managed_locals_no_leak() {
     // Each recursive call creates and drops a local List; no accumulation.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn countdown(n int) int
@@ -209,7 +200,6 @@ fn test_early_return_drops_locals_no_leak() {
     // A managed object created before an early return must still be freed.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn process(flag int) int

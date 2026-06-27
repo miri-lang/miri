@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_enum_method_simple_return() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Status
     Active
@@ -28,7 +27,6 @@ fn main()
 fn test_enum_method_match_on_self() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Direction
     North
@@ -51,7 +49,6 @@ fn main()
 fn test_enum_method_with_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 enum Counter
     Value(int)
@@ -72,7 +69,6 @@ fn main()
 fn test_must_use_user_defined_enum_discarded() {
     assert_compiler_error(
         r#"
-use system.io
 
 must_use enum Token
     Valid(String)
@@ -92,7 +88,6 @@ fn main()
 fn test_must_use_user_defined_enum_bound_ok() {
     assert_runs(
         r#"
-use system.io
 
 must_use enum Token
     Valid(String)

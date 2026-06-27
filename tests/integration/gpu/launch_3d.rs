@@ -18,7 +18,6 @@ use super::utils::assert_compiler_error;
 )]
 fn gpu_forall_3d_literal_bounds_value_round_trips() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -45,7 +44,6 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 )]
 fn gpu_forall_3d_runtime_bounds_value_round_trips() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -70,7 +68,6 @@ fn main()
 )]
 fn gpu_forall_3d_mixed_literal_x_runtime_yz() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -94,7 +91,6 @@ fn main()
 )]
 fn gpu_forall_3d_mixed_runtime_x_literal_y_runtime_z() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -134,7 +130,6 @@ fn main()
 )]
 fn gpu_forall_3d_non_square_bounds_value_round_trips() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 
@@ -157,7 +152,6 @@ fn main()
 )]
 fn gpu_forall_3d_inclusive_range_z_value_round_trips() {
     let source = "
-use system.io
 use system.gpu
 use system.collections.array
 

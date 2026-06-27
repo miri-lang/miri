@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_nested_function_calls() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn add(a int, b int) int
     a + b
@@ -26,7 +25,6 @@ fn main()
 fn test_function_with_local_vars() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn compute(x int) int
     let doubled = x * 2
@@ -57,7 +55,6 @@ fn main()
 fn test_function_with_conditional() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn abs(x int) int
     if x < 0

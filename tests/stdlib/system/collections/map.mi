@@ -3,7 +3,6 @@
 //
 // Tests for `system.collections.map`.
 
-use system.io
 use system.collections.map
 use system.testing
 

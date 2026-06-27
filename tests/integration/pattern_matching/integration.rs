@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_nested() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let outer = 1
 let inner = 2
@@ -27,7 +26,6 @@ print(f"{result}")
 fn test_match_used_as_statement() {
     assert_runs_with_output(
         r#"
-use system.io
 
 var count = 0
 let x = 2
@@ -46,7 +44,6 @@ print(f"{count}")
 fn test_match_in_function() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn describe(n int) int
     match n
@@ -69,7 +66,6 @@ fn main()
 fn test_match_function_fibonacci() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn fib(n int) int
     match n
@@ -91,7 +87,6 @@ fn main()
 fn test_match_without_default_hits_arm() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 1
 let result = match x
@@ -107,7 +102,6 @@ print(f"{result}")
 fn test_match_collection_in_enum_arm() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 enum Result

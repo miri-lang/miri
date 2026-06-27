@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_println_int_type_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 println(42)
 "#,
@@ -19,7 +18,6 @@ println(42)
 fn test_println_bool_type_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 println(true)
 "#,
@@ -31,7 +29,6 @@ println(true)
 fn test_println_float_type_error() {
     assert_compiler_error(
         r#"
-use system.io
 
 println(3.14)
 "#,

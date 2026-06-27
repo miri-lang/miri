@@ -11,7 +11,6 @@ use super::super::utils::*;
 fn test_inline_list_as_function_arg_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn count(l [int]) int
@@ -29,7 +28,6 @@ fn test_inline_map_as_function_arg_no_leak() {
     // Map literals can't be nested inside f-strings; extract to a local.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.map
 
 fn size(m Map<String, int>) int
@@ -47,7 +45,6 @@ fn main()
 fn test_inline_class_instance_as_function_arg_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Point
     var x int
@@ -67,7 +64,6 @@ fn main()
 fn test_chained_method_on_inline_list_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -81,7 +77,6 @@ fn main()
 fn test_inline_list_in_loop_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn count(l [int]) int
@@ -101,7 +96,6 @@ fn main()
 fn test_temporary_in_fstring_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -115,7 +109,6 @@ fn main()
 fn test_two_inline_lists_as_args_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn combine_length(a [int], b [int]) int
@@ -132,7 +125,6 @@ fn main()
 fn test_temporary_in_conditional_branch_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -153,7 +145,6 @@ fn test_temporary_bound_and_used_no_leak() {
     // Binding a freshly constructed object then immediately consuming it.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -168,7 +159,6 @@ fn main()
 fn test_inline_class_with_list_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Payload

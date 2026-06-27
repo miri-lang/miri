@@ -11,7 +11,6 @@ fn test_array_of_lists_no_crash() {
     // DecRefs each inner list.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -29,7 +28,6 @@ fn test_array_of_lists_reassign_no_crash() {
     // buggy double-free they would crash.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -48,7 +46,6 @@ fn test_list_of_lists_no_double_free() {
     // the temp array's elem_drop_fn provides the matching DecRef.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -64,7 +61,6 @@ fn test_list_of_lists_reassign_no_crash() {
     // Reassign a List<List<int>>; old inner list must be properly DecRef'd.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -106,7 +102,6 @@ fn test_array_of_strings_no_crash() {
     // each string element when the array goes out of scope.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let a = ["hello", "world"]
@@ -122,7 +117,6 @@ fn test_array_of_strings_reassign_no_crash() {
     // Both arrays must have the same size (arrays are fixed-size in Miri).
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var a = ["alpha", "beta"]
@@ -140,7 +134,6 @@ fn test_array_of_nonimmmortal_strings_no_double_free() {
     // setting elem_drop_fn on top would cause use-after-free when RC hits zero.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let s = "hel" + "lo"
@@ -157,7 +150,6 @@ fn test_array_alias_no_double_free() {
     // RC is incremented on alias, decremented when each goes out of scope.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var a = [1, 2, 3]
@@ -173,7 +165,6 @@ fn test_array_reassign_frees_old() {
     // Reassigning a collection variable should free the old value via DecRef.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     var a = [1, 2, 3]
@@ -189,7 +180,6 @@ fn test_array_passed_to_function_no_dangle() {
     // A collection passed to a function should not dangle after return.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn sum_first(arr [int; 3]) int
     arr[0] + arr[1] + arr[2]
@@ -211,7 +201,6 @@ fn test_array_set_managed_val_incref() {
     // the array must still hold a valid reference (IncRef'd at set time).
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn set_string() [String; 2]
@@ -239,7 +228,6 @@ fn test_array_index_write_managed_no_leak() {
     // pointer in the slot.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -262,7 +250,6 @@ fn test_array_of_arrays_index_write_no_leak() {
     // the old inner array. Running 100 iterations leaks without the fix.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let a = [1, 2]
@@ -284,7 +271,6 @@ fn test_array_of_sets_index_write_no_leak() {
     // Array<Set<int>>: overwriting outer[0] must DecRef the old inner set.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.set
 
 fn main()
@@ -307,7 +293,6 @@ fn test_array_of_maps_index_write_no_leak() {
     // Array<Map<String,int>>: overwriting outer[0] must DecRef the old inner map.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let m1 = {"a": 1}
@@ -332,7 +317,6 @@ fn test_array_of_lists_set_method_frees_old() {
     // on the displaced inner list. 100 iterations leak without the fix.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 
@@ -356,7 +340,6 @@ fn test_array_of_lists_set_preserves_aliased_element() {
     // readable — a double-decref would free it and crash here.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 use system.collections.list
 
@@ -379,7 +362,6 @@ fn test_array_set_overwrite_managed_no_leak() {
     // if the old RC is never decremented.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -403,7 +385,6 @@ fn test_zero_arg_sized_array_unused_no_leak() {
     // regressions where the len-0 array shape caused a drop-path no-op.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()
@@ -421,7 +402,6 @@ fn test_zero_arg_sized_array_expr_stmt_no_leak() {
     // temp-drop path works for unreferenced constructor results.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 fn main()

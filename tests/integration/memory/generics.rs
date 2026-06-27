@@ -15,7 +15,6 @@ fn test_generic_descriptive_name_with_int_no_leak() {
     // never heap-allocated so this must produce no IncRef/DecRef at all.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<Element>(e Element) Element
     e
@@ -32,7 +31,6 @@ fn main()
 fn test_generic_item_name_with_bool_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn pass<Item>(i Item) Item
     i
@@ -48,7 +46,6 @@ fn main()
 fn test_generic_value_name_with_float_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn wrap<Value>(v Value) Value
     v
@@ -70,7 +67,6 @@ fn test_generic_element_name_with_string_no_leak() {
     // though the generic param is named "Element" (not in the old hardcoded list).
     assert_runs_with_output(
         r#"
-use system.io
 
 fn identity<Element>(e Element) Element
     e
@@ -87,7 +83,6 @@ fn main()
 fn test_generic_payload_name_with_string_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn relay<Payload>(p Payload) Payload
     p
@@ -107,7 +102,6 @@ fn test_generic_data_name_string_through_chain_no_leak() {
     // Two levels of descriptive-named generics with a String value.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn outer<Data>(d Data) Data
     inner(d)
@@ -133,7 +127,6 @@ fn test_generic_element_name_with_list_no_leak() {
     // generic name "Collection".
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn passthrough<Collection>(c Collection) Collection
@@ -153,7 +146,6 @@ fn test_generic_container_name_list_used_after_call_no_leak() {
     // Caller keeps an alias; callee's copy must DecRef at function exit.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn inspect<Container>(c Container) int
@@ -173,7 +165,6 @@ fn test_generic_sequence_name_list_returned_no_leak() {
     // List passed to a descriptive-named generic and then used — must not leak.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn identity<Sequence>(s Sequence) Sequence
@@ -195,7 +186,6 @@ fn test_generic_descriptive_list_multiple_calls_no_leak() {
     // the length via the original binding after the call.)
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn passthrough<Collection>(c Collection) Collection
@@ -221,7 +211,6 @@ fn main()
 fn test_generic_node_name_with_class_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Point
     var x int
@@ -243,7 +232,6 @@ fn main()
 fn test_generic_record_name_with_class_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Box
     var value int
@@ -265,7 +253,6 @@ fn test_generic_entry_name_class_with_managed_field_no_leak() {
     // Class that itself holds a managed List field — the whole graph must be RC'd.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Container
@@ -291,7 +278,6 @@ fn main()
 fn test_generic_two_descriptive_params_primitives_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn combine<First, Second>(a First, b Second) int
     42
@@ -308,7 +294,6 @@ fn test_generic_key_value_with_strings_no_leak() {
     // "Key" and "Value" — only "V" was in the old hardcoded list; "Key" was not.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn make_label<Key, Value>(k Key, v Value) String
     "ok"
@@ -325,7 +310,6 @@ fn main()
 fn test_generic_input_output_descriptive_names_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn transform<Input, Output>(src Input, default_out Output) Output
@@ -348,7 +332,6 @@ fn main()
 fn test_generic_struct_element_field_int_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Box<Element>
     value Element
@@ -365,7 +348,6 @@ fn main()
 fn test_generic_struct_item_field_string_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Holder<Item>
     content Item
@@ -382,7 +364,6 @@ fn main()
 fn test_generic_struct_payload_field_two_instantiations_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 struct Wrapper<Payload>
     data Payload
@@ -403,7 +384,6 @@ fn test_generic_struct_container_with_list_field_no_leak() {
     // generic passthrough — exercises the type_params path for the struct's field.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Batch
@@ -430,7 +410,6 @@ fn test_generic_recursive_descriptive_name_no_leak() {
     // Each recursive call must correctly manage RC for the managed argument.
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn count_down<Collection>(c Collection, n int) int
@@ -457,7 +436,6 @@ fn test_generic_element_returns_string_no_leak() {
     // from mistaking "Element" for a concrete custom type.
     assert_runs_with_output(
         r#"
-use system.io
 
 fn echo<Element>(e Element) Element
     e
@@ -476,7 +454,6 @@ fn main()
 fn test_generic_forwarded_string_used_after_return_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn forward<Msg>(m Msg) Msg
     m

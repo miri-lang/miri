@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_bool_true() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let b = true
 let result = match b
@@ -23,7 +22,6 @@ print(f"{result}")
 fn test_match_bool_false() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let b = false
 let result = match b

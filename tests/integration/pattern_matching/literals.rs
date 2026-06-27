@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_match_integer_literals() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let val = 1
 let result = match val
@@ -24,7 +23,6 @@ print(f"{result}")
 fn test_match_integer_literal_wildcard() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let val = 99
 let result = match val
@@ -41,7 +39,6 @@ print(f"{result}")
 fn test_match_zero() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 0
 let result = match x
@@ -57,7 +54,6 @@ print(f"{result}")
 fn test_match_negative_int() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn sign(n int) int
     match n

@@ -23,7 +23,6 @@ use super::super::utils::*;
 fn test_lambda_captures_string_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let greeting = "hello"
@@ -41,7 +40,6 @@ fn main()
 fn test_lambda_captures_class_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 class Counter
     var value int
@@ -60,7 +58,6 @@ fn main()
 fn test_lambda_captures_two_strings_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let first = "hello"
@@ -78,7 +75,6 @@ fn main()
 fn test_lambda_captures_string_called_multiple_times_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let label = "item"
@@ -100,7 +96,6 @@ fn main()
 fn test_lambda_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -117,7 +112,6 @@ fn main()
 fn test_lambda_called_multiple_times_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -136,7 +130,6 @@ fn main()
 fn test_lambda_captures_two_lists_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -154,7 +147,6 @@ fn main()
 fn test_lambda_created_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -175,7 +167,6 @@ fn main()
 fn test_lambda_passed_as_arg_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn apply(f fn() int) int
@@ -195,7 +186,6 @@ fn main()
 fn test_lambda_captures_class_with_list_field_no_leak() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Bag
@@ -218,7 +208,6 @@ fn main()
 fn test_closure_var_reassigned_capturing_to_non_capturing() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -237,7 +226,6 @@ fn main()
 fn test_closure_var_reassigned_non_capturing_to_capturing() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -264,7 +252,6 @@ fn main()
 fn test_closure_alloc_tracked_no_false_positive() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn main()
     let f = fn() int: 42
@@ -314,7 +301,6 @@ fn main()
 fn test_capturing_closure_alloc_tracked_no_false_positive() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()
@@ -336,7 +322,6 @@ fn main()
 fn test_closure_returned_from_function() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_counter(items [int]) fn() int
@@ -355,7 +340,6 @@ fn main()
 fn test_closure_returned_captures_local_list() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_counter() fn() int
@@ -376,7 +360,6 @@ fn main()
 fn test_closure_returned_no_capture() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn make_fn() fn() int
     fn() int: 42
@@ -395,7 +378,6 @@ fn main()
 fn test_closure_returned_captures_int_param() {
     assert_runs_with_output(
         r#"
-use system.io
 
 fn make_adder(n int) fn() int
     fn() int: n + 1
@@ -414,7 +396,6 @@ fn main()
 fn test_debug_list_param_capture_length() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn make_counter(items [int]) fn() int
@@ -437,7 +418,6 @@ fn main()
 fn test_closure_captures_class_with_list_field() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 class Counter
@@ -461,7 +441,6 @@ fn main()
 fn test_two_lambdas_capture_same_list_no_double_free() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.list
 
 fn main()

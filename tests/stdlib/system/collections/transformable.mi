@@ -7,7 +7,6 @@
 // All higher-order args are inline lambdas — passing a named-fn reference
 // through a generic trait method is currently miscompiled.
 
-use system.io
 use system.collections.list
 use system.testing
 

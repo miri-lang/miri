@@ -30,7 +30,6 @@ use super::super::utils::*;
 fn test_chain_single_hop_baseline() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -51,7 +50,6 @@ println(f"{items.length()}")
 fn test_chain_two_hop() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -75,7 +73,6 @@ println(f"{items.length()}")
 fn test_chain_three_hop_with_branch() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -101,7 +98,6 @@ println(f"{items.length()}")
 fn test_chain_closure_capture() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn make_handler(items [int]) fn() int
@@ -119,7 +115,6 @@ println(f"{xs.length()}")
 fn test_chain_field_store() {
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 class Cache
@@ -144,7 +139,6 @@ fn test_chain_aggregate_escape() {
     // construction as an aggregate escape and emits the "in an aggregate" chain.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn wrap(xs [int]) ([int], int)
@@ -167,7 +161,6 @@ fn test_chain_higher_order_fn() {
     // empty (fn-param call sites are conservatively approximated at top level).
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -190,7 +183,6 @@ fn test_chain_recursion_terminates() {
     // The chain for save_all correctly identifies sink as the escaping function.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -219,7 +211,6 @@ fn test_chain_scc_blames_correct_branch() {
     // The chain must name h, NOT f or g.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -253,7 +244,6 @@ fn test_chain_named_sink() {
     // The diagnostic must name write_all, not just store.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn write_all(filename String, xs [int]) [int]
@@ -276,7 +266,6 @@ fn test_chain_no_false_positive_pure_borrow() {
     // The program must compile cleanly with no use-after-move error.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 
 fn print_first(items [int])
@@ -302,7 +291,6 @@ fn test_chain_no_false_positive_local_mutation() {
     // never escapes — it only has its elements read.  Must compile cleanly.
     assert_runs(
         r#"
-use system.io
 use system.collections.list
 use system.collections.set
 
@@ -329,7 +317,6 @@ fn test_chain_stability_after_rename() {
     // new name — not silently degrade or keep a stale name.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn sink(xs [int]) [int]
@@ -357,7 +344,6 @@ fn test_chain_dynamic_fn_callee() {
     // the dynamic dispatch as the source of the consume.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 fn save(xs [int]) [int]
@@ -384,7 +370,6 @@ fn test_chain_inherited_field_store_walks_to_base_class() {
     // method is defined on Base, not Child, so the field-store sink is Base_store.
     assert_compiler_error(
         r#"
-use system.io
 use system.collections.list
 
 class Base

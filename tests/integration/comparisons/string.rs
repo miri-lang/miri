@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_string_eq() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = "hello"
 let b = "hello"
@@ -25,7 +24,6 @@ println(f"{r2}")
 fn test_string_ne() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let a = "foo"
 let b = "bar"

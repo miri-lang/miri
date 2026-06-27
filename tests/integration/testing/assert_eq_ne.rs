@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_assert_eq_int_pass_silent() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -61,7 +60,6 @@ fn main()
 fn test_assert_eq_bool_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -89,7 +87,6 @@ fn main()
 fn test_assert_eq_string_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -117,7 +114,6 @@ fn main()
 fn test_assert_eq_float_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -145,7 +141,6 @@ fn main()
 fn test_assert_ne_int_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -199,7 +194,6 @@ fn main()
 fn test_assert_eq_i32_typed_pass() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn main()
@@ -233,7 +227,6 @@ fn test_assert_eq_inside_user_function() {
     // a non-main function where allocator is an explicit parameter.
     assert_runs_with_output(
         r#"
-use system.io
 use system.testing
 
 fn check(x int)

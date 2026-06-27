@@ -7,7 +7,6 @@ use super::utils::*;
 fn scope_visibility() {
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 10
 let result = if true
@@ -22,7 +21,6 @@ println(f"{result}")
 
     assert_runs_with_output(
         r#"
-use system.io
 
 let x = 10
 if true

@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_array_baselist_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [10, 20, 30]
@@ -25,7 +24,6 @@ println(f"{a.index_of(30)}")
 fn test_array_reverse() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [10000000000, 20000000000, 30000000000]
@@ -40,7 +38,6 @@ println(f"{a[0]} {a[1]} {a[2]}")
 fn test_array_set_method() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [10, 20, 30]
@@ -55,7 +52,6 @@ println(f"{a[0]} {a[1]} {a[2]}")
 fn test_array_length_method() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [1, 2, 3, 4, 5]
@@ -69,7 +65,6 @@ println(f"{a.length()}")
 fn test_array_element_at() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [10, 20, 30]
@@ -83,7 +78,6 @@ println(f"{a.element_at(1)}")
 fn test_array_is_empty_false() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [1]
@@ -97,7 +91,6 @@ println(f"{a.is_empty()}")
 fn test_array_first_last_methods() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [100, 200, 300]
@@ -112,7 +105,6 @@ println(f"{a.last() ?? -1}")
 fn test_array_contains_true_and_false() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [5, 10, 15]
@@ -127,7 +119,6 @@ println(f"{a.contains(99)}")
 fn test_array_index_of_found_and_not_found() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [5, 10, 15]
@@ -142,7 +133,6 @@ println(f"{a.index_of(99)}")
 fn test_array_reverse_two_elements() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [1, 2]
@@ -157,7 +147,6 @@ println(f"{a[0]} {a[1]}")
 fn test_array_sort() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [30, 10, 20, 5]
@@ -172,7 +161,6 @@ println(f"{a[0]} {a[1]} {a[2]} {a[3]}")
 fn test_array_sort_already_sorted() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [1, 2, 3]
@@ -187,7 +175,6 @@ println(f"{a[0]} {a[1]} {a[2]}")
 fn test_array_sort_reverse_order() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [5, 4, 3, 2, 1]
@@ -202,7 +189,6 @@ println(f"{a[0]} {a[1]} {a[2]} {a[3]} {a[4]}")
 fn test_array_index_of_duplicates() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [10, 20, 10, 30]
@@ -216,7 +202,6 @@ println(f"{a.index_of(10)}")
 fn test_array_sort_with_duplicates_and_negatives() {
     assert_runs_with_output(
         r#"
-use system.io
 use system.collections.array
 
 let a = [5, -1, 5, 0, -5]

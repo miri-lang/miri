@@ -7,7 +7,6 @@ use super::utils::*;
 fn set_filter_keeps_matching_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.set
 
 let s = {1, 2, 3, 4, 5}
@@ -22,7 +21,6 @@ println(f\"{evens.length()}\")
 fn set_map_transforms_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.set
 
 let s = {1, 2, 3}
@@ -37,7 +35,6 @@ println(f\"{doubled.length()}\")
 fn set_reduce_sums_elements() {
     assert_runs_with_output(
         "
-use system.io
 use system.collections.set
 
 let s = {1, 2, 3, 4, 5}

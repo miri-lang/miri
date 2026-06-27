@@ -38,7 +38,6 @@ fn scalar_int_capture_value_is_correct() {
         "
 use system.gpu
 use system.collections.array
-use system.io
 
 fn main()
     gpu var buf = [0, 0, 0, 0]
@@ -164,7 +163,6 @@ fn multiple_scalar_captures_value_check() {
         "
 use system.gpu
 use system.collections.array
-use system.io
 
 fn main()
     gpu var buf = [0, 0, 0, 0]
@@ -212,7 +210,6 @@ fn mixed_buffer_and_scalar_captures_value_check() {
         "
 use system.gpu
 use system.collections.array
-use system.io
 
 fn main()
     gpu var data = [1, 2, 3, 4]
