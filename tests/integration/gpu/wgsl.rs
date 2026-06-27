@@ -1522,3 +1522,212 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
         assert_gpu_runs_with_output(source, "15 26 37 48");
     }
 }
+
+/// `var<workgroup>` shared memory and `kernel.barrier()` — the cooperative
+/// substrate. A `shared` array declares per-workgroup storage; `kernel.barrier()`
+/// synchronizes the workgroup. Both lower through the real pipeline to naga-valid
+/// WGSL, and a barrier under thread-divergent control flow is rejected at
+/// compile time (the divergent-barrier deadlock guard).
+mod shared_memory {
+    use super::super::helpers::compile_to_wgsl;
+    use super::super::utils::assert_compiler_error;
+    use super::assert_gpu_wgsl_valid;
+
+    /// A `shared` array becomes a module-scope `var<workgroup>` declaration with
+    /// its source name and fixed extent — not a function-local `var`.
+    #[test]
+    fn shared_array_emits_module_scope_workgroup_var() {
+        let source = "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    shared tile Array<f32, 8>
+    let tx = kernel.thread_idx.x
+    tile[tx] = input[tx]
+    dst[tx] = tile[tx]
+";
+        let wgsl = compile_to_wgsl(source);
+        assert!(
+            wgsl.contains("var<workgroup> tile: array<f32, 8>;"),
+            "expected module-scope workgroup array, got:\n{}",
+            wgsl
+        );
+        assert!(
+            !wgsl.contains("var tile:"),
+            "shared array must not be a function-local var, got:\n{}",
+            wgsl
+        );
+        assert_gpu_wgsl_valid(source);
+    }
+
+    /// `kernel.barrier()` emits the WGSL `workgroupBarrier()` synchronization
+    /// statement, with no assignment into a throwaway temp.
+    #[test]
+    fn kernel_barrier_emits_workgroup_barrier() {
+        let source = "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    shared tile Array<f32, 8>
+    let tx = kernel.thread_idx.x
+    tile[tx] = input[tx]
+    kernel.barrier()
+    dst[tx] = tile[tx]
+";
+        let wgsl = compile_to_wgsl(source);
+        assert!(
+            wgsl.contains("workgroupBarrier();"),
+            "expected a workgroupBarrier() statement, got:\n{}",
+            wgsl
+        );
+        assert_gpu_wgsl_valid(source);
+    }
+
+    /// An integer shared array (`array<i32, N>`) and a barrier round-trip into a
+    /// reduction-shaped kernel that stays naga-valid.
+    #[test]
+    fn shared_int_array_with_barrier_is_naga_valid() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn reduce_stage(input Array<i32, 16>, dst out Array<i32, 16>)
+    shared scratch Array<i32, 16>
+    let tx = kernel.thread_idx.x
+    scratch[tx] = input[tx]
+    kernel.barrier()
+    dst[tx] = scratch[tx] + scratch[tx]
+",
+        );
+    }
+
+    /// A `shared` declaration outside a `gpu fn` is a compile error — workgroup
+    /// memory has no meaning on the host.
+    #[test]
+    fn shared_outside_gpu_fn_is_error() {
+        assert_compiler_error(
+            "
+use system.collections.array
+
+fn main()
+    shared tile Array<f32, 8>
+",
+            "Shared variables can only be declared inside 'gpu' functions",
+        );
+    }
+
+    /// A `shared` binding must be an array — a scalar shared variable is rejected.
+    #[test]
+    fn shared_scalar_is_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    shared bad f32
+",
+            "must be an array",
+        );
+    }
+
+    /// A barrier at the top level of the kernel body (uniform control flow)
+    /// compiles — every thread reaches it unconditionally.
+    #[test]
+    fn barrier_at_top_level_compiles() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    let tx = kernel.thread_idx.x
+    kernel.barrier()
+    dst[tx] = input[tx]
+",
+        );
+    }
+
+    /// A barrier inside a `block_idx`-guarded `if` compiles: `block_idx` is
+    /// uniform across the workgroup, so every thread takes the same branch.
+    #[test]
+    fn barrier_under_uniform_guard_compiles() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    let tx = kernel.thread_idx.x
+    if kernel.block_idx.x < 4
+        kernel.barrier()
+    dst[tx] = input[tx]
+",
+        );
+    }
+
+    /// A barrier inside a `thread_idx`-dependent `if` is a compile error: the
+    /// branch is taken by some threads and not others, so a barrier there
+    /// deadlocks the workgroup on real hardware.
+    #[test]
+    fn barrier_under_thread_dependent_if_is_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    let tx = kernel.thread_idx.x
+    if tx < 4
+        kernel.barrier()
+    dst[tx] = input[tx]
+",
+            "barrier",
+        );
+    }
+
+    /// The divergence guard also fires when the barrier sits under a
+    /// `global_idx`-dependent loop bound.
+    #[test]
+    fn barrier_under_thread_dependent_loop_is_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    let g = kernel.global_idx.x
+    var i = 0
+    while i < g
+        kernel.barrier()
+        i = i + 1
+    dst[g] = input[g]
+",
+            "barrier",
+        );
+    }
+
+    /// Thread-varying-ness propagates transitively through intermediate locals:
+    /// `b` derives from `a` derives from `thread_idx`, so a `b`-guarded barrier
+    /// is still rejected. This proves the guard tracks data flow, not just a
+    /// direct `kernel.thread_idx` reference in the guard.
+    #[test]
+    fn barrier_under_transitively_thread_dependent_if_is_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+gpu fn stage(input Array<f32, 8>, dst out Array<f32, 8>)
+    let a = kernel.thread_idx.x
+    let b = a + 1
+    if b < 4
+        kernel.barrier()
+    dst[a] = input[a]
+",
+            "barrier",
+        );
+    }
+}

@@ -54,6 +54,7 @@ impl Emitter {
         }
 
         self.emit_bindings(&bindings)?;
+        self.emit_shared_declarations(body)?;
         let workgroup_size = resolve_workgroup_size(body, default_workgroup_size);
         self.emit_entry_point(name, body, &bindings, workgroup_size)
     }
@@ -129,6 +130,33 @@ impl Emitter {
         }
 
         if !bindings.is_empty() {
+            writeln!(self.output).map_err(emit_err)?;
+        }
+        Ok(())
+    }
+
+    /// Emit module-scope `var<workgroup>` declarations for the kernel's `shared`
+    /// arrays. WGSL requires workgroup variables at module scope (not inside the
+    /// entry function) and forbids an initializer, so each shared array local is
+    /// declared here and referenced by its source name inside the body.
+    fn emit_shared_declarations(&mut self, body: &Body) -> Result<(), CodegenError> {
+        let mut emitted_any = false;
+        for (i, decl) in body.local_decls.iter().enumerate() {
+            if decl.storage_class != StorageClass::GpuShared {
+                continue;
+            }
+            let var_name = shared_local_name(decl, Local(i));
+            let element = buffer_element_typename(&decl.ty.kind)?;
+            let extent = shared_array_extent(&decl.ty.kind)?;
+            writeln!(
+                self.output,
+                "var<workgroup> {}: array<{}, {}>;",
+                var_name, element, extent
+            )
+            .map_err(emit_err)?;
+            emitted_any = true;
+        }
+        if emitted_any {
             writeln!(self.output).map_err(emit_err)?;
         }
         Ok(())
@@ -738,6 +766,11 @@ impl<'a> BodyEmitter<'a> {
             if matches!(decl.ty.kind, TypeKind::Void) {
                 continue;
             }
+            // `shared` arrays are declared at module scope as `var<workgroup>`,
+            // never as a function-local `var`.
+            if decl.storage_class == StorageClass::GpuShared {
+                continue;
+            }
             let ty_name = if let Some(vec_ty) = vector_type(&decl.ty.kind) {
                 vec_ty
             } else {
@@ -762,6 +795,17 @@ impl<'a> BodyEmitter<'a> {
             .iter()
             .find(|b| b.param_local == local)
             .map(|b| b.var_name.as_str())
+    }
+
+    /// The module-scope `var<workgroup>` name for a `shared` array local, or
+    /// `None` if the local is not shared. Matches the name emitted by
+    /// [`Emitter::emit_shared_declarations`].
+    fn shared_local_name(&self, local: Local) -> Option<String> {
+        let decl = self.body.local_decls.get(local.0)?;
+        if decl.storage_class != StorageClass::GpuShared {
+            return None;
+        }
+        Some(shared_local_name(decl, local))
     }
 
     fn get_scalar_field(&self, local: Local) -> Option<&str> {
@@ -1228,6 +1272,23 @@ impl<'a> BodyEmitter<'a> {
     fn emit_statement(&mut self, kind: &StatementKind) -> Result<(), CodegenError> {
         match kind {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
+                // A workgroup barrier is a void side-effecting intrinsic: emit the
+                // bare statement form, never an assignment into its throwaway temp.
+                if matches!(rvalue, Rvalue::GpuIntrinsic(GpuIntrinsic::SyncThreads)) {
+                    self.write_indent()?;
+                    return writeln!(self.output, "workgroupBarrier();").map_err(emit_err);
+                }
+                // A `void`-typed destination is a discarded statement result (e.g.
+                // the temp an expression-statement materializes a void call into).
+                // WGSL has no void values, so the assignment has nothing to emit.
+                if self
+                    .body
+                    .local_decls
+                    .get(place.local.0)
+                    .is_some_and(|d| matches!(d.ty.kind, TypeKind::Void))
+                {
+                    return Ok(());
+                }
                 self.write_indent()?;
                 let rhs = self.render_rvalue(rvalue)?;
                 let rhs = self.coerce_intrinsic_to_dest(place, rvalue, rhs);
@@ -1299,6 +1360,8 @@ impl<'a> BodyEmitter<'a> {
             }
         } else if let Some(name) = self.binding_name(place.local) {
             name.to_string()
+        } else if let Some(name) = self.shared_local_name(place.local) {
+            name
         } else {
             local_name(place.local)
         };
@@ -1593,6 +1656,44 @@ impl<'a> BodyEmitter<'a> {
 
 fn local_name(local: Local) -> String {
     format!("_{}", local.0)
+}
+
+/// WGSL identifier for a `shared` (workgroup) array local: its sanitized source
+/// name, falling back to a synthetic `_shared{n}` when the declaration is
+/// anonymous. The same name is used at the module-scope declaration and at every
+/// reference inside the kernel body.
+fn shared_local_name(decl: &crate::mir::LocalDecl, local: Local) -> String {
+    decl.name
+        .as_deref()
+        .map(sanitize_identifier)
+        .unwrap_or_else(|| format!("_shared{}", local.0))
+}
+
+/// Const-evaluate the fixed extent `N` of a `shared` array's `Array<T, N>` type.
+/// Workgroup arrays must be fixed-size, so a non-constant extent is a backend
+/// error (the type checker requires a compile-time size for shared arrays).
+fn shared_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
+    use crate::ast::types::BuiltinCollectionKind;
+    let size_expr = match kind {
+        TypeKind::Array(_, size) => size.as_ref(),
+        TypeKind::Custom(name, Some(args))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+                && args.len() == 2 =>
+        {
+            &args[1]
+        }
+        _ => {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: shared variable type {:?} is not a fixed-size array",
+                kind
+            )))
+        }
+    };
+    crate::type_checker::TypeChecker::try_eval_const_int(size_expr).ok_or_else(|| {
+        CodegenError::Internal(
+            "WGSL backend: shared array size must be a compile-time constant".to_string(),
+        )
+    })
 }
 
 fn binop_symbol(op: BinOp) -> Result<&'static str, CodegenError> {
