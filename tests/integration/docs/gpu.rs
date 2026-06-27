@@ -168,6 +168,34 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     );
 }
 
+/// On-device parallel reduction (`#cb-reduction`).
+///
+/// Demonstrates:
+///   * `.reduce(init, fold)` on a gpu-resident array lowers to a tree reduction
+///     over workgroup-shared memory (one launch).
+///   * The result is a gpu-resident scalar; binding it to a host `let` is the
+///     fence — a single-element readback brings the value to the host.
+///   * The fold is an associative binary operator (`+` here) over its two params.
+///
+/// Expected output: `sum = 36` (1+2+...+8).
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn doc_reduction() {
+    assert_gpu_runs_with_output(
+        "
+use system.gpu
+
+gpu let data = [1, 2, 3, 4, 5, 6, 7, 8]
+let sum = data.reduce(0, fn(a int, b int) int: a + b)
+println(f'sum = {sum}')
+",
+        "sum = 36",
+    );
+}
+
 /// Correct pattern: readback then host loop.
 ///
 /// Demonstrates:

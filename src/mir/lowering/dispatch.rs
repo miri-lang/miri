@@ -1159,6 +1159,32 @@ fn try_lower_collection_intrinsic(
         return lower_collection_set(ctx, obj, obj_ty, &args[0], &args[1], builtin, span);
     }
 
+    // Try GPU reduce on array with 2 args (init, fold). Only a gpu-resident
+    // receiver routes to the device reduction; a host receiver falls through to
+    // the CPU `Foldable::reduce`. The residency is read from the binding's local
+    // WITHOUT lowering `obj` here, so the single lowering happens inside
+    // `try_lower_gpu_reduce` (lowering it here too would double-emit a non-trivial
+    // receiver expression).
+    if args.len() == 2 && method_name == "reduce" && builtin == Some(BuiltinCollectionKind::Array) {
+        if let ExpressionKind::Identifier(name, _) = &obj.node {
+            let is_gpu_resident = ctx.variable_map.get(name.as_str()).is_some_and(|&local| {
+                ctx.body.local_decls[local.0].residency == crate::mir::body::BindingResidency::Gpu
+            });
+            if is_gpu_resident {
+                return super::reduce_gpu::try_lower_gpu_reduce(
+                    ctx,
+                    obj,
+                    obj_ty,
+                    &args[0],
+                    &args[1],
+                    call_expr_id,
+                    dest,
+                    span,
+                );
+            }
+        }
+    }
+
     Ok(None)
 }
 
