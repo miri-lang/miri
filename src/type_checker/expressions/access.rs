@@ -666,6 +666,10 @@ impl TypeChecker {
                 return self.infer_member_kernel_launch();
             }
 
+            if name == crate::ast::types::GPU_CONTEXT_TYPE_NAME && prop_name == "barrier" {
+                return self.infer_member_kernel_barrier();
+            }
+
             if let Some(result) = self.dispatch_type_definition_member(
                 name, prop_name, obj_type, &type_args, span, context,
             ) {
@@ -853,6 +857,19 @@ impl TypeChecker {
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             _ => (None, None),
         }
+    }
+
+    /// `kernel.barrier` is a zero-argument workgroup synchronization call. It
+    /// types as a function taking no parameters and returning `void`, so
+    /// `kernel.barrier()` checks like any other call and yields a void result.
+    fn infer_member_kernel_barrier(&mut self) -> Type {
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(
+                ast_factory::make_type(TypeKind::Void),
+            ))),
+        })))
     }
 
     fn infer_member_kernel_launch(&mut self) -> Type {

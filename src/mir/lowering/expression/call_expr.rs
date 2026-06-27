@@ -38,6 +38,10 @@ pub(crate) fn lower_call_expr(
         return Ok(op);
     }
 
+    if let Some(op) = try_lower_gpu_barrier(ctx, func, expr)? {
+        return Ok(op);
+    }
+
     if let Some(op) = try_lower_gpu_or_math_intrinsic(ctx, func, args, expr, dest.clone())? {
         return Ok(op);
     }
@@ -145,6 +149,44 @@ fn try_lower_gpu_or_math_intrinsic(
         }
     }
     Ok(None)
+}
+
+/// Lowers `kernel.barrier()` to a `SyncThreads` intrinsic statement. The call
+/// returns `void`, so it is emitted purely for its workgroup-synchronization
+/// side effect; the assignment target is a throwaway void temp the WGSL backend
+/// renders as a bare `workgroupBarrier();`.
+fn try_lower_gpu_barrier(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    expr: &Expression,
+) -> Result<Option<Operand>, LoweringError> {
+    let ExpressionKind::Member(obj, prop) = &func.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(obj_name, _) = &obj.node else {
+        return Ok(None);
+    };
+    if obj_name != crate::ast::types::KERNEL_CONTEXT_IDENT
+        && obj_name != crate::ast::types::GPU_CONTEXT_DEPRECATED_IDENT
+    {
+        return Ok(None);
+    }
+    let ExpressionKind::Identifier(prop_name, _) = &prop.node else {
+        return Ok(None);
+    };
+    if prop_name != "barrier" {
+        return Ok(None);
+    }
+
+    let void_temp = ctx.push_temp(Type::new(TypeKind::Void, expr.span), expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(void_temp),
+            Rvalue::GpuIntrinsic(GpuIntrinsic::SyncThreads),
+        ),
+        span: expr.span,
+    });
+    Ok(Some(Operand::Copy(Place::new(void_temp))))
 }
 
 fn try_lower_gpu_intrinsic(

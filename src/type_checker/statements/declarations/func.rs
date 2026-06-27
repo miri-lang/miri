@@ -133,6 +133,13 @@ impl TypeChecker {
             self.update_const_symbol(name, const_value, context);
         }
 
+        // Reject barriers under thread-divergent control flow in GPU kernels.
+        if properties.is_gpu {
+            if let Some(body_stmt) = body {
+                self.check_barrier_uniformity(body_stmt);
+            }
+        }
+
         context.in_gpu_function = previous_in_gpu;
         context.in_function = previous_in_function;
         context.in_async_function = previous_in_async;
