@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::utils::{miri_check, miri_run, miri_run_project};
+use crate::utils::{miri_build, miri_check, miri_run, miri_run_project};
 
 /// Checks whether the output contains an error header in either format:
 /// - `error:` (plain, no error code)
@@ -97,6 +97,28 @@ pub fn assert_compiler_error(code: &str, expected_error: &str) {
     if !output.contains(expected_error) {
         panic!(
             "Expected error '{}' not found in output:\n{}",
+            expected_error, output
+        );
+    }
+}
+
+/// Assert that the code fails during the build (full compilation pipeline) with a specific error message.
+/// This is distinct from assert_compiler_error, which only runs the type-checker.
+/// Use this for errors that occur during MIR lowering or code generation.
+pub fn assert_build_error(code: &str, expected_error: &str) {
+    let result = miri_build(code);
+    let output = result.output();
+
+    if !has_error_header(&output) {
+        panic!(
+            "Expected build to fail, but got no errors.\nOutput:\n{}",
+            output
+        );
+    }
+
+    if !output.contains(expected_error) {
+        panic!(
+            "Expected error '{}' not found in build output:\n{}",
             expected_error, output
         );
     }
