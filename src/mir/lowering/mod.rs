@@ -96,9 +96,17 @@ pub fn lower_function(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    let ret_ty = resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span);
-
     let execution_model = resolve_execution_model(props);
+
+    // A `gpu fn`'s declared/inferred return type is `Kernel` — the host-side
+    // launch handle produced by referencing the kernel, not a value the device
+    // code returns. The device body itself returns nothing, so its MIR return
+    // local is `void` (writes flow to `out` storage buffers, not a return slot).
+    let ret_ty = if execution_model == ExecutionModel::GpuKernel {
+        Type::new(TypeKind::Void, ast_func.span)
+    } else {
+        resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span)
+    };
 
     // Initialize lowering context
     let body = Body::new(params.len(), ast_func.span, execution_model);
