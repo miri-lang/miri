@@ -138,6 +138,17 @@ impl TypeChecker {
             return return_type;
         }
 
+        // Validate warp shuffle_down compile-time offset BEFORE type inference.
+        // This ensures the offset guard is not bypassed by an early return.
+        if self.try_validate_warp_shuffle_down(func, positional_args, span) {
+            // Validation errors already reported; continue to type inference.
+        }
+
+        // Check for warp shuffle_down polymorphism: return type matches first argument.
+        if let Some(return_type) = self.try_infer_warp_shuffle_down_call(func, positional_args) {
+            return return_type;
+        }
+
         // Check for vector builtin functions (dot, length, normalize, cross, reflect, mix).
         if let Some(return_type) = self.try_infer_vector_builtin_call(func, positional_args, span) {
             return return_type;
@@ -524,6 +535,51 @@ impl TypeChecker {
         Some(first_arg_type.clone())
     }
 
+    /// Handles polymorphic typing for `kernel.warp.shuffle_down(value: T, offset: Int) -> T`.
+    /// Returns Some(value_type) if this is a shuffle_down call, None otherwise.
+    /// The return type equals the value argument's type (int, f32, etc.).
+    fn try_infer_warp_shuffle_down_call(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+    ) -> Option<Type> {
+        // Check if func is `kernel.warp.shuffle_down`.
+        let ExpressionKind::Member(obj, prop) = &func.node else {
+            return None;
+        };
+        let ExpressionKind::Member(kernel_expr, warp_expr) = &obj.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(kernel_name, _) = &kernel_expr.node else {
+            return None;
+        };
+        if kernel_name != crate::ast::types::KERNEL_CONTEXT_IDENT
+            && kernel_name != crate::ast::types::GPU_CONTEXT_DEPRECATED_IDENT
+        {
+            return None;
+        }
+        let ExpressionKind::Identifier(warp_name, _) = &warp_expr.node else {
+            return None;
+        };
+        if warp_name != "warp" {
+            return None;
+        }
+        let ExpressionKind::Identifier(prop_name, _) = &prop.node else {
+            return None;
+        };
+        if prop_name != "shuffle_down" {
+            return None;
+        }
+
+        // This IS a warp shuffle_down call. Return the type of the first argument.
+        // The second argument validation happens in try_validate_warp_shuffle_down.
+        if positional_args.is_empty() {
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(positional_args[0].1.clone())
+    }
+
     fn try_infer_vector_builtin_call(
         &mut self,
         func: &Expression,
@@ -600,6 +656,80 @@ impl TypeChecker {
             }
             _ => None,
         }
+    }
+
+    /// Validates `kernel.warp.shuffle_down(value, offset)` arguments at compile time.
+    /// Returns true if this IS a warp shuffle_down call (whether validation passes or fails).
+    /// Reports errors for non-literal offsets or offsets outside [0, 128].
+    fn try_validate_warp_shuffle_down(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        span: Span,
+    ) -> bool {
+        // Check if func is `kernel.warp.shuffle_down` (Member(Member(...), Identifier)).
+        let ExpressionKind::Member(obj, prop) = &func.node else {
+            return false;
+        };
+        let ExpressionKind::Member(kernel_expr, warp_expr) = &obj.node else {
+            return false;
+        };
+        let ExpressionKind::Identifier(kernel_name, _) = &kernel_expr.node else {
+            return false;
+        };
+        if kernel_name != crate::ast::types::KERNEL_CONTEXT_IDENT
+            && kernel_name != crate::ast::types::GPU_CONTEXT_DEPRECATED_IDENT
+        {
+            return false;
+        }
+        let ExpressionKind::Identifier(warp_name, _) = &warp_expr.node else {
+            return false;
+        };
+        if warp_name != "warp" {
+            return false;
+        }
+        let ExpressionKind::Identifier(prop_name, _) = &prop.node else {
+            return false;
+        };
+        if prop_name != "shuffle_down" {
+            return false;
+        }
+
+        // This IS a warp shuffle_down call. Validate the offset argument (arg1).
+        if positional_args.len() < 2 {
+            self.report_error(
+                "shuffle_down requires 2 arguments (value, offset)".to_string(),
+                span,
+            );
+            return true;
+        }
+
+        let offset_expr = positional_args[1].0;
+        let offset_span = offset_expr.span;
+
+        // Offset MUST be a compile-time integer literal.
+        match &offset_expr.node {
+            ExpressionKind::Literal(crate::ast::literal::Literal::Integer(lit_val)) => {
+                let offset_i128 = lit_val.to_i128();
+                if !(0..=128).contains(&offset_i128) {
+                    self.report_error(
+                        format!(
+                            "shuffle offset {} exceeds the maximum subgroup size (128)",
+                            offset_i128
+                        ),
+                        offset_span,
+                    );
+                }
+            }
+            _ => {
+                self.report_error(
+                    "shuffle offset must be a compile-time literal".to_string(),
+                    offset_span,
+                );
+            }
+        }
+
+        true
     }
 
     /// Checks GPU compatibility of call arguments and the function itself.
@@ -1057,12 +1187,27 @@ impl TypeChecker {
     /// A host function reads its arguments on the host, so a gpu-resident
     /// value would need an implicit readback. To prevent silent readbacks, the
     /// caller must explicitly copy to host first (`let h = g`) and pass the copy.
+    /// GPU functions are exempt from this check: they accept gpu-resident arrays directly.
     fn reject_gpu_resident_call_args(
         &mut self,
         func: &Expression,
         args: &[Expression],
         context: &Context,
     ) {
+        let callee_name = match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            _ => None,
+        };
+
+        let is_gpu_fn = callee_name
+            .and_then(|name| self.global_scope.get(name))
+            .map(|info| info.is_gpu_fn)
+            .unwrap_or(false);
+
+        if is_gpu_fn {
+            return;
+        }
+
         let callee = match &func.node {
             ExpressionKind::Identifier(name, _) => format!("'{name}'"),
             _ => "this host function".to_string(),

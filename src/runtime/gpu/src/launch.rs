@@ -598,6 +598,10 @@ unsafe fn new_storage_buffer_with_upload(
 pub fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), GpuError> {
     let needs_int64 = wgsl_uses_scalar(wgsl, "i64") || wgsl_uses_scalar(wgsl, "u64");
     let needs_f64 = wgsl_uses_scalar(wgsl, "f64");
+    let needs_subgroup = wgsl.contains("subgroup")
+        || wgsl.contains("SUBGROUP_SIZE")
+        || wgsl.contains("SUBGROUP_INVOCATION_ID");
+
     if needs_int64 && !enabled.contains(Features::SHADER_INT64) {
         return Err(GpuError::UnsupportedScalar(
             "kernel uses i64/u64 but the adapter does not support Features::SHADER_INT64".into(),
@@ -606,6 +610,11 @@ pub fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(
     if needs_f64 && !enabled.contains(Features::SHADER_F64) {
         return Err(GpuError::UnsupportedScalar(
             "kernel uses f64 but the adapter does not support Features::SHADER_F64".into(),
+        ));
+    }
+    if needs_subgroup && !enabled.contains(Features::SUBGROUP) {
+        return Err(GpuError::UnsupportedScalar(
+            "kernel uses subgroup ops but the adapter does not support Features::SUBGROUP".into(),
         ));
     }
     Ok(())

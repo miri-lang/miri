@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, WARP_CONTEXT_TYPE_NAME};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -670,6 +670,10 @@ impl TypeChecker {
                 return self.infer_member_kernel_barrier();
             }
 
+            if name == WARP_CONTEXT_TYPE_NAME && prop_name == "shuffle_down" {
+                return self.infer_member_warp_shuffle_down();
+            }
+
             if let Some(result) = self.dispatch_type_definition_member(
                 name, prop_name, obj_type, &type_args, span, context,
             ) {
@@ -868,6 +872,35 @@ impl TypeChecker {
             params: vec![],
             return_type: Some(Box::new(ast_factory::type_expr_non_null(
                 ast_factory::make_type(TypeKind::Void),
+            ))),
+        })))
+    }
+
+    fn infer_member_warp_shuffle_down(&mut self) -> Type {
+        // shuffle_down(v: T, n: Int) -> T where T is a numeric type (int, i32, f32, etc.)
+        // Return a marker function type; the actual polymorphic return type is inferred
+        // in calls.rs::infer_function_call for warp shuffle_down calls.
+        let int_type = ast_factory::make_type(TypeKind::Int);
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![
+                Parameter {
+                    name: "value".to_string(),
+                    typ: Box::new(ast_factory::type_expr_non_null(int_type.clone())),
+                    guard: None,
+                    default_value: None,
+                    is_out: false,
+                },
+                Parameter {
+                    name: "offset".to_string(),
+                    typ: Box::new(ast_factory::type_expr_non_null(int_type)),
+                    guard: None,
+                    default_value: None,
+                    is_out: false,
+                },
+            ],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(
+                ast_factory::make_type(TypeKind::Int),
             ))),
         })))
     }

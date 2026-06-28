@@ -96,7 +96,7 @@ pub struct GpuContext {
 /// scalars a kernel may use go in here, so the launch-site gate stays
 /// focused on type-level correctness.
 fn optional_shader_features() -> Features {
-    Features::SHADER_INT64 | Features::SHADER_F64
+    Features::SHADER_INT64 | Features::SHADER_F64 | Features::SUBGROUP
 }
 
 /// Number of times device creation is attempted before giving up. A shared

@@ -14,7 +14,7 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
     vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -252,6 +252,7 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
         TypeKind::Custom(name, type_args) => {
             if name == DIM3_TYPE_NAME
                 || name == GPU_CONTEXT_TYPE_NAME
+                || name == WARP_CONTEXT_TYPE_NAME
                 || name == KERNEL_TYPE_NAME
                 || name == FRAME_INPUT_TYPE_NAME
             {

@@ -178,7 +178,11 @@ pub trait Visitor {
             Rvalue::UnaryOp(_, val) => self.visit_operand(val, location),
             Rvalue::Cast(op, _) => self.visit_operand(op, location),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
-            Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::GpuIntrinsic(intrinsic) => {
+                if let crate::mir::GpuIntrinsic::ShuffleDown(op, _) = intrinsic {
+                    self.visit_operand(op, location);
+                }
+            }
             Rvalue::MathIntrinsic(_, args) => {
                 for op in args {
                     self.visit_operand(op, location);
@@ -392,7 +396,11 @@ pub trait MutVisitor {
             Rvalue::UnaryOp(_, val) => self.visit_operand(val, location),
             Rvalue::Cast(op, _) => self.visit_operand(op, location),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
-            Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::GpuIntrinsic(intrinsic) => {
+                if let crate::mir::GpuIntrinsic::ShuffleDown(op, _) = intrinsic {
+                    self.visit_operand(op, location);
+                }
+            }
             Rvalue::MathIntrinsic(_, args) => {
                 for op in args {
                     self.visit_operand(op, location);

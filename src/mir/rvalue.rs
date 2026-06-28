@@ -231,10 +231,13 @@ impl fmt::Display for Rvalue {
 /// | GridDim      | gridDim         | threadgroups_per_grid    | NumWorkgroups       | num_workgroups          |
 /// | GlobalIdx    | blockIdx*blockDim+threadIdx | thread_position_in_grid | GlobalInvocationId | global_invocation_id   |
 /// | SyncThreads  | __syncthreads() | threadgroup_barrier()    | OpControlBarrier    | workgroupBarrier()      |
+/// | WarpSize     | warpSize        | N/A                      | OpSubgroupSize      | subgroup_size           |
+/// | LaneId       | laneId          | N/A                      | OpSubgroupInvocationId | subgroup_invocation_id |
+/// | ShuffleDown  | __shfl_down_sync | N/A                     | OpSubgroupShuffle* | subgroupShuffleDown    |
 ///
 /// *Note: SPIR-V/WGSL use flat global IDs by default. ThreadIdx requires computing
 /// `global_id - workgroup_id * workgroup_size`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GpuIntrinsic {
     /// Thread index within a block.
     /// - CUDA: `threadIdx.x/y/z`
@@ -273,6 +276,25 @@ pub enum GpuIntrinsic {
     /// - SPIR-V: `OpControlBarrier` with Workgroup scope
     /// - WebGPU: `workgroupBarrier()`
     SyncThreads,
+    /// Subgroup size (GPU-only, requires SUBGROUP feature).
+    /// - CUDA: `warpSize`
+    /// - Metal: N/A (Apple Metal uses fixed 32/64)
+    /// - SPIR-V: `OpSubgroupSize`
+    /// - WebGPU: `@builtin(subgroup_size)` → read-only u32
+    WarpSize,
+    /// Lane ID within the subgroup (GPU-only, requires SUBGROUP feature).
+    /// - CUDA: `laneId`
+    /// - Metal: N/A
+    /// - SPIR-V: `OpSubgroupInvocationId`
+    /// - WebGPU: `@builtin(subgroup_invocation_id)` → read-only u32
+    LaneId,
+    /// Shuffle a value within the subgroup with a dynamic offset (GPU-only).
+    /// The offset is a compile-time literal; out-of-range behavior is undefined.
+    /// - CUDA: `__shfl_down_sync(mask, value, delta, width)`
+    /// - Metal: N/A
+    /// - SPIR-V: `OpSubgroupShuffleDown`
+    /// - WebGPU: `subgroupShuffleDown(value, delta)` where delta is u32
+    ShuffleDown(Box<Operand>, u32),
 }
 
 /// High-level math intrinsic operations.
@@ -390,6 +412,9 @@ impl fmt::Display for GpuIntrinsic {
             GpuIntrinsic::GridDim(d) => write!(f, "gpu_grid_dim.{}", d),
             GpuIntrinsic::GlobalIdx(d) => write!(f, "gpu_global_idx.{}", d),
             GpuIntrinsic::SyncThreads => write!(f, "gpu_sync_threads"),
+            GpuIntrinsic::WarpSize => write!(f, "gpu_warp_size"),
+            GpuIntrinsic::LaneId => write!(f, "gpu_warp_lane_id"),
+            GpuIntrinsic::ShuffleDown(_, offset) => write!(f, "gpu_warp_shuffle_down({})", offset),
         }
     }
 }

@@ -942,6 +942,12 @@ impl Pipeline {
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
         Self::clone_gpu_device_helpers(&mut bodies)?;
 
+        // Apply recorded workgroup sizes from kernel launches to GPU kernel bodies.
+        // When kernel(args).launch(grid, block) is lowered, the block size is recorded
+        // in the caller's body.kernel_workgroups. This pass collects them and applies
+        // each to the corresponding GPU kernel body's backend metadata.
+        Self::stamp_kernel_workgroups(&mut bodies)?;
+
         // Insert Perceus RC operations on all function bodies, exactly once,
         // after all optimization passes have converged.
         for (_name, body) in &mut bodies {
@@ -2105,6 +2111,65 @@ impl Pipeline {
             | mir::TerminatorKind::Unreachable
             | mir::TerminatorKind::GpuLaunch { .. } => {}
         }
+    }
+
+    /// Apply recorded GPU kernel workgroup sizes to the corresponding GPU kernel bodies.
+    ///
+    /// When a `kernel(args).launch(grid, block)` call is lowered in a caller's body,
+    /// the block size is recorded in that body's `kernel_workgroups` vec.
+    /// This pass collects all these recordings across all bodies and applies each
+    /// to the corresponding GPU kernel body by setting its `BackendMetadata::Gpu.workgroup_size`.
+    ///
+    /// If a kernel has multiple conflicting block sizes recorded (different launches
+    /// with different blocks), returns an error — per-shape monomorphization is deferred.
+    fn stamp_kernel_workgroups(bodies: &mut [(String, mir::Body)]) -> Result<(), CompilerError> {
+        use crate::mir::backend::BackendMetadata;
+
+        // Collect all workgroup size recordings from all bodies.
+        let mut workgroup_map: std::collections::HashMap<String, [u32; 3]> =
+            std::collections::HashMap::new();
+
+        for (_name, body) in bodies.iter() {
+            for (kernel_name, block_size) in &body.kernel_workgroups {
+                if let Some(&existing) = workgroup_map.get(kernel_name) {
+                    if existing != *block_size {
+                        return Err(CompilerError::Codegen(format!(
+                            "conflicting launch workgroup shapes for kernel '{}': \
+                            {} {} {} vs {} {} {} (per-shape monomorphization is deferred)",
+                            kernel_name,
+                            existing[0],
+                            existing[1],
+                            existing[2],
+                            block_size[0],
+                            block_size[1],
+                            block_size[2]
+                        )));
+                    }
+                } else {
+                    workgroup_map.insert(kernel_name.clone(), *block_size);
+                }
+            }
+        }
+
+        // Apply each workgroup size to the corresponding kernel body.
+        for (kernel_name, block_size) in workgroup_map {
+            if let Some((_name, body)) = bodies.iter_mut().find(|(name, _)| name == &kernel_name) {
+                if let Some(BackendMetadata::Gpu(ref mut gpu_md)) = &mut body.backend_metadata {
+                    gpu_md.workgroup_size = Some(block_size);
+                } else if body.backend_metadata.is_none()
+                    && body.execution_model == mir::ExecutionModel::GpuKernel
+                {
+                    // If no backend metadata exists yet, create it.
+                    body.backend_metadata =
+                        Some(BackendMetadata::Gpu(crate::mir::backend::GpuBodyMetadata {
+                            workgroup_size: Some(block_size),
+                            ..Default::default()
+                        }));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Recursively narrow TypeKind, converting F64 to F32.
