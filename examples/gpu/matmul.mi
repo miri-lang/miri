@@ -11,6 +11,16 @@
 //
 // Note: the matrix dimension is inlined as the literal `2` inside the kernel —
 // host scalars/consts cannot be captured into a `forall` body, only buffers.
+//
+// Performance: this demo is illustrative, NOT optimized. Each thread streams its
+// row of A and column of B straight from global memory with no cross-thread
+// reuse, and the inner loop reads B column-strided (`b[k * 2 + col]` advances by
+// stride 2), so neighbouring threads cannot share loaded data and global memory
+// bandwidth is wasted. Correct, but the canonical GEMM anti-pattern. For the
+// shared-memory tiled counterpart that stages tiles into workgroup memory and
+// reuses them across threads, see `tiled_matmul.mi`. The performance model
+// (coalescing, occupancy, readback cost classes) is documented in the
+// directory README.
 
 use system.collections.array
 
