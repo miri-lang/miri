@@ -95,6 +95,59 @@ The device buffer persists between kernels (no deallocation); the second kernel 
 
 **Prerequisite**: Kernel-body loop support and multi-`if` structurizer improvements.
 
+## Performance model
+
+The residency surface makes the performance characteristics of a GPU program
+predictable from its source. Three things govern kernel throughput.
+
+### Memory coalescing
+
+A GPU services memory in transactions that span a contiguous block of addresses.
+When neighbouring threads read neighbouring addresses, the hardware fuses their
+loads into one transaction (a *coalesced* access) and bandwidth is fully used.
+When neighbouring threads read scattered or strided addresses, each load becomes
+its own transaction and effective bandwidth collapses.
+
+The rule of thumb: index device buffers so that thread `i` and thread `i + 1`
+touch adjacent elements. `vector_add.mi` and `saxpy.mi` are coalesced by
+construction — thread `i` reads `a[i]`/`b[i]` and writes `dst[i]`. `matmul.mi` is
+deliberately *not*: each thread re-streams a whole row of A and a column of B
+from global memory with no cross-thread reuse, and reads B column-strided. It is
+labelled illustrative-not-optimized in its header for exactly this reason.
+`tiled_matmul.mi` is the optimized counterpart — it stages tiles of A and B into
+workgroup-local `shared` memory, synchronizes with `kernel.barrier()`, and reuses
+each loaded element across the whole tile.
+
+### Occupancy
+
+A kernel launch maps onto workgroups (Miri's `block`) of threads. Occupancy is
+how much of the device is kept busy; it is bounded by the workgroup size and by
+the `shared` memory each workgroup reserves. A `gpu forall` over a 1D range uses
+the default block size; an explicit `kernel(args).launch(grid, block)` chooses the
+block shape directly (`tiled_matmul.mi` launches a 2×2 grid of 2×2 blocks). Larger
+blocks expose more parallelism but reserve more shared memory and registers per
+workgroup, so the optimum is workload-specific — size the block to the tile the
+kernel actually cooperates over, not to the maximum the hardware allows.
+
+### Readback cost classes
+
+Every operation falls into one of four cost classes, and the surface form names
+the class — so the cost of a program can be read straight from its source:
+
+| Cost class | Surface marker |
+|---|---|
+| Pure host op | `let`, `var`, `for`, a call to a non-`gpu fn` |
+| Upload to device | `gpu let`, `gpu var` (paid lazily at first capture) |
+| Kernel launch | `forall` / `gpu forall`, a `gpu fn` `.launch(...)`, `.reduce` on a gpu-resident array |
+| Fence + readback | cross-residency assignment (`let h = g`), a `.reduce` result read back to host |
+
+The expensive class is **fence + readback**: it stalls the host until the device
+finishes and copies the whole buffer back across the bus. The buffer-reuse
+pattern (`buffer_reuse.mi`) exists to amortize it — chain several kernel launches
+on the same `gpu var` and read back once at the end, never between launches. Each
+demo's "Cost sequencing" note above states its upload → launch → readback order so
+the cost is auditable without running the program.
+
 ---
 
-**Last updated**: 2026-06-02. Current demos showcase the native GPU dispatch surface (gpu let/var/for).
+**Last updated**: 2026-06-28. Current demos showcase the native GPU dispatch surface (gpu let/var/forall); the performance model section documents coalescing, occupancy, and the four readback cost classes.
