@@ -463,6 +463,51 @@ pub fn mir_lowering_gpu_launch_test(source: &str) {
     );
 }
 
+pub fn mir_lowering_gpu_fn_launch_test(
+    source: &str,
+    expected_num_buffers: usize,
+    expected_read_only: Vec<bool>,
+) {
+    let body = mir_lower_code(source);
+    let launch = body.basic_blocks.iter().find_map(|bb| {
+        if let Some(terminator) = &bb.terminator {
+            if let TerminatorKind::GpuLaunch {
+                args,
+                arg_read_only,
+                ..
+            } = &terminator.kind
+            {
+                return Some((args.len(), arg_read_only.clone()));
+            }
+        }
+        None
+    });
+
+    let (actual_num_buffers, actual_read_only) = launch.expect(&format!(
+        "Expected TerminatorKind::GpuLaunch with buffer args for source:\n{}",
+        source
+    ));
+
+    assert_eq!(
+        actual_num_buffers, expected_num_buffers,
+        "Expected {} buffer args, got {} for source:\n{}",
+        expected_num_buffers, actual_num_buffers, source
+    );
+
+    assert_eq!(
+        actual_read_only, expected_read_only,
+        "Expected arg_read_only {:?}, got {:?} for source:\n{}",
+        expected_read_only, actual_read_only, source
+    );
+
+    // Verify kernel_workgroups was recorded for the gpu fn launch.
+    assert!(
+        !body.kernel_workgroups.is_empty(),
+        "Expected kernel_workgroups to be populated for source:\n{}",
+        source
+    );
+}
+
 pub fn mir_lowering_storage_class_test(source: &str, var_name: &str, expected: StorageClass) {
     let body = mir_lower_code(source);
     let decl = body

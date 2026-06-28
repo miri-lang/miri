@@ -300,6 +300,22 @@ fn try_gpu_intrinsic(
                 }
             } else if let Some(field) = kernel_context_field(sym) {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                    // Handle warp intrinsics: kernel.warp.size, kernel.warp.lane_id
+                    if field == "warp" {
+                        let rvalue = match prop_name.as_str() {
+                            "size" => Rvalue::GpuIntrinsic(GpuIntrinsic::WarpSize),
+                            "lane_id" => Rvalue::GpuIntrinsic(GpuIntrinsic::LaneId),
+                            _ => {
+                                return Err(LoweringError::unsupported_expression(
+                                    format!("Unknown warp intrinsic: kernel.warp.{}", prop_name),
+                                    expr.span,
+                                ));
+                            }
+                        };
+                        return Ok(Some(emit_gpu_intrinsic_assign(ctx, rvalue, dest, expr)));
+                    }
+
+                    // Handle dimension intrinsics: kernel.thread_idx.x, etc.
                     let dim = try_parse_gpu_dimension(prop_name.as_str())?;
 
                     let rvalue = match field {

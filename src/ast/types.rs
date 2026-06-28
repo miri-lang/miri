@@ -85,6 +85,10 @@ pub const ATOMIC_TYPE_NAME: &str = "Atomic";
 /// available inside `gpu fn` bodies.
 pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
 
+/// Canonical class name for the compiler-builtin `WarpContext` struct containing
+/// subgroup (warp) operations (size, lane_id, shuffle_down).
+pub const WARP_CONTEXT_TYPE_NAME: &str = "WarpContext";
+
 /// Canonical class name for the opaque `Kernel` handle returned by `gpu fn`s.
 pub const KERNEL_TYPE_NAME: &str = "Kernel";
 
