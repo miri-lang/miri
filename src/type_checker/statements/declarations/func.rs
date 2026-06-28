@@ -126,6 +126,10 @@ impl TypeChecker {
                 .insert(name.to_string(), std::rc::Rc::new(body_stmt.clone()));
         }
 
+        // Store the out-param flags for each function (used in GPU kernel launch)
+        let out_flags: Vec<bool> = params.iter().map(|p| p.is_out).collect();
+        self.function_out_params.insert(name.to_string(), out_flags);
+
         let const_value =
             self.check_function_body(body, name, &return_type, infer_main_return, context);
 
@@ -166,31 +170,29 @@ impl TypeChecker {
         })));
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
-                name.to_string(),
-                SymbolInfo::new(
-                    func_type.clone(),
-                    false,
-                    false,
-                    properties.visibility.clone(),
-                    self.current_module.clone(),
-                    None,
-                ),
+            let mut global_info = SymbolInfo::new(
+                func_type.clone(),
+                false,
+                false,
+                properties.visibility.clone(),
+                self.current_module.clone(),
+                None,
             );
+            global_info.is_gpu_fn = properties.is_gpu;
+            self.global_scope.insert(name.to_string(), global_info);
         }
 
         if !context.in_class() {
-            context.define(
-                name.to_string(),
-                SymbolInfo::new(
-                    func_type,
-                    false,
-                    false,
-                    properties.visibility.clone(),
-                    self.current_module.clone(),
-                    None,
-                ),
+            let mut local_info = SymbolInfo::new(
+                func_type,
+                false,
+                false,
+                properties.visibility.clone(),
+                self.current_module.clone(),
+                None,
             );
+            local_info.is_gpu_fn = properties.is_gpu;
+            context.define(name.to_string(), local_info);
         }
     }
 

@@ -175,16 +175,29 @@ impl Emitter {
             workgroup_size[0], workgroup_size[1], workgroup_size[2]
         )
         .map_err(emit_err)?;
-        writeln!(
-            self.output,
-            "fn {}(@builtin(global_invocation_id) {}: vec3<u32>, @builtin(local_invocation_id) {}: vec3<u32>, @builtin(workgroup_id) {}: vec3<u32>, @builtin(num_workgroups) {}: vec3<u32>) {{",
+
+        // Check if the kernel body uses warp intrinsics
+        let (uses_warp_size, uses_lane_id) = scan_for_warp_intrinsics(body);
+
+        // Build the function signature with warp builtins if needed
+        let mut entry_sig = format!(
+            "fn {}(@builtin(global_invocation_id) {}: vec3<u32>, @builtin(local_invocation_id) {}: vec3<u32>, @builtin(workgroup_id) {}: vec3<u32>, @builtin(num_workgroups) {}: vec3<u32>",
             name,
             GLOBAL_ID,
             LOCAL_ID,
             WORKGROUP_ID,
             NUM_WORKGROUPS,
-        )
-        .map_err(emit_err)?;
+        );
+
+        if uses_warp_size {
+            entry_sig.push_str(", @builtin(subgroup_size) SUBGROUP_SIZE: u32");
+        }
+        if uses_lane_id {
+            entry_sig.push_str(", @builtin(subgroup_invocation_id) SUBGROUP_INVOCATION_ID: u32");
+        }
+
+        entry_sig.push_str(") {");
+        writeln!(self.output, "{}", entry_sig).map_err(emit_err)?;
 
         let mut ctx = BodyEmitter::new(body, bindings, workgroup_size, &mut self.output)?;
         ctx.emit_local_declarations()?;
@@ -1323,7 +1336,9 @@ impl<'a> BodyEmitter<'a> {
                     | GpuIntrinsic::BlockIdx(_)
                     | GpuIntrinsic::BlockDim(_)
                     | GpuIntrinsic::GridDim(_)
-                    | GpuIntrinsic::GlobalIdx(_),
+                    | GpuIntrinsic::GlobalIdx(_)
+                    | GpuIntrinsic::WarpSize
+                    | GpuIntrinsic::LaneId,
             )
         );
         if !is_dim_read || !place.projection.is_empty() {
@@ -1495,7 +1510,7 @@ impl<'a> BodyEmitter<'a> {
                 scalar(&ty.kind)?.name(),
                 self.render_operand(op)?
             )),
-            Rvalue::GpuIntrinsic(intrinsic) => Ok(self.render_gpu_intrinsic(*intrinsic)),
+            Rvalue::GpuIntrinsic(intrinsic) => self.render_gpu_intrinsic(intrinsic.clone()),
             Rvalue::MathIntrinsic(intrinsic, args) => {
                 let rendered: Result<Vec<_>, _> =
                     args.iter().map(|a| self.render_operand(a)).collect();
@@ -1767,19 +1782,27 @@ fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
 }
 
 impl BodyEmitter<'_> {
-    fn render_gpu_intrinsic(&self, intrinsic: GpuIntrinsic) -> String {
+    fn render_gpu_intrinsic(&self, intrinsic: GpuIntrinsic) -> Result<String, CodegenError> {
         match intrinsic {
-            GpuIntrinsic::ThreadIdx(dim) => format!("{}.{}", LOCAL_ID, dimension_field(dim)),
-            GpuIntrinsic::BlockIdx(dim) => format!("{}.{}", WORKGROUP_ID, dimension_field(dim)),
+            GpuIntrinsic::ThreadIdx(dim) => Ok(format!("{}.{}", LOCAL_ID, dimension_field(dim))),
+            GpuIntrinsic::BlockIdx(dim) => Ok(format!("{}.{}", WORKGROUP_ID, dimension_field(dim))),
             GpuIntrinsic::BlockDim(dim) => {
                 // WGSL has no shader-visible `workgroup_size_*` builtin; the
                 // `@workgroup_size` attribute is compile-time only. Substitute
                 // the literal so the value is observable from the kernel body.
-                format!("{}u", self.workgroup_size[dim as usize])
+                Ok(format!("{}u", self.workgroup_size[dim as usize]))
             }
-            GpuIntrinsic::GridDim(dim) => format!("{}.{}", NUM_WORKGROUPS, dimension_field(dim)),
-            GpuIntrinsic::GlobalIdx(dim) => format!("{}.{}", GLOBAL_ID, dimension_field(dim)),
-            GpuIntrinsic::SyncThreads => "workgroupBarrier()".into(),
+            GpuIntrinsic::GridDim(dim) => {
+                Ok(format!("{}.{}", NUM_WORKGROUPS, dimension_field(dim)))
+            }
+            GpuIntrinsic::GlobalIdx(dim) => Ok(format!("{}.{}", GLOBAL_ID, dimension_field(dim))),
+            GpuIntrinsic::SyncThreads => Ok("workgroupBarrier()".into()),
+            GpuIntrinsic::WarpSize => Ok("SUBGROUP_SIZE".into()),
+            GpuIntrinsic::LaneId => Ok("SUBGROUP_INVOCATION_ID".into()),
+            GpuIntrinsic::ShuffleDown(value_op, offset) => {
+                let value_str = self.render_operand(value_op.as_ref())?;
+                Ok(format!("subgroupShuffleDown({}, {}u)", value_str, offset))
+            }
         }
     }
 }
@@ -1892,6 +1915,34 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         | TypeKind::Option(_)
         | TypeKind::Linear(_) => body,
     }
+}
+
+/// Scan the kernel body for uses of WarpSize and LaneId intrinsics.
+/// Returns (uses_warp_size, uses_lane_id).
+fn scan_for_warp_intrinsics(body: &Body) -> (bool, bool) {
+    let mut uses_warp_size = false;
+    let mut uses_lane_id = false;
+
+    for block in &body.basic_blocks {
+        for statement in &block.statements {
+            if let StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) =
+                &statement.kind
+            {
+                if let Rvalue::GpuIntrinsic(intrinsic) = rvalue {
+                    match intrinsic {
+                        GpuIntrinsic::WarpSize => uses_warp_size = true,
+                        GpuIntrinsic::LaneId => uses_lane_id = true,
+                        GpuIntrinsic::ShuffleDown(_, _) => {
+                            // ShuffleDown doesn't need a builtin parameter
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    (uses_warp_size, uses_lane_id)
 }
 
 #[cfg(test)]

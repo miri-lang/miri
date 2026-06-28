@@ -125,6 +125,10 @@ pub struct TypeChecker {
     pub entry_source_path: Option<std::rc::Rc<str>>,
     /// Maps user-defined function names to their Statement bodies for GPU callability analysis.
     pub(crate) function_bodies: std::collections::HashMap<String, std::rc::Rc<Statement>>,
+    /// Maps function names to a Vec<bool> of their parameters' `is_out` flags.
+    /// Populated during function declaration checking; used in GPU kernel launch
+    /// to determine which buffers are writable.
+    pub(crate) function_out_params: std::collections::HashMap<String, Vec<bool>>,
 }
 
 impl Default for TypeChecker {
@@ -165,6 +169,7 @@ impl TypeChecker {
             entry_source: None,
             entry_source_path: None,
             function_bodies: HashMap::new(),
+            function_out_params: HashMap::new(),
         }
     }
 

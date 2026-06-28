@@ -73,6 +73,12 @@ pub struct Body {
     /// Populated by MIR lowering from the type checker's struct/class definitions.
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
     pub has_drop_types: HashSet<String>,
+    /// GPU kernel workgroup sizes recorded during a launch in another function.
+    /// Maps kernel name to [block_x, block_y, block_z].
+    /// Collected when a `kernel(args).launch(grid, block)` call is lowered in a caller.
+    /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
+    /// during the post-lowering pipeline pass `stamp_kernel_workgroups`.
+    pub kernel_workgroups: Vec<(String, [u32; 3])>,
 }
 
 impl Body {
@@ -94,6 +100,7 @@ impl Body {
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
             has_drop_types: HashSet::new(),
+            kernel_workgroups: Vec::new(),
         }
     }
 

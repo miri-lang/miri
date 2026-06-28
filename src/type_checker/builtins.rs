@@ -8,7 +8,7 @@
 
 use crate::ast::types::{
     FrameFieldKind, TypeDeclarationKind, TypeKind, DIM3_TYPE_NAME, FRAME_INPUT_FIELDS,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::MemberVisibility;
 use std::collections::HashMap;
@@ -48,6 +48,18 @@ fn register_primitive_types(_types: &mut HashMap<String, TypeDefinition>) {
 fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
     let int_type = || crate::ast::factory::make_type(TypeKind::Int);
 
+    // WarpContext: Subgroup (warp) operations available within GPU kernels.
+    let warp_context_def = TypeDefinition::Struct(StructDefinition {
+        fields: vec![
+            ("size".to_string(), int_type(), MemberVisibility::Public),
+            ("lane_id".to_string(), int_type(), MemberVisibility::Public),
+        ],
+        generics: None,
+        has_drop: false,
+        module: "std".to_string(),
+    });
+    types.insert(WARP_CONTEXT_TYPE_NAME.to_string(), warp_context_def);
+
     // Dim3: 3D dimension type for GPU operations
     let dim3_def = TypeDefinition::Struct(StructDefinition {
         fields: vec![
@@ -64,6 +76,9 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
     // GpuContext: Context available within GPU kernels
     let dim3_type =
         || crate::ast::factory::make_type(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None));
+    let warp_type = || {
+        crate::ast::factory::make_type(TypeKind::Custom(WARP_CONTEXT_TYPE_NAME.to_string(), None))
+    };
     types.insert(
         GPU_CONTEXT_TYPE_NAME.to_string(),
         TypeDefinition::Struct(StructDefinition {
@@ -93,6 +108,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
                     dim3_type(),
                     MemberVisibility::Public,
                 ),
+                ("warp".to_string(), warp_type(), MemberVisibility::Public),
             ],
             generics: None,
             has_drop: false,

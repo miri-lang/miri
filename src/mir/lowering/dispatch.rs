@@ -30,6 +30,17 @@ struct CollectionIntrinsicCall<'a> {
     args: &'a [Expression],
 }
 
+/// Aggregated result of analyzing GPU function arguments for a kernel launch.
+struct ThreadedGpuFnArgs {
+    kernel_op: Operand,
+    kernel_name: String,
+    buffer_args: Vec<Operand>,
+    arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>>,
+    arg_read_only: Vec<bool>,
+    arg_int_narrow: Vec<bool>,
+    scalar_args: Vec<Operand>,
+}
+
 /// Produce a mangled function name for a generic instantiation.
 ///
 /// Example: `identity` with `[("T", int)]` → `identity__int`
@@ -406,6 +417,206 @@ fn push_allocator_arg(ctx: &LoweringContext, arg_ops: &mut Vec<Operand>) {
     }
 }
 
+/// Thread GPU fn call arguments into the GpuLaunch terminator.
+/// Resolve kernel operand and name from a gpu fn callee expression.
+fn resolve_kernel_operand(
+    ctx: &LoweringContext,
+    callee: &Expression,
+    span: Span,
+) -> Result<(Operand, String), LoweringError> {
+    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+        return Err(LoweringError::unsupported_expression(
+            "gpu fn must be called by name".to_string(),
+            span,
+        ));
+    };
+
+    let kernel_name = match ctx.type_checker.call_generic_mappings.get(&callee.id) {
+        Some(generic_args) => mangle_generic_name(func_name, generic_args),
+        None => func_name.clone(),
+    };
+
+    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(kernel_name.clone()),
+    }));
+
+    Ok((kernel_op, kernel_name))
+}
+
+/// Process buffer arguments and metadata for a GPU function call.
+#[allow(clippy::type_complexity)]
+fn process_gpu_buffer_args(
+    ctx: &mut LoweringContext,
+    func_name: &str,
+    call_args: &[Expression],
+    span: Span,
+) -> Result<
+    (
+        Vec<Operand>,
+        Vec<Option<crate::mir::body::DeviceHandleId>>,
+        Vec<bool>,
+        Vec<bool>,
+    ),
+    LoweringError,
+> {
+    let out_params = ctx
+        .type_checker
+        .function_out_params
+        .get(func_name)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut buffer_args = Vec::new();
+    let mut arg_handles = Vec::new();
+    let mut arg_read_only = Vec::new();
+    let mut arg_int_narrow = Vec::new();
+
+    for (arg_idx, arg) in call_args.iter().enumerate() {
+        let arg_ty = ctx
+            .type_checker
+            .get_type(arg.id)
+            .cloned()
+            .unwrap_or_else(|| Type::new(TypeKind::Void, span));
+        let arg_op = lower_expression(ctx, arg, None)?;
+
+        if is_gpu_buffer_type(&arg_ty.kind) {
+            if let Operand::Copy(place) | Operand::Move(place) = &arg_op {
+                let local_decl = &ctx.body.local_decls[place.local.0];
+
+                // Enforce that buffer arguments to gpu fn are gpu-resident.
+                // Bare gpu fn calls are deferred handles (no dispatch yet), so this only
+                // applies when the kernel is actually launched.
+                if !matches!(
+                    local_decl.residency,
+                    crate::mir::body::BindingResidency::Gpu
+                ) {
+                    let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
+                    return Err(LoweringError::custom(
+                        format!("cannot pass host-resident array '{}' to gpu function", buffer_name),
+                        span,
+                        Some(format!(
+                            "mark the binding as gpu-resident: 'gpu let {} = ...' or 'gpu var {} = ...'",
+                            buffer_name, buffer_name
+                        )),
+                    ));
+                }
+
+                let handle = local_decl.device_handle;
+                arg_handles.push(handle);
+                buffer_args.push(arg_op.clone());
+
+                // GPU buffers are read-only unless the parameter is marked as `out`.
+                // Out parameters have write access (read_write in WGSL).
+                arg_read_only.push(!out_params.get(arg_idx).copied().unwrap_or(false));
+                arg_int_narrow.push(needs_int_narrowing(&arg_ty));
+            } else {
+                return Err(LoweringError::unsupported_expression(
+                    "gpu fn buffer args must be places".to_string(),
+                    span,
+                ));
+            }
+        }
+    }
+
+    Ok((buffer_args, arg_handles, arg_read_only, arg_int_narrow))
+}
+
+/// Analyze GPU function arguments for a kernel launch, producing operands and metadata.
+fn thread_gpu_fn_args(
+    ctx: &mut LoweringContext,
+    callee: &Expression,
+    call_args: &[Expression],
+    span: Span,
+) -> Result<ThreadedGpuFnArgs, LoweringError> {
+    let (kernel_op, kernel_name) = resolve_kernel_operand(ctx, callee, span)?;
+
+    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+        return Err(LoweringError::unsupported_expression(
+            "gpu fn must be called by name".to_string(),
+            span,
+        ));
+    };
+
+    let (buffer_args, arg_handles, arg_read_only, arg_int_narrow) =
+        process_gpu_buffer_args(ctx, func_name, call_args, span)?;
+
+    Ok(ThreadedGpuFnArgs {
+        kernel_op,
+        kernel_name,
+        buffer_args,
+        arg_handles,
+        arg_read_only,
+        arg_int_narrow,
+        scalar_args: Vec::new(),
+    })
+}
+
+fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Array(_, _) | TypeKind::List(_) => true,
+        TypeKind::Custom(n, _) => is_collection_type(n),
+        _ => false,
+    }
+}
+
+fn is_collection_type(name: &str) -> bool {
+    matches!(
+        BuiltinCollectionKind::from_name(name),
+        Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+    )
+}
+
+fn needs_int_narrowing(ty: &Type) -> bool {
+    use super::forall_gpu::needs_int_narrowing as check_narrowing;
+    check_narrowing(ty)
+}
+
+/// Try to extract Dim3(x, y, z) as [x, y, z] from a compile-time literal.
+/// Returns None if the expression is not a Dim3 literal or is not compile-time constant.
+fn try_extract_dim3_literal(expr: &Expression) -> Option<[u32; 3]> {
+    use crate::ast::expression::ExpressionKind;
+
+    match &expr.node {
+        ExpressionKind::Call(func, args) => {
+            if let ExpressionKind::Identifier(name, _) = &func.node {
+                if name == "Dim3" && args.len() == 3 {
+                    let x = extract_u32_literal(&args[0])?;
+                    let y = extract_u32_literal(&args[1])?;
+                    let z = extract_u32_literal(&args[2])?;
+                    return Some([x, y, z]);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn extract_u32_literal(expr: &Expression) -> Option<u32> {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::literal::Literal;
+
+    match &expr.node {
+        ExpressionKind::Literal(Literal::Integer(int_lit)) => {
+            use crate::ast::literal::IntegerLiteral;
+            match int_lit {
+                IntegerLiteral::I8(v) if *v >= 0 => Some(*v as u32),
+                IntegerLiteral::I16(v) if *v >= 0 => Some(*v as u32),
+                IntegerLiteral::I32(v) if *v >= 0 => Some(*v as u32),
+                IntegerLiteral::I64(v) if *v >= 0 => Some(*v as u32),
+                IntegerLiteral::U8(v) => Some(*v as u32),
+                IntegerLiteral::U16(v) => Some(*v as u32),
+                IntegerLiteral::U32(v) => Some(*v),
+                IntegerLiteral::U64(v) if *v <= u32::MAX as u64 => Some(*v as u32),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Lower a GPU kernel launch: `kernel_handle.launch(grid, block)`.
 fn try_lower_kernel_launch(
     ctx: &mut LoweringContext,
@@ -423,7 +634,6 @@ fn try_lower_kernel_launch(
         return Ok(None);
     }
 
-    let kernel_op = lower_expression(ctx, obj, None)?;
     if args.len() != 2 {
         return Err(LoweringError::invalid_gpu_launch_args(2, args.len(), *span));
     }
@@ -438,16 +648,70 @@ fn try_lower_kernel_launch(
     let (destination, op) = call_destination(ctx, return_ty, dest, *span);
     let target_bb = ctx.new_basic_block();
 
+    let (
+        kernel_op,
+        kernel_name,
+        call_args,
+        arg_handles,
+        arg_read_only,
+        arg_int_narrow,
+        scalar_args,
+    ) = if let ExpressionKind::Call(callee, call_args) = &obj.node {
+        let gpu_args = thread_gpu_fn_args(ctx, callee, call_args, *span)?;
+        (
+            gpu_args.kernel_op,
+            Some(gpu_args.kernel_name),
+            gpu_args.buffer_args,
+            gpu_args.arg_handles,
+            gpu_args.arg_read_only,
+            gpu_args.arg_int_narrow,
+            gpu_args.scalar_args,
+        )
+    } else {
+        (
+            lower_expression(ctx, obj, None)?,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
+
+    if let Some(ref kernel_name) = kernel_name {
+        let workgroup_size = try_extract_dim3_literal(&args[1]).ok_or_else(|| {
+            LoweringError::custom(
+                "gpu fn launch block size must be a compile-time literal Dim3".to_string(),
+                *span,
+                Some("use a compile-time literal, e.g., block: Dim3(16, 16, 1)".to_string()),
+            )
+        })?;
+
+        // Validate that all dimensions are > 0.
+        if workgroup_size.contains(&0) {
+            return Err(LoweringError::custom(
+                "gpu fn launch block dimensions must all be >0".to_string(),
+                *span,
+                Some("each dimension must be at least 1".to_string()),
+            ));
+        }
+
+        ctx.body
+            .kernel_workgroups
+            .push((kernel_name.clone(), workgroup_size));
+    }
+
     ctx.set_terminator(Terminator::new(
         TerminatorKind::GpuLaunch {
             kernel: kernel_op,
             grid: grid_op,
             block: block_op,
-            args: Vec::new(),
-            arg_handles: Vec::new(),
-            arg_read_only: Vec::new(),
-            arg_int_narrow: Vec::new(),
-            scalar_args: Vec::new(),
+            args: call_args,
+            arg_handles,
+            arg_read_only,
+            arg_int_narrow,
+            scalar_args,
             uniform_bound_x: None,
             uniform_bound_y: None,
             uniform_bound_z: None,

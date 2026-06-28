@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Tiled matrix multiplication using host-launch surface with explicit workgroup sizing.
+// This is the shared-memory tiled GEMM counterpart to the naive matmul.mi, demonstrating:
+// - GPU kernels (`gpu fn`) as first-class launch targets
+// - Host-side `.launch(grid, block)` with explicit 2D workgroup dimensions
+// - Workgroup-local shared memory (`shared` arrays) for tiling
+// - Kernel synchronization (`kernel.barrier()`) for multi-stage compute
+//
+// The kernel divides the work into 2×2 tiles: each thread computes one output element,
+// but cooperatively loads tiles of A and B into workgroup-local shared memory,
+// synchronizes, and then fuses the multiply-accumulate loop.
+//
+// Example: 4×4 matrix with 2×2 blocks, tiling factor T=2 (K-loop over 2 tiles):
+//   A = | 1  2  3  4 |   B = | 1  0  0  0 |   C = A×B = | 1  2  3  4 |
+//       | 5  6  7  8 |       | 0  1  0  0 |             | 5  6  7  8 |
+//       | 9 10 11 12 |       | 0  0  1  0 |             | 9 10 11 12 |
+//       |13 14 15 16 |       | 0  0  0  1 |             |13 14 15 16 |
+//       (identity × A = A)
+
+use system.collections.array
+
+gpu fn tiled_matmul(a Array<f32, 16>, b Array<f32, 16>, c out Array<f32, 16>)
+    shared tileA Array<f32, 4>
+    shared tileB Array<f32, 4>
+
+    let tx = kernel.thread_idx.x
+    let ty = kernel.thread_idx.y
+    let bx = kernel.block_idx.x
+    let by = kernel.block_idx.y
+
+    let row = by * 2 + ty
+    let col = bx * 2 + tx
+
+    var acc = 0.0
+
+    // Tile K-loop: process A and B in 2×2 tiles
+    var tile_k = 0
+    while tile_k < 2
+        // Load tile from global memory into shared memory
+        tileA[ty * 2 + tx] = a[row * 4 + tile_k * 2 + tx]
+        tileB[ty * 2 + tx] = b[(tile_k * 2 + ty) * 4 + col]
+        kernel.barrier()
+
+        // Local multiply-accumulate loop over the tile (T=2 elements)
+        var k = 0
+        while k < 2
+            acc = acc + tileA[ty * 2 + k] * tileB[k * 2 + tx]
+            k = k + 1
+        kernel.barrier()
+
+        tile_k = tile_k + 1
+
+    c[row * 4 + col] = acc
+
+fn main()
+    gpu let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
+    gpu let b = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    gpu var c = Array<f32, 16>()
+
+    // Launch with a 2×2 grid of 2×2 blocks (4 blocks total, 4 threads per block = 16 threads).
+    tiled_matmul(a, b, c).launch(Dim3(2, 2, 1), Dim3(2, 2, 1))
+
+    let host = c
+    println(f"{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]} {host[8]} {host[9]} {host[10]} {host[11]} {host[12]} {host[13]} {host[14]} {host[15]}")

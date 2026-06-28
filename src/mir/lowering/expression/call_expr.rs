@@ -42,6 +42,10 @@ pub(crate) fn lower_call_expr(
         return Ok(op);
     }
 
+    if let Some(op) = try_lower_gpu_shuffle_down(ctx, func, args, expr, dest.clone())? {
+        return Ok(op);
+    }
+
     if let Some(op) = try_lower_gpu_or_math_intrinsic(ctx, func, args, expr, dest.clone())? {
         return Ok(op);
     }
@@ -187,6 +191,106 @@ fn try_lower_gpu_barrier(
         span: expr.span,
     });
     Ok(Some(Operand::Copy(Place::new(void_temp))))
+}
+
+/// Lowers `kernel.warp.shuffle_down(value, offset)` to a `ShuffleDown` intrinsic.
+/// The offset MUST be a compile-time integer literal (validated here).
+fn try_lower_gpu_shuffle_down(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let ExpressionKind::Member(obj, prop) = &func.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Member(kernel_expr, warp_expr) = &obj.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(kernel_name, _) = &kernel_expr.node else {
+        return Ok(None);
+    };
+    if kernel_name != crate::ast::types::KERNEL_CONTEXT_IDENT
+        && kernel_name != crate::ast::types::GPU_CONTEXT_DEPRECATED_IDENT
+    {
+        return Ok(None);
+    }
+    let ExpressionKind::Identifier(warp_name, _) = &warp_expr.node else {
+        return Ok(None);
+    };
+    if warp_name != "warp" {
+        return Ok(None);
+    }
+    let ExpressionKind::Identifier(prop_name, _) = &prop.node else {
+        return Ok(None);
+    };
+    if prop_name != "shuffle_down" {
+        return Ok(None);
+    }
+
+    if args.len() != 2 {
+        return Err(LoweringError::unsupported_expression(
+            "kernel.warp.shuffle_down requires 2 arguments (value, offset)".to_string(),
+            expr.span,
+        ));
+    }
+
+    // Lower the value operand
+    let value_op = lower_expression(ctx, &args[0], None)?;
+
+    // Extract the compile-time literal offset
+    let offset = match &args[1].node {
+        ExpressionKind::Literal(lit) => {
+            use crate::ast::literal::Literal;
+            match lit {
+                Literal::Integer(i) => {
+                    let val = i.to_i128() as u32;
+                    if val > 128 {
+                        return Err(LoweringError::custom(
+                            format!(
+                                "shuffle offset {} exceeds the maximum subgroup size (128)",
+                                val
+                            ),
+                            args[1].span,
+                            None,
+                        ));
+                    }
+                    val
+                }
+                _ => {
+                    return Err(LoweringError::unsupported_expression(
+                        "shuffle offset must be a compile-time literal".to_string(),
+                        args[1].span,
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(LoweringError::unsupported_expression(
+                "shuffle offset must be a compile-time literal".to_string(),
+                args[1].span,
+            ));
+        }
+    };
+
+    let result_ty = resolve_type(ctx.type_checker, &args[0]);
+    let (target, ret_op) = if let Some(ref d) = dest {
+        (d.clone(), Operand::Copy(d.clone()))
+    } else {
+        let temp = ctx.push_temp(result_ty, expr.span);
+        (Place::new(temp), Operand::Copy(Place::new(temp)))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target,
+            Rvalue::GpuIntrinsic(GpuIntrinsic::ShuffleDown(Box::new(value_op), offset)),
+        ),
+        span: expr.span,
+    });
+
+    Ok(Some(ret_op))
 }
 
 fn try_lower_gpu_intrinsic(

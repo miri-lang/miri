@@ -55,6 +55,8 @@ pub struct SymbolInfo {
     /// `VariableDeclaration::residency` for local variables; defaults to
     /// [`BindingResidency::Host`] for every other symbol kind.
     pub residency: BindingResidency,
+    /// True if this symbol represents a `gpu fn` (GPU kernel function).
+    pub is_gpu_fn: bool,
 }
 
 impl SymbolInfo {
@@ -77,6 +79,7 @@ impl SymbolInfo {
             original_name: None,
             is_intrinsic: false,
             residency: BindingResidency::Host,
+            is_gpu_fn: false,
         }
     }
 
@@ -92,6 +95,7 @@ impl SymbolInfo {
             original_name: None,
             is_intrinsic: true,
             residency: BindingResidency::Host,
+            is_gpu_fn: false,
         }
     }
 }
