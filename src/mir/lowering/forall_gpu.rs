@@ -35,7 +35,7 @@ use crate::mir::body::{BindingResidency, DeviceHandleId};
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
-    Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
+    GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
     StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
 
@@ -665,7 +665,7 @@ fn assemble_gpu_launch_terminator(
     ctx: &mut LoweringContext,
     params: GpuLaunchTerminatorParams,
     span: Span,
-) {
+) -> Result<(), LoweringError> {
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         params.captures.iter().partition(|c| !c.is_scalar);
 
@@ -688,10 +688,13 @@ fn assemble_gpu_launch_terminator(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
+    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
 
     let void_ty = Type::new(TypeKind::Void, span);
     let dest_local = ctx.push_temp(void_ty, span);
@@ -702,10 +705,7 @@ fn assemble_gpu_launch_terminator(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(params.grid_local)),
             block: Operand::Copy(Place::new(params.block_local)),
-            args: buffer_ops,
-            arg_handles,
-            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
-            arg_int_narrow,
+            launch_args,
             scalar_args: scalar_ops,
             uniform_bound_x: params.bounds[0].clone(),
             uniform_bound_y: params.bounds[1].clone(),
@@ -716,6 +716,7 @@ fn assemble_gpu_launch_terminator(
         span,
     ));
     ctx.set_current_block(after_bb);
+    Ok(())
 }
 
 /// Emits a GpuLaunch terminator for an N-D forall GPU loop.
@@ -755,9 +756,7 @@ fn emit_gpu_launch_nd(
             bounds,
         },
         span,
-    );
-
-    Ok(())
+    )
 }
 
 fn collect_written_captures(body: &Statement) -> HashSet<String> {
