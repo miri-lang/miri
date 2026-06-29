@@ -146,11 +146,6 @@ pub struct GpuLaunchDesc {
     pub uniform_bound_y_value: i64,
     /// Bound value for z axis (3D loops only).
     pub uniform_bound_z_value: i64,
-    /// Number of storage buffer bindings.
-    /// num_bufs reflects capture count, but with uniform buffers present,
-    /// the kernel has num_bufs storage + N uniform bindings (where N is popcount(uniform_bound_present)).
-    /// This is always num_bufs.
-    pub num_storage_bufs: u64,
     /// Packed scalar capture values (int→i32, bool→u32, f32→f32).
     /// Each scalar occupies 4 bytes. When null, no scalar captures are present.
     pub scalar_inputs_ptr: *const u8,
@@ -158,7 +153,7 @@ pub struct GpuLaunchDesc {
     pub scalar_inputs_len: usize,
 }
 
-const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 160);
+const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 152);
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
@@ -216,7 +211,9 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let num_bindings = desc.num_bufs + num_uniform_bufs + (has_scalar_inputs as usize);
 
     // Ensure the kernel is compiled with the correct bind group layout.
-    // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
+    // The storage-buffer count equals num_bufs (every capture is a storage
+    // binding); uniform and scalar-input bindings follow it. Passing it lets
+    // the layout distinguish storage from uniform buffers.
     // Pass buf_read_only so storage buffers use the correct access mode.
     let buf_read_only = if desc.buf_read_only.is_null() {
         None
@@ -230,7 +227,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         entry_point,
         wgsl,
         num_bindings,
-        desc.num_storage_bufs as usize,
+        desc.num_bufs,
         buf_read_only,
         [desc.block_x, desc.block_y, desc.block_z],
     )?;
@@ -975,7 +972,7 @@ mod desc_layout_tests {
     fn gpu_launch_desc_abi_is_pinned() {
         assert_eq!(
             size_of::<GpuLaunchDesc>(),
-            160,
+            152,
             "GpuLaunchDesc size drifted; update Cranelift desc_layout::DESC_SIZE in lockstep"
         );
         assert_eq!(align_of::<GpuLaunchDesc>(), 8);
@@ -999,9 +996,8 @@ mod desc_layout_tests {
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_x_value), 112);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_y_value), 120);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_z_value), 128);
-        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 136);
-        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_ptr), 144);
-        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_len), 152);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_ptr), 136);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_len), 144);
     }
 }
 
