@@ -207,6 +207,74 @@ fn is_perceus_managed_inner(
     }
 }
 
+/// Device representability of a *scalar* leaf type — the single source of truth
+/// the three GPU type predicates ([`is_gpu_compatible`], [`is_gpu_buffer_element`],
+/// and the accelerable element bound) all derive from, so they can never
+/// disagree on a scalar.
+///
+/// The classes form a strict capability ladder (`Storage` ⊂ kernel-usable):
+/// a `Storage` scalar is usable everywhere a `KernelOnly` scalar is, plus as a
+/// WGSL `var<storage>` element and a gpu-resident binding leaf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuScalarClass {
+    /// Representable as a WGSL storage-buffer element — and therefore also as a
+    /// kernel-body value and a gpu-resident binding leaf. The numeric scalars
+    /// with a fixed device layout.
+    Storage,
+    /// Usable as a value inside a `gpu fn` body, but NOT as a storage-buffer
+    /// element or a gpu-resident binding leaf. `Boolean` (WGSL `bool` is barred
+    /// from `var<storage>`), the soft-fail propagation types `Void`/`Error`,
+    /// and the 128-bit integers (no portable device representation, but valid as
+    /// in-kernel locals).
+    KernelOnly,
+    /// Not a device-representable scalar in any position — or not a scalar at
+    /// all (containers, context types, and generics are classified by the
+    /// predicate that owns them, not here).
+    Forbidden,
+}
+
+/// Classifies a scalar `TypeKind` for GPU use. Container, context, and generic
+/// types are `Forbidden` here: each predicate decides those for itself and only
+/// consults this classifier for the scalar leaves, keeping the scalar verdict in
+/// exactly one place.
+pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64 => GpuScalarClass::Storage,
+
+        TypeKind::Boolean | TypeKind::Void | TypeKind::Error | TypeKind::I128 | TypeKind::U128 => {
+            GpuScalarClass::KernelOnly
+        }
+
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
+    }
+}
+
 /// Determines whether a type is permitted inside a `gpu fn` body.
 ///
 /// GPU kernels execute on the device with no heap allocator, no I/O, and no
@@ -229,24 +297,6 @@ fn is_perceus_managed_inner(
 /// via the canonical constants in [`crate::ast::types`].
 pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
     match kind {
-        TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::Boolean
-        | TypeKind::Void
-        | TypeKind::Error => true,
-
         TypeKind::Generic(_, _, _) => true,
 
         TypeKind::Custom(name, type_args) => {
@@ -300,19 +350,11 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
 
         TypeKind::Array(elem_expr, _size) => first_expr_type_is_gpu_compatible(elem_expr),
 
-        TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Tuple(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Option(_)
-        | TypeKind::Linear(_)
-        | TypeKind::Meta(_)
-        | TypeKind::RawPtr
-        | TypeKind::Identifier
-        | TypeKind::Function(_) => false,
+        // Every remaining variant is either a scalar leaf (Storage/KernelOnly →
+        // kernel-body usable) or a non-device container (Forbidden → rejected).
+        // `gpu_scalar_class` is the single, exhaustive authority for that split,
+        // so a future `TypeKind` variant is force-classified there.
+        scalar_or_container => gpu_scalar_class(scalar_or_container) != GpuScalarClass::Forbidden,
     }
 }
 
@@ -320,8 +362,11 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
 /// `gpu var`).
 ///
 /// A type is *accelerable* when its bytes can be marshalled to device memory:
-/// - an `AccelerableScalar` primitive — `int`, `i32`/`i64`, `u32`/`u64`,
-///   `f32`/`f64`, `bool`;
+/// - a `Storage`-class scalar — the device-storable numerics `int`, the signed
+///   widths `i8`..`i64`, the unsigned widths `u8`..`u64`, and `float`/`f32`/`f64`
+///   (see [`gpu_scalar_class`]). `bool` and the 128-bit widths are *not*
+///   storable and are rejected, so the binding gate agrees with
+///   [`is_gpu_buffer_element`] on the element set;
 /// - a nominal type whose definition implements the stdlib `Accelerable` trait,
 ///   provided every type argument is itself accelerable (this enforces the
 ///   `T : AccelerableScalar` element bound on the stdlib `Array` / `List` impls
@@ -364,15 +409,6 @@ fn accelerable_inner(
     allow_generic: bool,
 ) -> bool {
     match kind {
-        TypeKind::Int
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::Boolean => true,
-
         TypeKind::Generic(_, _, _) => allow_generic,
 
         TypeKind::Tuple(elements) => elements
@@ -418,28 +454,12 @@ fn accelerable_inner(
                 && type_args_are_accelerable(args.as_deref(), type_definitions, allow_generic)
         }
 
-        TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Option(_)
-        | TypeKind::Linear(_)
-        | TypeKind::Meta(_)
-        | TypeKind::RawPtr
-        | TypeKind::Identifier
-        | TypeKind::Function(_) => false,
+        // A scalar leaf is accelerable exactly when it is device-storable
+        // (`Storage`): the binding gate marshals it into a device buffer, so it
+        // must agree with [`is_gpu_buffer_element`]. `KernelOnly` scalars (bool,
+        // void, error, 128-bit) and every non-scalar container (`Forbidden`)
+        // cannot back a gpu-resident binding leaf and are rejected here.
+        scalar => gpu_scalar_class(scalar) == GpuScalarClass::Storage,
     }
 }
 
@@ -517,18 +537,6 @@ fn first_expr_type_is_gpu_compatible(expr: &crate::ast::expression::Expression) 
 /// the concrete element must be checked.
 pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
     match kind {
-        TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::Float
-        | TypeKind::F32
-        | TypeKind::F64 => true,
         // A vector (Vec2/3/4) is a valid storage-buffer element when its
         // component is a WGSL-vector-capable 4-byte scalar (f32 / i32 / u32 and
         // their narrower aliases / browser-portable `Int`). 64-bit components
@@ -556,27 +564,11 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
                 Some(TypeKind::I32 | TypeKind::U32)
             )
         }
-        TypeKind::I128
-        | TypeKind::U128
-        | TypeKind::Boolean
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Tuple(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Option(_)
-        | TypeKind::Linear(_)
-        | TypeKind::Meta(_)
-        | TypeKind::RawPtr
-        | TypeKind::Identifier
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Custom(_, _) => false,
+        // Every other type is a storage-buffer element exactly when it is a
+        // `Storage`-class scalar. Vector/atomic containers are handled above;
+        // all remaining containers, context types, and generics classify as
+        // `Forbidden` (never `Storage`), so this rejects them.
+        scalar => gpu_scalar_class(scalar) == GpuScalarClass::Storage,
     }
 }
 
