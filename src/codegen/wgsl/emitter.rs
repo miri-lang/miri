@@ -12,8 +12,9 @@ use crate::codegen::wgsl::types::{
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
-    BinOp, Body, Constant, Dimension, GpuIntrinsic, Local, MathIntrinsic, Operand, Place,
-    PlaceElem, Rvalue, StatementKind, StorageClass, TerminatorKind, UnOp,
+    BinOp, Body, Constant, Dimension, GpuIndexNarrowing, GpuIntrinsic, Local, MathIntrinsic,
+    Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass, TerminatorKind, UnOp,
+    I32_INDEX_MAX,
 };
 use std::fmt::Write;
 
@@ -1394,23 +1395,30 @@ impl<'a> BodyEmitter<'a> {
                     }
                 }
                 PlaceElem::Index(local) => {
-                    // naga rejects indexing `array<T>` with an `i64` value — array indices must be `i32`/`u32`.
-                    // Int maps to WGSL i32 (identity cast is safe); an I64 value >= 2^31 would silently
-                    // truncate and wrap into an in-bounds index, aliasing a valid element, so saturate into
-                    // the non-negative i32 range with clamp() first — an out-of-range index stays out-of-range
-                    // and WGSL storage-array bounds behavior handles it harmlessly. Any other index type renders bare.
-                    let index_kind = self.body.local_decls.get(local.0).map(|decl| &decl.ty.kind);
-                    if matches!(index_kind, Some(TypeKind::I64)) {
-                        write!(
-                            rendered,
-                            "[i32(clamp({}, 0, 2147483647))]",
-                            local_name(*local)
-                        )
-                        .map_err(emit_err)?;
-                    } else if matches!(index_kind, Some(TypeKind::Int)) {
-                        write!(rendered, "[i32({})]", local_name(*local)).map_err(emit_err)?;
-                    } else {
-                        write!(rendered, "[{}]", local_name(*local)).map_err(emit_err)?;
+                    // naga rejects indexing `array<T>` with an `i64` value — array indices
+                    // must be 32-bit. The narrowing policy (identity for `Int`, saturate for
+                    // `I64`, none otherwise) is backend-neutral and lives in `mir::backend`;
+                    // here we only render the chosen narrowing as WGSL. A saturated I64 index
+                    // stays out-of-range when out-of-range, and WGSL storage-array bounds
+                    // behavior handles it harmlessly.
+                    let name = local_name(*local);
+                    let narrowing = self
+                        .body
+                        .local_decls
+                        .get(local.0)
+                        .map(|decl| GpuIndexNarrowing::from_index_kind(&decl.ty.kind))
+                        .unwrap_or(GpuIndexNarrowing::None);
+                    match narrowing {
+                        GpuIndexNarrowing::SaturateToI32 => {
+                            write!(rendered, "[i32(clamp({}, 0, {}))]", name, I32_INDEX_MAX)
+                                .map_err(emit_err)?
+                        }
+                        GpuIndexNarrowing::Identity => {
+                            write!(rendered, "[i32({})]", name).map_err(emit_err)?
+                        }
+                        GpuIndexNarrowing::None => {
+                            write!(rendered, "[{}]", name).map_err(emit_err)?
+                        }
                     }
                 }
                 PlaceElem::Deref => {

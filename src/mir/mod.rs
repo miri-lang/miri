@@ -34,8 +34,8 @@ pub mod verify;
 pub mod visitor;
 
 pub use backend::{
-    BackendMetadata, GpuAtomicOp, GpuBinding, GpuBodyMetadata, GpuCapability, GpuKernelArg,
-    GpuMemoryAccess, GpuMemoryScope,
+    BackendMetadata, GpuAtomicOp, GpuBinding, GpuBodyMetadata, GpuCapability, GpuIndexNarrowing,
+    GpuKernelArg, GpuMemoryAccess, GpuMemoryScope, I32_INDEX_MAX,
 };
 pub use block::{BasicBlock, BasicBlockData};
 pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StorageClass};
