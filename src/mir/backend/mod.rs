@@ -6,6 +6,8 @@
 //! This module contains types that are specific to particular backends (GPU, TPU, etc.).
 //! These are isolated here to keep the core MIR types backend-agnostic.
 
+pub mod config;
 pub mod gpu;
 
+pub use config::BackendConfig;
 pub use gpu::*;

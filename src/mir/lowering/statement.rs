@@ -65,7 +65,10 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                     &vars.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
                 )
             {
-                super::forall_gpu::lower_forall_gpu(ctx, &stmt.span, stmt.id, vars, iterable, body)
+                let config = crate::mir::backend::BackendConfig::WEB_GPU;
+                super::forall_gpu::lower_forall_gpu(
+                    ctx, &config, &stmt.span, stmt.id, vars, iterable, body,
+                )
             } else {
                 super::forall_cpu::lower_forall_cpu(ctx, &stmt.span, vars, iterable, body)
             }

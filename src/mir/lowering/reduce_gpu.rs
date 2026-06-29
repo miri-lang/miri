@@ -25,7 +25,8 @@ use crate::mir::{
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
-use super::forall_gpu::{compute_thread_index, needs_int_narrowing, FORALL_GPU_BLOCK_SIZE};
+use super::forall_gpu::{compute_thread_index, needs_int_narrowing};
+use crate::mir::backend::BackendConfig;
 
 /// Runtime entry that fences outstanding device writes and copies a
 /// `gpu`-resident buffer back to its host array.
@@ -354,7 +355,7 @@ fn build_gpu_reduce_kernel(
     fold_op: BinOp,
     span: Span,
 ) -> Result<Body, LoweringError> {
-    let workgroup_size = FORALL_GPU_BLOCK_SIZE;
+    let workgroup_size = BackendConfig::WEB_GPU.block_size(1)[0];
     // 3 params: input array, init scalar, output array (1-element, read_write)
     let arg_count = 3;
 
@@ -888,7 +889,8 @@ fn emit_gpu_reduce_launch(
         span,
     );
 
-    let block_size_i64 = i64::from(FORALL_GPU_BLOCK_SIZE);
+    let block_size = BackendConfig::WEB_GPU.block_size(1)[0];
+    let block_size_i64 = i64::from(block_size);
     let block_local = ctx.push_temp(dim3_ty.clone(), span);
     push_assign(
         ctx,

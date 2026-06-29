@@ -239,12 +239,13 @@ fn emit_frame_pass(
 fn make_grid_block_locals(
     ctx: &mut LoweringContext,
     grid_x: u32,
+    block_size: u32,
     span: Span,
 ) -> (crate::mir::Local, crate::mir::Local) {
     let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
     let one_op = forall_gpu::int_constant(1, span);
     let grid_x_op = forall_gpu::int_constant(i64::from(grid_x), span);
-    let block_size_i64 = i64::from(forall_gpu::FORALL_GPU_BLOCK_SIZE);
+    let block_size_i64 = i64::from(block_size);
     let block_x_op = forall_gpu::int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -372,11 +373,12 @@ fn compute_bounds_limit(
 fn make_grid_block_locals_from_local(
     ctx: &mut LoweringContext,
     grid_x_local: crate::mir::Local,
+    block_size: u32,
     span: Span,
 ) -> (crate::mir::Local, crate::mir::Local) {
     let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
     let one_op = forall_gpu::int_constant(1, span);
-    let block_size_i64 = i64::from(forall_gpu::FORALL_GPU_BLOCK_SIZE);
+    let block_size_i64 = i64::from(block_size);
     let block_x_op = forall_gpu::int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -415,8 +417,9 @@ fn emit_gpu_frame_launch_literal(
     uses_frame: bool,
 ) {
     let void_ty = Type::new(TypeKind::Void, span);
-    let grid_x = forall_gpu::literal_grid_x(length);
-    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_x, span);
+    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
+    let grid_x = forall_gpu::literal_grid_x(length, block_size);
+    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_x, block_size, span);
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -490,9 +493,11 @@ fn emit_gpu_frame_launch_runtime(
     let void_ty = Type::new(TypeKind::Void, span);
 
     let clamped_length_local = forall_gpu::compute_clamped_length(ctx, end_op.clone(), start, span);
-    let grid_x_local = forall_gpu::compute_grid_size(ctx, clamped_length_local, span);
+    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
+    let grid_x_local = forall_gpu::compute_grid_size(ctx, clamped_length_local, block_size, span);
     let grid_x = crate::mir::Local(grid_x_local.0);
-    let (grid_local, block_local) = make_grid_block_locals_from_local(ctx, grid_x, span);
+    let (grid_local, block_local) =
+        make_grid_block_locals_from_local(ctx, grid_x, block_size, span);
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -720,9 +725,10 @@ fn build_frame_kernel_literal(
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
 
-    let grid_x = forall_gpu::literal_grid_x(length);
+    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1);
+    let grid_x = forall_gpu::literal_grid_x(length, block_size[0]);
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([forall_gpu::FORALL_GPU_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some(block_size),
         grid_size: Some([grid_x, 1, 1]),
         required_capabilities: Vec::new(),
         is_frame_step: true,
@@ -782,8 +788,9 @@ fn build_frame_kernel_runtime(
     kernel
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1);
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([forall_gpu::FORALL_GPU_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some(block_size),
         grid_size: None,
         required_capabilities: Vec::new(),
         is_frame_step: true,
