@@ -300,6 +300,59 @@ gpu fn my_kernel(xs List<int>)
     type_checker_error_test(input, "not GPU-compatible");
 }
 
+// An `Array<T, N>` parameter lowers to a WGSL `var<storage>` binding, so its
+// element `T` must be a storage-buffer element. `bool` is a valid kernel-body
+// value but WGSL bars it from `var<storage>`, so a buffer-of-bool parameter is
+// rejected at the signature — coherent with the `gpu let arr = [true, false]`
+// binding gate, not admitted here and only caught later at WGSL emission.
+#[test]
+fn test_gpu_function_rejects_bool_array_param() {
+    let input = r#"
+use system.collections.array
+
+gpu fn my_kernel(flags Array<bool, 4>)
+    let x = 1
+"#;
+    type_checker_error_test(input, "not GPU-compatible");
+}
+
+// The `[T; N]` sugar form of an array parameter is gated identically to the
+// `Array<T, N>` form — a buffer-of-bool is rejected through either spelling.
+#[test]
+fn test_gpu_function_rejects_bool_sugar_array_param() {
+    let input = r#"
+gpu fn my_kernel(flags [bool; 4])
+    let x = 1
+"#;
+    type_checker_error_test(input, "not GPU-compatible");
+}
+
+// A 128-bit integer is kernel-body usable but has no portable device storage
+// representation, so an `Array<i128, N>` buffer parameter is rejected too.
+#[test]
+fn test_gpu_function_rejects_i128_array_param() {
+    let input = r#"
+use system.collections.array
+
+gpu fn my_kernel(xs Array<i128, 4>)
+    let x = 1
+"#;
+    type_checker_error_test(input, "not GPU-compatible");
+}
+
+// Regression guard: an `Array<f32, N>` buffer parameter (the GEMM/SAXPY shape)
+// stays accepted — `f32` is a storage-buffer element.
+#[test]
+fn test_gpu_function_allows_f32_array_param() {
+    let input = r#"
+use system.collections.array
+
+gpu fn my_kernel(a Array<f32, 4>)
+    let x = a[0]
+"#;
+    type_checker_test(input);
+}
+
 #[test]
 fn test_gpu_function_rejects_discarded_string_return() {
     let input = r#"

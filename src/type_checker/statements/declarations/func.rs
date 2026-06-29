@@ -47,7 +47,7 @@ use crate::ast::types::{
 use crate::ast::*;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::statements::{check_returns, ReturnStatus};
-use crate::type_checker::utils::is_gpu_compatible;
+use crate::type_checker::utils::is_gpu_signature_type;
 use crate::type_checker::TypeChecker;
 
 pub(crate) struct FunctionDeclarationInfo<'a> {
@@ -360,7 +360,7 @@ impl TypeChecker {
             if matches!(param_type.kind, TypeKind::Error) {
                 continue;
             }
-            if is_gpu_compatible(&param_type.kind) {
+            if is_gpu_signature_type(&param_type.kind) {
                 continue;
             }
             self.report_error(
