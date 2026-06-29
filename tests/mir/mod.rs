@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod analysis;
+pub mod backend;
 pub mod class;
 pub mod lowering;
 pub mod optimization;
