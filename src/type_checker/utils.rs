@@ -358,6 +358,50 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
     }
 }
 
+/// Determines whether a type may appear in a `gpu fn` parameter list.
+///
+/// A `gpu fn` parameter crosses the host→device boundary, so it routes through
+/// the same unified GPU predicate set every other device gate uses — never a
+/// standalone rule that could disagree with them:
+///
+/// - An `Array<T, N>` parameter lowers to a WGSL `var<storage>` binding, so its
+///   element `T` must be a storage-buffer element ([`is_gpu_buffer_element`]).
+///   This rejects a buffer of a kernel-only scalar such as `bool` (valid as an
+///   in-kernel local, barred from `var<storage>`) or a 128-bit integer at the
+///   signature, coherent with the `gpu let` binding gate — instead of admitting
+///   it here and failing late at WGSL emission.
+/// - Every other parameter (a kernel-body scalar passed by value, or a GPU
+///   builtin / `VecN` / `Atomic`) is gated by [`is_gpu_compatible`], the
+///   kernel-body lowering-eligibility predicate that rejects host-only
+///   collections (`List`, `Map`, …) the backend cannot lower.
+pub fn is_gpu_signature_type(kind: &TypeKind) -> bool {
+    match gpu_array_element_kind(kind) {
+        Some(element) => is_gpu_buffer_element(element),
+        None => is_gpu_compatible(kind),
+    }
+}
+
+/// Borrows the element `TypeKind` of an `Array<T, N>` parameter, in either the
+/// `[T; N]` sugar form (`TypeKind::Array`) or the post-resolution
+/// `TypeKind::Custom("Array", [T, N])` envelope. Returns `None` for any
+/// non-`Array` type (including `List`, which is not a valid `gpu fn` parameter
+/// and stays rejected by [`is_gpu_compatible`]) or an unresolved element.
+fn gpu_array_element_kind(kind: &TypeKind) -> Option<&TypeKind> {
+    let element_expr = match kind {
+        TypeKind::Array(element_expr, _) => element_expr.as_ref(),
+        TypeKind::Custom(name, Some(args))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) =>
+        {
+            args.first()?
+        }
+        _ => return None,
+    };
+    match &element_expr.node {
+        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        _ => None,
+    }
+}
+
 /// Determines whether a type may back a gpu-resident binding (`gpu let` /
 /// `gpu var`).
 ///
