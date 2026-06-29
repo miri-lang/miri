@@ -389,3 +389,129 @@ fn main()
         "expected runtime 3D bounds to carry uniform_bound_x, uniform_bound_y, and uniform_bound_z"
     );
 }
+
+#[test]
+fn test_forall_gpu_kernel_workgroup_size_comes_from_backend_config() {
+    // Test 1D kernel workgroup size.
+    let pipeline = Pipeline::new();
+    let source_1d = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var a = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        a[i] = i
+";
+    let result = pipeline.frontend(source_1d).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+        .expect("function");
+    let (_body, lambdas) =
+        lower_function(func_stmt, &result.type_checker, false, false).expect("lower 1D");
+    let kernel_1d = lambdas
+        .iter()
+        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .expect("1D kernel");
+    let metadata_1d = &kernel_1d.body.backend_metadata;
+    assert!(
+        matches!(metadata_1d, Some(miri::mir::backend::BackendMetadata::Gpu(md)) if md.workgroup_size == Some([256, 1, 1])),
+        "expected 1D kernel to have workgroup_size [256, 1, 1], got {:?}",
+        metadata_1d
+    );
+
+    // Test 2D kernel workgroup size.
+    let source_2d = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var a = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i, j in 0..3, 0..3
+        a[i * 3 + j] = i + j
+";
+    let result = pipeline.frontend(source_2d).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+        .expect("function");
+    let (_body, lambdas) =
+        lower_function(func_stmt, &result.type_checker, false, false).expect("lower 2D");
+    let kernel_2d = lambdas
+        .iter()
+        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .expect("2D kernel");
+    let metadata_2d = &kernel_2d.body.backend_metadata;
+    assert!(
+        matches!(metadata_2d, Some(miri::mir::backend::BackendMetadata::Gpu(md)) if md.workgroup_size == Some([16, 16, 1])),
+        "expected 2D kernel to have workgroup_size [16, 16, 1], got {:?}",
+        metadata_2d
+    );
+
+    // Test 3D kernel workgroup size.
+    let source_3d = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var a = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i, j, k in 0..2, 0..2, 0..2
+        a[i * 4 + j * 2 + k] = i + j + k
+";
+    let result = pipeline.frontend(source_3d).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+        .expect("function");
+    let (_body, lambdas) =
+        lower_function(func_stmt, &result.type_checker, false, false).expect("lower 3D");
+    let kernel_3d = lambdas
+        .iter()
+        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .expect("3D kernel");
+    let metadata_3d = &kernel_3d.body.backend_metadata;
+    assert!(
+        matches!(metadata_3d, Some(miri::mir::backend::BackendMetadata::Gpu(md)) if md.workgroup_size == Some([8, 8, 4])),
+        "expected 3D kernel to have workgroup_size [8, 8, 4], got {:?}",
+        metadata_3d
+    );
+}
+
+#[test]
+fn test_forall_gpu_2d_mixed_literal_runtime_carries_both_uniform_bounds() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 5
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i, j in 0..3, 0..w
+        dst[i * 5 + j] = i + j
+",
+    );
+    let launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch {
+                uniform_bound_x,
+                uniform_bound_y,
+                ..
+            }) => Some((uniform_bound_x.is_some(), uniform_bound_y.is_some())),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        launch.0 && launch.1,
+        "expected mixed 2D bounds (literal x, runtime y) to carry both uniform_bound_x and uniform_bound_y"
+    );
+}
