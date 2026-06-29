@@ -19,7 +19,7 @@ use crate::mir::body::BindingResidency;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
-    Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
+    GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
     StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
 
@@ -934,6 +934,11 @@ fn emit_gpu_reduce_launch(
         needs_int_narrowing(&output_ty),
     ];
 
+    // input is read-only, output is read_write.
+    let arg_read_only = vec![true, false];
+    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
 
@@ -942,10 +947,7 @@ fn emit_gpu_reduce_launch(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: buffer_ops,
-            arg_handles,
-            arg_read_only: vec![true, false], // input is read-only, output is read_write
-            arg_int_narrow,
+            launch_args,
             scalar_args: scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,

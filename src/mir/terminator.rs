@@ -169,10 +169,7 @@ impl fmt::Display for Terminator {
                 kernel,
                 grid,
                 block,
-                args,
-                arg_handles: _,
-                arg_read_only: _,
-                arg_int_narrow: _,
+                launch_args,
                 scalar_args: _,
                 uniform_bound_x: _,
                 uniform_bound_y: _,
@@ -185,7 +182,7 @@ impl fmt::Display for Terminator {
                     "{} = launch({}, grid: {}, block: {}",
                     destination, kernel, grid, block
                 )?;
-                for arg in args {
+                for arg in launch_args.args() {
                     write!(f, ", {}", arg)?;
                 }
                 write!(f, ") -> ")?;
@@ -217,6 +214,125 @@ impl fmt::Display for Terminator {
                 }
             }
         }
+    }
+}
+
+/// Raised when the parallel per-capture vectors of a [`GpuLaunchArgs`] do not
+/// all match the length of `args`. Carries the offending field so the lowering
+/// pass can surface a precise compiler error instead of producing a launch the
+/// codegen would read out of bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuLaunchArgsError {
+    /// Name of the parallel vector whose length diverged from `args`.
+    pub field: &'static str,
+    /// Length of `args` (the expected length of every parallel vector).
+    pub expected: usize,
+    /// Actual length of the diverging vector.
+    pub got: usize,
+}
+
+impl fmt::Display for GpuLaunchArgsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GPU launch capture metadata is inconsistent: `{}` has {} entries but `args` has {}",
+            self.field, self.got, self.expected
+        )
+    }
+}
+
+/// The per-capture parallel data of a [`TerminatorKind::GpuLaunch`], with the
+/// equal-length invariant enforced once at construction.
+///
+/// A GPU launch marshals N host captures into N storage buffers. Each capture
+/// carries three pieces of parallel metadata that must stay 1:1 with the
+/// capture operands: its persistent device handle, its read-only flag, and its
+/// int-narrowing flag. This struct owns all four vectors and guarantees
+///
+/// ```text
+/// args.len() == arg_handles.len() == arg_read_only.len() == arg_int_narrow.len()
+/// ```
+///
+/// The fields are private and the only constructor is [`GpuLaunchArgs::new`],
+/// which validates the lengths, so it is impossible to build a launch whose
+/// metadata vectors are mismatched. Scalar captures and uniform loop bounds are
+/// *not* part of this struct — they are distinct fields on the terminator and
+/// must never pad these vectors.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GpuLaunchArgs {
+    args: Vec<Operand>,
+    arg_handles: Vec<Option<DeviceHandleId>>,
+    arg_read_only: Vec<bool>,
+    arg_int_narrow: Vec<bool>,
+}
+
+impl GpuLaunchArgs {
+    /// Builds the capture data, validating that every parallel vector has the
+    /// same length as `args`. Returns [`GpuLaunchArgsError`] on mismatch.
+    pub fn new(
+        args: Vec<Operand>,
+        arg_handles: Vec<Option<DeviceHandleId>>,
+        arg_read_only: Vec<bool>,
+        arg_int_narrow: Vec<bool>,
+    ) -> Result<Self, GpuLaunchArgsError> {
+        let expected = args.len();
+        for (field, got) in [
+            ("arg_handles", arg_handles.len()),
+            ("arg_read_only", arg_read_only.len()),
+            ("arg_int_narrow", arg_int_narrow.len()),
+        ] {
+            if got != expected {
+                return Err(GpuLaunchArgsError {
+                    field,
+                    expected,
+                    got,
+                });
+            }
+        }
+        Ok(Self {
+            args,
+            arg_handles,
+            arg_read_only,
+            arg_int_narrow,
+        })
+    }
+
+    /// Number of captures (the shared length of every parallel vector).
+    pub fn len(&self) -> usize {
+        self.args.len()
+    }
+
+    /// True when there are no captures.
+    pub fn is_empty(&self) -> bool {
+        self.args.is_empty()
+    }
+
+    /// The capture operands marshaled into storage buffers, in binding order.
+    pub fn args(&self) -> &[Operand] {
+        &self.args
+    }
+
+    /// Persistent device-buffer id for each capture, in `args` order.
+    pub fn arg_handles(&self) -> &[Option<DeviceHandleId>] {
+        &self.arg_handles
+    }
+
+    /// Read-only flag for each capture, in `args` order.
+    pub fn arg_read_only(&self) -> &[bool] {
+        &self.arg_read_only
+    }
+
+    /// i64→i32 narrowing flag for each capture, in `args` order.
+    pub fn arg_int_narrow(&self) -> &[bool] {
+        &self.arg_int_narrow
+    }
+
+    /// Element-wise mutable access to the capture operands for MIR passes
+    /// (SSA renaming, operand rewriting). Returns a slice, not the backing
+    /// `Vec`, so a visitor can rewrite operands in place but cannot change the
+    /// length and break the equal-length invariant.
+    pub fn args_mut(&mut self) -> &mut [Operand] {
+        &mut self.args
     }
 }
 
@@ -271,22 +387,12 @@ pub enum TerminatorKind {
         kernel: Operand,
         grid: Operand,
         block: Operand,
-        args: Vec<Operand>,
-        /// Persistent device-buffer id for each capture in `args`, in the same
-        /// order. `Some` marks a `gpu`-resident capture whose device buffer
-        /// survives across launches; `None` marks a host-resident capture
-        /// uploaded and read back per launch. Empty means every capture is
-        /// host-resident.
-        arg_handles: Vec<Option<DeviceHandleId>>,
-        /// Which args (storage buffers) are read-only.
-        /// `arg_read_only[i]` is true when the i-th capture is never written to
-        /// in the kernel body. Empty means no captures (impossible), or this
-        /// launch is legacy and all captures are assumed read_write.
-        arg_read_only: Vec<bool>,
-        /// Which args need i64→i32 narrowing on upload and i32→i64 widening on readback.
-        /// `arg_int_narrow[i]` is true when the i-th capture is an `Array<int, N>`.
-        /// Empty means no captures (impossible), or this launch is legacy and none need narrowing.
-        arg_int_narrow: Vec<bool>,
+        /// The capture operands and their three parallel per-capture metadata
+        /// vectors (device handles, read-only flags, int-narrowing flags),
+        /// bundled so the `len`-equality invariant holds by construction. See
+        /// [`GpuLaunchArgs`]. Scalar captures and uniform bounds below are
+        /// distinct fields and are never folded into these vectors.
+        launch_args: GpuLaunchArgs,
         /// Scalar captures (int, bool, f32) passed as WGSL uniform values.
         /// Empty if no scalar captures. Each entry is materialized to a local
         /// and its type is available from the type checker.
@@ -323,4 +429,82 @@ pub enum TerminatorKind {
         destination: Place,
         target: Option<BasicBlock>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mir::place::Local;
+
+    fn dummy_operand() -> Operand {
+        Operand::Copy(Place::new(Local(0)))
+    }
+
+    #[test]
+    fn gpu_launch_args_accepts_equal_lengths() {
+        let built = GpuLaunchArgs::new(
+            vec![dummy_operand(), dummy_operand()],
+            vec![None, None],
+            vec![true, false],
+            vec![false, true],
+        );
+        let args = built.expect("equal-length vectors must construct");
+        assert_eq!(args.len(), 2);
+        assert!(!args.is_empty());
+        assert_eq!(args.arg_read_only(), &[true, false]);
+        assert_eq!(args.arg_int_narrow(), &[false, true]);
+        assert_eq!(args.arg_handles().len(), 2);
+    }
+
+    #[test]
+    fn gpu_launch_args_accepts_no_captures() {
+        let args = GpuLaunchArgs::new(vec![], vec![], vec![], vec![])
+            .expect("empty launch must construct");
+        assert!(args.is_empty());
+        assert_eq!(args.len(), 0);
+    }
+
+    #[test]
+    fn gpu_launch_args_rejects_short_handles() {
+        let err = GpuLaunchArgs::new(
+            vec![dummy_operand(), dummy_operand()],
+            vec![None],
+            vec![true, false],
+            vec![false, false],
+        )
+        .expect_err("mismatched arg_handles must be rejected");
+        assert_eq!(err.field, "arg_handles");
+        assert_eq!(err.expected, 2);
+        assert_eq!(err.got, 1);
+    }
+
+    #[test]
+    fn gpu_launch_args_rejects_long_read_only() {
+        let err = GpuLaunchArgs::new(
+            vec![dummy_operand()],
+            vec![None],
+            vec![true, false],
+            vec![false],
+        )
+        .expect_err("mismatched arg_read_only must be rejected");
+        assert_eq!(err.field, "arg_read_only");
+    }
+
+    #[test]
+    fn gpu_launch_args_rejects_mismatched_int_narrow() {
+        let err = GpuLaunchArgs::new(vec![dummy_operand()], vec![None], vec![true], vec![])
+            .expect_err("mismatched arg_int_narrow must be rejected");
+        assert_eq!(err.field, "arg_int_narrow");
+        assert_eq!(err.got, 0);
+    }
+
+    #[test]
+    fn gpu_launch_args_mut_preserves_length() {
+        let mut args =
+            GpuLaunchArgs::new(vec![dummy_operand()], vec![None], vec![true], vec![false])
+                .expect("constructs");
+        args.args_mut()[0] = dummy_operand();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args.arg_read_only().len(), args.args().len());
+    }
 }

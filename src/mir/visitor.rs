@@ -125,10 +125,7 @@ pub trait Visitor {
                 kernel,
                 grid,
                 block: grid_block,
-                args,
-                arg_handles: _,
-                arg_read_only: _,
-                arg_int_narrow: _,
+                launch_args,
                 scalar_args,
                 uniform_bound_x,
                 uniform_bound_y,
@@ -139,7 +136,7 @@ pub trait Visitor {
                 self.visit_operand(kernel, block);
                 self.visit_operand(grid, block);
                 self.visit_operand(grid_block, block);
-                for arg in args {
+                for arg in launch_args.args() {
                     self.visit_operand(arg, block);
                 }
                 for scalar_arg in scalar_args {
@@ -343,10 +340,7 @@ pub trait MutVisitor {
                 kernel,
                 grid,
                 block: grid_block,
-                args,
-                arg_handles: _,
-                arg_read_only: _,
-                arg_int_narrow: _,
+                launch_args,
                 scalar_args,
                 uniform_bound_x,
                 uniform_bound_y,
@@ -357,7 +351,7 @@ pub trait MutVisitor {
                 self.visit_operand(kernel, block);
                 self.visit_operand(grid, block);
                 self.visit_operand(grid_block, block);
-                for arg in args {
+                for arg in launch_args.args_mut() {
                     self.visit_operand(arg, block);
                 }
                 for scalar_arg in scalar_args {

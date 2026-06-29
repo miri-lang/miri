@@ -9,7 +9,8 @@ use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
-    Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+    GpuLaunchArgs, Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::runtime_fns::{cow_fn, rt};
 use crate::type_checker::context::{
@@ -702,15 +703,15 @@ fn try_lower_kernel_launch(
             .push((kernel_name.clone(), workgroup_size));
     }
 
+    let launch_args = GpuLaunchArgs::new(call_args, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), *span, None))?;
+
     ctx.set_terminator(Terminator::new(
         TerminatorKind::GpuLaunch {
             kernel: kernel_op,
             grid: grid_op,
             block: block_op,
-            args: call_args,
-            arg_handles,
-            arg_read_only,
-            arg_int_narrow,
+            launch_args,
             scalar_args,
             uniform_bound_x: None,
             uniform_bound_y: None,
