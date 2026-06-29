@@ -139,10 +139,9 @@ mod desc_layout {
     pub(super) const UNIFORM_BOUND_X_VALUE: i32 = 112;
     pub(super) const UNIFORM_BOUND_Y_VALUE: i32 = 120;
     pub(super) const UNIFORM_BOUND_Z_VALUE: i32 = 128;
-    pub(super) const NUM_STORAGE_BUFS: i32 = 136;
-    pub(super) const SCALAR_INPUTS_PTR: i32 = 144;
-    pub(super) const SCALAR_INPUTS_LEN: i32 = 152;
-    pub(super) const DESC_SIZE: u32 = 160;
+    pub(super) const SCALAR_INPUTS_PTR: i32 = 136;
+    pub(super) const SCALAR_INPUTS_LEN: i32 = 144;
+    pub(super) const DESC_SIZE: u32 = 152;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -341,15 +340,6 @@ pub(crate) fn translate(
         bound_present_i64,
         slots.desc_addr,
         desc_layout::UNIFORM_BOUND_PRESENT,
-    );
-
-    // Store num_storage_bufs (= num_bufs, always equal to capture count).
-    let num_storage_i64 = builder.ins().iconst(cl_types::I64, num_bufs as i64);
-    builder.ins().store(
-        MemFlags::new(),
-        num_storage_i64,
-        slots.desc_addr,
-        desc_layout::NUM_STORAGE_BUFS,
     );
 
     let func_id = declare_launch_fn(module_ctx.module, ptr_ty)?;
@@ -767,6 +757,6 @@ mod tests {
 
     #[test]
     fn gpu_launch_desc_size_matches_runtime() {
-        assert_eq!(desc_layout::DESC_SIZE as usize, 160);
+        assert_eq!(desc_layout::DESC_SIZE as usize, 152);
     }
 }
