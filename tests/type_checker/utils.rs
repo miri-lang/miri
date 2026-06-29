@@ -436,3 +436,182 @@ fn generic_bounded_by_trait_is_not_resource() {
     );
     assert!(!is_resource(&g, &defs));
 }
+
+// GPU type-predicate coherence (F25).
+//
+// `gpu_scalar_class` is the single source of truth for scalar-leaf device
+// eligibility; the three GPU type predicates (`is_gpu_compatible`,
+// `is_gpu_buffer_element`, and the accelerable element bound) all derive from
+// it, so they can never disagree on a scalar. The matrix below is exhaustive
+// over every `TypeKind` — the classification match has no wildcard, so a new
+// variant cannot compile until it is classified — and asserts the capability
+// ladder `Storage ⊂ kernel-usable`.
+
+use miri::ast::factory::type_expr_non_null;
+use miri::ast::types::FunctionTypeData;
+use miri::type_checker::utils::{
+    gpu_scalar_class, is_accelerable, is_gpu_buffer_element, is_gpu_compatible, GpuScalarClass,
+};
+
+/// The expected scalar class of every `TypeKind`, restated independently of the
+/// production classifier. The match is exhaustive (no `_`): adding a `TypeKind`
+/// variant forces a deliberate classification decision here.
+fn expected_scalar_class(kind: &TypeKind) -> GpuScalarClass {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64 => GpuScalarClass::Storage,
+
+        TypeKind::Boolean | TypeKind::Void | TypeKind::Error | TypeKind::I128 | TypeKind::U128 => {
+            GpuScalarClass::KernelOnly
+        }
+
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
+    }
+}
+
+/// One representative value of every `TypeKind` variant — the universe the
+/// coherence matrix ranges over.
+fn one_of_every_type_kind() -> Vec<TypeKind> {
+    let elem = || Box::new(type_expr_non_null(make_type(TypeKind::Int)));
+    let ty = || Box::new(make_type(TypeKind::Int));
+    vec![
+        TypeKind::Int,
+        TypeKind::I8,
+        TypeKind::I16,
+        TypeKind::I32,
+        TypeKind::I64,
+        TypeKind::I128,
+        TypeKind::U8,
+        TypeKind::U16,
+        TypeKind::U32,
+        TypeKind::U64,
+        TypeKind::U128,
+        TypeKind::Float,
+        TypeKind::F32,
+        TypeKind::F64,
+        TypeKind::Boolean,
+        TypeKind::Void,
+        TypeKind::Error,
+        TypeKind::String,
+        TypeKind::Identifier,
+        TypeKind::RawPtr,
+        TypeKind::List(elem()),
+        TypeKind::Array(elem(), elem()),
+        TypeKind::Map(elem(), elem()),
+        TypeKind::Set(elem()),
+        TypeKind::Tuple(vec![type_expr_non_null(make_type(TypeKind::Int))]),
+        TypeKind::Result(elem(), elem()),
+        TypeKind::Future(elem()),
+        TypeKind::Option(ty()),
+        TypeKind::Meta(ty()),
+        TypeKind::Linear(ty()),
+        TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![],
+            return_type: None,
+        })),
+        TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
+        TypeKind::Custom("Foo".to_string(), None),
+    ]
+}
+
+#[test]
+fn gpu_scalar_class_agrees_with_independent_oracle() {
+    for kind in one_of_every_type_kind() {
+        assert_eq!(
+            gpu_scalar_class(&kind),
+            expected_scalar_class(&kind),
+            "gpu_scalar_class disagrees for {:?}",
+            kind
+        );
+    }
+}
+
+#[test]
+fn storage_class_is_a_subset_of_kernel_compatible() {
+    // Every storage-buffer element must also be kernel-body compatible: a value
+    // the device can persist must be a value the kernel can name.
+    for kind in one_of_every_type_kind() {
+        if is_gpu_buffer_element(&kind) {
+            assert!(
+                is_gpu_compatible(&kind),
+                "{:?} is a buffer element but not GPU-compatible",
+                kind
+            );
+        }
+    }
+}
+
+#[test]
+fn scalar_predicates_are_coherent_for_every_scalar_leaf() {
+    let defs: HashMap<String, TypeDefinition> = HashMap::new();
+    for kind in one_of_every_type_kind() {
+        let class = gpu_scalar_class(&kind);
+        if class == GpuScalarClass::Forbidden {
+            // Containers/context/generics are classified by their owning
+            // predicate, not by the scalar rule — skip them here.
+            continue;
+        }
+        let is_storage = class == GpuScalarClass::Storage;
+        // A scalar leaf is always kernel-body compatible.
+        assert!(
+            is_gpu_compatible(&kind),
+            "scalar leaf {:?} must be GPU-compatible",
+            kind
+        );
+        // Storage membership is the single gate for buffer-element AND binding
+        // eligibility — no scalar is accepted by one and rejected by the other.
+        assert_eq!(
+            is_gpu_buffer_element(&kind),
+            is_storage,
+            "buffer-element disagrees with scalar class for {:?}",
+            kind
+        );
+        assert_eq!(
+            is_accelerable(&kind, &defs),
+            is_storage,
+            "accelerable disagrees with scalar class for {:?}",
+            kind
+        );
+    }
+}
+
+#[test]
+fn boolean_is_kernel_only_not_bindable() {
+    // The original F25 incoherence: `Boolean` was accelerable (accepted at the
+    // binding) yet not a buffer element (rejected at capture). It must now be
+    // kernel-local only — usable inside a kernel, never a device buffer leaf.
+    let defs: HashMap<String, TypeDefinition> = HashMap::new();
+    assert_eq!(
+        gpu_scalar_class(&TypeKind::Boolean),
+        GpuScalarClass::KernelOnly
+    );
+    assert!(is_gpu_compatible(&TypeKind::Boolean));
+    assert!(!is_gpu_buffer_element(&TypeKind::Boolean));
+    assert!(!is_accelerable(&TypeKind::Boolean, &defs));
+}
