@@ -214,6 +214,24 @@ fn main()
     );
 }
 
+// A `bool` array cannot back a WGSL storage buffer (WGSL forbids `bool` in
+// `var<storage>`), so a gpu-resident binding over it must be rejected at the
+// binding site — not silently admitted here and only flagged later at a `gpu
+// forall` capture. This is the coherence guarantee: the binding gate and the
+// buffer-element gate agree on the element set.
+#[test]
+fn gpu_let_bool_array_is_rejected_at_binding() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu let g = [true, false]
+",
+        "does not implement 'Accelerable' and cannot be gpu-resident.",
+    );
+}
+
 #[test]
 fn host_string_binding_is_unaffected() {
     assert_type_checks(
