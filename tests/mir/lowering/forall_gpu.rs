@@ -210,7 +210,9 @@ fn main()
         .basic_blocks
         .iter()
         .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
-            Some(TerminatorKind::GpuLaunch { args, .. }) => Some(args.clone()),
+            Some(TerminatorKind::GpuLaunch { launch_args, .. }) => {
+                Some(launch_args.args().to_vec())
+            }
             _ => None,
         })
         .expect("expected GpuLaunch terminator");

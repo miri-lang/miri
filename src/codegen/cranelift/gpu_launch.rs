@@ -19,7 +19,7 @@ use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::CodegenError;
 use crate::mir::body::DeviceHandleId;
-use crate::mir::{Body, ExecutionModel, Local, Operand, Place};
+use crate::mir::{Body, ExecutionModel, GpuLaunchArgs, Local, Operand, Place};
 use cranelift_codegen::ir::{
     condcodes::IntCC, types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData,
     StackSlotKind, TrapCode, Value,
@@ -162,10 +162,7 @@ pub(crate) fn translate(
     kernel_op: &Operand,
     grid_op: &Operand,
     block_op: &Operand,
-    args: &[Operand],
-    arg_handles: &[Option<DeviceHandleId>],
-    _arg_read_only: &[bool],
-    arg_int_narrow: &[bool],
+    launch_args: &GpuLaunchArgs,
     _scalar_args: &[Operand],
     uniform_bound_x: &Option<Box<Operand>>,
     uniform_bound_y: &Option<Box<Operand>>,
@@ -173,6 +170,18 @@ pub(crate) fn translate(
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
+    let args = launch_args.args();
+    let arg_handles = launch_args.arg_handles();
+    let _arg_read_only = launch_args.arg_read_only();
+    let arg_int_narrow = launch_args.arg_int_narrow();
+    // The parallel per-capture vectors are written to the `#[repr(C)]`
+    // `GpuLaunchDesc` by index below; `GpuLaunchArgs` guarantees they are
+    // equal-length at construction, but assert the contract here so a future
+    // change that bypasses the builder fails at codegen, not at the GPU driver.
+    debug_assert_eq!(args.len(), arg_handles.len());
+    debug_assert_eq!(args.len(), _arg_read_only.len());
+    debug_assert_eq!(args.len(), arg_int_narrow.len());
+
     let kernel_name = extract_kernel_name(kernel_op)?;
     let kernel = module_ctx
         .kernel_registry

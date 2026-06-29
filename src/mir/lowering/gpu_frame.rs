@@ -22,7 +22,7 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
     BackendMetadata, BinOp, Body, Dimension, Discriminant, ExecutionModel, GpuBodyMetadata,
-    LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
+    GpuLaunchArgs, LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
 };
 
 use super::context::LoweringContext;
@@ -204,7 +204,7 @@ fn emit_frame_pass(
             body: kernel_body,
             captures: Vec::new(),
         });
-        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, captures, *span, uses_frame);
+        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, captures, *span, uses_frame)?;
     } else {
         let kernel_body = build_frame_kernel_runtime(
             ctx,
@@ -415,7 +415,7 @@ fn emit_gpu_frame_launch_literal(
     captures: &[forall_gpu::CaptureInfo],
     span: Span,
     uses_frame: bool,
-) {
+) -> Result<(), LoweringError> {
     let void_ty = Type::new(TypeKind::Void, span);
     let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
     let grid_x = forall_gpu::literal_grid_x(length, block_size);
@@ -443,10 +443,13 @@ fn emit_gpu_frame_launch_literal(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
+    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
 
     let mut all_scalar_ops = Vec::new();
     if uses_frame {
@@ -461,10 +464,7 @@ fn emit_gpu_frame_launch_literal(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: buffer_ops,
-            arg_handles,
-            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
-            arg_int_narrow,
+            launch_args,
             scalar_args: all_scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,
@@ -475,6 +475,7 @@ fn emit_gpu_frame_launch_literal(
         span,
     ));
     ctx.set_current_block(after_bb);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -521,10 +522,13 @@ fn emit_gpu_frame_launch_runtime(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
+    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
 
     let mut all_scalar_ops = Vec::new();
     if uses_frame {
@@ -541,10 +545,7 @@ fn emit_gpu_frame_launch_runtime(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: buffer_ops,
-            arg_handles,
-            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
-            arg_int_narrow,
+            launch_args,
             scalar_args: all_scalar_ops,
             uniform_bound_x: Some(Box::new(bounds_limit_op)),
             uniform_bound_y: None,

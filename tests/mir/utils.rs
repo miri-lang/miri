@@ -471,13 +471,8 @@ pub fn mir_lowering_gpu_fn_launch_test(
     let body = mir_lower_code(source);
     let launch = body.basic_blocks.iter().find_map(|bb| {
         if let Some(terminator) = &bb.terminator {
-            if let TerminatorKind::GpuLaunch {
-                args,
-                arg_read_only,
-                ..
-            } = &terminator.kind
-            {
-                return Some((args.len(), arg_read_only.clone()));
+            if let TerminatorKind::GpuLaunch { launch_args, .. } = &terminator.kind {
+                return Some((launch_args.len(), launch_args.arg_read_only().to_vec()));
             }
         }
         None
