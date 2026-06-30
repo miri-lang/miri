@@ -19,6 +19,7 @@ use crate::codegen::Backend;
 use crate::error::compiler::CompilerError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{Body, ExecutionModel};
+use crate::type_checker::GpuBufferInit;
 use manifest::{BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest};
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,14 +29,6 @@ use std::path::PathBuf;
 const MIRI_GPU_JS: &str = include_str!("../../../assets/web/miri-gpu.js");
 const MIRI_GPU_JS_FILENAME: &str = "miri-gpu.js";
 const INDEX_HTML_FILENAME: &str = "index.html";
-
-/// Initial data for a GPU buffer from a compile-time constant initializer.
-#[derive(Debug, Clone)]
-pub struct GpuBufferInit {
-    pub elem_type: String,
-    pub values: Vec<f64>,
-    pub length: Option<usize>, // Explicit length for sized allocations; None means infer from values.len()
-}
 
 /// Per-binding metadata for a kernel's storage buffer.
 #[derive(Debug, Clone)]
