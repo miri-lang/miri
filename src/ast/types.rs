@@ -259,6 +259,7 @@ pub fn resolve_element_type_kind(expr: &crate::ast::expression::Expression) -> O
         "u8" => Some(TypeKind::U8),
         "i128" => Some(TypeKind::I128),
         "u128" => Some(TypeKind::U128),
+        "f16" => Some(TypeKind::F16),
         "f32" => Some(TypeKind::F32),
         "f64" => Some(TypeKind::F64),
         _ => None,
@@ -319,6 +320,13 @@ pub enum TypeKind {
     U128,
     /// Arbitrary precision float.
     Float,
+    /// 16-bit floating point.
+    ///
+    /// Storage/arithmetic scalar for GPU kernels only (WGSL `f16`). There is no
+    /// CPU representation: the Cranelift backend has no `f16`, so a half-precision
+    /// value never materializes on the host path — it exists solely as a
+    /// device-buffer element and kernel-body scalar.
+    F16,
     /// 32-bit floating point.
     F32,
     /// 64-bit floating point.
@@ -413,6 +421,7 @@ impl TypeKind {
             | TypeKind::U64
             | TypeKind::U128
             | TypeKind::Float
+            | TypeKind::F16
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::Boolean
@@ -463,6 +472,7 @@ impl TypeKind {
             | TypeKind::U64
             | TypeKind::U128
             | TypeKind::Float
+            | TypeKind::F16
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::String
@@ -507,6 +517,7 @@ impl TypeKind {
             | TypeKind::U64
             | TypeKind::U128
             | TypeKind::Float
+            | TypeKind::F16
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::String
@@ -548,6 +559,7 @@ impl fmt::Display for TypeKind {
             TypeKind::U64 => f.write_str("u64"),
             TypeKind::U128 => f.write_str("u128"),
             TypeKind::Float => f.write_str("float"),
+            TypeKind::F16 => f.write_str("f16"),
             TypeKind::F32 => f.write_str("f32"),
             TypeKind::F64 => f.write_str("f64"),
             TypeKind::String => f.write_str("String"),
@@ -705,6 +717,7 @@ pub fn wgsl_scalar_name(kind: &TypeKind) -> Option<&'static str> {
     match kind {
         TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Some("i32"),
         TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
+        TypeKind::F16 => Some("f16"),
         TypeKind::F32 => Some("f32"),
         TypeKind::Int => Some("i32"), // Browser-portable: no i64
         TypeKind::I64 => Some("i64"), // Explicit i64 still uses i64

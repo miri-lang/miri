@@ -114,12 +114,16 @@ impl TypeChecker {
         }
 
         // Float literal compatible with any float type
-        if matches!(t2.kind, TypeKind::Float) && matches!(t1.kind, TypeKind::F32 | TypeKind::F64) {
+        if matches!(t2.kind, TypeKind::Float)
+            && matches!(t1.kind, TypeKind::F16 | TypeKind::F32 | TypeKind::F64)
+        {
             return Some(true);
         }
 
-        // F32/F64 compatible with Float variable
-        if matches!(t1.kind, TypeKind::Float) && matches!(t2.kind, TypeKind::F32 | TypeKind::F64) {
+        // F16/F32/F64 compatible with Float variable
+        if matches!(t1.kind, TypeKind::Float)
+            && matches!(t2.kind, TypeKind::F16 | TypeKind::F32 | TypeKind::F64)
+        {
             return Some(true);
         }
 
@@ -355,7 +359,10 @@ impl TypeChecker {
 
     /// Checks inner type compatibility for collections.
     fn is_float_kind(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64)
+        matches!(
+            kind,
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64
+        )
     }
 
     fn check_inner_type_compatible(

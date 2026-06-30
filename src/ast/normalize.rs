@@ -355,6 +355,7 @@ fn normalize_type_children(kind: &mut TypeKind) {
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String
@@ -396,6 +397,7 @@ fn canonicalize_collection(kind: TypeKind) -> TypeKind {
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String

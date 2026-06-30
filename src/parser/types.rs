@@ -28,6 +28,7 @@ fn primitive_type_kind(name: &str) -> Option<TypeKind> {
         "u64" => TypeKind::U64,
         "u128" => TypeKind::U128,
         "float" => TypeKind::Float,
+        "f16" => TypeKind::F16,
         "f32" => TypeKind::F32,
         "f64" => TypeKind::F64,
         "bool" => TypeKind::Boolean,

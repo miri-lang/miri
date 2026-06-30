@@ -249,6 +249,7 @@ pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::U32
         | TypeKind::U64
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64 => GpuScalarClass::Storage,
 
@@ -672,6 +673,7 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::Boolean
@@ -725,6 +727,7 @@ pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::Boolean
@@ -752,6 +755,58 @@ fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Typ
     } else {
         None
     }
+}
+
+/// Returns `true` when `f16` appears anywhere in `kind` — as the scalar itself
+/// or as a container element (`Array<f16, N>`, `List<f16>`, a tuple field, …).
+///
+/// `f16` is a GPU-only scalar with no host (Cranelift) representation, so a
+/// host-resident binding or a non-`gpu` function carrying it is rejected at the
+/// type checker. Recurses through both the canonical collection variants and the
+/// post-normalization `Custom` envelopes; `Option`/`Meta`/`Linear` wrap a `Type`
+/// directly, every other container holds element `Expression`s.
+pub fn type_mentions_f16(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::F16 => true,
+        TypeKind::List(e) | TypeKind::Set(e) | TypeKind::Future(e) => expr_mentions_f16(e),
+        TypeKind::Array(e, _) => expr_mentions_f16(e),
+        TypeKind::Map(k, v) | TypeKind::Result(k, v) => {
+            expr_mentions_f16(k) || expr_mentions_f16(v)
+        }
+        TypeKind::Tuple(elems) => elems.iter().any(expr_mentions_f16),
+        TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
+            type_mentions_f16(&inner.kind)
+        }
+        TypeKind::Custom(_, Some(args)) => args.iter().any(expr_mentions_f16),
+        TypeKind::Generic(_, Some(arg), _) => type_mentions_f16(&arg.kind),
+        TypeKind::Custom(_, None)
+        | TypeKind::Generic(_, None, _)
+        | TypeKind::Function(_)
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error => false,
+    }
+}
+
+fn expr_mentions_f16(expr: &crate::ast::expression::Expression) -> bool {
+    matches!(&expr.node, ExpressionKind::Type(ty, _) if type_mentions_f16(&ty.kind))
 }
 
 // Re-export the shared element-type resolver from ast::types so it is available
@@ -798,6 +853,7 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::Boolean
@@ -913,7 +969,7 @@ fn estimated_type_size(
 ) -> usize {
     match kind {
         TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
-        TypeKind::I16 | TypeKind::U16 => 2,
+        TypeKind::I16 | TypeKind::U16 | TypeKind::F16 => 2,
         TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
         TypeKind::Int
         | TypeKind::I64
@@ -1028,6 +1084,7 @@ impl TypeChecker {
                 | TypeKind::U32
                 | TypeKind::U64
                 | TypeKind::U128
+                | TypeKind::F16
                 | TypeKind::F32
                 | TypeKind::F64
         )

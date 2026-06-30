@@ -203,6 +203,7 @@ fn buffer_element_type_string(param_ty: &TypeKind) -> String {
         match kind {
             TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Some("i32"),
             TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
+            TypeKind::F16 => Some("f16"),
             TypeKind::F32 => Some("f32"),
             TypeKind::Boolean => Some("bool"),
             TypeKind::Int => Some("i32"),
@@ -272,6 +273,7 @@ fn buffer_element_type_string(param_ty: &TypeKind) -> String {
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String

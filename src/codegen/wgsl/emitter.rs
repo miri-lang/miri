@@ -30,7 +30,14 @@ impl Emitter {
     }
 
     pub(super) fn finish(self) -> String {
-        self.output
+        // WGSL requires `enable f16;` before any other global declaration when
+        // the module names the `f16` type. The substring is unambiguous: no
+        // other WGSL scalar spelling (`i32`/`u32`/`f32`/`f64`) contains it.
+        if self.output.contains("f16") {
+            format!("enable f16;\n\n{}", self.output)
+        } else {
+            self.output
+        }
     }
 
     pub(super) fn emit_helper(&mut self, name: &str, body: &Body) -> Result<(), CodegenError> {
@@ -1655,7 +1662,8 @@ impl<'a> BodyEmitter<'a> {
                 | crate::codegen::wgsl::types::WgslScalar::I64 => "0",
                 crate::codegen::wgsl::types::WgslScalar::U32
                 | crate::codegen::wgsl::types::WgslScalar::U64 => "0u",
-                crate::codegen::wgsl::types::WgslScalar::F32
+                crate::codegen::wgsl::types::WgslScalar::F16
+                | crate::codegen::wgsl::types::WgslScalar::F32
                 | crate::codegen::wgsl::types::WgslScalar::F64 => "0.0",
                 crate::codegen::wgsl::types::WgslScalar::Bool => "false",
             };
@@ -1669,7 +1677,8 @@ impl<'a> BodyEmitter<'a> {
                 | crate::codegen::wgsl::types::WgslScalar::I64 => Ok("0".to_string()),
                 crate::codegen::wgsl::types::WgslScalar::U32
                 | crate::codegen::wgsl::types::WgslScalar::U64 => Ok("0u".to_string()),
-                crate::codegen::wgsl::types::WgslScalar::F32
+                crate::codegen::wgsl::types::WgslScalar::F16
+                | crate::codegen::wgsl::types::WgslScalar::F32
                 | crate::codegen::wgsl::types::WgslScalar::F64 => Ok("0.0".to_string()),
                 crate::codegen::wgsl::types::WgslScalar::Bool => Ok("false".to_string()),
             }
@@ -1856,6 +1865,7 @@ fn render_integer(i: &IntegerLiteral, ty: &TypeKind) -> String {
         | TypeKind::I32
         | TypeKind::I128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::Boolean
@@ -1890,6 +1900,7 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         FloatLiteral::F64(bits) => format!("{:?}", f64::from_bits(*bits)),
     };
     match ty {
+        TypeKind::F16 => format!("{}h", body), // `h` suffix → f16 literal (needs `enable f16;`)
         TypeKind::F32 => body,
         TypeKind::Float | TypeKind::F64 => format!("{}lf", body),
         TypeKind::Int
