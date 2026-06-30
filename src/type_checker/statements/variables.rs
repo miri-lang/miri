@@ -45,7 +45,9 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
-use crate::type_checker::utils::{is_accelerable, is_gpu_compatible, resolve_element_type_kind};
+use crate::type_checker::utils::{
+    is_accelerable, is_gpu_compatible, resolve_element_type_kind, type_mentions_f16,
+};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -115,6 +117,7 @@ impl TypeChecker {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
         self.check_gpu_residency_type(decl, &inferred_type, context, span);
+        self.check_host_f16(decl, &inferred_type, context, span);
         let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
@@ -196,6 +199,33 @@ impl TypeChecker {
         self.report_error(
             format!(
                 "'{}' does not implement 'Accelerable' and cannot be gpu-resident.",
+                inferred_type
+            ),
+            span,
+        );
+    }
+
+    /// Rejects an `f16` value on the host path. `f16` is a GPU-only scalar with
+    /// no Cranelift representation, so it is admitted only in a `gpu let`/`gpu
+    /// var` binding (gpu-resident) or inside a `gpu fn` body (a kernel-body
+    /// value). A plain host `let`/`var` carrying it — directly or as a
+    /// collection element — is a compile error.
+    fn check_host_f16(
+        &mut self,
+        decl: &VariableDeclaration,
+        inferred_type: &Type,
+        context: &Context,
+        span: Span,
+    ) {
+        if decl.residency == BindingResidency::Gpu || context.in_gpu_function {
+            return;
+        }
+        if !type_mentions_f16(&inferred_type.kind) {
+            return;
+        }
+        self.report_error(
+            format!(
+                "'{}' uses 'f16', a GPU-only type with no host representation; use it inside a 'gpu' binding or a 'gpu fn'/'gpu forall'",
                 inferred_type
             ),
             span,

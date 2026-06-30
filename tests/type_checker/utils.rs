@@ -468,6 +468,7 @@ fn expected_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::U32
         | TypeKind::U64
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64 => GpuScalarClass::Storage,
 
@@ -512,6 +513,7 @@ fn one_of_every_type_kind() -> Vec<TypeKind> {
         TypeKind::U64,
         TypeKind::U128,
         TypeKind::Float,
+        TypeKind::F16,
         TypeKind::F32,
         TypeKind::F64,
         TypeKind::Boolean,

@@ -88,6 +88,108 @@ mod types {
     use super::super::utils::assert_compiler_error;
     use super::assert_gpu_wgsl_valid;
 
+    /// An `f16` storage buffer emits an `enable f16;` directive (required before
+    /// any other WGSL global declaration) and binds the buffer as `array<f16>`.
+    /// `f16` is GPU-only and has no literal syntax, so the buffer is built with
+    /// the sized `Array<f16, N>()` constructor.
+    #[test]
+    fn f16_kernel_emits_enable_directive_and_storage_type() {
+        let wgsl = super::super::helpers::compile_to_wgsl(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu let b = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] + b[i]
+",
+        );
+        assert!(
+            wgsl.starts_with("enable f16;"),
+            "f16 kernel must begin with the `enable f16;` directive, got:\n{}",
+            wgsl
+        );
+        assert!(
+            wgsl.contains("array<f16>"),
+            "f16 buffer must bind as `array<f16>`, got:\n{}",
+            wgsl
+        );
+    }
+
+    #[test]
+    fn f16_buffer_add_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu let b = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] + b[i]
+",
+        );
+    }
+
+    #[test]
+    fn f16_buffer_mul_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu let b = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * b[i]
+",
+        );
+    }
+
+    /// Fused multiply-add over three `f16` buffers — exercises a two-operator
+    /// `f16` expression tree, the densest arithmetic shape in the per-op grid.
+    #[test]
+    fn f16_buffer_madd_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu let b = Array<f16, 4>()
+    gpu let c = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * b[i] + c[i]
+",
+        );
+    }
+
+    /// `f16` has no host (Cranelift) representation, so a plain host `let`
+    /// carrying it — here a host `Array<f16, 4>` — is rejected at the type
+    /// checker rather than reaching CPU codegen.
+    #[test]
+    fn f16_on_host_path_is_rejected() {
+        assert_compiler_error(
+            "
+use system.collections.array
+
+fn main()
+    let a = Array<f16, 4>()
+    let _ = a
+",
+            "GPU-only type",
+        );
+    }
+
     #[test]
     fn int_buffer_add_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(

@@ -184,6 +184,7 @@ fn scalar_name_from_identifier(type_name: &str) -> String {
         "u16" => Some(TypeKind::U16),
         "u32" => Some(TypeKind::U32),
         "u64" => Some(TypeKind::U64),
+        "f16" => Some(TypeKind::F16),
         "f32" => Some(TypeKind::F32),
         "float" => Some(TypeKind::Float),
         "f64" => Some(TypeKind::F64),

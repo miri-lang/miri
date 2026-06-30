@@ -1146,6 +1146,7 @@ impl TypeChecker {
             | TypeKind::U64
             | TypeKind::U128
             | TypeKind::Float
+            | TypeKind::F16
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::Boolean

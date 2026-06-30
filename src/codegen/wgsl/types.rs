@@ -18,6 +18,7 @@ use crate::error::CodegenError;
 pub enum WgslScalar {
     I32,
     U32,
+    F16,
     F32,
     Bool,
     I64,
@@ -31,6 +32,7 @@ impl WgslScalar {
         match self {
             WgslScalar::I32 => "i32",
             WgslScalar::U32 => "u32",
+            WgslScalar::F16 => "f16",
             WgslScalar::F32 => "f32",
             WgslScalar::Bool => "bool",
             WgslScalar::I64 => "i64",
@@ -55,6 +57,7 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
     match kind {
         TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Ok(WgslScalar::I32),
         TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Ok(WgslScalar::U32),
+        TypeKind::F16 => Ok(WgslScalar::F16),
         TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Boolean => Ok(WgslScalar::Bool),
         TypeKind::Int => Ok(WgslScalar::I32), // Browser-portable: no i64
@@ -217,6 +220,7 @@ fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError>
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String
