@@ -55,9 +55,15 @@ impl TypeChecker {
         context: &Context,
     ) -> Result<Type, String> {
         let left_is_int = self.is_integer(left);
-        let left_is_float = matches!(left.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64);
+        let left_is_float = matches!(
+            left.kind,
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64
+        );
         let right_is_int = self.is_integer(right);
-        let right_is_float = matches!(right.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64);
+        let right_is_float = matches!(
+            right.kind,
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64
+        );
 
         // Disallow mixed int/float operations
         if (left_is_int && right_is_float) || (left_is_float && right_is_int) {

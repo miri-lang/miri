@@ -29,8 +29,12 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // Platform-dependent integer
         TypeKind::Int => ptr_ty,
 
-        // Floating point types
-        TypeKind::F32 => types::F32,
+        // Floating point types.
+        //
+        // `F16` has no Cranelift IR scalar; the type checker rejects it outside
+        // GPU contexts, so it never reaches host codegen for a valid program.
+        // It maps to `F32` here only as a documented defensive fallback.
+        TypeKind::F16 | TypeKind::F32 => types::F32,
         TypeKind::F64 | TypeKind::Float => types::F64,
 
         // Boolean is represented as I8

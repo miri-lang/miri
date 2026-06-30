@@ -595,6 +595,7 @@ unsafe fn new_storage_buffer_with_upload(
 pub fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), GpuError> {
     let needs_int64 = wgsl_uses_scalar(wgsl, "i64") || wgsl_uses_scalar(wgsl, "u64");
     let needs_f64 = wgsl_uses_scalar(wgsl, "f64");
+    let needs_f16 = wgsl_uses_scalar(wgsl, "f16");
     let needs_subgroup = wgsl.contains("subgroup")
         || wgsl.contains("SUBGROUP_SIZE")
         || wgsl.contains("SUBGROUP_INVOCATION_ID");
@@ -607,6 +608,11 @@ pub fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(
     if needs_f64 && !enabled.contains(Features::SHADER_F64) {
         return Err(GpuError::UnsupportedScalar(
             "kernel uses f64 but the adapter does not support Features::SHADER_F64".into(),
+        ));
+    }
+    if needs_f16 && !enabled.contains(Features::SHADER_F16) {
+        return Err(GpuError::UnsupportedScalar(
+            "kernel uses f16 but the adapter does not support Features::SHADER_F16".into(),
         ));
     }
     if needs_subgroup && !enabled.contains(Features::SUBGROUP) {
@@ -1348,5 +1354,30 @@ mod gpu_launch_error_message_tests {
         assert!(msg.starts_with("Runtime error: GPU"));
         assert!(msg.contains("grid dimensions exceed device limits"));
         assert!(msg.contains("reduce the loop range"));
+    }
+
+    #[test]
+    fn f16_kernel_rejected_without_shader_f16_feature() {
+        let wgsl = "enable f16;\n@group(0) @binding(0) var<storage> a: array<f16>;";
+        let err = super::check_required_shader_features(wgsl, super::Features::empty())
+            .expect_err("an f16 kernel must be rejected when SHADER_F16 is absent");
+        match err {
+            GpuError::UnsupportedScalar(msg) => assert!(msg.contains("f16")),
+            other => panic!("expected UnsupportedScalar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn f16_kernel_accepted_with_shader_f16_feature() {
+        let wgsl = "enable f16;\n@group(0) @binding(0) var<storage> a: array<f16>;";
+        super::check_required_shader_features(wgsl, super::Features::SHADER_F16)
+            .expect("an f16 kernel must pass when SHADER_F16 is enabled");
+    }
+
+    #[test]
+    fn non_f16_kernel_does_not_require_shader_f16_feature() {
+        let wgsl = "@group(0) @binding(0) var<storage> a: array<f32>;";
+        super::check_required_shader_features(wgsl, super::Features::empty())
+            .expect("an f32 kernel must not require SHADER_F16");
     }
 }

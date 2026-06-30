@@ -119,6 +119,7 @@ pub fn field_layout(
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String
@@ -299,6 +300,7 @@ pub fn aggregate_size(
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::Float
+        | TypeKind::F16
         | TypeKind::F32
         | TypeKind::F64
         | TypeKind::String
