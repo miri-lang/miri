@@ -36,12 +36,15 @@ pub mod context;
 pub mod escape_analysis;
 pub mod expressions;
 mod generics;
+mod gpu_buffer_init;
 mod operators;
 pub mod statements;
 pub mod use_after_move;
 pub mod utils;
 
 use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
+
+pub use gpu_buffer_init::GpuBufferInit;
 
 /// Extracts a `Type` from an AST type expression without a full `TypeChecker`.
 ///
@@ -129,6 +132,10 @@ pub struct TypeChecker {
     /// Populated during function declaration checking; used in GPU kernel launch
     /// to determine which buffers are writable.
     pub(crate) function_out_params: std::collections::HashMap<String, Vec<bool>>,
+    /// Initial host data for `gpu` buffers bound to compile-time constant
+    /// literals, keyed by binding name. Populated at the end of [`check`] and
+    /// consumed by the web-gpu bundle emitter.
+    pub gpu_buffer_inits: HashMap<String, GpuBufferInit>,
 }
 
 impl Default for TypeChecker {
@@ -170,6 +177,7 @@ impl TypeChecker {
             entry_source_path: None,
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
+            gpu_buffer_inits: HashMap::new(),
         }
     }
 
@@ -236,6 +244,7 @@ impl TypeChecker {
         self.run_pass_use_after_move(program, &context);
 
         if self.errors.is_empty() {
+            self.collect_gpu_buffer_initializers(program);
             Ok(())
         } else {
             Err(self.errors.clone())
