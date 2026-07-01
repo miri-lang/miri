@@ -1181,6 +1181,52 @@ impl TypeChecker {
         }
     }
 
+    /// Resolves a generic class's type-argument expressions to concrete types
+    /// for the instantiation registry. Returns `None` (recording nothing) if any
+    /// argument is not a type expression — value-generic slots (e.g. the `3` in
+    /// `Wrap<int, 3>`) are sizes, not types, so such a tuple is not a pure
+    /// type-argument instantiation. Resolution is non-reporting: each argument is
+    /// confirmed to be a type expression before it is resolved, so this scan never
+    /// injects a spurious error for a value-generic argument.
+    pub(crate) fn resolve_type_arg_tuple(
+        &mut self,
+        args: &[Expression],
+        context: &Context,
+    ) -> Option<Vec<Type>> {
+        let mut resolved = Vec::with_capacity(args.len());
+        for arg in args {
+            if self.extract_type_from_expression(arg).is_err() {
+                return None;
+            }
+            resolved.push(self.resolve_type_expression(arg, context));
+        }
+        Some(resolved)
+    }
+
+    /// Records a generic class instantiation under its class name, keeping the
+    /// resolved type-argument tuples deduplicated by their kinds (spans ignored).
+    /// A tuple containing an unresolved (`Error`) argument is not recorded, so
+    /// the registry only ever holds concrete instantiations.
+    pub(crate) fn record_generic_class_instantiation(&mut self, name: &str, args: Vec<Type>) {
+        if args.iter().any(|ty| ty.kind == TypeKind::Error) {
+            return;
+        }
+        let tuples = self
+            .generic_class_instantiations
+            .entry(name.to_string())
+            .or_default();
+        let already_recorded = tuples.iter().any(|existing| {
+            existing.len() == args.len()
+                && existing
+                    .iter()
+                    .zip(&args)
+                    .all(|(lhs, rhs)| lhs.kind == rhs.kind)
+        });
+        if !already_recorded {
+            tuples.push(args);
+        }
+    }
+
     // ==================== Type Expression Helpers ====================
 
     /// Creates a type expression from a Type.
