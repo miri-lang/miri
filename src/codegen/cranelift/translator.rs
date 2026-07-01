@@ -74,6 +74,11 @@ pub struct TypeCtx<'a> {
     /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
     /// that holds the incoming pointer. Used by the Return terminator to write back.
     pub out_param_ptr_vars: &'a HashMap<Local, Variable>,
+    /// Concrete type-argument tuples recorded for each generic class. Only the
+    /// drop-thunk path populates this; other translation sites leave it empty.
+    /// Used to resolve a generic class's bare-generic field to the concrete type
+    /// of its instantiation when deciding the field's drop semantics.
+    pub generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
 }
 
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
@@ -193,12 +198,16 @@ impl<'a> FunctionTranslator<'a> {
             Self::setup_entry_params(&mut builder, body, &locals, &blocks, self.ptr_type);
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
+        // Struct/class drop thunks are generated on a separate path; normal
+        // function translation never resolves generic-class field drops.
+        let no_instantiations = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             type_definitions: self.type_definitions,
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
+            generic_class_instantiations: &no_instantiations,
         };
 
         Self::translate_blocks(

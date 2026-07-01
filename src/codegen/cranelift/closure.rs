@@ -101,12 +101,14 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
+        let no_instantiations = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             type_definitions,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
+            generic_class_instantiations: &no_instantiations,
         };
 
         for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
