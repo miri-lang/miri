@@ -247,6 +247,94 @@ println(b.get())
     );
 }
 
+// A trait default method returning `T` monomorphizes per instantiation: the
+// class inherits the default (does not override it), and a `Box<float>` receiver
+// dispatches to a body whose return/parameter types are the concrete `float`, so
+// the value round-trips at full precision instead of through an integer slot.
+#[test]
+fn generic_class_trait_default_returning_type_param_monomorphizes() {
+    assert_runs_with_output(
+        "
+trait Gettable<T>
+    fn echo(x T) T
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<float>(value: 3.5)
+println(f\"{b.echo(1.5)}\")
+",
+        "1.5",
+    );
+}
+
+// The int instantiation of the same trait default keeps its pointer-width body,
+// proving the mangled dispatch selects the right monomorphization per receiver.
+#[test]
+fn generic_class_trait_default_returning_type_param_int_instantiation() {
+    assert_runs_with_output(
+        "
+trait Gettable<T>
+    fn echo(x T) T
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<int>(value: 7)
+println(f\"{b.echo(9) + b.echo(3)}\")
+",
+        "12",
+    );
+}
+
+// A managed `T` inheriting a trait-default returning `T` routes through the bare
+// `Box_echo` body (managed args are already pointer-shaped, so no scalar-width
+// monomorphization is needed) and frees cleanly — `assert_runs_with_output`
+// fails on a leak, so this guards the managed trait-default path too.
+#[test]
+fn generic_class_trait_default_returning_managed_type_param() {
+    assert_runs_with_output(
+        "
+trait Gettable<T>
+    fn echo(x T) T
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<String>(value: \"hi\")
+println(b.echo(\"world\"))
+",
+        "world",
+    );
+}
+
+// When a generic class overrides the trait default with its own method, the
+// own-method monomorphization path supplies the mangled body and the trait
+// default is skipped — no double emission, and the override result is used.
+#[test]
+fn generic_class_overriding_trait_default_uses_own_method() {
+    assert_runs_with_output(
+        "
+trait Gettable<T>
+    fn echo(x T) T
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+    fn echo(x T) T
+        return x
+
+let b = Box<float>(value: 3.5)
+println(f\"{b.echo(2.5)}\")
+",
+        "2.5",
+    );
+}
+
 // Regression guard: a `List` of managed elements must still free its elements
 // even though generic-class drop thunks now exist. `List` routes through the
 // runtime `miri_rt_list_free` decref path, never the generic-class thunk, so a
