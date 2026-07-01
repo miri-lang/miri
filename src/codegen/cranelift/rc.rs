@@ -25,6 +25,19 @@ use cranelift_object::ObjectModule;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Mangle a generic class name with a concrete instantiation's type arguments,
+/// producing the per-instantiation drop-thunk suffix (`Box` + `[String]` →
+/// `Box__String`). Shares `mangle_generic_name`'s scheme so the drop call site
+/// and the thunk-generation site agree byte-for-byte; the parameter names are
+/// irrelevant to the mangling, so an empty placeholder name is used.
+pub(crate) fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
+    let pairs: Vec<(String, Type)> = type_args
+        .iter()
+        .map(|ty| (String::new(), ty.clone()))
+        .collect();
+    crate::mir::lowering::dispatch::mangle_generic_name(class_name, &pairs)
+}
+
 impl<'a> FunctionTranslator<'a> {
     /// Address of the runtime decref helper for an element of `shape`, or
     /// `None` when the shape needs no decref (primitives, void, etc.).
@@ -163,39 +176,29 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// True when a generic class's bare-generic field is a genuine no-op to drop.
+    /// Resolve a generic class's bare-generic field to its concrete kind for one
+    /// instantiation.
     ///
-    /// Resolves the field's generic parameter to the concrete type of every
-    /// recorded instantiation. Returns true only when at least one instantiation
-    /// exists and each pins the field to a non-managed scalar — nothing to
-    /// reference-count, so the shared bare-name thunk can safely skip it. A
-    /// managed or absent instantiation returns false so the caller keeps the
-    /// fail-closed rejection (per-instantiation decref thunks land in a later step).
-    fn generic_field_drops_to_noop(
+    /// `inst_args` is the recorded instantiation's ordered type arguments. When
+    /// the field is a bare generic parameter (`value T`), it is resolved to the
+    /// argument at the parameter's declared position. Returns `None` when the
+    /// field is not a bare generic, or when no per-instantiation arguments are
+    /// available (the shared bare-name thunk), so the caller skips the field.
+    fn generic_field_concrete_kind(
         class_def: &ClassDefinition,
         field_kind: &TypeKind,
-        instantiations: Option<&Vec<Vec<crate::ast::types::Type>>>,
-    ) -> bool {
+        inst_args: Option<&[Type]>,
+    ) -> Option<TypeKind> {
         let gen_name = if let TypeKind::Generic(name, _, _) = field_kind {
             name.as_str()
         } else if let TypeKind::Custom(name, None) = field_kind {
             name.as_str()
         } else {
-            return false;
+            return None;
         };
-        let Some(generics) = class_def.generics.as_ref() else {
-            return false;
-        };
-        let Some(param_idx) = generics.iter().position(|g| g.name == gen_name) else {
-            return false;
-        };
-        match instantiations {
-            Some(tuples) if !tuples.is_empty() => tuples.iter().all(|args| {
-                args.get(param_idx)
-                    .is_some_and(|t| crate::mir::lowering::is_monomorphizable_scalar(&t.kind))
-            }),
-            _ => false,
-        }
+        let generics = class_def.generics.as_ref()?;
+        let param_idx = generics.iter().position(|g| g.name == gen_name)?;
+        inst_args?.get(param_idx).map(|t| t.kind.clone())
     }
 
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
@@ -451,8 +454,16 @@ impl<'a> FunctionTranslator<'a> {
             // miri_rt_string_free takes the payload pointer (not header) — it
             // calls free_with_rc internally.
             Self::call_rt_string_free(builder, ctx, ptr)
-        } else if let TypeKind::Custom(name, _) = kind {
-            Self::emit_drop_custom(builder, ctx, name, ptr, header_ptr, type_ctx)
+        } else if let TypeKind::Custom(name, args) = kind {
+            Self::emit_drop_custom(
+                builder,
+                ctx,
+                name,
+                args.as_deref(),
+                ptr,
+                header_ptr,
+                type_ctx,
+            )
         } else if matches!(kind, TypeKind::Function(_)) {
             Self::emit_drop_closure(builder, ctx, ptr, header_ptr, type_ctx)
         } else {
@@ -605,6 +616,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
+        type_args: Option<&[Expression]>,
         ptr: Value,
         header_ptr: Value,
         type_ctx: &TypeCtx,
@@ -612,9 +624,61 @@ impl<'a> FunctionTranslator<'a> {
         let needs_thunk = Self::has_managed_fields(name, type_ctx.type_definitions)
             || Self::type_has_user_drop(name, type_ctx.type_definitions);
         if needs_thunk {
-            Self::call_drop_thunk(builder, ctx, name, ptr, type_ctx.ptr_type)
+            // A generic class instantiated at a recorded set of type arguments
+            // dispatches to its per-instantiation drop thunk (`__drop_Box__String`)
+            // so a managed field is DecRef'd and a scalar field skipped, each per
+            // instantiation. Non-generic types and unrecorded instantiations use
+            // the bare `__drop_Name` thunk.
+            let thunk_target = Self::generic_drop_thunk_name_part(name, type_args, type_ctx);
+            Self::call_drop_thunk(builder, ctx, &thunk_target, ptr, type_ctx.ptr_type)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
+        }
+    }
+
+    /// The `__drop_` suffix to call for a Custom type: the mangled
+    /// `Box__String` for a generic class whose instantiation is recorded, else
+    /// the bare `Box`.
+    ///
+    /// Gated on the instantiation registry so the emitted call always targets a
+    /// thunk `generate_type_drop_functions` actually defined — both sides mangle
+    /// through the same `mangle_generic_name`, so a registry hit guarantees the
+    /// symbol exists.
+    fn generic_drop_thunk_name_part(
+        class_name: &str,
+        type_args: Option<&[Expression]>,
+        type_ctx: &TypeCtx,
+    ) -> String {
+        let Some(TypeDefinition::Class(class_def)) = type_ctx.type_definitions.get(class_name)
+        else {
+            return class_name.to_string();
+        };
+        if class_def.generics.is_none() {
+            return class_name.to_string();
+        }
+        let Some(args) = type_args else {
+            return class_name.to_string();
+        };
+        let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
+        for arg in args {
+            let ExpressionKind::Type(ty, _) = &arg.node else {
+                return class_name.to_string();
+            };
+            concrete.push((**ty).clone());
+        }
+        let want = mangle_class_instantiation(class_name, &concrete);
+        let recorded = type_ctx
+            .generic_class_instantiations
+            .get(class_name)
+            .is_some_and(|tuples| {
+                tuples
+                    .iter()
+                    .any(|tuple| mangle_class_instantiation(class_name, tuple) == want)
+            });
+        if recorded {
+            want
+        } else {
+            class_name.to_string()
         }
     }
 
@@ -690,6 +754,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         type_name: &str,
+        inst_args: Option<&[Type]>,
         payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
@@ -720,31 +785,28 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Class(class_def) => {
                 use crate::type_checker::context::collect_class_fields_all;
                 let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
-                // A generic class shares a single bare-name `__drop_TypeName` thunk
-                // across every `<T>` instantiation, so a field whose type is a bare
-                // generic parameter has no concrete kind at thunk-emission time.
-                // Resolve it against the recorded instantiations: when every
-                // instantiation makes the field a pointer-width integer (non-managed,
-                // nothing to reference-count), the drop is a genuine no-op and the
-                // field is dropped from the DecRef set. A managed or non-pointer-width
-                // instantiation still cannot be encoded by one bare-name thunk, so it
-                // is rejected — the leak must not silently ship.
-                let instantiations = type_ctx.generic_class_instantiations.get(type_name);
+                // A bare-generic field (`value T`) has no concrete kind in the class
+                // definition. The per-instantiation drop thunk (`__drop_Box__String`)
+                // supplies `inst_args`, so the field resolves to its concrete kind:
+                // a managed one (`String`) joins the DecRef set at that kind, a scalar
+                // one (`float`) is a genuine no-op and is skipped. The shared bare-name
+                // thunk (`inst_args = None`) is only reached as a collection element's
+                // decref helper; there the direct drop already routed through the
+                // mangled thunk, so an unresolvable generic field is skipped here.
                 let mut managed_fields: Vec<(usize, TypeKind)> = Vec::new();
-                for (idx, (field_name, fi)) in all_fields.iter().enumerate() {
+                for (idx, (_field_name, fi)) in all_fields.iter().enumerate() {
                     let kind = &fi.ty.kind;
                     if class_def.generics.is_some()
                         && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
                     {
-                        if Self::generic_field_drops_to_noop(class_def, kind, instantiations) {
-                            continue;
+                        if let Some(concrete) =
+                            Self::generic_field_concrete_kind(class_def, kind, inst_args)
+                        {
+                            if is_field_managed(&concrete) {
+                                managed_fields.push((idx, concrete));
+                            }
                         }
-                        return Err(CodegenError::Internal(format!(
-                            "generic class '{type_name}' has a bare-generic field '{field_name}' \
-                             whose drop semantics depend on the instantiation; \
-                             bare-name drop thunks cannot encode this. Use a concrete wrapper \
-                             type (e.g. `List<T>`) or wait for per-instantiation mangling."
-                        )));
+                        continue;
                     }
                     if is_field_managed(kind) {
                         managed_fields.push((idx, kind.clone()));
@@ -1080,20 +1142,31 @@ impl<'a> FunctionTranslator<'a> {
     /// This function is called once per managed concrete type during codegen,
     /// before any user functions are compiled, so the thunk symbols are available
     /// when user code later references them via Import declarations.
+    /// `type_args = None` generates the bare `__drop_TypeName`; `Some(args)`
+    /// generates a per-instantiation thunk (`__drop_Box__String`) whose body
+    /// resolves each bare-generic field against `args`. Only the bare thunk
+    /// carries the matching `__decref_TypeName` wrapper (used as a collection
+    /// element's decref helper); per-instantiation drops are reached directly
+    /// from `emit_type_drop`, never through a decref wrapper.
     pub(crate) fn generate_drop_function(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
+        type_args: Option<&[Type]>,
         type_definitions: &HashMap<String, TypeDefinition>,
         generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let mut func_name = String::with_capacity(7 + type_name.len());
+        let mangled = match type_args {
+            Some(args) => mangle_class_instantiation(type_name, args),
+            None => type_name.to_string(),
+        };
+        let mut func_name = String::with_capacity(7 + mangled.len());
         func_name.push_str("__drop_");
-        func_name.push_str(type_name);
+        func_name.push_str(&mangled);
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1110,6 +1183,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx,
             &mut builder_ctx,
             type_name,
+            type_args,
             type_definitions,
             generic_class_instantiations,
             ptr_type,
@@ -1121,6 +1195,10 @@ impl<'a> FunctionTranslator<'a> {
             .map_err(|e| CodegenError::define_function(func_name, e.to_string()))?;
         ctx.clear();
 
+        if type_args.is_some() {
+            // Per-instantiation thunks need no decref wrapper.
+            return Ok(());
+        }
         // Generate __decref_TypeName: the RC-decrement wrapper used as
         // elem_drop_fn for collections holding custom-type elements.
         Self::generate_decref_function(module, ctx, isa, type_name)
@@ -1136,6 +1214,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
         type_name: &str,
+        type_args: Option<&[Type]>,
         type_definitions: &HashMap<String, TypeDefinition>,
         generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
         ptr_type: cl_types::Type,
@@ -1174,7 +1253,14 @@ impl<'a> FunctionTranslator<'a> {
             )?;
         }
 
-        Self::emit_struct_drop(&mut builder, &mut module_ctx, type_name, ptr, &type_ctx)?;
+        Self::emit_struct_drop(
+            &mut builder,
+            &mut module_ctx,
+            type_name,
+            type_args,
+            ptr,
+            &type_ctx,
+        )?;
 
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
         Self::call_libc_free(&mut builder, &mut module_ctx, header_ptr)?;
