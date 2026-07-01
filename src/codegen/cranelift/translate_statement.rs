@@ -1004,16 +1004,14 @@ impl<'a> FunctionTranslator<'a> {
                                         .map(|(_, fi)| fi.ty.kind.clone())
                                         .unwrap_or(TypeKind::Error);
 
-                                    // Only apply substitution for compiler-known Vec types.
-                                    if crate::ast::types::vec_dim(name).is_some() {
-                                        Self::substitute_first_generic(
-                                            &field_type,
-                                            type_args_opt.as_ref(),
-                                            def.generics.as_ref(),
-                                        )
-                                    } else {
-                                        field_type
-                                    }
+                                    // Monomorphize a generic-parameter field to its
+                                    // concrete type argument (scalar `T` at its real
+                                    // width); concrete fields pass through unchanged.
+                                    crate::codegen::cranelift::layout::substitute_generic_field_kind(
+                                        &field_type,
+                                        type_args_opt.as_deref(),
+                                        def.generics.as_ref(),
+                                    )
                                 }
                                 None
                                 | Some(TypeDefinition::Enum(_))

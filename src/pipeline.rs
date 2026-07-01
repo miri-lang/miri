@@ -657,11 +657,11 @@ impl Pipeline {
     /// by the instantiation's concrete types. The mangled name matches the symbol
     /// the dispatcher emits at the call site, byte-for-byte, so the call resolves.
     ///
-    /// Restricted to the pointer-width-integer slice (see [`is_pointer_width_int`]
-    /// in `mir::lowering`): those load/store byte-exactly through the pointer-width
-    /// field slot and need no reference counting. Wider type arguments (floats,
-    /// managed types) fall back to the plain generic body and its fail-closed drop
-    /// path until per-instantiation field widths and drop thunks land.
+    /// Restricted to the non-managed-scalar slice (see [`is_monomorphizable_scalar`]
+    /// in `mir::lowering`): each scalar type argument load/stores at a concrete
+    /// per-instantiation field width and needs no reference counting. Managed type
+    /// arguments fall back to the plain generic body and its fail-closed drop path
+    /// until per-instantiation decref thunks land.
     fn lower_generic_class_instantiations(
         result: &PipelineResult,
         class_name: &str,
@@ -690,7 +690,7 @@ impl Pipeline {
             if type_args.len() != generics.len()
                 || !type_args
                     .iter()
-                    .all(|t| mir::lowering::is_pointer_width_int(&t.kind))
+                    .all(|t| mir::lowering::is_monomorphizable_scalar(&t.kind))
             {
                 continue;
             }

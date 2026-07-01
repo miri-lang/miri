@@ -6,12 +6,12 @@
 //! Provides helpers to compute byte offsets and sizes for fields within
 //! structs, tuples, and enums during Cranelift code generation.
 
-use crate::ast::expression::ExpressionKind;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
 use crate::type_checker::context::{
     class_needs_vtable, collect_class_fields_all, ClassDefinition, EnumDefinition,
-    StructDefinition, TypeDefinition,
+    GenericDefinition, StructDefinition, TypeDefinition,
 };
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
@@ -105,7 +105,13 @@ pub fn field_layout(
                     }
                 }
             }
-            custom_field_layout(name, field_idx, type_definitions, ptr_ty)
+            custom_field_layout(
+                name,
+                type_args.as_deref(),
+                field_idx,
+                type_definitions,
+                ptr_ty,
+            )
         }
         TypeKind::Int
         | TypeKind::I8
@@ -172,6 +178,7 @@ fn tuple_field_layout(
 
 fn custom_field_layout(
     name: &str,
+    type_args: Option<&[Expression]>,
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
@@ -192,12 +199,53 @@ fn custom_field_layout(
             type_definitions,
             ptr_ty,
         ),
-        TypeDefinition::Class(class_def) => {
-            class_field_layout(name, class_def, field_idx, type_definitions, ptr_ty)
-        }
+        TypeDefinition::Class(class_def) => class_field_layout(
+            name,
+            class_def,
+            type_args,
+            field_idx,
+            type_definitions,
+            ptr_ty,
+        ),
         TypeDefinition::Generic(_) | TypeDefinition::Trait(_) => {
             ((field_idx as i32) * ptr_size, ptr_ty)
         }
+    }
+}
+
+/// Resolve a class/struct field's declared type through the instantiation's
+/// type arguments.
+///
+/// A field typed as a bare generic parameter (`TypeKind::Generic("T", …)` or
+/// `TypeKind::Custom("T", None)`) is replaced by the concrete type argument at
+/// the parameter's declaration position, so a monomorphized `Box<float>.value`
+/// lays out at the concrete scalar width instead of a pointer slot. Fields with
+/// a concrete type, or an unresolved generic (no matching argument), are
+/// returned unchanged.
+pub(crate) fn substitute_generic_field_kind(
+    field_kind: &TypeKind,
+    type_args: Option<&[Expression]>,
+    def_generics: Option<&Vec<GenericDefinition>>,
+) -> TypeKind {
+    // Only a bare generic-parameter spelling can be substituted; a concrete
+    // field type is returned unchanged.
+    let param_name = if let TypeKind::Generic(name, _, _) = field_kind {
+        name.as_str()
+    } else if let TypeKind::Custom(name, None) = field_kind {
+        name.as_str()
+    } else {
+        return field_kind.clone();
+    };
+    let (Some(generics), Some(args)) = (def_generics, type_args) else {
+        return field_kind.clone();
+    };
+    let Some(pos) = generics.iter().position(|g| g.name == param_name) else {
+        return field_kind.clone();
+    };
+    if let Some(ExpressionKind::Type(ty, _)) = args.get(pos).map(|a| &a.node) {
+        ty.kind.clone()
+    } else {
+        field_kind.clone()
     }
 }
 
@@ -247,6 +295,7 @@ fn enum_field_layout(
 fn class_field_layout(
     name: &str,
     class_def: &ClassDefinition,
+    type_args: Option<&[Expression]>,
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
@@ -263,7 +312,14 @@ fn class_field_layout(
     };
     let mut offset: i32 = vtable_offset;
     for (i, (_field_name, field_info)) in all_fields.iter().enumerate() {
-        let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
+        // A generic-parameter field is monomorphized to its concrete type
+        // argument so it lays out at the instantiation's scalar width.
+        let field_kind = substitute_generic_field_kind(
+            &field_info.ty.kind,
+            type_args,
+            class_def.generics.as_ref(),
+        );
+        let cl_ty = translate_type_kind(&field_kind, ptr_ty);
         let alignment = type_alignment(cl_ty);
         offset = align_to(offset, alignment);
         if i == field_idx {
