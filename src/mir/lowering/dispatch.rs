@@ -19,7 +19,8 @@ use crate::type_checker::context::{
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{coerce_rvalue, gpu_math_return_type};
-use super::{lower_expression, LoweringContext};
+use super::{apply_generic_sub, is_pointer_width_int, lower_expression, LoweringContext};
+use std::collections::HashMap;
 
 /// Context for lowering a collection intrinsic method (push/get/index).
 struct CollectionIntrinsicCall<'a> {
@@ -780,8 +781,7 @@ fn emit_virtual_method_call(
 #[allow(clippy::too_many_arguments)]
 fn emit_static_method_call(
     ctx: &mut LoweringContext,
-    defining_class: &str,
-    method_name: &str,
+    symbol: &str,
     self_op: Operand,
     user_args: &[Expression],
     method_info: &MethodInfo,
@@ -791,10 +791,7 @@ fn emit_static_method_call(
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mut mangled_name = String::with_capacity(defining_class.len() + 1 + method_name.len());
-    mangled_name.push_str(defining_class);
-    mangled_name.push('_');
-    mangled_name.push_str(method_name);
+    let mangled_name = symbol.to_string();
     let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
     for arg in user_args {
@@ -957,7 +954,14 @@ fn emit_resolved_method_call(
     m: ResolvedMethod,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let return_ty = m.method_info.return_type.clone();
+    // A concrete instantiation of a generic class dispatches to a monomorphized
+    // method body (`Box_get__int`) and types its result as the concrete type.
+    // Everything else keeps the plain `Class_method` symbol and generic return.
+    let mono = resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info);
+    let return_ty = match &mono {
+        Some((_, concrete_return)) => concrete_return.clone(),
+        None => m.method_info.return_type.clone(),
+    };
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
         prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
@@ -983,10 +987,13 @@ fn emit_resolved_method_call(
             );
         }
     }
+    let symbol = match mono {
+        Some((mangled, _)) => mangled,
+        None => format!("{}_{}", m.defining_class, m.method_name),
+    };
     emit_static_method_call(
         ctx,
-        m.defining_class,
-        m.method_name,
+        &symbol,
         self_op,
         m.args,
         m.method_info,
@@ -996,6 +1003,65 @@ fn emit_resolved_method_call(
         obj_watermark,
         *m.span,
     )
+}
+
+/// Resolve a generic-class method call to its per-instantiation monomorphized
+/// symbol and concrete return type, or `None` when the plain generic body applies.
+///
+/// Returns `Some` only when the receiver is a concrete instantiation of a
+/// generic class whose every type argument is a pointer-width integer — the slice
+/// that monomorphizes end-to-end today (see [`is_pointer_width_int`]). A
+/// value-generic slot, a non-pointer-width argument, or a non-generic receiver
+/// falls back to the plain `Class_method` symbol. The mangled symbol matches the
+/// name the pipeline emits for the same instantiation, byte-for-byte.
+fn resolve_generic_class_monomorph(
+    ctx: &LoweringContext,
+    obj_ty: &Type,
+    method_name: &str,
+    method_info: &MethodInfo,
+) -> Option<(String, Type)> {
+    let TypeKind::Custom(name, Some(arg_exprs)) = &obj_ty.kind else {
+        return None;
+    };
+    let defs = &ctx.type_checker.global_type_definitions;
+    let Some(TypeDefinition::Class(class_def)) = defs.get(name.as_str()) else {
+        return None;
+    };
+    let gens = class_def.generics.as_ref()?;
+    let resolved: Vec<Type> = arg_exprs
+        .iter()
+        .map(|e| ctx.type_checker.extract_type_from_expression(e))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if resolved.len() != gens.len() || !resolved.iter().all(|t| is_pointer_width_int(&t.kind)) {
+        return None;
+    }
+    // Only dispatch to a monomorphized symbol the pipeline actually emitted: the
+    // instantiation must be one the type checker recorded. Builtin collections
+    // (`List<int>`, …) resolve through their own constructor path and are never
+    // recorded, so they keep the plain `List_length` symbol here.
+    let recorded = ctx
+        .type_checker
+        .generic_class_instantiations
+        .get(name.as_str())?;
+    let is_recorded = recorded.iter().any(|tuple| {
+        tuple.len() == resolved.len() && tuple.iter().zip(&resolved).all(|(a, b)| a.kind == b.kind)
+    });
+    if !is_recorded {
+        return None;
+    }
+    let mut subs = HashMap::new();
+    let type_args: Vec<(String, Type)> = gens
+        .iter()
+        .zip(&resolved)
+        .map(|(g, t)| {
+            subs.insert(g.name.clone(), t.clone());
+            (g.name.clone(), t.clone())
+        })
+        .collect();
+    let mangled = mangle_generic_name(&format!("{name}_{method_name}"), &type_args);
+    let return_ty = apply_generic_sub(&method_info.return_type, &subs);
+    Some((mangled, return_ty))
 }
 
 /// Lower the receiver, apply a CoW check for mutating collection methods, and

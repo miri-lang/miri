@@ -8,6 +8,7 @@ pub mod arg_count;
 pub mod basic;
 pub mod constructor;
 pub mod drop;
+pub mod generic_class_monomorphization;
 pub mod inheritance;
 pub mod inherited_arg_count;
 pub mod invalid_targets;

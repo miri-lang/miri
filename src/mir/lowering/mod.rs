@@ -179,7 +179,6 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 /// [`TypeChecker::extract_type_from_expression`] so no type-name string table is
 /// hand-rolled. A value-generic (size) slot whose argument is not a type
 /// expression is skipped, leaving that name unmapped.
-#[allow(dead_code)]
 pub(crate) fn build_class_generic_substitution(
     tc: &TypeChecker,
     def_generics: &[GenericDefinition],
@@ -231,6 +230,19 @@ pub(crate) fn rebuild_class_type_params(
         .map(|generic| generic.name.clone())
         .filter(|name| !subs.contains_key(name))
         .collect()
+}
+
+/// True for a generic-class type argument that monomorphizes safely today.
+///
+/// Restricted to pointer-width integers: they occupy the pointer register width,
+/// so a bare-generic field stored/loaded through the pointer-width slot is
+/// byte-exact and its drop is a genuine no-op (nothing to reference-count). A
+/// method call whose result is typed as one of these participates in integer
+/// arithmetic directly. Non-pointer-width scalars (floats, narrow ints) need a
+/// per-instantiation field width, and managed types need per-instantiation drop
+/// thunks; both are handled in later steps, so they are excluded here.
+pub(crate) fn is_pointer_width_int(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::Int | TypeKind::I64 | TypeKind::U64)
 }
 
 /// Lower a generic function with concrete type substitutions to produce a
@@ -341,28 +353,26 @@ pub fn lower_generic_instantiation(
 ///
 /// Returns `LoweringError` if the statement is not a function declaration,
 /// if expression lowering fails, or if the resulting MIR fails validation.
-/// Inject enum/class-level generic names (e.g. `T`, `E` from `Result<T, E>`)
-/// into `type_params`. `collect_type_params` only catches `TypeKind::Generic`,
-/// missing names that resolve to `Custom("T", None)` for enum/class methods;
-/// reading them from the type definition closes that gap so Perceus does not
-/// treat unresolved placeholders as concrete heap-managed types.
-fn inject_class_level_generics(ctx: &mut LoweringContext, self_type: &Type, tc: &TypeChecker) {
+/// Enum/class-level generic names (e.g. `T`, `E` from `Result<T, E>`) declared
+/// on the receiver's type definition. `collect_type_params` only catches
+/// `TypeKind::Generic`, missing names that resolve to `Custom("T", None)` for
+/// enum/class methods; reading them from the type definition closes that gap so
+/// Perceus does not treat unresolved placeholders as concrete heap-managed types.
+fn class_level_generic_names(self_type: &Type, tc: &TypeChecker) -> Vec<String> {
     let TypeKind::Custom(class_name, _) = &self_type.kind else {
-        return;
+        return Vec::new();
     };
     let Some(type_def) = tc.type_definitions().get(class_name.as_str()) else {
-        return;
+        return Vec::new();
     };
     let generics = match type_def {
         crate::type_checker::context::TypeDefinition::Enum(ed) => ed.generics.as_deref(),
         crate::type_checker::context::TypeDefinition::Class(cd) => cd.generics.as_deref(),
         _ => None,
     };
-    if let Some(gens) = generics {
-        for gen in gens {
-            ctx.body.type_params.insert(gen.name.clone());
-        }
-    }
+    generics
+        .map(|gens| gens.iter().map(|g| g.name.clone()).collect())
+        .unwrap_or_default()
 }
 
 pub fn lower_class_method(
@@ -370,6 +380,39 @@ pub fn lower_class_method(
     self_type: Type,
     tc: &TypeChecker,
     is_release: bool,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_class_method_impl(ast_method, self_type, tc, is_release, &HashMap::new())
+}
+
+/// Lower a generic class method for one concrete instantiation.
+///
+/// `subs` maps the class's generic parameters (`T`, …) to the instantiation's
+/// concrete types. The return type, parameter types, and `type_params` are
+/// rebuilt through the substitution so the body is monomorphized: a scalar `T`
+/// pinned to a concrete type is no longer an opaque managed placeholder. The
+/// `self` parameter keeps the bare class type — field layout is keyed on the
+/// class name, not the instantiation. The mangled symbol (e.g. `Box_get__int`)
+/// is chosen by the caller.
+pub fn lower_class_method_instantiation(
+    ast_method: &Statement,
+    class_name: &str,
+    tc: &TypeChecker,
+    is_release: bool,
+    subs: &HashMap<String, Type>,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    let self_type = Type::new(
+        TypeKind::Custom(class_name.to_string(), None),
+        ast_method.span,
+    );
+    lower_class_method_impl(ast_method, self_type, tc, is_release, subs)
+}
+
+fn lower_class_method_impl(
+    ast_method: &Statement,
+    self_type: Type,
+    tc: &TypeChecker,
+    is_release: bool,
+    subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
@@ -384,7 +427,7 @@ pub fn lower_class_method(
 
     let ret_ty = ret_type_expr.as_deref().map_or_else(
         || Type::new(TypeKind::Void, ast_method.span),
-        |e| resolve_type(tc, e),
+        |e| apply_generic_sub(&resolve_type(tc, e), subs),
     );
 
     let execution_model = resolve_execution_model(props);
@@ -394,11 +437,17 @@ pub fn lower_class_method(
     let body = Body::new(params.len() + 1, ast_method.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
 
-    // Populate generic type parameter names (captures both method-own generics
-    // and class-level generics that appear in param/return types, e.g. T in List<T>).
-    ctx.body.type_params = collect_type_params(decl, tc);
-
-    inject_class_level_generics(&mut ctx, &self_type, tc);
+    // Method-own generics plus class-level generics that appear in param/return
+    // types (e.g. T in List<T>), minus any name pinned to a concrete type by
+    // `subs`. Dropping substituted names lets Perceus treat a monomorphized
+    // scalar `T` as concrete rather than an opaque managed placeholder. For the
+    // non-monomorphized path `subs` is empty, so nothing is dropped.
+    let mut type_params = collect_type_params(decl, tc);
+    for name in class_level_generic_names(&self_type, tc) {
+        type_params.insert(name);
+    }
+    type_params.retain(|name| !subs.contains_key(name));
+    ctx.body.type_params = type_params;
 
     // _0: Return value
     ctx.body
@@ -413,7 +462,7 @@ pub fn lower_class_method(
     let mut out_params = Vec::with_capacity(params.len() + 2);
     out_params.push(false);
     for param in params.iter() {
-        let param_ty = resolve_type(tc, &param.typ);
+        let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }

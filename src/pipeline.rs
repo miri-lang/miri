@@ -6,7 +6,7 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
-use crate::ast::statement::{AcceleratorTarget, Statement, StatementKind};
+use crate::ast::statement::{AcceleratorTarget, ClassData, Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::codegen::Backend;
@@ -542,6 +542,12 @@ impl Pipeline {
                     backend.set_type_definitions(
                         pipeline_result.type_checker.type_definitions().clone(),
                     );
+                    backend.set_generic_class_instantiations(
+                        pipeline_result
+                            .type_checker
+                            .generic_class_instantiations
+                            .clone(),
+                    );
 
                     let ptr_ty = backend.pointer_type();
                     let runtime_info = collect_runtime_info(
@@ -640,6 +646,122 @@ impl Pipeline {
         mangled.push('_');
         mangled.push_str(method_name);
         mangled
+    }
+
+    /// Emit a monomorphized method body for each recorded instantiation of a
+    /// generic class.
+    ///
+    /// For every `(class, [type args])` the type checker recorded (see
+    /// `generic_class_instantiations`), each concrete method compiles to a body
+    /// named `Class_method__arg` with the class's generic parameters substituted
+    /// by the instantiation's concrete types. The mangled name matches the symbol
+    /// the dispatcher emits at the call site, byte-for-byte, so the call resolves.
+    ///
+    /// Restricted to the pointer-width-integer slice (see [`is_pointer_width_int`]
+    /// in `mir::lowering`): those load/store byte-exactly through the pointer-width
+    /// field slot and need no reference counting. Wider type arguments (floats,
+    /// managed types) fall back to the plain generic body and its fail-closed drop
+    /// path until per-instantiation field widths and drop thunks land.
+    fn lower_generic_class_instantiations(
+        result: &PipelineResult,
+        class_name: &str,
+        class_data: &ClassData,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
+        let Some(TypeDefinition::Class(def)) =
+            result.type_checker.type_definitions().get(class_name)
+        else {
+            return Ok(());
+        };
+        let Some(generics) = def.generics.clone() else {
+            return Ok(());
+        };
+        let Some(instantiations) = result
+            .type_checker
+            .generic_class_instantiations
+            .get(class_name)
+        else {
+            return Ok(());
+        };
+
+        for type_args in instantiations {
+            if type_args.len() != generics.len()
+                || !type_args
+                    .iter()
+                    .all(|t| mir::lowering::is_pointer_width_int(&t.kind))
+            {
+                continue;
+            }
+
+            let subs: std::collections::HashMap<String, Type> = generics
+                .iter()
+                .zip(type_args)
+                .map(|(g, t)| (g.name.clone(), t.clone()))
+                .collect();
+            let mangle_args: Vec<(String, Type)> = generics
+                .iter()
+                .zip(type_args)
+                .map(|(g, t)| (g.name.clone(), t.clone()))
+                .collect();
+
+            Self::lower_instantiation_methods(
+                result,
+                class_name,
+                class_data,
+                is_release,
+                &subs,
+                &mangle_args,
+                bodies,
+                lowered_names,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Lower every concrete method of one generic-class instantiation.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_instantiation_methods(
+        result: &PipelineResult,
+        class_name: &str,
+        class_data: &ClassData,
+        is_release: bool,
+        subs: &std::collections::HashMap<String, Type>,
+        mangle_args: &[(String, Type)],
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
+        for method_stmt in &class_data.body {
+            let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node else {
+                continue;
+            };
+            if method_decl.body.is_none() {
+                continue;
+            }
+            let base = Self::mangle_method_name(class_name, &method_decl.name);
+            let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
+            if lowered_names.contains(&mangled) {
+                continue;
+            }
+            let (mir_body, lambdas) = mir::lowering::lower_class_method_instantiation(
+                method_stmt,
+                class_name,
+                &result.type_checker,
+                is_release,
+                subs,
+            )
+            .map_err(|e| {
+                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
+            })?;
+            lowered_names.insert(mangled.clone());
+            bodies.push((mangled, mir_body));
+            for lambda in lambdas {
+                lowered_names.insert(lambda.name.clone());
+                bodies.push((lambda.name, lambda.body));
+            }
+        }
+        Ok(())
     }
 
     fn lower_to_mir(
@@ -795,6 +917,15 @@ impl Pipeline {
                             }
                         }
                     }
+
+                    Self::lower_generic_class_instantiations(
+                        result,
+                        class_name,
+                        class_data,
+                        is_release,
+                        bodies,
+                        lowered_names,
+                    )?;
                 }
                 StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
                     // Compile default (non-abstract) trait methods as `TraitName_methodName`.
@@ -1023,6 +1154,15 @@ impl Pipeline {
                             }
                         }
                     }
+
+                    Self::lower_generic_class_instantiations(
+                        result,
+                        class_name,
+                        class_data,
+                        is_release,
+                        bodies,
+                        lowered_names,
+                    )?;
                 }
                 StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
                     let Some(enum_name) = Self::identifier_name(name_expr) else {
