@@ -24,6 +24,11 @@ use std::process::Command;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 
+/// One generic-class instantiation's substitution: the generic-name→concrete-type
+/// map used to substitute a method body, paired with the ordered name/type pairs
+/// used to mangle the per-instantiation symbol.
+type InstantiationSub = (std::collections::HashMap<String, Type>, Vec<(String, Type)>);
+
 fn has_main_function(program: &Program) -> bool {
     program.body.iter().any(|s| {
         if let StatementKind::FunctionDeclaration(decl) = &s.node {
@@ -670,42 +675,7 @@ impl Pipeline {
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
     ) -> Result<(), CompilerError> {
-        let Some(TypeDefinition::Class(def)) =
-            result.type_checker.type_definitions().get(class_name)
-        else {
-            return Ok(());
-        };
-        let Some(generics) = def.generics.clone() else {
-            return Ok(());
-        };
-        let Some(instantiations) = result
-            .type_checker
-            .generic_class_instantiations
-            .get(class_name)
-        else {
-            return Ok(());
-        };
-
-        for type_args in instantiations {
-            if type_args.len() != generics.len()
-                || !type_args
-                    .iter()
-                    .all(|t| mir::lowering::is_monomorphizable_scalar(&t.kind))
-            {
-                continue;
-            }
-
-            let subs: std::collections::HashMap<String, Type> = generics
-                .iter()
-                .zip(type_args)
-                .map(|(g, t)| (g.name.clone(), t.clone()))
-                .collect();
-            let mangle_args: Vec<(String, Type)> = generics
-                .iter()
-                .zip(type_args)
-                .map(|(g, t)| (g.name.clone(), t.clone()))
-                .collect();
-
+        for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             Self::lower_instantiation_methods(
                 result,
                 class_name,
@@ -718,6 +688,52 @@ impl Pipeline {
             )?;
         }
         Ok(())
+    }
+
+    /// Build the substitution and mangle-argument pairs for every recorded
+    /// non-managed-scalar instantiation of a generic class.
+    ///
+    /// Each entry maps the class's generic parameters to one instantiation's
+    /// concrete types (both as a name→type map for body substitution and as an
+    /// ordered pair vector for symbol mangling). Instantiations whose arity does
+    /// not match the class generics, or that carry a non-monomorphizable-scalar
+    /// argument, are skipped. Returns empty for a non-generic or unrecorded class.
+    fn scalar_instantiation_subs(
+        result: &PipelineResult,
+        class_name: &str,
+    ) -> Vec<InstantiationSub> {
+        let Some(TypeDefinition::Class(def)) =
+            result.type_checker.type_definitions().get(class_name)
+        else {
+            return Vec::new();
+        };
+        let Some(generics) = def.generics.as_ref() else {
+            return Vec::new();
+        };
+        let Some(instantiations) = result
+            .type_checker
+            .generic_class_instantiations
+            .get(class_name)
+        else {
+            return Vec::new();
+        };
+        instantiations
+            .iter()
+            .filter(|type_args| {
+                type_args.len() == generics.len()
+                    && type_args
+                        .iter()
+                        .all(|t| mir::lowering::is_monomorphizable_scalar(&t.kind))
+            })
+            .map(|type_args| {
+                let pairs: Vec<(String, Type)> = generics
+                    .iter()
+                    .zip(type_args)
+                    .map(|(g, t)| (g.name.clone(), t.clone()))
+                    .collect();
+                (pairs.iter().cloned().collect(), pairs)
+            })
+            .collect()
     }
 
     /// Lower every concrete method of one generic-class instantiation.
@@ -739,27 +755,95 @@ impl Pipeline {
             if method_decl.body.is_none() {
                 continue;
             }
-            let base = Self::mangle_method_name(class_name, &method_decl.name);
-            let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
-            if lowered_names.contains(&mangled) {
-                continue;
-            }
-            let (mir_body, lambdas) = mir::lowering::lower_class_method_instantiation(
-                method_stmt,
+            Self::lower_one_instantiation_method(
+                result,
                 class_name,
-                &result.type_checker,
+                method_stmt,
+                &method_decl.name,
                 is_release,
                 subs,
-            )
-            .map_err(|e| {
-                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
-            })?;
-            lowered_names.insert(mangled.clone());
-            bodies.push((mangled, mir_body));
-            for lambda in lambdas {
-                lowered_names.insert(lambda.name.clone());
-                bodies.push((lambda.name, lambda.body));
-            }
+                mangle_args,
+                bodies,
+                lowered_names,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Lower one method statement for a single instantiation into a mangled body.
+    ///
+    /// Shared by the own-method path ([`lower_instantiation_methods`]) and the
+    /// inherited trait-default path ([`lower_trait_default_instantiations`]): both
+    /// need the same mangle-name / re-lower / push sequence, differing only in
+    /// where the method statement comes from.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_one_instantiation_method(
+        result: &PipelineResult,
+        class_name: &str,
+        method_stmt: &Statement,
+        method_name: &str,
+        is_release: bool,
+        subs: &std::collections::HashMap<String, Type>,
+        mangle_args: &[(String, Type)],
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
+        let base = Self::mangle_method_name(class_name, method_name);
+        let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
+        if lowered_names.contains(&mangled) {
+            return Ok(());
+        }
+        let (mir_body, lambdas) = mir::lowering::lower_class_method_instantiation(
+            method_stmt,
+            class_name,
+            &result.type_checker,
+            is_release,
+            subs,
+        )
+        .map_err(|e| {
+            CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
+        })?;
+        lowered_names.insert(mangled.clone());
+        bodies.push((mangled, mir_body));
+        for lambda in lambdas {
+            lowered_names.insert(lambda.name.clone());
+            bodies.push((lambda.name, lambda.body));
+        }
+        Ok(())
+    }
+
+    /// Emit a per-instantiation monomorphized copy of an inherited trait-default
+    /// method for every recorded non-managed-scalar instantiation of a generic
+    /// class.
+    ///
+    /// The bare `Class_method` body a non-generic class inherits leaves a scalar
+    /// `T` unresolved (it falls back to a pointer-width slot); a generic class
+    /// instantiated at a concrete scalar (`Box<float>`) instead dispatches to a
+    /// mangled `Class_method__float` whose parameter and return types are the
+    /// concrete type. This threads the same substitution the own-method path uses
+    /// into the trait-default body so those mangled symbols exist to link against.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_trait_default_instantiations(
+        result: &PipelineResult,
+        class_name: &str,
+        method_stmt: &Statement,
+        method_name: &str,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
+        for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
+            Self::lower_one_instantiation_method(
+                result,
+                class_name,
+                method_stmt,
+                method_name,
+                is_release,
+                &subs,
+                &mangle_args,
+                bodies,
+                lowered_names,
+            )?;
         }
         Ok(())
     }
@@ -1549,6 +1633,20 @@ impl Pipeline {
                                 lowered_names.insert(lambda.name.clone());
                                 bodies.push((lambda.name, lambda.body));
                             }
+
+                            // A generic class inheriting this default also needs a
+                            // mangled copy per concrete-scalar instantiation so a
+                            // `Box<float>` receiver links against a body typed at
+                            // the concrete `float`, not the bare pointer-width one.
+                            Self::lower_trait_default_instantiations(
+                                result,
+                                class_name,
+                                method_stmt,
+                                &md.name,
+                                is_release,
+                                bodies,
+                                lowered_names,
+                            )?;
                         }
                     }
                 }
