@@ -165,9 +165,10 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 }
 
 // The three helpers below are the shared substitution machinery for generic
-// class monomorphization. Class-instantiation lowering does not call them yet;
-// until that consumer lands they are exercised only by the unit tests at the
-// bottom of this file, so each carries an explicit dead-code allowance.
+// class monomorphization. `build_class_generic_substitution` drives constructor
+// field-type substitution; the single-type and `type_params`-rebuild
+// convenience wrappers are not yet consumed and carry a dead-code allowance
+// until their step lands.
 
 /// Build the substitution map from a generic class's declared parameters to the
 /// concrete type arguments of a resolved instantiation.
@@ -234,15 +235,32 @@ pub(crate) fn rebuild_class_type_params(
 
 /// True for a generic-class type argument that monomorphizes safely today.
 ///
-/// Restricted to pointer-width integers: they occupy the pointer register width,
-/// so a bare-generic field stored/loaded through the pointer-width slot is
-/// byte-exact and its drop is a genuine no-op (nothing to reference-count). A
-/// method call whose result is typed as one of these participates in integer
-/// arithmetic directly. Non-pointer-width scalars (floats, narrow ints) need a
-/// per-instantiation field width, and managed types need per-instantiation drop
-/// thunks; both are handled in later steps, so they are excluded here.
-pub(crate) fn is_pointer_width_int(kind: &TypeKind) -> bool {
-    matches!(kind, TypeKind::Int | TypeKind::I64 | TypeKind::U64)
+/// Admits any non-managed scalar: integers of every width, floats (`float`,
+/// `f16`, `f32`, `f64`), and `bool`. A scalar field carries a concrete
+/// store/load width per instantiation and its drop is a genuine no-op (nothing
+/// to reference-count), so the shared bare-name drop thunk can safely skip it.
+/// Managed type arguments (`String`, collections, class/struct instances) still
+/// need per-instantiation decref thunks and are excluded until that lands.
+pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+    )
 }
 
 /// Lower a generic function with concrete type substitutions to produce a
@@ -390,9 +408,10 @@ pub fn lower_class_method(
 /// concrete types. The return type, parameter types, and `type_params` are
 /// rebuilt through the substitution so the body is monomorphized: a scalar `T`
 /// pinned to a concrete type is no longer an opaque managed placeholder. The
-/// `self` parameter keeps the bare class type — field layout is keyed on the
-/// class name, not the instantiation. The mangled symbol (e.g. `Box_get__int`)
-/// is chosen by the caller.
+/// `self` parameter carries the instantiation's concrete type arguments
+/// (`Custom(class, Some([float]))`) so codegen field layout loads a scalar `T`
+/// field at its concrete width. The mangled symbol (e.g. `Box_get__int`) is
+/// chosen by the caller.
 pub fn lower_class_method_instantiation(
     ast_method: &Statement,
     class_name: &str,
@@ -400,11 +419,46 @@ pub fn lower_class_method_instantiation(
     is_release: bool,
     subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    let self_type = Type::new(
-        TypeKind::Custom(class_name.to_string(), None),
-        ast_method.span,
-    );
+    let self_type = monomorphized_self_type(class_name, tc, subs, ast_method.span);
     lower_class_method_impl(ast_method, self_type, tc, is_release, subs)
+}
+
+/// Build the `self` type for a monomorphized method: `Custom(class, Some(args))`
+/// with one type argument per declared class generic, in declaration order, so
+/// codegen's positional field-type substitution resolves a scalar `T` field to
+/// its concrete width. A generic absent from `subs` (an unsubstituted
+/// value-generic size) is emitted as a bare identifier placeholder that codegen
+/// leaves untouched. Falls back to the bare class type when the class is
+/// non-generic.
+fn monomorphized_self_type(
+    class_name: &str,
+    tc: &TypeChecker,
+    subs: &HashMap<String, Type>,
+    span: crate::error::syntax::Span,
+) -> Type {
+    let generics = match tc.type_definitions().get(class_name) {
+        Some(crate::type_checker::context::TypeDefinition::Class(cd)) => cd.generics.as_deref(),
+        _ => None,
+    };
+    let Some(generics) = generics.filter(|g| !g.is_empty()) else {
+        return Type::new(TypeKind::Custom(class_name.to_string(), None), span);
+    };
+    let args = generics
+        .iter()
+        .map(|g| match subs.get(&g.name) {
+            Some(ty) => Expression {
+                id: 0,
+                span,
+                node: ExpressionKind::Type(Box::new(ty.clone()), false),
+            },
+            None => Expression {
+                id: 0,
+                span,
+                node: ExpressionKind::Identifier(g.name.clone(), None),
+            },
+        })
+        .collect();
+    Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span)
 }
 
 fn lower_class_method_impl(
@@ -919,5 +973,33 @@ mod class_generic_substitution_tests {
         let defs = [generic("T")];
         let plain = Type::new(TypeKind::Custom("Box".to_string(), None), Span::new(0, 0));
         assert!(build_class_generic_substitution(&tc, &defs, &plain).is_empty());
+    }
+
+    #[test]
+    fn monomorphizable_scalar_admits_ints_floats_bool_rejects_managed() {
+        for kind in [
+            TypeKind::Int,
+            TypeKind::I8,
+            TypeKind::U64,
+            TypeKind::I128,
+            TypeKind::Float,
+            TypeKind::F16,
+            TypeKind::F32,
+            TypeKind::F64,
+            TypeKind::Boolean,
+        ] {
+            assert!(is_monomorphizable_scalar(&kind), "{kind:?} should qualify");
+        }
+        for kind in [
+            TypeKind::String,
+            TypeKind::Custom("Box".to_string(), None),
+            TypeKind::RawPtr,
+            TypeKind::Void,
+        ] {
+            assert!(
+                !is_monomorphizable_scalar(&kind),
+                "{kind:?} should not qualify"
+            );
+        }
     }
 }

@@ -167,10 +167,10 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// Resolves the field's generic parameter to the concrete type of every
     /// recorded instantiation. Returns true only when at least one instantiation
-    /// exists and each pins the field to a pointer-width integer — non-managed, so
-    /// the shared bare-name thunk can safely skip it. A managed, non-pointer-width,
-    /// or absent instantiation returns false so the caller keeps the fail-closed
-    /// rejection (per-instantiation drop thunks land in a later step).
+    /// exists and each pins the field to a non-managed scalar — nothing to
+    /// reference-count, so the shared bare-name thunk can safely skip it. A
+    /// managed or absent instantiation returns false so the caller keeps the
+    /// fail-closed rejection (per-instantiation decref thunks land in a later step).
     fn generic_field_drops_to_noop(
         class_def: &ClassDefinition,
         field_kind: &TypeKind,
@@ -192,7 +192,7 @@ impl<'a> FunctionTranslator<'a> {
         match instantiations {
             Some(tuples) if !tuples.is_empty() => tuples.iter().all(|args| {
                 args.get(param_idx)
-                    .is_some_and(|t| crate::mir::lowering::is_pointer_width_int(&t.kind))
+                    .is_some_and(|t| crate::mir::lowering::is_monomorphizable_scalar(&t.kind))
             }),
             _ => false,
         }

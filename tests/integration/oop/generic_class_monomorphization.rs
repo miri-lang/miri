@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// Generic-class method monomorphization for a pointer-width integer parameter.
+// Generic-class method monomorphization for a scalar type parameter.
 //
 // A `class Box<T>` with a `value T` field and a `fn get() T` method compiles a
 // per-instantiation method body (`Box_get__int`) whose return type is the
 // concrete instantiation type, not the opaque generic `T`. The call site emits
 // the byte-identical mangled symbol and types the result as the concrete type,
-// so the value round-trips end-to-end. `int` is the proven-safe slice: it shares
-// the pointer register width, so the generic field's load/store is exact.
+// so the value round-trips end-to-end.
 //
-// Non-pointer-width scalar `T` (e.g. `float`) and managed `T` freeing are gated
-// separately and stay blocked here until their own steps land.
+// Every non-managed scalar `T` monomorphizes: the `value` field lays out at the
+// instantiation's concrete width (a pointer-width `int`, a 64-bit `float`, a
+// 32-bit `f32`), so the load/store is byte-exact. Managed `T` freeing needs a
+// per-instantiation drop thunk and stays blocked here until its own step lands.
 
 use super::utils::*;
 
@@ -88,12 +89,11 @@ println(f\"{a.get() + b.get()}\")
     );
 }
 
-// The F8c slice is pointer-width integers only. A non-pointer-width scalar `T`
-// (float) needs a per-instantiation field width, so it is rejected at codegen
-// rather than silently reading the field through the wrong register width.
+// A non-pointer-width scalar `T` (float) monomorphizes: the `value` field lays
+// out as an f64, so `get()` reads it back at full precision.
 #[test]
-fn generic_class_float_field_is_rejected_until_scalar_width_lands() {
-    assert_build_error(
+fn generic_class_float_field_returns_value() {
+    assert_runs_with_output(
         "
 class Box<T>
     var value T
@@ -103,7 +103,85 @@ class Box<T>
 let b = Box<float>(value: 3.5)
 println(f\"{b.get()}\")
 ",
-        "bare-generic field",
+        "3.5",
+    );
+}
+
+// The narrower `f32` scalar also monomorphizes at its own 4-byte field width.
+#[test]
+fn generic_class_f32_field_returns_value() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    var value T
+
+    public fn get() T: self.value
+
+let b = Box<f32>(value: 2.5)
+println(f\"{b.get()}\")
+",
+        "2.5",
+    );
+}
+
+// A monomorphized float field flows into float arithmetic, proving the load
+// produces a float register value rather than reinterpreted integer bits.
+#[test]
+fn generic_class_float_field_participates_in_arithmetic() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    var value T
+
+    public fn get() T: self.value
+
+let b = Box<float>(value: 1.5)
+println(f\"{b.get() + b.get()}\")
+",
+        "3",
+    );
+}
+
+// A user `init` method must dispatch to the per-instantiation body so the
+// constructor argument crosses the ABI at the concrete scalar width. A bare
+// `Box_init` call would pass the f64 through an integer slot and corrupt it.
+#[test]
+fn generic_class_float_init_method_stores_at_scalar_width() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    var value T
+
+    public fn init(v T)
+        self.value = v
+
+    public fn get() T: self.value
+
+let b = Box<float>(3.5)
+println(f\"{b.get()}\")
+",
+        "3.5",
+    );
+}
+
+// Two scalar instantiations of the same class (`Box<int>` and `Box<float>`)
+// coexist: each field lays out at its own width and both share one bare-name
+// drop thunk that safely skips the non-managed scalar field.
+#[test]
+fn generic_class_mixed_scalar_instantiations_coexist() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    var value T
+
+    public fn get() T: self.value
+
+let a = Box<int>(value: 7)
+let b = Box<float>(value: 3.5)
+println(f\"{a.get()}\")
+println(f\"{b.get()}\")
+",
+        "7\n3.5",
     );
 }
 

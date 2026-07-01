@@ -19,7 +19,7 @@ use crate::type_checker::context::{
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{coerce_rvalue, gpu_math_return_type};
-use super::{apply_generic_sub, is_pointer_width_int, lower_expression, LoweringContext};
+use super::{apply_generic_sub, is_monomorphizable_scalar, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
 /// Context for lowering a collection intrinsic method (push/get/index).
@@ -1010,7 +1010,7 @@ fn emit_resolved_method_call(
 ///
 /// Returns `Some` only when the receiver is a concrete instantiation of a
 /// generic class whose every type argument is a pointer-width integer — the slice
-/// that monomorphizes end-to-end today (see [`is_pointer_width_int`]). A
+/// that monomorphizes end-to-end today (see [`is_monomorphizable_scalar`]). A
 /// value-generic slot, a non-pointer-width argument, or a non-generic receiver
 /// falls back to the plain `Class_method` symbol. The mangled symbol matches the
 /// name the pipeline emits for the same instantiation, byte-for-byte.
@@ -1033,7 +1033,8 @@ fn resolve_generic_class_monomorph(
         .map(|e| ctx.type_checker.extract_type_from_expression(e))
         .collect::<Result<_, _>>()
         .ok()?;
-    if resolved.len() != gens.len() || !resolved.iter().all(|t| is_pointer_width_int(&t.kind)) {
+    if resolved.len() != gens.len() || !resolved.iter().all(|t| is_monomorphizable_scalar(&t.kind))
+    {
         return None;
     }
     // Only dispatch to a monomorphized symbol the pipeline actually emitted: the
@@ -1562,7 +1563,7 @@ fn try_lower_constructor_call(
                             return ctor_fn(ctx, span, call_expr_id, args, dest).map(Some);
                         }
                     }
-                    return lower_class_constructor(ctx, span, type_name, def, args, dest)
+                    return lower_class_constructor(ctx, span, type_name, def, args, call_ty, dest)
                         .map(Some);
                 }
             }
