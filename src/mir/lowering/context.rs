@@ -70,6 +70,12 @@ pub struct LoweringContext<'a> {
     pub source: Option<&'a str>,
     /// Absolute or relative path of the source file being lowered.
     pub source_path: Option<&'a str>,
+    /// Substitution map from the class's generic parameters (`T`, …) to the
+    /// concrete instantiation types, when lowering a monomorphized generic-class
+    /// method. Empty for ordinary (non-monomorphized) lowering. Used to resolve
+    /// a `T`-typed intrinsic element read (e.g. `self.items.element_at(0)`) to
+    /// the instantiation's concrete type instead of the pointer-width fallback.
+    pub generic_subs: HashMap<String, Type>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -104,6 +110,7 @@ impl<'a> LoweringContext<'a> {
             is_release,
             source,
             source_path,
+            generic_subs: HashMap::new(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));

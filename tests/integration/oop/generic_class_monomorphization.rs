@@ -358,3 +358,69 @@ println(f\"{words.length()}\")
         "2",
     );
 }
+
+// A generic container reads an element out of a `List<T>` field. Inside the
+// monomorphized method the intrinsic element read is typed `T`; without the
+// substitution it falls back to the pointer-width `Int`, so a `T = f32` element
+// is loaded at the wrong width and the value is garbage. The read must resolve
+// `T` to the instantiation's concrete type so the element round-trips.
+#[test]
+fn generic_container_element_read_substitutes_type_param() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Container<T>
+    var items List<T>
+
+    public fn first() T: self.items.element_at(0)
+
+let c = Container<f32>(items: List([1.5, 2.5]))
+println(f\"{c.first()}\")
+",
+        "1.5",
+    );
+}
+
+// The pointer-width instantiation and the `get` alias route through the same
+// substituted element read: `T = int` loads at pointer width and `get(0)`
+// resolves to the concrete type just as `element_at(0)` does.
+#[test]
+fn generic_container_int_element_read_and_get_alias() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Container<T>
+    var items List<T>
+
+    public fn first() T: self.items.element_at(0)
+    public fn viaget() T: self.items.get(0)
+
+let c = Container<int>(items: List([10, 20]))
+println(f\"{c.first() + c.viaget()}\")
+",
+        "20",
+    );
+}
+
+// A managed `T` container reads the boxed element through the same substitution
+// (`List<String>`), returning the value at pointer width and freeing cleanly —
+// `assert_runs_with_output` fails on a leak, so this guards the managed path.
+#[test]
+fn generic_container_managed_element_read_substitutes_type_param() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Container<T>
+    var items List<T>
+
+    public fn first() T: self.items.element_at(0)
+
+let c = Container<String>(items: List([\"hi\", \"yo\"]))
+println(c.first())
+",
+        "hi",
+    );
+}
