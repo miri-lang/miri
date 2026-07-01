@@ -136,6 +136,12 @@ pub struct TypeChecker {
     /// literals, keyed by binding name. Populated at the end of [`check`] and
     /// consumed by the web-gpu bundle emitter.
     pub gpu_buffer_inits: HashMap<String, GpuBufferInit>,
+    /// Distinct resolved type-argument tuples each generic class is instantiated
+    /// with, keyed by class name (e.g. `"Box"` → `[[int], [float]]`). Populated
+    /// at constructor inference so a later monomorphization pass can emit one
+    /// specialized body per instantiation without re-walking the AST. Tuples are
+    /// deduplicated by their type kinds (source spans are ignored).
+    pub generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
 }
 
 impl Default for TypeChecker {
@@ -178,6 +184,7 @@ impl TypeChecker {
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
             gpu_buffer_inits: HashMap::new(),
+            generic_class_instantiations: HashMap::new(),
         }
     }
 

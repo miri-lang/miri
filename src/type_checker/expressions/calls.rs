@@ -1529,6 +1529,14 @@ impl TypeChecker {
 
                 self.validate_class_generics(def, name, type_args, span);
 
+                if def.generics.is_some() {
+                    if let Some(args) = type_args {
+                        if let Some(resolved) = self.resolve_type_arg_tuple(args, context) {
+                            self.record_generic_class_instantiation(name, resolved);
+                        }
+                    }
+                }
+
                 let init_method = self.find_init_method(def);
 
                 if let Some(init_method) = init_method {
