@@ -611,11 +611,15 @@ impl CraneliftBackend {
         managed_names.sort_unstable();
 
         for type_name in managed_names {
+            // Bare `__drop_TypeName` (+ its `__decref_TypeName` wrapper). For a
+            // generic class this thunk backs the collection-element decref path;
+            // direct drops route through the per-instantiation thunks below.
             FunctionTranslator::generate_drop_function(
                 module,
                 ctx,
                 isa,
                 type_name,
+                None,
                 &self.type_definitions,
                 &self.generic_class_instantiations,
             )?;
@@ -625,6 +629,50 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 &self.type_definitions,
+            )?;
+            self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
+        }
+        Ok(())
+    }
+
+    /// Generate a per-instantiation `__drop_TypeName__Args` thunk for each
+    /// recorded instantiation of a generic class, so a managed field is DecRef'd
+    /// and a scalar field skipped, each per instantiation. Non-generic classes
+    /// and classes with no recorded instantiations produce nothing here (the bare
+    /// thunk suffices). Instantiations are deduplicated by mangled name so the
+    /// same symbol is never defined twice.
+    fn generate_instantiation_drop_functions(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+        type_name: &str,
+    ) -> Result<(), CodegenError> {
+        let Some(TypeDefinition::Class(class_def)) = self.type_definitions.get(type_name) else {
+            return Ok(());
+        };
+        if class_def.generics.is_none() {
+            return Ok(());
+        }
+        let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
+            return Ok(());
+        };
+        let mut emitted: Vec<String> = Vec::new();
+        for args in tuples {
+            let mangled =
+                crate::codegen::cranelift::rc::mangle_class_instantiation(type_name, args);
+            if emitted.contains(&mangled) {
+                continue;
+            }
+            emitted.push(mangled);
+            FunctionTranslator::generate_drop_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                Some(args),
+                &self.type_definitions,
+                &self.generic_class_instantiations,
             )?;
         }
         Ok(())
