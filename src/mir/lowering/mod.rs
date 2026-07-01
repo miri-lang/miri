@@ -34,6 +34,7 @@ use crate::mir::{
     BinOp, Body, Constant, Discriminant, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
+use crate::type_checker::context::GenericDefinition;
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -161,6 +162,75 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
         }
         _ => ty.clone(),
     }
+}
+
+// The three helpers below are the shared substitution machinery for generic
+// class monomorphization. Class-instantiation lowering does not call them yet;
+// until that consumer lands they are exercised only by the unit tests at the
+// bottom of this file, so each carries an explicit dead-code allowance.
+
+/// Build the substitution map from a generic class's declared parameters to the
+/// concrete type arguments of a resolved instantiation.
+///
+/// `resolved_class_ty` is the resolved `Custom(name, Some(args))` produced by
+/// type resolution: each argument expression wraps a concrete `Type`
+/// (`ExpressionKind::Type`). Every declared generic (`T`, `K`, …) is paired
+/// positionally with its argument, extracted through
+/// [`TypeChecker::extract_type_from_expression`] so no type-name string table is
+/// hand-rolled. A value-generic (size) slot whose argument is not a type
+/// expression is skipped, leaving that name unmapped.
+#[allow(dead_code)]
+pub(crate) fn build_class_generic_substitution(
+    tc: &TypeChecker,
+    def_generics: &[GenericDefinition],
+    resolved_class_ty: &Type,
+) -> HashMap<String, Type> {
+    let mut subs = HashMap::new();
+    let TypeKind::Custom(_, Some(args)) = &resolved_class_ty.kind else {
+        return subs;
+    };
+    for (generic, arg) in def_generics.iter().zip(args) {
+        if let Ok(concrete) = tc.extract_type_from_expression(arg) {
+            subs.insert(generic.name.clone(), concrete);
+        }
+    }
+    subs
+}
+
+/// Substitute a generic class's parameters inside a single field/return `Type`.
+///
+/// Convenience over [`build_class_generic_substitution`] + [`apply_generic_sub`]
+/// for the single-type case (a field type, a method return type). Callers that
+/// substitute many types should build the map once and reuse [`apply_generic_sub`].
+#[allow(dead_code)]
+pub(crate) fn substitute_class_generics(
+    tc: &TypeChecker,
+    def_generics: &[GenericDefinition],
+    resolved_class_ty: &Type,
+    ty: &Type,
+) -> Type {
+    let subs = build_class_generic_substitution(tc, def_generics, resolved_class_ty);
+    apply_generic_sub(ty, &subs)
+}
+
+/// Rebuild a monomorphized class body's `type_params`, dropping every generic
+/// name pinned to a concrete type by `subs`.
+///
+/// The names left behind are the still-opaque generics — an unsubstituted
+/// value-generic size or a nested generic — that Perceus must keep treating as
+/// unresolved. A substituted scalar `T` is removed so Perceus sees it as the
+/// concrete scalar the instantiation monomorphized to rather than an opaque
+/// (managed) placeholder.
+#[allow(dead_code)]
+pub(crate) fn rebuild_class_type_params(
+    def_generics: &[GenericDefinition],
+    subs: &HashMap<String, Type>,
+) -> Vec<String> {
+    def_generics
+        .iter()
+        .map(|generic| generic.name.clone())
+        .filter(|name| !subs.contains_key(name))
+        .collect()
 }
 
 /// Lower a generic function with concrete type substitutions to produce a
@@ -651,4 +721,154 @@ fn finalize_body(
     let body = std::mem::replace(&mut ctx.body, Body::new(0, span, ExecutionModel::Cpu));
     let lambda_bodies = std::mem::take(&mut ctx.lambda_bodies);
     Ok((body, lambda_bodies))
+}
+
+#[cfg(test)]
+mod class_generic_substitution_tests {
+    use super::*;
+    use crate::ast::types::TypeDeclarationKind;
+    use crate::ast::IdNode;
+    use crate::error::syntax::Span;
+
+    fn generic(name: &str) -> GenericDefinition {
+        GenericDefinition {
+            name: name.to_string(),
+            constraint: None,
+            kind: TypeDeclarationKind::None,
+        }
+    }
+
+    fn generic_field(name: &str) -> Type {
+        Type::new(
+            TypeKind::Generic(name.to_string(), None, TypeDeclarationKind::None),
+            Span::new(0, 0),
+        )
+    }
+
+    /// Build a resolved `Custom(class, Some(args))` whose argument expressions
+    /// each wrap a concrete `Type` — the shape type resolution produces.
+    fn instantiation(tc: &TypeChecker, class: &str, args: Vec<Type>) -> Type {
+        let arg_exprs = args
+            .into_iter()
+            .map(|ty| tc.create_type_expression(ty))
+            .collect();
+        Type::new(
+            TypeKind::Custom(class.to_string(), Some(arg_exprs)),
+            Span::new(0, 0),
+        )
+    }
+
+    #[test]
+    fn substitution_map_pairs_generics_with_resolved_args() {
+        let tc = TypeChecker::new();
+        let defs = [generic("K"), generic("V")];
+        let ty = instantiation(
+            &tc,
+            "Pair",
+            vec![
+                Type::new(TypeKind::Int, Span::new(0, 0)),
+                Type::new(TypeKind::Float, Span::new(0, 0)),
+            ],
+        );
+        let subs = build_class_generic_substitution(&tc, &defs, &ty);
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs["K"].kind, TypeKind::Int);
+        assert_eq!(subs["V"].kind, TypeKind::Float);
+    }
+
+    #[test]
+    fn substitutes_generic_field_type_to_concrete() {
+        let tc = TypeChecker::new();
+        let defs = [generic("T")];
+        let ty = instantiation(
+            &tc,
+            "Box",
+            vec![Type::new(TypeKind::Float, Span::new(0, 0))],
+        );
+        let substituted = substitute_class_generics(&tc, &defs, &ty, &generic_field("T"));
+        assert_eq!(substituted.kind, TypeKind::Float);
+    }
+
+    #[test]
+    fn substitutes_bare_identifier_generic_field_to_concrete() {
+        // A generic param written as a plain identifier resolves to `Custom(name, None)`.
+        let tc = TypeChecker::new();
+        let defs = [generic("T")];
+        let ty = instantiation(
+            &tc,
+            "Box",
+            vec![Type::new(TypeKind::Float, Span::new(0, 0))],
+        );
+        let bare = Type::new(TypeKind::Custom("T".to_string(), None), Span::new(0, 0));
+        let substituted = substitute_class_generics(&tc, &defs, &ty, &bare);
+        assert_eq!(substituted.kind, TypeKind::Float);
+    }
+
+    #[test]
+    fn leaves_unrelated_field_type_unchanged() {
+        let tc = TypeChecker::new();
+        let defs = [generic("T")];
+        let ty = instantiation(
+            &tc,
+            "Box",
+            vec![Type::new(TypeKind::Float, Span::new(0, 0))],
+        );
+        let unrelated = Type::new(TypeKind::String, Span::new(0, 0));
+        let substituted = substitute_class_generics(&tc, &defs, &ty, &unrelated);
+        assert_eq!(substituted.kind, TypeKind::String);
+    }
+
+    #[test]
+    fn rebuilt_type_params_exclude_substituted_names() {
+        let tc = TypeChecker::new();
+        let defs = [generic("T")];
+        let ty = instantiation(
+            &tc,
+            "Box",
+            vec![Type::new(TypeKind::Float, Span::new(0, 0))],
+        );
+        let subs = build_class_generic_substitution(&tc, &defs, &ty);
+        assert_eq!(
+            rebuild_class_type_params(&defs, &subs),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn rebuilt_type_params_keep_unsubstituted_names() {
+        // A value-generic (size) slot is not a type expression, so it stays
+        // unmapped and its name survives the rebuild.
+        let tc = TypeChecker::new();
+        let defs = [generic("T"), generic("Size")];
+        let size_expr = IdNode::new(
+            0,
+            ExpressionKind::Literal(crate::ast::literal::Literal::None),
+            Span::new(0, 0),
+        );
+        let ty = Type::new(
+            TypeKind::Custom(
+                "Buffer".to_string(),
+                Some(vec![
+                    tc.create_type_expression(Type::new(TypeKind::Float, Span::new(0, 0))),
+                    size_expr,
+                ]),
+            ),
+            Span::new(0, 0),
+        );
+        let subs = build_class_generic_substitution(&tc, &defs, &ty);
+        assert!(subs.contains_key("T"));
+        assert!(!subs.contains_key("Size"));
+        assert_eq!(
+            rebuild_class_type_params(&defs, &subs),
+            vec!["Size".to_string()]
+        );
+    }
+
+    #[test]
+    fn non_generic_instantiation_yields_empty_map() {
+        let tc = TypeChecker::new();
+        let defs = [generic("T")];
+        let plain = Type::new(TypeKind::Custom("Box".to_string(), None), Span::new(0, 0));
+        assert!(build_class_generic_substitution(&tc, &defs, &plain).is_empty());
+    }
 }
