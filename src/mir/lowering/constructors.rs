@@ -16,7 +16,10 @@ use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, St
 
 use super::dispatch::resolve_inherited_method;
 use super::helpers::coerce_rvalue;
-use super::{lower_expression, LoweringContext};
+use super::{
+    apply_generic_sub, build_class_generic_substitution, lower_expression, LoweringContext,
+};
+use std::collections::HashMap;
 
 /// Lowers a struct constructor call to an Aggregate rvalue.
 pub fn lower_struct_constructor(
@@ -184,14 +187,21 @@ pub fn lower_struct_constructor(
 
 /// Lowers a class constructor call to an Aggregate rvalue,
 /// then calls the `init` method if one exists.
+///
+/// `resolved_ty` is the fully-resolved constructor result type
+/// (`Custom(class, Some(args))`) when the call site knows it. For a generic
+/// class it drives the field-type substitution so a scalar `T` field
+/// (`Box<float>.value`) stores at its concrete width instead of a pointer slot.
 pub fn lower_class_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
     class_name: &str,
     def: &ClassDefinition,
     args: &[Expression],
+    resolved_ty: Option<&Type>,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let field_subs = build_class_field_substitution(ctx, def, resolved_ty);
     let init_class_name: Option<String> = {
         if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
             Some(class_name.to_string())
@@ -207,22 +217,79 @@ pub fn lower_class_constructor(
     let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> = {
         collect_class_fields_all(def, &ctx.type_checker.global_type_definitions)
             .into_iter()
-            .map(|(n, f)| (n.to_string(), f.clone()))
+            .map(|(n, f)| {
+                let mut fi = f.clone();
+                fi.ty = apply_generic_sub(&fi.ty, &field_subs);
+                (n.to_string(), fi)
+            })
             .collect()
     };
 
     if let Some(init_class) = init_class_name {
-        lower_class_with_init(ctx, span, class_name, init_class, &all_fields, args, dest)
+        let init_symbol = monomorphized_init_symbol(def, &init_class, class_name, &field_subs);
+        lower_class_with_init(ctx, span, class_name, init_symbol, &all_fields, args, dest)
     } else {
         lower_class_without_init(ctx, span, class_name, &all_fields, args, dest)
     }
+}
+
+/// Build the generic-parameter → concrete-type map for one class instantiation.
+///
+/// Empty for a non-generic class or when the call site could not resolve the
+/// instantiation's type arguments; in that case field types keep their generic
+/// spelling and the constructor behaves exactly as before.
+fn build_class_field_substitution(
+    ctx: &LoweringContext,
+    def: &ClassDefinition,
+    resolved_ty: Option<&Type>,
+) -> HashMap<String, Type> {
+    match (def.generics.as_deref(), resolved_ty) {
+        (Some(generics), Some(ty)) => {
+            build_class_generic_substitution(ctx.type_checker, generics, ty)
+        }
+        _ => HashMap::new(),
+    }
+}
+
+/// Resolve the `init` symbol the constructor must call.
+///
+/// For a monomorphizable instantiation whose `init` is defined on the class
+/// itself, the field substitution pins every generic to a concrete scalar; the
+/// call is mangled to the per-instantiation body (`Box_init__float`) the pipeline
+/// emits, so the argument crosses the ABI at the concrete width instead of being
+/// reinterpreted through the bare-generic (`Box_init`) slot. Any other case —
+/// non-generic class, unresolved args, or an `init` inherited from a base — keeps
+/// the plain `Class_init` symbol.
+fn monomorphized_init_symbol(
+    def: &ClassDefinition,
+    init_class: &str,
+    class_name: &str,
+    field_subs: &HashMap<String, Type>,
+) -> String {
+    let plain = format!("{init_class}_init");
+    let Some(generics) = def.generics.as_deref() else {
+        return plain;
+    };
+    if init_class != class_name || generics.is_empty() {
+        return plain;
+    }
+    let mut mangle_args = Vec::with_capacity(generics.len());
+    for generic in generics {
+        match field_subs.get(&generic.name) {
+            Some(ty) if super::is_monomorphizable_scalar(&ty.kind) => {
+                mangle_args.push((generic.name.clone(), ty.clone()))
+            }
+            _ => return plain,
+        }
+    }
+    super::dispatch::mangle_generic_name(&format!("{class_name}_init"), &mangle_args)
 }
 
 fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
     class_name: &str,
-    init_class: String,
+    init_symbol: String,
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
     args: &[Expression],
     dest: Option<Place>,
@@ -265,13 +332,10 @@ fn lower_class_with_init(
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
 
-    let mut mangled_name = String::with_capacity(init_class.len() + 5);
-    mangled_name.push_str(&init_class);
-    mangled_name.push_str("_init");
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+        literal: crate::ast::literal::Literal::Identifier(init_symbol),
     }));
 
     let void_ty = Type::new(TypeKind::Void, *span);
