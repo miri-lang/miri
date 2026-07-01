@@ -14,7 +14,7 @@ use crate::codegen::cranelift::translator::{
 };
 use crate::error::CodegenError;
 use crate::runtime_fns::rt;
-use crate::type_checker::context::{EnumDefinition, TypeDefinition};
+use crate::type_checker::context::{ClassDefinition, EnumDefinition, TypeDefinition};
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
@@ -160,6 +160,41 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Void
             | TypeKind::Error
             | TypeKind::Linear(_) => false,
+        }
+    }
+
+    /// True when a generic class's bare-generic field is a genuine no-op to drop.
+    ///
+    /// Resolves the field's generic parameter to the concrete type of every
+    /// recorded instantiation. Returns true only when at least one instantiation
+    /// exists and each pins the field to a pointer-width integer — non-managed, so
+    /// the shared bare-name thunk can safely skip it. A managed, non-pointer-width,
+    /// or absent instantiation returns false so the caller keeps the fail-closed
+    /// rejection (per-instantiation drop thunks land in a later step).
+    fn generic_field_drops_to_noop(
+        class_def: &ClassDefinition,
+        field_kind: &TypeKind,
+        instantiations: Option<&Vec<Vec<crate::ast::types::Type>>>,
+    ) -> bool {
+        let gen_name = if let TypeKind::Generic(name, _, _) = field_kind {
+            name.as_str()
+        } else if let TypeKind::Custom(name, None) = field_kind {
+            name.as_str()
+        } else {
+            return false;
+        };
+        let Some(generics) = class_def.generics.as_ref() else {
+            return false;
+        };
+        let Some(param_idx) = generics.iter().position(|g| g.name == gen_name) else {
+            return false;
+        };
+        match instantiations {
+            Some(tuples) if !tuples.is_empty() => tuples.iter().all(|args| {
+                args.get(param_idx)
+                    .is_some_and(|t| crate::mir::lowering::is_pointer_width_int(&t.kind))
+            }),
+            _ => false,
         }
     }
 
@@ -685,30 +720,36 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Class(class_def) => {
                 use crate::type_checker::context::collect_class_fields_all;
                 let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
-                // Generic classes share a single bare-name `__drop_TypeName` thunk
+                // A generic class shares a single bare-name `__drop_TypeName` thunk
                 // across every `<T>` instantiation, so a field whose type is a bare
                 // generic parameter has no concrete kind at thunk-emission time.
-                // We cannot DecRef it without instantiation-specific monomorphization.
-                // Reject explicitly so the leak does not silently ship.
-                if class_def.generics.is_some() {
-                    for (field_name, fi) in &all_fields {
-                        if Self::is_unresolved_generic_elem(&fi.ty.kind, type_ctx.type_definitions)
-                        {
-                            return Err(CodegenError::Internal(format!(
-                                "generic class '{type_name}' has a bare-generic field '{field_name}' \
-                                 whose drop semantics depend on the instantiation; \
-                                 bare-name drop thunks cannot encode this. Use a concrete wrapper \
-                                 type (e.g. `List<T>`) or wait for per-instantiation mangling."
-                            )));
+                // Resolve it against the recorded instantiations: when every
+                // instantiation makes the field a pointer-width integer (non-managed,
+                // nothing to reference-count), the drop is a genuine no-op and the
+                // field is dropped from the DecRef set. A managed or non-pointer-width
+                // instantiation still cannot be encoded by one bare-name thunk, so it
+                // is rejected — the leak must not silently ship.
+                let instantiations = type_ctx.generic_class_instantiations.get(type_name);
+                let mut managed_fields: Vec<(usize, TypeKind)> = Vec::new();
+                for (idx, (field_name, fi)) in all_fields.iter().enumerate() {
+                    let kind = &fi.ty.kind;
+                    if class_def.generics.is_some()
+                        && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
+                    {
+                        if Self::generic_field_drops_to_noop(class_def, kind, instantiations) {
+                            continue;
                         }
+                        return Err(CodegenError::Internal(format!(
+                            "generic class '{type_name}' has a bare-generic field '{field_name}' \
+                             whose drop semantics depend on the instantiation; \
+                             bare-name drop thunks cannot encode this. Use a concrete wrapper \
+                             type (e.g. `List<T>`) or wait for per-instantiation mangling."
+                        )));
+                    }
+                    if is_field_managed(kind) {
+                        managed_fields.push((idx, kind.clone()));
                     }
                 }
-                let managed_fields: Vec<(usize, TypeKind)> = all_fields
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, fi))| is_field_managed(&fi.ty.kind))
-                    .map(|(idx, (_, fi))| (idx, fi.ty.kind.clone()))
-                    .collect();
                 Self::emit_struct_like_field_decrefs(
                     builder,
                     ctx,
@@ -1045,6 +1086,7 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
@@ -1069,6 +1111,7 @@ impl<'a> FunctionTranslator<'a> {
             &mut builder_ctx,
             type_name,
             type_definitions,
+            generic_class_instantiations,
             ptr_type,
             call_conv,
         )?;
@@ -1094,6 +1137,7 @@ impl<'a> FunctionTranslator<'a> {
         builder_ctx: &mut FunctionBuilderContext,
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
@@ -1116,6 +1160,7 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
+            generic_class_instantiations,
         };
 
         if Self::type_has_user_drop(type_name, type_definitions) {

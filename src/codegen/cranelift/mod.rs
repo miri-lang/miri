@@ -61,6 +61,10 @@ pub struct CraneliftBackend {
     isa: Arc<dyn TargetIsa>,
     /// Type definitions from the type checker (for layout computation).
     type_definitions: HashMap<String, TypeDefinition>,
+    /// Concrete type-argument tuples recorded for each generic class. Consulted
+    /// by the drop-thunk generator to resolve a bare-generic field to its
+    /// instantiation's concrete type.
+    generic_class_instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
     /// Runtime function imports to declare as external symbols.
     runtime_imports: Vec<RuntimeImport>,
 }
@@ -144,6 +148,7 @@ impl CraneliftBackend {
         Ok(Self {
             isa,
             type_definitions: HashMap::new(),
+            generic_class_instantiations: HashMap::new(),
             runtime_imports: Vec::new(),
         })
     }
@@ -161,6 +166,15 @@ impl CraneliftBackend {
     /// Set the type definitions for layout computation.
     pub fn set_type_definitions(&mut self, defs: HashMap<String, TypeDefinition>) {
         self.type_definitions = defs;
+    }
+
+    /// Set the recorded generic-class instantiations used by the drop-thunk
+    /// generator to resolve bare-generic fields to concrete instantiation types.
+    pub fn set_generic_class_instantiations(
+        &mut self,
+        instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
+    ) {
+        self.generic_class_instantiations = instantiations;
     }
 
     /// Set runtime function imports that should be declared as external symbols.
@@ -603,6 +617,7 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 &self.type_definitions,
+                &self.generic_class_instantiations,
             )?;
             FunctionTranslator::generate_clone_function(
                 module,
