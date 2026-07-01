@@ -185,11 +185,14 @@ println(f\"{b.get()}\")
     );
 }
 
-// A managed `T` (String) needs a per-instantiation drop thunk to free the field;
-// the shared bare-name thunk cannot encode that, so it stays fail-closed here.
+// A managed `T` (String) monomorphizes to a per-instantiation drop thunk
+// (`__drop_Box__String`) that DecRefs the field, so the boxed string reads back
+// and the box frees cleanly. `assert_runs_with_output` fails on a leak (the
+// runtime prints `MIRI_LEAK_CHECK: leaked` and exits non-zero), so this also
+// guards against the field not being freed.
 #[test]
-fn generic_class_managed_field_is_rejected_until_drop_thunks_land() {
-    assert_build_error(
+fn generic_class_string_field_returns_value() {
+    assert_runs_with_output(
         "
 class Box<T>
     var value T
@@ -199,15 +202,36 @@ class Box<T>
 let b = Box<String>(value: \"hi\")
 println(b.get())
 ",
-        "bare-generic field",
+        "hi",
     );
 }
 
-// Two conflicting instantiations of the same generic class cannot share one
-// bare-name drop thunk (one skips, one would DecRef), so the mix is rejected.
+// Constructing then dropping a `Box<String>` without ever reading the field must
+// still free the boxed string — isolates the per-instantiation drop thunk from
+// any method-return reference counting.
 #[test]
-fn generic_class_conflicting_instantiations_are_rejected() {
-    assert_build_error(
+fn generic_class_string_field_frees_without_leak() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    var value T
+
+    public fn get() T: self.value
+
+let b = Box<String>(value: \"hi\")
+println(\"made a box\")
+",
+        "made a box",
+    );
+}
+
+// A scalar and a managed instantiation of the same generic class coexist: the
+// `Box<int>` field is skipped by its no-op thunk while the `Box<String>` field is
+// DecRef'd by its own thunk. A per-generic-class (rather than per-instantiation)
+// skip would leak the string here.
+#[test]
+fn generic_class_int_and_string_instantiations_coexist() {
+    assert_runs_with_output(
         "
 class Box<T>
     var value T
@@ -215,10 +239,34 @@ class Box<T>
     public fn get() T: self.value
 
 let a = Box<int>(value: 7)
-let b = Box<String>(value: \"x\")
+let b = Box<String>(value: \"hi\")
 println(f\"{a.get()}\")
 println(b.get())
 ",
-        "bare-generic field",
+        "7\nhi",
+    );
+}
+
+// Regression guard: a `List` of managed elements must still free its elements
+// even though generic-class drop thunks now exist. `List` routes through the
+// runtime `miri_rt_list_free` decref path, never the generic-class thunk, so a
+// coexisting `Box<String>` must not perturb collection element cleanup.
+#[test]
+fn list_of_strings_still_frees_alongside_generic_class() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Box<T>
+    var value T
+
+    public fn get() T: self.value
+
+var words = List([\"hello\", \"world\", \"foo\"])
+words.remove_at(0)
+let b = Box<String>(value: \"boxed\")
+println(f\"{words.length()}\")
+",
+        "2",
     );
 }
