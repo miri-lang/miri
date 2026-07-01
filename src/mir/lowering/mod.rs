@@ -490,6 +490,10 @@ fn lower_class_method_impl(
     // not added to variable_map.
     let body = Body::new(params.len() + 1, ast_method.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
+    // Carry the instantiation substitution so an intrinsic element read typed
+    // `T` (e.g. `self.items.element_at(0)`) resolves to the concrete
+    // instantiation type instead of the pointer-width fallback.
+    ctx.generic_subs = subs.clone();
 
     // Method-own generics plus class-level generics that appear in param/return
     // types (e.g. T in List<T>), minus any name pinned to a concrete type by

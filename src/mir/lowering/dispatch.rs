@@ -1225,6 +1225,11 @@ fn lower_collection_element_access(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
+    // Inside a monomorphized generic-class method, a `List<T>`/`Array<T,N>` field
+    // carries the unsubstituted parameter `T`. Resolving it to the concrete
+    // instantiation type makes codegen address the element at its true width and
+    // stride (a `T = f32` element loads 4 bytes, not the pointer-width fallback).
+    let obj_ty = substitute_collection_element_ty(obj_ty, &ctx.generic_subs);
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, &args[0], None)?;
@@ -1241,6 +1246,7 @@ fn lower_collection_element_access(
         .type_checker
         .get_type(call_expr_id)
         .cloned()
+        .map(|ty| crate::mir::lowering::apply_generic_sub(&ty, &ctx.generic_subs))
         .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
     let (destination, op) = call_destination(ctx, elem_ty, dest, *span);
 
@@ -1254,6 +1260,42 @@ fn lower_collection_element_access(
         ctx.emit_temp_drop(src_local, obj_watermark, *span);
     }
     Ok(op)
+}
+
+/// Substitute a generic class's type parameters into a collection type's
+/// element type. A `List<T>`/`Array<T,N>` field read inside a monomorphized
+/// method sees the unsubstituted `T`; mapping it to the concrete instantiation
+/// type (`List<f32>`) lets codegen resolve the element's width and stride.
+/// Non-collection or already-concrete types pass through unchanged, and an empty
+/// substitution (the non-monomorphized path) is a no-op clone.
+fn substitute_collection_element_ty(obj_ty: &Type, subs: &HashMap<String, Type>) -> Type {
+    if subs.is_empty() {
+        return obj_ty.clone();
+    }
+    let sub_expr = |expr: &Expression| -> Expression {
+        match &expr.node {
+            ExpressionKind::Type(ty, is_ref) => Expression {
+                id: expr.id,
+                span: expr.span,
+                node: ExpressionKind::Type(Box::new(apply_generic_sub(ty, subs)), *is_ref),
+            },
+            _ => expr.clone(),
+        }
+    };
+    let new_kind = match &obj_ty.kind {
+        TypeKind::List(elem) => TypeKind::List(Box::new(sub_expr(elem))),
+        TypeKind::Array(elem, size) => TypeKind::Array(Box::new(sub_expr(elem)), size.clone()),
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+            ) =>
+        {
+            TypeKind::Custom(name.clone(), Some(args.iter().map(sub_expr).collect()))
+        }
+        _ => return obj_ty.clone(),
+    };
+    Type::new(new_kind, obj_ty.span)
 }
 
 /// Materialize an index operand into a bare local, spilling to a temp when it is
