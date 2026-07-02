@@ -191,6 +191,12 @@ pub struct ClassDefinition {
     /// here and is substituted by descendants that pin the chain.
     pub base_class_args: Option<Vec<Type>>,
     pub traits: Vec<String>,
+    /// Generic args declared at each `implements Trait<...>`, keyed by trait
+    /// name. Resolved in this class's generic-param scope, so a class generic
+    /// `T` in `implements Gettable<T>` survives as `Generic("T")` here; a trait
+    /// default method returning the trait's own param (`U`) is remapped
+    /// `U → T → concrete` at the call site through this binding.
+    pub trait_args: HashMap<String, Vec<Type>>,
     pub fields: Vec<(String, FieldInfo)>, // Preserves declaration order for constructor and layout
     pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,

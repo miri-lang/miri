@@ -47,6 +47,7 @@ fn class(
         base_class: base.map(String::from),
         base_class_args: None,
         traits: traits.iter().map(|s| s.to_string()).collect(),
+        trait_args: std::collections::HashMap::new(),
         fields: Vec::new(),
         methods: method_map,
         module: String::new(),

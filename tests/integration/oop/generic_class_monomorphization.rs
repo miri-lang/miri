@@ -424,3 +424,230 @@ println(c.first())
         "hi",
     );
 }
+
+// A two-parameter generic class monomorphizes each field at its own concrete
+// width and mangles the method by both type arguments in declaration order
+// (`Pair_first__int__float`). Reading each field back proves the K and V slots
+// are laid out and dispatched independently.
+#[test]
+fn generic_pair_two_scalar_params_round_trip() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+    public fn first() K: self.key
+    public fn second() V: self.val
+
+let p = Pair<int, float>(key: 3, val: 2.5)
+println(f\"{p.first()}\")
+println(f\"{p.second()}\")
+",
+        "3\n2.5",
+    );
+}
+
+// Two distinct instantiations of the same two-parameter class coexist: the
+// argument order distinguishes the mangled symbols (`Pair_first__int__float`
+// vs `Pair_first__String__int`), so neither monomorphization collides.
+#[test]
+fn generic_pair_distinct_instantiations_do_not_collide() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+    public fn first() K: self.key
+    public fn second() V: self.val
+
+let a = Pair<int, float>(key: 1, val: 2.5)
+let b = Pair<String, int>(key: \"x\", val: 9)
+println(f\"{a.first()}\")
+println(f\"{a.second()}\")
+println(b.first())
+println(f\"{b.second()}\")
+",
+        "1\n2.5\nx\n9",
+    );
+}
+
+// A managed field followed by a scalar field: the drop thunk must DecRef the
+// `String` at its own offset (field 0) while skipping the scalar `int` (field
+// 1). `assert_runs_with_output` fails on a leak, so this guards multi-field
+// offset substitution in the per-instantiation drop path.
+#[test]
+fn generic_pair_managed_then_scalar_frees_at_correct_offset() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+    public fn first() K: self.key
+    public fn second() V: self.val
+
+let p = Pair<String, int>(key: \"hi\", val: 7)
+println(p.first())
+println(f\"{p.second()}\")
+",
+        "hi\n7",
+    );
+}
+
+// The mirror layout — a scalar field ahead of a managed one: the drop thunk
+// skips the scalar `int` (field 0) and DecRefs the `String` at field 1's
+// offset. Leak-guarded like its sibling above.
+#[test]
+fn generic_pair_scalar_then_managed_frees_at_correct_offset() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+    public fn first() K: self.key
+    public fn second() V: self.val
+
+let p = Pair<int, String>(key: 5, val: \"yo\")
+println(f\"{p.first()}\")
+println(p.second())
+",
+        "5\nyo",
+    );
+}
+
+// Both fields managed: the drop thunk DecRefs each `String` at its own offset.
+// A leak (or a double-free at the wrong offset) fails the run.
+#[test]
+fn generic_pair_two_managed_fields_free() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+    public fn first() K: self.key
+    public fn second() V: self.val
+
+let p = Pair<String, String>(key: \"a\", val: \"b\")
+println(p.first())
+println(p.second())
+",
+        "a\nb",
+    );
+}
+
+// A trait default method whose parameter and return use the trait's own generic
+// name (`U`), implemented by a class that binds it under a different name
+// (`class Box<T> implements Gettable<T>`). The `U → T → concrete` remap must run
+// so a `Box<float>` receiver dispatches to a body typed at `float`; without it
+// the return stays the opaque trait param `U`.
+#[test]
+fn generic_class_trait_default_remaps_differing_param_name_float() {
+    assert_runs_with_output(
+        "
+trait Gettable<U>
+    fn echo(x U) U
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<float>(value: 3.5)
+println(f\"{b.echo(1.5)}\")
+",
+        "1.5",
+    );
+}
+
+// The int instantiation of the same differing-name trait default keeps its
+// pointer-width body — proving the remap composes with the concrete type, not
+// just the parameter name.
+#[test]
+fn generic_class_trait_default_remaps_differing_param_name_int() {
+    assert_runs_with_output(
+        "
+trait Gettable<U>
+    fn echo(x U) U
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<int>(value: 7)
+println(f\"{b.echo(9) + b.echo(3)}\")
+",
+        "12",
+    );
+}
+
+// A managed `T` under a differing-name trait default routes through the bare
+// pointer-width body and frees cleanly — leak-guarded.
+#[test]
+fn generic_class_trait_default_remaps_differing_param_name_managed() {
+    assert_runs_with_output(
+        "
+trait Gettable<U>
+    fn echo(x U) U
+        return x
+
+class Box<T> implements Gettable<T>
+    var value T
+
+let b = Box<String>(value: \"hi\")
+println(b.echo(\"world\"))
+",
+        "world",
+    );
+}
+
+// A generic class instantiated with the wrong number of type arguments is
+// rejected at the constructor, before any monomorphization runs.
+#[test]
+fn generic_pair_wrong_type_arg_count_is_rejected() {
+    assert_compiler_error(
+        "
+class Pair<K, V>
+    var key K
+    var val V
+
+let p = Pair<int>(key: 3, val: 4)
+",
+        "expects 2 generic arguments, got 1",
+    );
+}
+
+// A constructor argument whose type does not match the instantiation's concrete
+// field type is rejected with a field type-mismatch diagnostic.
+#[test]
+fn generic_box_constructor_arg_type_mismatch_is_rejected() {
+    assert_compiler_error(
+        "
+class Box<T>
+    var value T
+
+let b = Box<int>(value: \"notint\")
+",
+        "Type mismatch for field 'value'",
+    );
+}
+
+// A method argument typed `T` is substituted to the concrete instantiation
+// type, so passing an incompatible argument is a compile-time type error.
+#[test]
+fn generic_box_method_arg_type_mismatch_is_rejected() {
+    assert_compiler_error(
+        "
+class Box<T>
+    var value T
+
+    public fn add(other T) T: self.value + other
+
+let b = Box<int>(value: 3)
+let r = b.add(\"str\")
+",
+        "expected int, got String",
+    );
+}

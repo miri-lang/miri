@@ -1227,6 +1227,46 @@ impl TypeChecker {
         }
     }
 
+    /// Bindings of every directly-implemented trait's generic parameters to the
+    /// class's `implements Trait<args>` arguments, keyed by trait-param name and
+    /// valued in the class's generic-param terms.
+    ///
+    /// A trait default method is written in the trait's own parameters (`U`),
+    /// which a class binds through `implements Trait<T>` in class-param terms.
+    /// The generic-class monomorphization pipeline needs `U → T` to then compose
+    /// with the concrete `T → float`, so both the definition body and the call
+    /// site's return type land at the same width. `class Box<T> implements
+    /// Gettable<T>` yields `{U → Generic("T")}` (the trait param name, the class
+    /// argument). Matching parameter names produce a harmless identity entry.
+    ///
+    /// Only directly-implemented traits are covered; a method inherited from a
+    /// parent trait keeps the parent's parameter names (parent-trait argument
+    /// bindings are not threaded here).
+    pub(crate) fn class_trait_param_bindings(
+        &self,
+        class_name: &str,
+    ) -> std::collections::HashMap<String, Type> {
+        let mut bindings = std::collections::HashMap::new();
+        let Some(TypeDefinition::Class(class_def)) = self.global_type_definitions.get(class_name)
+        else {
+            return bindings;
+        };
+        for (trait_name, args) in &class_def.trait_args {
+            let Some(TypeDefinition::Trait(trait_def)) =
+                self.global_type_definitions.get(trait_name)
+            else {
+                continue;
+            };
+            let Some(params) = trait_def.generics.as_ref() else {
+                continue;
+            };
+            for (param, arg) in params.iter().zip(args.iter()) {
+                bindings.insert(param.name.clone(), arg.clone());
+            }
+        }
+        bindings
+    }
+
     // ==================== Type Expression Helpers ====================
 
     /// Creates a type expression from a Type.

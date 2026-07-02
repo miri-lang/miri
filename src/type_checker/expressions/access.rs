@@ -1294,9 +1294,14 @@ impl TypeChecker {
                 }
                 _ => break,
             };
+            // A trait default method is written in the trait's own generic
+            // parameters (`U`), which the class binds through `implements
+            // Trait<...>` in class-param terms (`T`). Extend the receiver
+            // mapping with `trait-param → class-arg → concrete` so a default
+            // returning `U` resolves to the receiver's concrete type.
+            let mapping = self.trait_augmented_mapping(&class_name, &receiver_mapping);
             for trait_name in &traits {
-                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &receiver_mapping)
-                {
+                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &mapping) {
                     return Some(ty);
                 }
             }
@@ -1307,6 +1312,24 @@ impl TypeChecker {
             break;
         }
         None
+    }
+
+    /// Extend a class receiver mapping (class-param → concrete) with one entry
+    /// per directly-implemented trait generic parameter, resolving each trait
+    /// binding through the receiver mapping. Shares the binding source with the
+    /// generic-class monomorphization pipeline
+    /// ([`TypeChecker::class_trait_param_bindings`]).
+    fn trait_augmented_mapping(
+        &self,
+        class_name: &str,
+        receiver_mapping: &std::collections::HashMap<String, Type>,
+    ) -> std::collections::HashMap<String, Type> {
+        let mut mapping = receiver_mapping.clone();
+        for (trait_param, class_arg) in self.class_trait_param_bindings(class_name) {
+            let concrete = self.substitute_type(&class_arg, receiver_mapping);
+            mapping.insert(trait_param, concrete);
+        }
+        mapping
     }
 
     fn build_receiver_mapping(

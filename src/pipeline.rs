@@ -832,7 +832,18 @@ impl Pipeline {
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
     ) -> Result<(), CompilerError> {
-        for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
+        for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
+            // The trait-default body is written in the trait's own generic
+            // parameters (`U`), which the class binds through
+            // `implements Trait<...>` in class-param terms (`T`). Extend the
+            // class-param substitution with `trait-param → class-arg → concrete`
+            // so a default over `U` monomorphizes at the concrete scalar width
+            // (matching the return type the type checker resolves for the call).
+            mir::lowering::dispatch::extend_subs_with_trait_params(
+                &result.type_checker,
+                class_name,
+                &mut subs,
+            );
             Self::lower_one_instantiation_method(
                 result,
                 class_name,

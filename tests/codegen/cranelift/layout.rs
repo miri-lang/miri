@@ -520,6 +520,7 @@ fn test_class_is_pointer_sized() {
             base_class: None,
             base_class_args: None,
             traits: vec![],
+            trait_args: std::collections::HashMap::new(),
             fields: Vec::new(),
             methods: BTreeMap::new(),
             module: String::new(),
@@ -545,6 +546,7 @@ fn test_class_field_layout_uses_pointer_slots() {
             base_class: None,
             base_class_args: None,
             traits: vec![],
+            trait_args: std::collections::HashMap::new(),
             fields: vec![
                 (
                     "f0".to_string(),
