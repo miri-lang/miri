@@ -55,6 +55,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
             ("lane_id".to_string(), int_type(), MemberVisibility::Public),
         ],
         generics: None,
+        traits: vec![],
         has_drop: false,
         module: "std".to_string(),
     });
@@ -68,6 +69,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
             ("z".to_string(), int_type(), MemberVisibility::Public),
         ],
         generics: None,
+        traits: vec![],
         has_drop: false,
         module: "std".to_string(),
     });
@@ -111,6 +113,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
                 ("warp".to_string(), warp_type(), MemberVisibility::Public),
             ],
             generics: None,
+            traits: vec![],
             has_drop: false,
             module: "std".to_string(),
         }),
@@ -122,6 +125,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         TypeDefinition::Struct(StructDefinition {
             fields: vec![],
             generics: None,
+            traits: vec![],
             has_drop: false,
             module: "std".to_string(),
         }),
@@ -149,6 +153,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         TypeDefinition::Struct(StructDefinition {
             fields,
             generics: None,
+            traits: vec![],
             has_drop: false,
             module: "std".to_string(),
         }),
@@ -167,6 +172,7 @@ fn register_async_types(types: &mut HashMap<String, TypeDefinition>) {
                 constraint: None,
                 kind: TypeDeclarationKind::None,
             }]),
+            traits: vec![],
             has_drop: false,
             module: "std".to_string(),
         }),

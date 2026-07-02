@@ -127,7 +127,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             | StatementKind::Use(_, _)
             | StatementKind::Type(_, _)
             | StatementKind::Enum(_, _, _, _, _, _)
-            | StatementKind::Struct(_, _, _, _, _)
+            | StatementKind::Struct(_, _, _, _, _, _)
             | StatementKind::Class(_)
             | StatementKind::Trait(_, _, _, _, _)
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)

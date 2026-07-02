@@ -858,7 +858,7 @@ fn collect_function_defs<'a>(
                     collect_function_defs(&cd.body, fn_defs, Some(&cls.clone()));
                 }
             }
-            StatementKind::Struct(name_expr, _, _, methods, _) => {
+            StatementKind::Struct(name_expr, _, _, methods, _, _) => {
                 if let Some(s) = extract_name_from_expr(name_expr) {
                     collect_function_defs(methods, fn_defs, Some(&s.clone()));
                 }
@@ -1336,7 +1336,7 @@ fn walk_stmt_for_escapes(
         StatementKind::Use(_, _)
         | StatementKind::Type(_, _)
         | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _, _)
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)

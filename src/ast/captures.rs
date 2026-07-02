@@ -120,7 +120,7 @@ fn collect_identifiers_in_stmt(
         | StatementKind::Type(_, _)
         | StatementKind::FunctionDeclaration(_)
         | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _, _)
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)

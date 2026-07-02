@@ -68,8 +68,9 @@ fn normalize_stmt(stmt: &mut Statement) {
         StatementKind::Enum(name, generics, variants, methods, _, _) => {
             normalize_nominal_type_decl(name, generics, variants, methods)
         }
-        StatementKind::Struct(name, generics, fields, methods, _) => {
-            normalize_nominal_type_decl(name, generics, fields, methods)
+        StatementKind::Struct(name, generics, fields, methods, _, traits) => {
+            normalize_nominal_type_decl(name, generics, fields, methods);
+            normalize_expr_list(traits);
         }
         StatementKind::Class(class_data) => normalize_class_stmt(class_data),
         StatementKind::Trait(name, generics, parent_traits, body, _) => {

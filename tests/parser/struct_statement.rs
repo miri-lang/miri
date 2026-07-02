@@ -27,6 +27,7 @@ struct Point: x int, y int
             ],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -48,6 +49,7 @@ struct Point
             ],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -74,6 +76,7 @@ struct UserProfile
             ],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -88,6 +91,7 @@ fn test_struct_with_single_member() {
             vec![struct_member("value", type_expr_non_null(type_float()))],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -144,6 +148,7 @@ fn test_private_struct() {
             vec![struct_member("x", type_expr_non_null(type_int()))],
             vec![],
             MemberVisibility::Private,
+            vec![],
         )],
     );
 }
@@ -161,6 +166,7 @@ fn test_generic_struct() {
             )],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -178,6 +184,7 @@ fn test_struct_with_multiple_generic_parameters() {
             ],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -199,6 +206,7 @@ fn test_generic_struct_with_constraint() {
             )],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -219,6 +227,7 @@ fn test_struct_with_nested_generic_member() {
             )],
             vec![],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -269,6 +278,7 @@ struct Conn
                 },
             )],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }
@@ -303,6 +313,7 @@ struct Token
                 },
             )],
             MemberVisibility::Public,
+            vec![],
         )],
     );
 }

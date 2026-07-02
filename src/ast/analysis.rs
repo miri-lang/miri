@@ -32,7 +32,7 @@ fn stmt_uses_gpu(stmt: &Statement) -> bool {
         }
         StatementKind::While(_, body, _) | StatementKind::For(_, _, body) => stmt_uses_gpu(body),
         StatementKind::Class(class_data) => class_data.body.iter().any(stmt_uses_gpu),
-        StatementKind::Struct(_, _, _, methods, _)
+        StatementKind::Struct(_, _, _, methods, _, _)
         | StatementKind::Enum(_, _, _, methods, _, _)
         | StatementKind::Trait(_, _, _, methods, _) => methods.iter().any(stmt_uses_gpu),
         // A `gpu let` / `gpu var` binding may trigger a cross-residency

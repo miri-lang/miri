@@ -241,3 +241,75 @@ fn main()
 ",
     );
 }
+
+// A user `struct` — not only a `class` — becomes gpu-eligible purely by
+// declaring `implements Accelerable`. Structs are the natural shape for
+// device-resident value data, so the residency gate must recognize a struct's
+// trait list exactly as it does a class's.
+#[test]
+fn gpu_let_struct_implementing_accelerable_is_accepted() {
+    assert_type_checks(
+        "
+use system.accelerator
+
+struct Point implements Accelerable
+    x int
+    y int
+
+fn main()
+    gpu let p = Point(1, 2)
+",
+    );
+}
+
+// A `struct` declaring `implements Accelerable` is held to the same
+// field-accelerability rule as a class: every field must itself be accelerable.
+#[test]
+fn struct_implementing_accelerable_with_non_accelerable_field_is_rejected() {
+    assert_compiler_error(
+        "
+use system.accelerator
+
+struct Bad implements Accelerable
+    s String
+
+fn main()
+    let x = 1
+",
+        "field 's' has type 'String', which is not accelerable",
+    );
+}
+
+// A user struct that does not declare the trait stays non-accelerable, so a
+// `gpu let` over it is rejected — the trait list, not the struct-ness, gates it.
+#[test]
+fn gpu_let_struct_without_accelerable_is_rejected() {
+    assert_compiler_error(
+        "
+struct Plain
+    x int
+
+fn main()
+    gpu let p = Plain(1)
+",
+        "'Plain' does not implement 'Accelerable' and cannot be gpu-resident.",
+    );
+}
+
+// `implements` on a struct rejects a non-trait target exactly as on a class.
+#[test]
+fn struct_implementing_non_trait_is_rejected() {
+    assert_compiler_error(
+        "
+struct Other
+    y int
+
+struct Point implements Other
+    x int
+
+fn main()
+    let z = 1
+",
+        "'Other' is not a trait",
+    );
+}

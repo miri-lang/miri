@@ -386,24 +386,44 @@ impl TypeChecker {
         fields: &[(String, FieldInfo)],
         name_expr: &Expression,
     ) {
+        self.check_accelerable_fields(
+            name,
+            trait_names,
+            fields
+                .iter()
+                .map(|(field_name, field)| (field_name.as_str(), &field.ty)),
+            name_expr,
+        );
+    }
+
+    /// Shared `implements Accelerable` field check for classes and structs: every
+    /// field must be accelerable (or a generic parameter, resolved at the
+    /// instantiation site). No-op unless the trait list names `Accelerable`.
+    pub(crate) fn check_accelerable_fields<'a>(
+        &mut self,
+        name: &str,
+        trait_names: &[String],
+        fields: impl Iterator<Item = (&'a str, &'a Type)>,
+        name_expr: &Expression,
+    ) {
         if !trait_names.iter().any(|t| t == ACCELERABLE_TRAIT_NAME) {
             return;
         }
-        for (field_name, field) in fields {
-            if permits_accelerable(&field.ty.kind, &self.global_type_definitions) {
+        for (field_name, field_ty) in fields {
+            if permits_accelerable(&field_ty.kind, &self.global_type_definitions) {
                 continue;
             }
             self.report_error(
                 format!(
                     "'{}' implements 'Accelerable' but field '{}' has type '{}', which is not accelerable; every field of an 'Accelerable' type must itself be accelerable.",
-                    name, field_name, field.ty
+                    name, field_name, field_ty
                 ),
                 name_expr.span,
             );
         }
     }
 
-    fn check_class_traits(
+    pub(crate) fn check_class_traits(
         &mut self,
         traits: &[Expression],
         context: &mut Context,

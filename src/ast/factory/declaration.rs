@@ -75,6 +75,7 @@ pub fn struct_statement(
     members: Vec<Expression>,
     methods: Vec<Statement>,
     visibility: MemberVisibility,
+    traits: Vec<Expression>,
 ) -> Statement {
     stmt(StatementKind::Struct(
         Box::new(name),
@@ -82,6 +83,7 @@ pub fn struct_statement(
         members,
         methods,
         visibility,
+        traits,
     ))
 }
 
