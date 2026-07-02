@@ -224,7 +224,7 @@ impl TypeChecker {
         }
     }
 
-    fn check_slice_bounds_for_array(
+    pub(crate) fn check_slice_bounds_for_array(
         &mut self,
         array_size: Option<i128>,
         index: &Expression,

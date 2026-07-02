@@ -66,6 +66,13 @@ impl TypeChecker {
         context: &mut Context,
         call_id: usize,
     ) -> Type {
+        // `g.slice(range)` on a gpu-resident binding is a partial readback, not a
+        // normal method call — recognize it before member resolution (which would
+        // reject `slice` as an unknown Array method).
+        if let Some(slice_ty) = self.try_infer_gpu_slice_call(func, args, span, context) {
+            return slice_ty;
+        }
+
         let func_type = self.infer_expression(func, context);
 
         // Process arguments
@@ -1182,6 +1189,65 @@ impl TypeChecker {
             | TypeKind::Identifier
             | TypeKind::Function(_) => false,
         }
+    }
+
+    /// Recognizes `g.slice(range)` on a gpu-resident array binding and types it
+    /// as a partial readback: a host `List<T>` holding the `range`-selected
+    /// elements. The gpu binding is not consumed (a slice is a copy, like a full
+    /// `let h = g` readback). Per-element cross-reads stay forbidden (D22); slice
+    /// is the sanctioned bulk peek.
+    ///
+    /// Returns `Some(result_type)` when the call is a gpu slice (including the
+    /// `Error` type on a bad range so the caller stops), `None` otherwise.
+    fn try_infer_gpu_slice_call(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        if context.in_gpu_function {
+            return None;
+        }
+        let ExpressionKind::Member(recv, method) = &func.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method.node else {
+            return None;
+        };
+        if method_name != "slice" || args.len() != 1 {
+            return None;
+        }
+        // Only a gpu-resident receiver routes to slice readback.
+        self.gpu_resident_identifier(recv, context)?;
+
+        let recv_type = self.infer_expression(recv, context);
+        let TypeKind::Custom(cname, Some(cargs)) = &recv_type.kind else {
+            return None;
+        };
+        if BuiltinCollectionKind::from_name(cname.as_str()) != Some(BuiltinCollectionKind::Array) {
+            return None;
+        }
+        let elem_type_expr = cargs.first()?.clone();
+        let array_size = cargs.get(1).and_then(Self::try_eval_const_int);
+
+        // Record the argument's type for downstream passes, then require a range.
+        let range = &args[0];
+        let _ = self.infer_expression(range, context);
+        if !matches!(&range.node, ExpressionKind::Range(_, Some(_), _)) {
+            self.report_error(
+                "slice expects a bounded range argument, e.g. 'g.slice(0..10)'".to_string(),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        self.check_slice_bounds_for_array(array_size, range, span, context);
+
+        Some(make_type(TypeKind::Custom(
+            BuiltinCollectionKind::List.name().to_string(),
+            Some(vec![elem_type_expr]),
+        )))
     }
 
     /// Rejects a gpu-resident binding passed as an argument to a host call.

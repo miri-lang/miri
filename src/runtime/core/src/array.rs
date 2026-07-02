@@ -472,6 +472,58 @@ pub mod ffi {
         list
     }
 
+    /// Copies the sub-range `[start, end)` of the array into a fresh `MiriList`.
+    ///
+    /// Backs `g.slice(range)` on a gpu-resident binding: a partial readback that
+    /// yields an independent host list of the selected elements. `start` and
+    /// `end` are clamped to the array length so an out-of-range runtime range is
+    /// safe (the type checker already rejects out-of-range constant ranges).
+    ///
+    /// Managed elements (`elem_drop_fn` set) are IncRef'd and the list inherits
+    /// the element drop/clone hooks, so the returned list independently owns its
+    /// elements. GPU storage buffers hold only scalars, so this hook path is
+    /// inert for the gpu-slice caller.
+    ///
+    /// The caller owns the returned list and must free it with `miri_rt_list_free`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_slice(
+        ptr: *const MiriArray,
+        start: usize,
+        end: usize,
+    ) -> *mut MiriList {
+        if ptr.is_null() {
+            return crate::miri_rt_list_new(0);
+        }
+        let arr = &*ptr;
+        let list = crate::miri_rt_list_new(arr.elem_size);
+        if arr.data.is_null() || arr.elem_size == 0 {
+            return list;
+        }
+        let lo = start.min(arr.elem_count);
+        let hi = end.min(arr.elem_count);
+        if lo >= hi {
+            return list;
+        }
+        if arr.elem_drop_fn != 0 {
+            crate::miri_rt_list_set_elem_drop_fn(list, arr.elem_drop_fn);
+        }
+        if arr.elem_clone_fn != 0 {
+            crate::miri_rt_list_set_elem_clone_fn(list, arr.elem_clone_fn);
+        }
+        for i in lo..hi {
+            let src = arr.data.add(i * arr.elem_size);
+            (*list).push(src);
+            if arr.elem_drop_fn != 0 {
+                let ptr_val = *(src as *const usize);
+                if ptr_val != 0 {
+                    crate::rc::incref(ptr_val as *mut u8);
+                }
+            }
+        }
+        list
+    }
+
     /// Panics with a clear out-of-bounds error message.
     ///
     /// This provides a better debugging experience than crashing silently on

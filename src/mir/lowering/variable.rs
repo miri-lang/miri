@@ -37,7 +37,10 @@ const RELEASE_FN: &str = "miri_gpu_release";
 /// Modeled as a borrowing call: the array is passed by `Copy` (no Perceus
 /// IncRef on terminator operands), so the gpu binding survives the readback
 /// and remains available for a second readback.
-fn emit_cross_residency_readback(
+///
+/// Shared with `g.slice(range)` lowering, which fences the same way before
+/// copying a sub-range of the device buffer back to host.
+pub(crate) fn emit_cross_residency_readback(
     ctx: &mut LoweringContext,
     initializer: Option<&Expression>,
     span: Span,

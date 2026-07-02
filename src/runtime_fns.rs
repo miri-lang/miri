@@ -38,6 +38,8 @@ pub mod rt {
     pub const ARRAY_SET_VAL: &str = "miri_rt_array_set_val";
     pub const ARRAY_SORT: &str = "miri_rt_array_sort";
     pub const ARRAY_CLONE: &str = "miri_rt_array_clone";
+    /// Compiler-internal: partial readback of `g.slice(range)`, not in stdlib.
+    pub const ARRAY_SLICE: &str = "miri_rt_array_slice";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
     /// Compiler-internal: decrements the RC of an array element, not in stdlib.
@@ -197,6 +199,7 @@ pub mod rt {
         ARRAY_SET_VAL,
         ARRAY_SORT,
         ARRAY_CLONE,
+        ARRAY_SLICE,
         ARRAY_PANIC_OOB,
         ARRAY_DECREF_ELEMENT,
         ARRAY_SET_ELEM_DROP_FN,
