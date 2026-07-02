@@ -276,12 +276,14 @@ fn push_kernel_params(
 ) -> Vec<Local> {
     for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
-        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+        ctx.body.local_decls[local.0].storage_class =
+            capture_storage_class(&cap.ty.kind, StorageClass::GpuGlobal);
     }
 
     for cap in scalar_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
-        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+        ctx.body.local_decls[local.0].storage_class =
+            capture_storage_class(&cap.ty.kind, StorageClass::UniformBuffer);
     }
 
     let mut uniform_bounds = Vec::new();
@@ -299,6 +301,18 @@ fn push_kernel_params(
         }
     }
     uniform_bounds
+}
+
+/// Storage class a forall capture of `kind` binds with, sourced from the
+/// accelerator binding-kind registry ([`accelerable_binding_kind`]): a
+/// buffer-backed collection binds as a `Storage` global, a scalar as a
+/// `Uniform`. `default` covers the unreachable case where the registry has no
+/// binding for a type that nonetheless reached the capture set — it keeps the
+/// assignment total without a panic rather than guessing.
+fn capture_storage_class(kind: &TypeKind, default: StorageClass) -> StorageClass {
+    crate::type_checker::utils::accelerable_binding_kind(kind)
+        .map(crate::type_checker::utils::binding_kind_storage_class)
+        .unwrap_or(default)
 }
 
 /// Builds an N-D kernel body for a forall GPU loop.
