@@ -550,6 +550,240 @@ fn expr_type_is_accelerable(
     }
 }
 
+/// How an accelerator-resident value of a given type is bound into a kernel's
+/// resource interface — the compiler-side answer to the stdlib
+/// `Accelerable::binding_kind`. Until Miri traits carry associated values, the
+/// marshalling layer reads this from the type table (see
+/// [`accelerable_binding_kind`]) rather than from a user-visible trait body.
+///
+/// Mirrors `AcceleratorBindingKind` in `system.accelerator`: `Storage` is a
+/// read/write device buffer, `Uniform` a small read-only block. `PushConstant`
+/// is reserved for a future inline-immediate lowering — no binding site emits
+/// push constants today, so the registry never yields it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceleratorBindingKind {
+    Storage,
+    Uniform,
+    PushConstant,
+}
+
+/// Classifies how an accelerator-bindable value of this type is bound into a
+/// kernel — the compiler-side `Accelerable::binding_kind`.
+///
+/// A scalar leaf (including the kernel-only scalars `bool` and the 128-bit
+/// integers, which cross the boundary as uniforms even though they are not
+/// storage-buffer elements) and a fixed-width `VecN` are passed as a small
+/// `Uniform` block; a buffer-backed collection (`Array`/`List`) or a composite
+/// aggregate (tuple, `struct`/`class`) is bound as a read/write `Storage`
+/// buffer. Returns `None` for a type that has no accelerator binding at all
+/// (heap collections without a device layout, `String`, function values, an
+/// unresolved generic, …), so a caller never marshals a guessed binding.
+///
+/// Dispatch is structural — never by stdlib type name — so a new gpu-eligible
+/// container gets a binding from its `.mi` shape, not a compiler edit.
+pub fn accelerable_binding_kind(kind: &TypeKind) -> Option<AcceleratorBindingKind> {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean => Some(AcceleratorBindingKind::Uniform),
+
+        TypeKind::Array(..) | TypeKind::List(..) | TypeKind::Tuple(..) => {
+            Some(AcceleratorBindingKind::Storage)
+        }
+
+        // A fixed-width vector rides as a uniform; every other nominal accelerable
+        // type (a `struct`/`class`, an `Array`/`List` in resolved envelope form,
+        // an `Atomic` cell) backs a storage buffer.
+        TypeKind::Custom(name, _) if vec_dim(name).is_some() => {
+            Some(AcceleratorBindingKind::Uniform)
+        }
+        TypeKind::Custom(..) => Some(AcceleratorBindingKind::Storage),
+
+        TypeKind::String
+        | TypeKind::Map(..)
+        | TypeKind::Set(..)
+        | TypeKind::Result(..)
+        | TypeKind::Future(..)
+        | TypeKind::Option(..)
+        | TypeKind::Linear(..)
+        | TypeKind::Function(..)
+        | TypeKind::Meta(..)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Generic(..) => None,
+    }
+}
+
+/// Maps an [`AcceleratorBindingKind`] to the MIR storage class a kernel
+/// parameter of that binding is declared with. Kept next to the registry so the
+/// binding taxonomy and its lowering stay in one place.
+pub fn binding_kind_storage_class(kind: AcceleratorBindingKind) -> crate::mir::StorageClass {
+    use crate::mir::StorageClass;
+    match kind {
+        AcceleratorBindingKind::Storage => StorageClass::GpuGlobal,
+        AcceleratorBindingKind::Uniform => StorageClass::UniformBuffer,
+        AcceleratorBindingKind::PushConstant => StorageClass::GpuConstant,
+    }
+}
+
+/// Marshalled byte width of a single element/unit of an accelerable type — the
+/// compiler-side `Accelerable::byte_size`. The runtime multiplies this by a
+/// collection's length to size a device buffer; for a scalar, `VecN`, tuple, or
+/// `struct`/`class` the unit is the whole value.
+///
+/// Widths are the host representation: Miri's default `int`/`float` are 64-bit
+/// on the host (narrowed to 32-bit for the device at the marshalling boundary),
+/// while the fixed-width scalars keep their declared width. A collection reports
+/// its element `T`'s width (`Array<T, N>`/`List<T>` → width of `T`); a `VecN<T>`
+/// reports `N × width(T)`; a tuple or `struct`/`class` reports the sum of its
+/// field widths.
+///
+/// Returns `None` for a type with no fixed device width — a non-accelerable
+/// scalar (`bool`, 128-bit), a heap collection without a device layout, or an
+/// unresolved generic — so a caller never marshals a guessed size.
+pub fn accelerable_byte_size(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> Option<usize> {
+    let mut in_progress = Vec::new();
+    accelerable_byte_size_inner(kind, type_definitions, &mut in_progress)
+}
+
+/// Host byte width of a device-storable scalar, or `None` for a non-accelerable
+/// scalar (`bool`, `void`, `error`, the 128-bit integers) or any non-scalar.
+///
+/// Gated on [`gpu_scalar_class`] so the width table can never disagree with the
+/// accelerable-scalar set: a scalar has a marshalled width exactly when it is a
+/// `Storage`-class scalar.
+fn scalar_host_byte_size(kind: &TypeKind) -> Option<usize> {
+    if gpu_scalar_class(kind) != GpuScalarClass::Storage {
+        return None;
+    }
+    match kind {
+        TypeKind::I8 | TypeKind::U8 => Some(1),
+        TypeKind::I16 | TypeKind::U16 | TypeKind::F16 => Some(2),
+        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => Some(4),
+        // `int`/`float` are 64-bit on the host; the wide fixed scalars keep 8.
+        TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => Some(8),
+        _ => None,
+    }
+}
+
+/// Recursion core of [`accelerable_byte_size`]. `in_progress` records the
+/// nominal types currently being sized so a pathological self-referential
+/// definition terminates with `None` instead of overflowing the stack.
+fn accelerable_byte_size_inner(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    in_progress: &mut Vec<String>,
+) -> Option<usize> {
+    if let Some(width) = scalar_host_byte_size(kind) {
+        return Some(width);
+    }
+    match kind {
+        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => {
+            let elem = resolve_element_type_kind(elem_expr)?;
+            accelerable_byte_size_inner(&elem, type_definitions, in_progress)
+        }
+        TypeKind::Tuple(elements) => sum_expr_byte_sizes(elements, type_definitions, in_progress),
+        TypeKind::Custom(name, args) => {
+            accelerable_custom_byte_size(name, args.as_deref(), type_definitions, in_progress)
+        }
+        _ => None,
+    }
+}
+
+/// Byte size of a nominal (`TypeKind::Custom`) accelerable type: a `VecN<T>`
+/// (`N × width(T)`), an `Array`/`List` in resolved envelope form (element
+/// width), or a user `struct`/`class` (sum of field widths).
+fn accelerable_custom_byte_size(
+    name: &str,
+    args: Option<&[crate::ast::expression::Expression]>,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    in_progress: &mut Vec<String>,
+) -> Option<usize> {
+    if let Some(dim) = vec_dim(name) {
+        let component_expr = args?.first()?;
+        let component = resolve_element_type_kind(component_expr)?;
+        let component_width =
+            accelerable_byte_size_inner(&component, type_definitions, in_progress)?;
+        return Some(dim as usize * component_width);
+    }
+    if matches!(
+        BuiltinCollectionKind::from_name(name),
+        Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+    ) {
+        let element = resolve_element_type_kind(args?.first()?)?;
+        return accelerable_byte_size_inner(&element, type_definitions, in_progress);
+    }
+    struct_like_byte_size(name, type_definitions, in_progress)
+}
+
+/// Sum of the byte widths of a `struct`/`class`'s fields, read from the type
+/// table. Returns `None` if the type is unknown, not a data type, or any field
+/// has no marshalled width. `in_progress` guards against a self-referential
+/// definition.
+fn struct_like_byte_size(
+    name: &str,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    in_progress: &mut Vec<String>,
+) -> Option<usize> {
+    if in_progress.iter().any(|seen| seen == name) {
+        return None;
+    }
+    in_progress.push(name.to_string());
+    let total = match type_definitions.get(name) {
+        Some(TypeDefinition::Struct(def)) => def
+            .fields
+            .iter()
+            .map(|(_, ty, _)| accelerable_byte_size_inner(&ty.kind, type_definitions, in_progress))
+            .sum::<Option<usize>>(),
+        Some(TypeDefinition::Class(def)) => def
+            .fields
+            .iter()
+            .map(|(_, info)| {
+                accelerable_byte_size_inner(&info.ty.kind, type_definitions, in_progress)
+            })
+            .sum::<Option<usize>>(),
+        _ => None,
+    };
+    in_progress.pop();
+    total
+}
+
+/// Sum of the byte widths of a list of type-argument expressions (tuple
+/// elements), or `None` if any element lacks a marshalled width.
+fn sum_expr_byte_sizes(
+    elements: &[crate::ast::expression::Expression],
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    in_progress: &mut Vec<String>,
+) -> Option<usize> {
+    elements
+        .iter()
+        .map(|expr| match &expr.node {
+            ExpressionKind::Type(ty, _) => {
+                accelerable_byte_size_inner(&ty.kind, type_definitions, in_progress)
+            }
+            _ => None,
+        })
+        .sum()
+}
+
 fn first_type_arg_is_gpu_compatible(args: Option<&[crate::ast::expression::Expression]>) -> bool {
     let Some(args) = args else { return false };
     let Some(first) = args.first() else {
@@ -2093,5 +2327,213 @@ impl TypeChecker {
             | TypeKind::Map(_, _) => false,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod accelerable_registry_tests {
+    use super::*;
+    use crate::ast::common::MemberVisibility;
+    use crate::ast::expression::{Expression, ExpressionKind};
+    use crate::ast::types::{VEC3_TYPE_NAME, VEC4_TYPE_NAME};
+    use crate::error::syntax::Span;
+    use crate::type_checker::context::StructDefinition;
+    use std::collections::HashMap;
+
+    fn array_name() -> &'static str {
+        BuiltinCollectionKind::Array.name()
+    }
+
+    fn list_name() -> &'static str {
+        BuiltinCollectionKind::List.name()
+    }
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    /// Wraps a `TypeKind` as a resolved type-argument expression, the shape a
+    /// generic argument takes after type resolution.
+    fn type_arg(kind: TypeKind) -> Expression {
+        Expression::new(
+            0,
+            ExpressionKind::Type(Box::new(Type::new(kind, span())), false),
+            span(),
+        )
+    }
+
+    fn custom(name: &str, args: Vec<TypeKind>) -> TypeKind {
+        TypeKind::Custom(
+            name.to_string(),
+            Some(args.into_iter().map(type_arg).collect()),
+        )
+    }
+
+    fn no_defs() -> HashMap<String, TypeDefinition> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn binding_kind_scalars_are_uniforms() {
+        for kind in [
+            TypeKind::Int,
+            TypeKind::I8,
+            TypeKind::I32,
+            TypeKind::I64,
+            TypeKind::U16,
+            TypeKind::Float,
+            TypeKind::F32,
+            TypeKind::F64,
+            // Kernel-only scalars still ride as uniforms even though they are
+            // not storage-buffer elements — matches the forall capture split.
+            TypeKind::Boolean,
+            TypeKind::I128,
+        ] {
+            assert_eq!(
+                accelerable_binding_kind(&kind),
+                Some(AcceleratorBindingKind::Uniform),
+                "{kind:?} should bind as a uniform"
+            );
+        }
+    }
+
+    #[test]
+    fn binding_kind_collections_and_aggregates_are_storage() {
+        let cases = [
+            custom(array_name(), vec![TypeKind::I32, TypeKind::Int]),
+            custom(list_name(), vec![TypeKind::F32]),
+            TypeKind::Tuple(vec![type_arg(TypeKind::I32), type_arg(TypeKind::F32)]),
+        ];
+        for kind in cases {
+            assert_eq!(
+                accelerable_binding_kind(&kind),
+                Some(AcceleratorBindingKind::Storage),
+                "{kind:?} should bind as storage"
+            );
+        }
+    }
+
+    #[test]
+    fn binding_kind_vectors_are_uniforms() {
+        assert_eq!(
+            accelerable_binding_kind(&custom(VEC3_TYPE_NAME, vec![TypeKind::F32])),
+            Some(AcceleratorBindingKind::Uniform)
+        );
+    }
+
+    #[test]
+    fn binding_kind_unbindable_types_are_none() {
+        assert_eq!(accelerable_binding_kind(&TypeKind::String), None);
+        assert_eq!(
+            accelerable_binding_kind(&TypeKind::Map(
+                Box::new(type_arg(TypeKind::Int)),
+                Box::new(type_arg(TypeKind::Int)),
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn byte_size_scalars_use_host_widths() {
+        let defs = no_defs();
+        assert_eq!(accelerable_byte_size(&TypeKind::Int, &defs), Some(8));
+        assert_eq!(accelerable_byte_size(&TypeKind::I8, &defs), Some(1));
+        assert_eq!(accelerable_byte_size(&TypeKind::U16, &defs), Some(2));
+        assert_eq!(accelerable_byte_size(&TypeKind::I32, &defs), Some(4));
+        assert_eq!(accelerable_byte_size(&TypeKind::I64, &defs), Some(8));
+        assert_eq!(accelerable_byte_size(&TypeKind::Float, &defs), Some(8));
+        assert_eq!(accelerable_byte_size(&TypeKind::F32, &defs), Some(4));
+        assert_eq!(accelerable_byte_size(&TypeKind::F64, &defs), Some(8));
+    }
+
+    #[test]
+    fn byte_size_non_accelerable_scalars_are_none() {
+        let defs = no_defs();
+        assert_eq!(accelerable_byte_size(&TypeKind::Boolean, &defs), None);
+        assert_eq!(accelerable_byte_size(&TypeKind::I128, &defs), None);
+    }
+
+    #[test]
+    fn byte_size_collection_reports_element_width() {
+        let defs = no_defs();
+        // Element width only — the runtime multiplies by the length.
+        assert_eq!(
+            accelerable_byte_size(
+                &custom(array_name(), vec![TypeKind::I32, TypeKind::Int]),
+                &defs
+            ),
+            Some(4)
+        );
+        assert_eq!(
+            accelerable_byte_size(&custom(list_name(), vec![TypeKind::F64]), &defs),
+            Some(8)
+        );
+        assert_eq!(
+            accelerable_byte_size(
+                &custom(array_name(), vec![TypeKind::Int, TypeKind::Int]),
+                &defs
+            ),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn byte_size_vector_is_dim_times_component() {
+        let defs = no_defs();
+        assert_eq!(
+            accelerable_byte_size(&custom(VEC3_TYPE_NAME, vec![TypeKind::F32]), &defs),
+            Some(12)
+        );
+        assert_eq!(
+            accelerable_byte_size(&custom(VEC4_TYPE_NAME, vec![TypeKind::F32]), &defs),
+            Some(16)
+        );
+    }
+
+    #[test]
+    fn byte_size_tuple_is_sum_of_fields() {
+        let defs = no_defs();
+        assert_eq!(
+            accelerable_byte_size(
+                &TypeKind::Tuple(vec![type_arg(TypeKind::I32), type_arg(TypeKind::F64)]),
+                &defs
+            ),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn byte_size_struct_sums_field_widths_from_the_type_table() {
+        let mut defs = no_defs();
+        defs.insert(
+            "Point".to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![
+                    (
+                        "x".to_string(),
+                        Type::new(TypeKind::I32, span()),
+                        MemberVisibility::Public,
+                    ),
+                    (
+                        "y".to_string(),
+                        Type::new(TypeKind::F64, span()),
+                        MemberVisibility::Public,
+                    ),
+                ],
+                generics: None,
+                traits: vec![ACCELERABLE_TRAIT_NAME.to_string()],
+                module: String::new(),
+                has_drop: false,
+            }),
+        );
+        assert_eq!(
+            accelerable_byte_size(&TypeKind::Custom("Point".to_string(), None), &defs),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn byte_size_string_has_no_device_width() {
+        assert_eq!(accelerable_byte_size(&TypeKind::String, &no_defs()), None);
     }
 }
