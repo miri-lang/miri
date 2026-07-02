@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.collections.tensor`. `Tensor<T, Rank>` has a static rank
+// (the value generic `Rank`) and dynamic extents carried in `shape`. The
+// surface covered is rank / dimension / size and flat row-major element reads.
+
+use system.collections.tensor
+use system.collections.list
+use system.testing
+
+fn test_rank_is_the_static_dimension_count()
+    let t = Tensor<int, 2>(shape: [2, 3], data: List([1, 2, 3, 4, 5, 6]))
+    assert_eq(t.rank(), 2)
+
+fn test_dimension_reads_runtime_extents()
+    let t = Tensor<int, 3>(shape: [2, 3, 4], data: List([0]))
+    assert_eq(t.dimension(0), 2)
+    assert_eq(t.dimension(1), 3)
+    assert_eq(t.dimension(2), 4)
+
+fn test_size_is_the_product_of_extents()
+    let t = Tensor<int, 3>(shape: [2, 3, 4], data: List([0]))
+    assert_eq(t.size(), 24)
+
+fn test_size_of_a_single_element_tensor()
+    let t = Tensor<int, 1>(shape: [1], data: List([42]))
+    assert_eq(t.size(), 1)
+
+fn test_flat_element_read_in_row_major_order()
+    let t = Tensor<int, 2>(shape: [2, 3], data: List([10, 20, 30, 40, 50, 60]))
+    assert_eq(t.element_at(0), 10)
+    assert_eq(t.element_at(5), 60)
+
+fn main()
+    test_rank_is_the_static_dimension_count()
+    test_dimension_reads_runtime_extents()
+    test_size_is_the_product_of_extents()
+    test_size_of_a_single_element_tensor()
+    test_flat_element_read_in_row_major_order()
+    println("system.collections.tensor: OK")
