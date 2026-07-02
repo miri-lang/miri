@@ -58,6 +58,7 @@ fn is_drop_method(stmt: &Statement) -> bool {
 }
 
 impl TypeChecker {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_struct(
         &mut self,
         name_expr: &Expression,
@@ -65,6 +66,7 @@ impl TypeChecker {
         fields: &[Expression],
         methods: &[Statement],
         visibility: &MemberVisibility,
+        traits: &[Expression],
         context: &mut Context,
     ) {
         let Some(name) = self.extract_struct_name(name_expr) else {
@@ -77,11 +79,19 @@ impl TypeChecker {
         context.enter_scope();
         let generic_defs = self.collect_struct_generics(generics, context);
         let fields_vec = self.collect_struct_fields(fields, context);
+        let (trait_names, _trait_args) = self.check_class_traits(traits, context);
         context.exit_scope();
 
         if !self.validate_struct_field_types(&name, &fields_vec, name_expr) {
             return;
         }
+
+        self.check_accelerable_fields(
+            &name,
+            &trait_names,
+            fields_vec.iter().map(|(n, t, _)| (n.as_str(), t)),
+            name_expr,
+        );
 
         let has_drop = methods.iter().any(is_drop_method);
         let struct_def = StructDefinition {
@@ -91,6 +101,7 @@ impl TypeChecker {
             } else {
                 Some(generic_defs)
             },
+            traits: trait_names,
             has_drop,
             module: self.current_module.clone(),
         };

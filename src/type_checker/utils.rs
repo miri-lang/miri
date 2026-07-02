@@ -509,19 +509,20 @@ fn accelerable_inner(
 }
 
 /// Trait-dispatch core of [`is_accelerable`]: does the named type's definition
-/// list the `Accelerable` trait? Only class definitions carry a trait list; the
-/// stdlib `Array` / `List` classes opt in via `implements ... Accelerable`.
+/// list the `Accelerable` trait? Both class and struct definitions carry a trait
+/// list; a user `class` or `struct` opts in via `implements ... Accelerable`.
 fn type_implements_accelerable(
     name: &str,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
-    match type_definitions.get(name) {
-        Some(TypeDefinition::Class(def)) => def
-            .traits
-            .iter()
-            .any(|trait_name| trait_name == ACCELERABLE_TRAIT_NAME),
-        _ => false,
-    }
+    let traits = match type_definitions.get(name) {
+        Some(TypeDefinition::Class(def)) => &def.traits,
+        Some(TypeDefinition::Struct(def)) => &def.traits,
+        _ => return false,
+    };
+    traits
+        .iter()
+        .any(|trait_name| trait_name == ACCELERABLE_TRAIT_NAME)
 }
 
 /// Every type-valued generic argument must itself be accelerable. Value generics

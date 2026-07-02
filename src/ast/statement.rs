@@ -174,13 +174,18 @@ pub enum StatementKind {
     ),
 
     /// A struct declaration.
-    /// (name, generics, fields, methods, visibility)
+    /// (name, generics, fields, methods, visibility, traits)
+    ///
+    /// `traits` holds the `implements Trait, ...` list. A struct is a data type,
+    /// so its traits are capability markers (e.g. `Accelerable`) rather than a
+    /// dispatch base; the list mirrors the class trait list.
     Struct(
         Box<Expression>,
         Option<Vec<Expression>>,
         Vec<Expression>,
         Vec<Statement>,
         MemberVisibility,
+        Vec<Expression>,
     ),
 
     /// A class declaration. Boxed to reduce enum size.

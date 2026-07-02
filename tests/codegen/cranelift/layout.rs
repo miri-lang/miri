@@ -216,6 +216,7 @@ fn make_struct(fields: Vec<(&str, TypeKind)>) -> StructDefinition {
             })
             .collect(),
         generics: None,
+        traits: vec![],
         has_drop: false,
         module: String::new(),
     }

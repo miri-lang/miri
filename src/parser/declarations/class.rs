@@ -167,7 +167,10 @@ impl<'source> Parser<'source> {
         })
     }
 
-    fn inheritance_clause(&mut self, keyword: &Token) -> Result<Vec<Expression>, SyntaxError> {
+    pub(crate) fn inheritance_clause(
+        &mut self,
+        keyword: &Token,
+    ) -> Result<Vec<Expression>, SyntaxError> {
         let matches = matches!(&self.lookahead, Some((t, _)) if t == keyword);
         if !matches {
             return Ok(vec![]);

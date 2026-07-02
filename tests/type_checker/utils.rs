@@ -321,6 +321,7 @@ fn struct_def(has_drop: bool) -> TypeDefinition {
     TypeDefinition::Struct(StructDefinition {
         fields: vec![],
         generics: None,
+        traits: vec![],
         module: "test".to_string(),
         has_drop,
     })

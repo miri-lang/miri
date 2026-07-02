@@ -202,11 +202,12 @@ fn test_normalize_walks_struct_fields() {
         vec![struct_member("xs", list_int_type_expr())],
         vec![],
         MemberVisibility::Public,
+        vec![],
     );
     let mut prog = Program { body: vec![stmt] };
     normalize(&mut prog);
 
-    let StatementKind::Struct(_, _, fields, _, _) = &prog.body[0].node else {
+    let StatementKind::Struct(_, _, fields, _, _, _) = &prog.body[0].node else {
         panic!("expected Struct");
     };
     let ExpressionKind::StructMember(_, ty) = &fields[0].node else {

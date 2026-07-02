@@ -333,7 +333,7 @@ impl TypeChecker {
             StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
                 self.shell_trait(name_expr, generics_expr.as_ref(), context);
             }
-            StatementKind::Struct(name_expr, generics_expr, _, _, _) => {
+            StatementKind::Struct(name_expr, generics_expr, _, _, _, _) => {
                 self.shell_struct(name_expr, generics_expr.as_ref(), context);
             }
             StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
@@ -433,6 +433,7 @@ impl TypeChecker {
             TypeDefinition::Struct(context::StructDefinition {
                 fields: vec![],
                 generics,
+                traits: vec![],
                 has_drop: false,
                 module: self.current_module.clone(),
             }),
@@ -487,7 +488,7 @@ impl TypeChecker {
                 );
             }
             StatementKind::Class(class_data) => self.collect_class_decl(class_data, context),
-            StatementKind::Struct(name_expr, generics_expr, _, _, _) => {
+            StatementKind::Struct(name_expr, generics_expr, _, _, _, _) => {
                 self.collect_struct_decl(name_expr, generics_expr.as_ref(), context);
             }
             StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
@@ -759,6 +760,7 @@ impl TypeChecker {
             TypeDefinition::Struct(context::StructDefinition {
                 fields: vec![],
                 generics,
+                traits: vec![],
                 has_drop: false,
                 module: self.current_module.clone(),
             }),

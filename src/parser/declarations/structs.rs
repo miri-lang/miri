@@ -16,6 +16,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Struct)?;
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
+        let traits = self.inheritance_clause(&Token::Implements)?;
 
         let (fields, methods) = self.struct_body()?;
 
@@ -29,6 +30,7 @@ impl<'source> Parser<'source> {
             fields,
             methods,
             visibility,
+            traits,
         ))
     }
 

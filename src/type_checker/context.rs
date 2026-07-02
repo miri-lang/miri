@@ -113,6 +113,10 @@ pub struct TypeRelation {
 pub struct StructDefinition {
     pub fields: Vec<(String, Type, MemberVisibility)>,
     pub generics: Option<Vec<GenericDefinition>>,
+    /// Trait names from the `implements Trait, ...` list. A struct is a data
+    /// type, so these are capability markers (e.g. `Accelerable`) queried by the
+    /// residency gate, mirroring [`ClassDefinition::traits`].
+    pub traits: Vec<String>,
     pub module: String,
     /// True if this struct defines `fn drop(self)` (makes it a resource type).
     pub has_drop: bool,
