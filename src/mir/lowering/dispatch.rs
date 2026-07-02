@@ -1581,7 +1581,73 @@ fn try_lower_collection_intrinsic(
         }
     }
 
+    // `g.slice(range)` on a gpu-resident array is a partial readback: copy the
+    // selected range of the eagerly-read-back host buffer into a fresh `List`.
+    // A host receiver has no `slice` method and never reaches here.
+    if args.len() == 1 && method_name == "slice" && builtin == Some(BuiltinCollectionKind::Array) {
+        if let ExpressionKind::Identifier(name, _) = &obj.node {
+            let is_gpu_resident = ctx.variable_map.get(name.as_str()).is_some_and(|&local| {
+                ctx.body.local_decls[local.0].residency == crate::mir::body::BindingResidency::Gpu
+            });
+            if is_gpu_resident {
+                return lower_gpu_slice(ctx, span, call_expr_id, obj, &args[0], dest).map(Some);
+            }
+        }
+    }
+
     Ok(None)
+}
+
+/// Lower `g.slice(start..end)` on a gpu-resident array to a partial readback:
+/// `miri_rt_array_slice(host_buffer, start, end)` yielding a fresh `List<T>`.
+/// The gpu binding is borrowed (a `Copy` call argument — callers use borrow
+/// semantics, so no IncRef), matching the non-consuming readback-copy rule.
+fn lower_gpu_slice(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    obj: &Expression,
+    range: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Range(start, Some(end), _) = &range.node else {
+        return Err(LoweringError::custom(
+            "slice expects a bounded range argument".to_string(),
+            *span,
+            None,
+        ));
+    };
+
+    // Fence outstanding device writes and copy the device buffer back to the
+    // host array first, so the sub-range read observes the kernel's results.
+    // This is the same readback `let h = g` emits; slice is a partial variant.
+    super::variable::emit_cross_residency_readback(ctx, Some(obj), *span);
+
+    let obj_op = move_to_copy(lower_expression(ctx, obj, None)?);
+    let start_op = lower_expression(ctx, start, None)?;
+    let end_op = lower_expression(ctx, end, None)?;
+
+    let result_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
+    let (destination, op) = call_destination(ctx, result_ty, dest, *span);
+
+    let func_op = runtime_fn_operand(rt::ARRAY_SLICE, *span);
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, start_op, end_op],
+            out_args: Vec::new(),
+            destination,
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    Ok(op)
 }
 
 /// Lower a constructor call for a struct or class.
