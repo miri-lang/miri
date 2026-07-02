@@ -314,7 +314,7 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             for stmt in &block_data.statements {
-                Self::translate_statement(builder, module_ctx, stmt, locals, type_ctx)?;
+                Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
             if let Some(ref terminator) = block_data.terminator {
                 Self::translate_terminator(

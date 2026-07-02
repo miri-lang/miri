@@ -58,9 +58,15 @@ pub fn insert_resident(handle_id: u64, buffer: Buffer, byte_len: usize, needs_wi
 }
 
 /// Releases the device buffer owned by a dropped host-side binding. Returns
-/// `true` when a buffer was present and removed.
+/// `true` when a buffer was present and removed; only an actual removal is
+/// recorded in the release telemetry counter, so the no-op reset a binding
+/// emits at its declaration does not inflate the count.
 pub fn release(handle_id: u64) -> bool {
-    DEVICE_BUFFERS.write().remove(&handle_id).is_some()
+    let removed = DEVICE_BUFFERS.write().remove(&handle_id).is_some();
+    if removed {
+        crate::telemetry::record_release();
+    }
+    removed
 }
 
 /// # Safety
@@ -68,4 +74,19 @@ pub fn release(handle_id: u64) -> bool {
 #[no_mangle]
 pub extern "C" fn miri_gpu_release(handle_id: u64) {
     let _ = release(handle_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{release, HOST_HANDLE};
+
+    /// Releasing a handle that was never allocated a buffer — the no-op reset a
+    /// binding emits at its declaration, or a `gpu` local never captured by a
+    /// launch — returns `false` and therefore does not record a release. Uses a
+    /// handle id that no test uploads to, so it never races a resident buffer.
+    #[test]
+    fn release_of_absent_handle_is_a_noop() {
+        assert!(!release(u64::MAX));
+        assert!(!release(HOST_HANDLE));
+    }
 }

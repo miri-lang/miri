@@ -10,6 +10,7 @@ runtime "gpu" fn miri_gpu_telemetry_uploads() int
 runtime "gpu" fn miri_gpu_telemetry_launches() int
 runtime "gpu" fn miri_gpu_telemetry_readbacks() int
 runtime "gpu" fn miri_gpu_telemetry_fences() int
+runtime "gpu" fn miri_gpu_telemetry_releases() int
 
 /// Returns `true` when the GPU runtime has been initialized and a
 /// device is reachable, `false` otherwise.
@@ -43,3 +44,9 @@ public fn gpu_readbacks() int
 /// fences; reuse and launch never do.
 public fn gpu_fences() int
     return miri_gpu_telemetry_fences()
+
+/// Number of resident device buffers freed since the last reset. A
+/// `gpu`-resident binding releases its persistent buffer once, when the
+/// binding leaves scope.
+public fn gpu_releases() int
+    return miri_gpu_telemetry_releases()
