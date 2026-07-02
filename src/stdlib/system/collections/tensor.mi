@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+use system.collections.array
+use system.collections.list
+use system.accelerator
+
+/// A multi-dimensional array with a statically known rank and dynamic extents.
+///
+/// `Tensor<T, Rank>` fixes the number of dimensions at compile time — `Rank` is
+/// a value generic, so `Tensor<f32, 4>` is always four-dimensional — while the
+/// extent of each dimension is a runtime value carried in `shape`. Elements are
+/// stored flat in row-major order in `data`.
+///
+/// Static rank enables compile-time iteration-domain reasoning; dynamic extents
+/// let the same type describe real workloads whose sizes are known only at run
+/// time. `Tensor` is accelerator-eligible because it implements `Accelerable`;
+/// the compiler carries no `Tensor`-specific logic — it is defined entirely in
+/// terms of `Array` and `List`.
+///
+/// Example:
+///     let t = Tensor<int, 2>(shape: [2, 3], data: List([1, 2, 3, 4, 5, 6]))
+///     println(f"{t.rank()}")       // 2
+///     println(f"{t.dimension(1)}") // 3
+///     println(f"{t.size()}")       // 6
+public class Tensor<T, Rank> implements Accelerable
+
+    /// The extent of each dimension, in order. Its length is always `Rank`.
+    var shape Array<int, Rank>
+
+    /// The elements in row-major order.
+    var data List<T>
+
+    /// The number of dimensions (the static rank).
+    public fn rank() int: self.shape.length()
+
+    /// The extent along dimension `axis`.
+    public fn dimension(axis int) int: self.shape.element_at(axis)
+
+    /// The total number of elements: the product of the dimensions.
+    public fn size() int
+        var total = 1
+        var axis = 0
+        while axis < self.shape.length()
+            total = total * self.shape.element_at(axis)
+            axis = axis + 1
+        return total
+
+    /// The element at flat row-major position `index`.
+    public fn element_at(index int) T: self.data.element_at(index)

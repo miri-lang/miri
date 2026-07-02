@@ -86,6 +86,7 @@ mi_suite_test!(test_system_collections_array, "collections/array.mi");
 mi_suite_test!(test_system_collections_list, "collections/list.mi");
 mi_suite_test!(test_system_collections_set, "collections/set.mi");
 mi_suite_test!(test_system_collections_map, "collections/map.mi");
+mi_suite_test!(test_system_collections_tensor, "collections/tensor.mi");
 mi_suite_test!(test_system_collections_tuple, "collections/tuple.mi");
 mi_suite_test!(
     test_system_collections_transformable,
@@ -137,6 +138,7 @@ fn every_mi_file_is_wired() {
         "collections/list.mi",
         "collections/set.mi",
         "collections/map.mi",
+        "collections/tensor.mi",
         "collections/tuple.mi",
         "collections/transformable.mi",
         "collections/foldable.mi",
