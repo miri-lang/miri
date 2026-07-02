@@ -188,10 +188,42 @@ fn apply_variable_residency(
         AstResidency::Gpu => MirResidency::Gpu,
     };
     if ctx.body.local_decls[local.0].residency == MirResidency::Gpu {
-        let handle = DeviceHandleId::fresh();
-        ctx.body.local_decls[local.0].device_handle = Some(handle);
-        emit_gpu_buffer_reset(ctx, handle, *span);
+        if let Some(handle) = gpu_move_source_handle(ctx, decl) {
+            // `gpu let/var b = a` where `a` is a gpu-resident binding is a move:
+            // `b` takes over `a`'s persistent device buffer (the type checker
+            // has consumed `a`). Transfer the handle so `b`'s first launch
+            // reuses the already-uploaded buffer, and skip the reset — releasing
+            // here would drop the very buffer being transferred.
+            ctx.body.local_decls[local.0].device_handle = Some(handle);
+        } else {
+            let handle = DeviceHandleId::fresh();
+            ctx.body.local_decls[local.0].device_handle = Some(handle);
+            emit_gpu_buffer_reset(ctx, handle, *span);
+        }
     }
+}
+
+/// Device handle of a gpu-to-gpu move source: a bare identifier initializer
+/// bound to a gpu-resident local with a live device handle. Mirrors the type
+/// checker's D24 move rule (target gpu-resident, source a gpu binding), so the
+/// moved binding inherits the source buffer instead of allocating a fresh one.
+fn gpu_move_source_handle(
+    ctx: &LoweringContext,
+    decl: &VariableDeclaration,
+) -> Option<DeviceHandleId> {
+    let Expression {
+        node: ExpressionKind::Identifier(name, _),
+        ..
+    } = decl.initializer.as_deref()?
+    else {
+        return None;
+    };
+    let src_local = *ctx.variable_map.get(name.as_str())?;
+    let src_decl = &ctx.body.local_decls[src_local.0];
+    if src_decl.residency != MirResidency::Gpu {
+        return None;
+    }
+    src_decl.device_handle
 }
 
 /// Lower a variable's initializer into `local`: assign a pre-lowered operand,

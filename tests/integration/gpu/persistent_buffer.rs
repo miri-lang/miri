@@ -186,6 +186,42 @@ fn main()
     );
 }
 
+/// A `gpu`-to-`gpu` move (`gpu var b = a`) transfers the source's persistent
+/// device buffer to the target instead of allocating a fresh one. `b` reuses
+/// the buffer `a` already uploaded and launched into, so the second stage adds
+/// a launch with zero extra uploads and observes the device-side results of the
+/// first stage. `a[0] = 1 + 10 = 11` on the device, then `b[0] = 11 + 100 = 111`.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_to_gpu_move_transfers_device_buffer() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped gpu_to_gpu_move_transfers_device_buffer: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var a = [1, 1, 1, 1]
+    gpu forall i in 0..4
+        a[i] = a[i] + 10
+
+    gpu var b = a
+    gpu forall i in 0..4
+        b[i] = b[i] + 100
+
+    let host = b
+    println(f'{host[0]} {gpu_uploads()} {gpu_launches()}')
+",
+        "111 1 2",
+    );
+}
+
 /// Simpler test: upload without a launch on host-only system.
 /// Since no GPU adapter exists, this just tests the structure is correct.
 #[test]
