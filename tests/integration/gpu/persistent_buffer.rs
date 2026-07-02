@@ -6,7 +6,8 @@
 // launch that captures it; only a cross-residency readback (`let h = g`) fences
 // and copies back. The residency cost counters in `src/runtime/gpu/` make this
 // observable from source, so these tests assert the exact upload / launch /
-// readback / fence budget end-to-end through native dispatch.
+// readback / fence / release budget end-to-end through native dispatch. A
+// binding's buffer is freed once, when the binding leaves scope.
 
 use super::device::gpu_adapter_available;
 use super::utils::*;
@@ -219,6 +220,42 @@ fn main()
     println(f'{host[0]} {gpu_uploads()} {gpu_launches()}')
 ",
         "111 1 2",
+    );
+}
+
+/// A `gpu`-resident binding's persistent device buffer is freed when the
+/// binding leaves scope. `use_gpu` declares `data`, uploads it on the launch,
+/// then returns — `data`'s `StorageDead` releases the buffer. Observed from
+/// `main` after the call returns: exactly one release, one upload, one launch.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn resident_buffer_released_when_binding_leaves_scope() {
+    if !gpu_adapter_available() {
+        eprintln!(
+            "[gpu] skipped resident_buffer_released_when_binding_leaves_scope: no suitable adapter"
+        );
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+
+fn use_gpu() int
+    gpu var data = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        data[i] = i * i
+    let host = data
+    return host[3]
+
+fn main()
+    gpu_reset_telemetry()
+    let value = use_gpu()
+    println(f'{value} {gpu_uploads()} {gpu_launches()} {gpu_releases()}')
+",
+        "9 1 1 1",
     );
 }
 

@@ -5,7 +5,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{
-    needs_out_pointer, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
+    needs_out_pointer, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
@@ -38,6 +38,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         stmt: &Statement,
+        body: &Body,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
@@ -54,10 +55,49 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 Self::translate_assign(builder, ctx, place, rvalue, locals, type_ctx)
             }
-            StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
-                Ok(())
+            StatementKind::StorageDead(place) => {
+                Self::translate_gpu_buffer_release(builder, ctx, place, body)
             }
+            StatementKind::Nop | StatementKind::StorageLive(_) => Ok(()),
         }
+    }
+
+    /// Frees the persistent device buffer of a `gpu`-resident local at its
+    /// `StorageDead` (scope exit). The handle id is a compile-time constant on
+    /// the local's decl; a non-`gpu` local carries no handle and this is a
+    /// no-op. `miri_gpu_release` is idempotent, so a `gpu`-to-`gpu` move whose
+    /// handle is shared by two locals releases it once and the second call is a
+    /// harmless no-op.
+    fn translate_gpu_buffer_release(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        body: &Body,
+    ) -> Result<(), CodegenError> {
+        // Compiler-synthesized GPU intrinsic (never a `runtime "gpu" fn` in
+        // stdlib); codegen declares the import on demand, matching the
+        // `miri_gpu_readback` / `miri_gpu_launch_inline` convention. The handle
+        // id is a `u64`, so the runtime ABI is a single `I64` parameter.
+        const RELEASE_FN: &str = "miri_gpu_release";
+
+        let Some(handle) = body.local_decls[place.local.0].device_handle else {
+            return Ok(());
+        };
+        let handle_val = builder
+            .ins()
+            .iconst(cranelift_codegen::ir::types::I64, handle.0 as i64);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: RELEASE_FN,
+                param_types: &[cranelift_codegen::ir::types::I64],
+                return_types: &[],
+                args: &[handle_val],
+            },
+        )?;
+        Ok(())
     }
 
     /// `StatementKind::IncRef`: bump the RC slot at `payload - ptr_size`,
