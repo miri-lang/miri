@@ -333,6 +333,7 @@ fn class_def(has_drop: bool) -> TypeDefinition {
         base_class: None,
         base_class_args: None,
         traits: vec![],
+        trait_args: std::collections::HashMap::new(),
         fields: vec![] as Vec<(String, FieldInfo)>,
         methods: BTreeMap::<String, MethodInfo>::new(),
         module: "test".to_string(),

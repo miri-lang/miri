@@ -16,6 +16,7 @@ use crate::runtime_fns::{cow_fn, rt};
 use crate::type_checker::context::{
     class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
 };
+use crate::type_checker::TypeChecker;
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{coerce_rvalue, gpu_math_return_type};
@@ -1061,8 +1062,29 @@ fn resolve_generic_class_monomorph(
         })
         .collect();
     let mangled = mangle_generic_name(&format!("{name}_{method_name}"), &type_args);
+    // A trait-default method's return type is written in the trait's own
+    // parameters (`U`); extend the class-param substitution with the trait's
+    // `implements Trait<T>` binding so the call site types the result at the
+    // same concrete width the monomorphized body returns.
+    extend_subs_with_trait_params(ctx.type_checker, name, &mut subs);
     let return_ty = apply_generic_sub(&method_info.return_type, &subs);
     Some((mangled, return_ty))
+}
+
+/// Add `trait-param → concrete` entries to a class-instantiation substitution,
+/// resolving each directly-implemented trait's `implements Trait<args>` binding
+/// through the existing class-param map. See
+/// [`TypeChecker::class_trait_param_bindings`] for the binding source.
+pub(crate) fn extend_subs_with_trait_params(
+    tc: &TypeChecker,
+    class_name: &str,
+    subs: &mut HashMap<String, Type>,
+) {
+    let bindings = tc.class_trait_param_bindings(class_name);
+    for (trait_param, class_arg) in bindings {
+        let concrete = apply_generic_sub(&class_arg, subs);
+        subs.insert(trait_param, concrete);
+    }
 }
 
 /// Lower the receiver, apply a CoW check for mutating collection methods, and
