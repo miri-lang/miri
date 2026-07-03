@@ -9,6 +9,8 @@ use crate::ast::types::TypeKind;
 use crate::codegen::wgsl::types::{
     buffer_element, buffer_element_typename, scalar, vector_swizzle, vector_type, WgslScalar,
 };
+use crate::codegen::wgsl::WgslSourceSpan;
+use crate::error::syntax::Span;
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
@@ -20,23 +22,53 @@ use std::fmt::Write;
 
 pub(super) struct Emitter {
     output: String,
+    /// WGSL-line → Miri-offset spans accumulated while emitting bodies.
+    source_map: Vec<WgslSourceSpan>,
 }
+
+/// Lines the `enable f16;` preamble prepends to the module (`enable f16;` plus a
+/// blank separator line). Source-map WGSL lines shift down by this when present.
+const F16_PREAMBLE_LINES: u32 = 2;
 
 impl Emitter {
     pub(super) fn new() -> Self {
         Self {
             output: String::new(),
+            source_map: Vec::new(),
         }
     }
 
+    /// WGSL requires `enable f16;` before any other global declaration when the
+    /// module names the `f16` type. The substring is unambiguous: no other WGSL
+    /// scalar spelling (`i32`/`u32`/`f32`/`f64`) contains it.
+    fn needs_f16_preamble(&self) -> bool {
+        self.output.contains("f16")
+    }
+
     pub(super) fn finish(self) -> String {
-        // WGSL requires `enable f16;` before any other global declaration when
-        // the module names the `f16` type. The substring is unambiguous: no
-        // other WGSL scalar spelling (`i32`/`u32`/`f32`/`f64`) contains it.
-        if self.output.contains("f16") {
+        if self.needs_f16_preamble() {
             format!("enable f16;\n\n{}", self.output)
         } else {
             self.output
+        }
+    }
+
+    /// Like [`finish`], but also returns the source map. The `enable f16;`
+    /// preamble shifts every mapped WGSL line down, so entries are rebased when
+    /// it is prepended.
+    pub(super) fn finish_with_map(self) -> (String, Vec<WgslSourceSpan>) {
+        if self.needs_f16_preamble() {
+            let map = self
+                .source_map
+                .into_iter()
+                .map(|s| WgslSourceSpan {
+                    wgsl_line: s.wgsl_line + F16_PREAMBLE_LINES,
+                    miri_offset: s.miri_offset,
+                })
+                .collect();
+            (format!("enable f16;\n\n{}", self.output), map)
+        } else {
+            (self.output, self.source_map)
         }
     }
 
@@ -207,7 +239,13 @@ impl Emitter {
         entry_sig.push_str(") {");
         writeln!(self.output, "{}", entry_sig).map_err(emit_err)?;
 
-        let mut ctx = BodyEmitter::new(body, bindings, workgroup_size, &mut self.output)?;
+        let mut ctx = BodyEmitter::new(
+            body,
+            bindings,
+            workgroup_size,
+            &mut self.output,
+            &mut self.source_map,
+        )?;
         ctx.emit_local_declarations()?;
         ctx.emit_blocks()?;
 
@@ -258,7 +296,8 @@ impl Emitter {
         writeln!(self.output, ") -> {} {{", return_type.name()).map_err(emit_err)?;
 
         // Helpers carry no `@workgroup_size`; the value is unused for non-entry bodies.
-        let mut ctx = BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output)?;
+        let mut ctx =
+            BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output, &mut self.source_map)?;
         ctx.return_local = Some(Local(0));
         ctx.emit_local_declarations()?;
         ctx.emit_blocks()?;
@@ -540,6 +579,13 @@ struct BodyEmitter<'a> {
     bindings: &'a [BufferBinding],
     workgroup_size: [u32; 3],
     output: &'a mut String,
+    /// Accumulates WGSL-line → Miri-offset spans for the emitted body.
+    source_map: &'a mut Vec<WgslSourceSpan>,
+    /// Byte offset in `output` up to which newlines have already been counted,
+    /// and the 1-based line of the next byte to be written. Together they let
+    /// `current_line` advance in O(bytes-written) instead of rescanning.
+    map_scan_pos: usize,
+    map_line: u32,
     indent: usize,
     /// Blocks that are loop headers (targets of back-edges).
     loop_headers: std::collections::HashSet<crate::mir::BasicBlock>,
@@ -559,6 +605,7 @@ impl<'a> BodyEmitter<'a> {
         bindings: &'a [BufferBinding],
         workgroup_size: [u32; 3],
         output: &'a mut String,
+        source_map: &'a mut Vec<WgslSourceSpan>,
     ) -> Result<Self, CodegenError> {
         let (loop_headers, loop_info, invalid_headers) = Self::detect_loops_and_build_info(body);
 
@@ -578,12 +625,53 @@ impl<'a> BodyEmitter<'a> {
             bindings,
             workgroup_size,
             output,
+            source_map,
+            map_scan_pos: 0,
+            map_line: 1,
             indent: 1,
             loop_headers,
             loop_info,
             loop_stack: Vec::new(),
             return_local: None,
         })
+    }
+
+    /// The 1-based WGSL line the next byte written to `output` will land on.
+    /// Advances the newline scan only over bytes appended since the last call.
+    fn current_line(&mut self) -> u32 {
+        let added = self.output[self.map_scan_pos..]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count() as u32;
+        self.map_line += added;
+        self.map_scan_pos = self.output.len();
+        self.map_line
+    }
+
+    /// Record that the construct about to be emitted on the current WGSL line
+    /// originates at `span` in the Miri source. Synthetic spans (default, no
+    /// source) are skipped. Because emission may add nothing, a later construct
+    /// landing on the same line overwrites the entry — so only the construct
+    /// that actually starts a line survives.
+    fn record(&mut self, span: Span) {
+        if span == Span::default() {
+            return;
+        }
+        let wgsl_line = self.current_line();
+        match self.source_map.last_mut() {
+            Some(last) if last.wgsl_line == wgsl_line => last.miri_offset = span.start,
+            _ => self.source_map.push(WgslSourceSpan {
+                wgsl_line,
+                miri_offset: span.start,
+            }),
+        }
+    }
+
+    /// Emit a statement, recording its source span first so the map ties the
+    /// resulting WGSL line back to the Miri source.
+    fn emit_statement_mapped(&mut self, stmt: &crate::mir::Statement) -> Result<(), CodegenError> {
+        self.record(stmt.span);
+        self.emit_statement(&stmt.kind)
     }
 
     /// Detect loop headers and build per-header LoopInfo.
@@ -912,11 +1000,14 @@ impl<'a> BodyEmitter<'a> {
                 CodegenError::Internal(format!("WGSL backend: block bb{} out of bounds", cur.0))
             })?;
             for stmt in &block.statements {
-                self.emit_statement(&stmt.kind)?;
+                self.emit_statement_mapped(stmt)?;
             }
             let term = block.terminator.as_ref().ok_or_else(|| {
                 CodegenError::Internal(format!("WGSL backend: block bb{} has no terminator", cur.0))
             })?;
+            // Map the control-flow line (an `if`, `return`, `break`/`continue`,
+            // or call) back to the terminator's Miri source span.
+            self.record(term.span);
             match &term.kind {
                 TerminatorKind::Return => {
                     if let Some(rl) = self.return_local {
@@ -1174,7 +1265,7 @@ impl<'a> BodyEmitter<'a> {
 
         // Emit header block statements (compute the loop condition).
         for stmt in &header_block.statements {
-            self.emit_statement(&stmt.kind)?;
+            self.emit_statement_mapped(stmt)?;
         }
 
         if let Some(term) = &header_block.terminator {
@@ -1186,6 +1277,7 @@ impl<'a> BodyEmitter<'a> {
             {
                 if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() {
                     let cond_str = self.render_operand(discr)?;
+                    self.record(term.span);
                     self.write_indent()?;
                     writeln!(self.output, "if (!(bool({}))) {{ break; }}", cond_str)
                         .map_err(emit_err)?;
@@ -1217,7 +1309,7 @@ impl<'a> BodyEmitter<'a> {
             // Emit statements only from the continuing block, not the terminator (which is Goto header).
             if let Some(cont_block) = self.body.basic_blocks.get(continuing.0) {
                 for stmt in &cont_block.statements {
-                    self.emit_statement(&stmt.kind)?;
+                    self.emit_statement_mapped(stmt)?;
                 }
             }
 
@@ -2001,11 +2093,15 @@ mod tests {
 
         // Create a minimal BodyEmitter. Empty bindings and empty output buffer.
         let mut output = String::new();
+        let mut source_map = Vec::new();
         let emitter = BodyEmitter {
             body: &body,
             bindings: &[],
             workgroup_size: [256, 1, 1],
             output: &mut output,
+            source_map: &mut source_map,
+            map_scan_pos: 0,
+            map_line: 1,
             indent: 0,
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),
@@ -2056,11 +2152,15 @@ mod tests {
 
         // Create a minimal BodyEmitter.
         let mut output = String::new();
+        let mut source_map = Vec::new();
         let emitter = BodyEmitter {
             body: &body,
             bindings: &[],
             workgroup_size: [256, 1, 1],
             output: &mut output,
+            source_map: &mut source_map,
+            map_scan_pos: 0,
+            map_line: 1,
             indent: 0,
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),
@@ -2110,11 +2210,15 @@ mod tests {
 
         // Create a minimal BodyEmitter.
         let mut output = String::new();
+        let mut source_map = Vec::new();
         let emitter = BodyEmitter {
             body: &body,
             bindings: &[],
             workgroup_size: [256, 1, 1],
             output: &mut output,
+            source_map: &mut source_map,
+            map_scan_pos: 0,
+            map_line: 1,
             indent: 0,
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),

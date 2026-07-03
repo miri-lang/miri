@@ -58,6 +58,18 @@ pub struct KernelSpec {
     pub write: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inputs: Option<Vec<InputFieldSpec>>,
+    /// WGSL-line → Miri-line map for source highlighting. Omitted when empty
+    /// (e.g. the original source was unavailable at bundle time).
+    #[serde(rename = "sourceMap", skip_serializing_if = "Vec::is_empty")]
+    pub source_map: Vec<SourceMapEntry>,
+}
+
+/// One entry of a kernel's WGSL → Miri source map. Both lines are 1-based:
+/// `wgsl` into the kernel's `wgsl` text, `miri` into the displayed Miri source.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceMapEntry {
+    pub wgsl: u32,
+    pub miri: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

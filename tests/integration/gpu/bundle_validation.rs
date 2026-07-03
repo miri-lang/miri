@@ -411,3 +411,70 @@ gpu forall i in 0..4
         validate_wgsl(wgsl);
     }
 }
+
+/// Each kernel spec carries a `sourceMap`: WGSL-line → Miri-line entries so the
+/// website can highlight the Miri source that produced a given WGSL line.
+#[test]
+fn manifest_kernel_has_source_map() {
+    let source = r#"
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+
+gpu forall i in 0..4
+    dst[i] = a[i] + 5
+"#;
+
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
+
+    let seed_array = manifest["seed"].as_array().expect("seed is array");
+    assert!(!seed_array.is_empty(), "expected at least one seed kernel");
+
+    // The assignment `dst[i] = a[i] + 5` is on line 9 (1-based) of `source`.
+    let source_lines = source.lines().count() as u64;
+
+    let mut saw_map = false;
+    for kernel in seed_array {
+        let entries = kernel["sourceMap"]
+            .as_array()
+            .expect("kernel must carry a sourceMap array");
+        assert!(
+            !entries.is_empty(),
+            "sourceMap must have at least one entry; kernel:\n{}",
+            serde_json::to_string_pretty(kernel).unwrap()
+        );
+        let wgsl_line_count = kernel["wgsl"].as_str().unwrap().lines().count() as u64;
+        for entry in entries {
+            let wgsl = entry["wgsl"].as_u64().expect("wgsl line is a number");
+            let miri = entry["miri"].as_u64().expect("miri line is a number");
+            assert!(
+                wgsl >= 1 && wgsl <= wgsl_line_count,
+                "wgsl line {} in range",
+                wgsl
+            );
+            assert!(
+                miri >= 1 && miri <= source_lines,
+                "miri line {} in range",
+                miri
+            );
+        }
+        // The body assignment's Miri line must be represented in the map.
+        let assign_line = 9;
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["miri"].as_u64() == Some(assign_line)),
+            "sourceMap must map some WGSL line back to the assignment at Miri line {}; entries:\n{}",
+            assign_line,
+            serde_json::to_string_pretty(&entries).unwrap()
+        );
+        saw_map = true;
+    }
+    assert!(
+        saw_map,
+        "expected to inspect at least one kernel source map"
+    );
+}
