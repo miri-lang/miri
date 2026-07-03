@@ -18,7 +18,7 @@ use crate::mir;
 use crate::parser::Parser;
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::type_checker::context::TypeDefinition;
@@ -354,6 +354,11 @@ pub struct BuildOptions {
     pub cpu_backend: CpuBackend,
     /// Target environment for the produced artifact.
     pub target: BuildTarget,
+    /// For the `web-gpu` target, also emit a native host binary inside the
+    /// bundle directory so the same GPU program can run on the host. Ignored by
+    /// the `native` target (which always produces the executable). Off by
+    /// default so bundle-only callers do not require a linker.
+    pub emit_native_host: bool,
 }
 
 /// Orchestrates the full compilation pipeline from source to executable.
@@ -481,6 +486,7 @@ impl Pipeline {
             opt_level: 0,
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
+            emit_native_host: false,
         };
 
         self.build(source, &build_opts)?;
@@ -521,10 +527,12 @@ impl Pipeline {
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
 
         match opts.target {
-            BuildTarget::Native => {}
+            BuildTarget::Native => {
+                self.build_native(&pipeline_result, &mir_bodies, opts, opts.out_path.clone())
+            }
             BuildTarget::WebGpu => {
                 let gpu_buffer_inits = &pipeline_result.type_checker.gpu_buffer_inits;
-                return crate::codegen::web_gpu::emit_bundle(
+                let bundle_dir = crate::codegen::web_gpu::emit_bundle(
                     &mir_bodies,
                     opts.out_path.as_ref(),
                     Some(source),
@@ -533,11 +541,76 @@ impl Pipeline {
                     } else {
                         Some(gpu_buffer_inits)
                     },
-                );
+                )?;
+                // Re-emit the native host binary alongside the browser bundle so
+                // the same GPU program can also run on the host. It lives inside
+                // the bundle directory under the bundle's own name. Bundle-only
+                // callers leave `emit_native_host` off and need no linker.
+                if opts.emit_native_host {
+                    let native_out = native_binary_path(&bundle_dir);
+                    self.build_native(&pipeline_result, &mir_bodies, opts, Some(native_out))?;
+                }
+                Ok(bundle_dir)
             }
         }
+    }
 
-        let (object_bytes, required_runtimes) = match opts.cpu_backend {
+    /// Compile the lowered program to a native executable and link it.
+    ///
+    /// `out_override` selects the output path: `Some` writes the executable
+    /// there; `None` falls back to a unique temporary `a.out`. Shared by the
+    /// `native` target and the `web-gpu` target (which also emits a browser
+    /// bundle before calling this).
+    fn build_native(
+        &self,
+        pipeline_result: &PipelineResult,
+        mir_bodies: &[(String, mir::Body)],
+        opts: &BuildOptions,
+        out_override: Option<PathBuf>,
+    ) -> Result<PathBuf, CompilerError> {
+        let (object_bytes, required_runtimes) =
+            Self::compile_object(pipeline_result, mir_bodies, opts.cpu_backend)?;
+
+        let (work_dir, out_path) = if let Some(out) = out_override {
+            let work_dir = out
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
+            (work_dir, out)
+        } else {
+            let unique_dir = tempfile::Builder::new()
+                .prefix("miri_build_")
+                .tempdir()
+                .map_err(|e| {
+                    CompilerError::Codegen(format!("Failed to create build directory: {}", e))
+                })?;
+            #[allow(deprecated)]
+            let unique_dir = unique_dir.into_path();
+            let out = unique_dir.join("a.out");
+            (unique_dir, out)
+        };
+
+        fs::create_dir_all(&work_dir)?;
+
+        // Derive a unique object path from the output path so that parallel
+        // builds targeting different output files don't overwrite each other's
+        // intermediate `.o` file.
+        let object_path = out_path.with_extension("o");
+        fs::write(&object_path, &object_bytes)?;
+        self.link_executable(&object_path, &out_path, &required_runtimes)?;
+
+        Ok(out_path)
+    }
+
+    /// Compile the lowered bodies to native object bytes with the chosen CPU
+    /// backend, returning the object code and the runtime libraries it must be
+    /// linked against.
+    fn compile_object(
+        pipeline_result: &PipelineResult,
+        mir_bodies: &[(String, mir::Body)],
+        cpu_backend: CpuBackend,
+    ) -> Result<(Vec<u8>, HashSet<RuntimeKind>), CompilerError> {
+        let (object_bytes, required_runtimes) = match cpu_backend {
             CpuBackend::Cranelift => {
                 #[cfg(feature = "cranelift")]
                 {
@@ -605,35 +678,7 @@ impl Pipeline {
             }
         };
 
-        let (work_dir, out_path) = if let Some(out) = opts.out_path.clone() {
-            let work_dir = out
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
-            (work_dir, out)
-        } else {
-            let unique_dir = tempfile::Builder::new()
-                .prefix("miri_build_")
-                .tempdir()
-                .map_err(|e| {
-                    CompilerError::Codegen(format!("Failed to create build directory: {}", e))
-                })?;
-            #[allow(deprecated)]
-            let unique_dir = unique_dir.into_path();
-            let out = unique_dir.join("a.out");
-            (unique_dir, out)
-        };
-
-        fs::create_dir_all(&work_dir)?;
-
-        // Derive a unique object path from the output path so that parallel
-        // builds targeting different output files don't overwrite each other's
-        // intermediate `.o` file.
-        let object_path = out_path.with_extension("o");
-        fs::write(&object_path, &object_bytes)?;
-        self.link_executable(&object_path, &out_path, &required_runtimes)?;
-
-        Ok(out_path)
+        Ok((object_bytes, required_runtimes))
     }
 
     /// Extract an identifier name from an expression, if it is a simple identifier.
@@ -2158,6 +2203,17 @@ impl Pipeline {
             _ => {}
         }
     }
+}
+
+/// Path of the native host binary emitted inside a `web-gpu` bundle directory.
+/// Named after the bundle directory so it sits next to the `<name>.json`
+/// manifest without colliding with it.
+fn native_binary_path(bundle_dir: &Path) -> PathBuf {
+    let name = bundle_dir
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("gpu_program");
+    bundle_dir.join(name)
 }
 
 /// Resolve the path to the linker (cc) using absolute paths or environment variables.

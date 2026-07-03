@@ -42,6 +42,8 @@ fn build_bundle_to_tempdir(source: &str) -> PathBuf {
         release: false,
         opt_level: 0,
         cpu_backend: Default::default(),
+        // Bundle-only: this test validates the manifest/WGSL, not a native link.
+        emit_native_host: false,
     };
 
     let _index_html_path = pipeline.build(source, &opts).expect("build should succeed");
