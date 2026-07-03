@@ -1178,6 +1178,7 @@ impl TypeChecker {
                         return_type: &decl.return_type,
                         body: decl.body.as_ref().map(|b| b.as_ref()),
                         properties: &decl.properties,
+                        span: stmt.span,
                     },
                     context,
                 );
