@@ -495,6 +495,7 @@ impl TypeChecker {
         self.bind_gpu_for_int_variables(decls, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
+        self.check_concurrent_writes(decls, body, context);
 
         self.finalize_gpu_for_scope(context, outer_in_gpu);
     }
@@ -692,6 +693,7 @@ impl TypeChecker {
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
+        self.check_concurrent_writes(decls, body, context);
 
         self.finalize_gpu_for_scope(context, outer_in_gpu);
     }
@@ -732,6 +734,7 @@ impl TypeChecker {
         self.bind_gpu_for_int_variables(decls, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
+        self.check_concurrent_writes(decls, body, context);
 
         self.finalize_gpu_for_scope(context, outer_in_gpu);
     }

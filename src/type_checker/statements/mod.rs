@@ -51,6 +51,7 @@ use crate::type_checker::TypeChecker;
 pub mod control_flow;
 pub mod declarations;
 pub mod gpu_barrier;
+pub mod gpu_concurrent_write;
 pub mod gpu_for_captures;
 pub mod helpers;
 pub mod imports;

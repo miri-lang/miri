@@ -20,6 +20,7 @@ pub mod atomics;
 pub mod box_blur;
 pub mod browser_validation;
 pub mod bundle_validation;
+pub mod concurrent_write;
 pub mod cross_residency;
 pub mod demos;
 pub mod device;
