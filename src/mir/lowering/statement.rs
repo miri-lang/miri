@@ -499,6 +499,7 @@ fn lower_nested_function_decl(
                     guard: p.guard.clone(),
                     default_value: p.default_value.clone(),
                     is_out: p.is_out,
+                    residency: p.residency,
                 })
                 .collect(),
             return_type: ret_type_expr.clone(),

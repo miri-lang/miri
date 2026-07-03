@@ -197,6 +197,7 @@ impl<'source> Parser<'source> {
             guard: None,
             default_value: None,
             is_out: false,
+            residency: None,
         })
     }
 
@@ -440,6 +441,7 @@ fn unnamed_param(typ: Expression) -> Parameter {
         guard: None,
         default_value: None,
         is_out: false,
+        residency: None,
     }
 }
 

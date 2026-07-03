@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::expression::Expression;
+use crate::ast::statement::BindingResidency;
 
 /// Visibility level for class/struct members and declarations.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -29,6 +30,7 @@ pub struct Parameter {
     pub guard: Option<Box<Expression>>,
     pub default_value: Option<Box<Expression>>,
     pub is_out: bool,
+    pub residency: Option<BindingResidency>,
 }
 
 /// Known runtime targets for runtime function declarations.

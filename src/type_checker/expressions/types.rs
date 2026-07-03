@@ -368,6 +368,7 @@ impl TypeChecker {
                 guard: p.guard.clone(),
                 default_value: p.default_value.clone(),
                 is_out: p.is_out,
+                residency: p.residency,
             });
         }
 

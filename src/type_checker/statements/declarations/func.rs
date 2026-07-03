@@ -105,6 +105,9 @@ impl TypeChecker {
 
         self.check_function_parameters(params, context);
 
+        // Validate parameter residency annotations
+        self.validate_parameter_residencies(params, properties);
+
         let previous_in_gpu = context.in_gpu_function;
         self.handle_gpu_function(
             name,
@@ -124,6 +127,10 @@ impl TypeChecker {
         if let Some(body_stmt) = body {
             self.function_bodies
                 .insert(name.to_string(), std::rc::Rc::new(body_stmt.clone()));
+
+            // Compute residency verdict for this function
+            let residency = self.compute_function_residency(params, body_stmt, context);
+            self.fn_residencies.insert(name.to_string(), residency);
         }
 
         // Store the out-param flags for each function (used in GPU kernel launch)
@@ -535,6 +542,421 @@ impl TypeChecker {
             {
                 info.value = const_value;
                 info.is_constant = true;
+            }
+        }
+    }
+
+    /// Computes the residency verdict for a function: whether it can safely
+    /// accept gpu-resident arguments. Returns PolymorphicSafe if the body only
+    /// performs buffer-untouching operations on parameters; HostOnly if it
+    /// performs host-forcing operations like element access or println.
+    fn compute_function_residency(
+        &self,
+        params: &[Parameter],
+        body: &Statement,
+        context: &Context,
+    ) -> crate::type_checker::FnResidency {
+        let param_names: std::collections::HashSet<_> =
+            params.iter().map(|p| p.name.clone()).collect();
+
+        if self.body_forces_host(body)
+            || self.body_touches_param_buffer(body, &param_names, params, context)
+        {
+            crate::type_checker::FnResidency::HostOnly
+        } else {
+            crate::type_checker::FnResidency::PolymorphicSafe
+        }
+    }
+
+    /// Checks if a function body calls any host-forcing intrinsic (println, etc).
+    fn body_forces_host(&self, stmt: &Statement) -> bool {
+        match &stmt.node {
+            StatementKind::Expression(expr) => self.expr_forces_host(expr),
+            StatementKind::Variable(vars, _visibility) => {
+                // Check if any initializer contains host-forcing intrinsics
+                vars.iter().any(|v| {
+                    v.initializer
+                        .as_ref()
+                        .is_some_and(|e| self.expr_forces_host(e))
+                })
+            }
+            StatementKind::If(cond, then_stmt, else_stmt, _if_type) => {
+                self.expr_forces_host(cond)
+                    || self.body_forces_host(then_stmt)
+                    || else_stmt.as_ref().is_some_and(|s| self.body_forces_host(s))
+            }
+            StatementKind::While(cond, body_stmt, _while_type) => {
+                self.expr_forces_host(cond) || self.body_forces_host(body_stmt)
+            }
+            StatementKind::For(_vars, iterable, body_stmt) => {
+                self.expr_forces_host(iterable) || self.body_forces_host(body_stmt)
+            }
+            StatementKind::Forall {
+                device: _,
+                vars: _,
+                iterable,
+                body: body_stmt,
+            } => self.expr_forces_host(iterable) || self.body_forces_host(body_stmt),
+            StatementKind::Return(expr_opt) => expr_opt
+                .as_ref()
+                .is_some_and(|expr| self.expr_forces_host(expr)),
+            StatementKind::Block(stmts) => stmts.iter().any(|s| self.body_forces_host(s)),
+            // Genuinely inert statement kinds
+            StatementKind::Empty | StatementKind::Break | StatementKind::Continue => false,
+            StatementKind::Use(_, _) | StatementKind::Type(_, _) => false,
+            StatementKind::Enum(_, _, _, _, _, _) => false,
+            StatementKind::Struct(_, _, _, _, _, _) => false,
+            StatementKind::Class(_) => false,
+            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::FunctionDeclaration(_) => {
+                // Nested function declarations don't execute host code in outer scope
+                false
+            }
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => false,
+            StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::GpuFrame(_, _, _) => false,
+            StatementKind::GpuFrameBlock(_) => false,
+        }
+    }
+
+    /// Checks if an expression calls any host-forcing intrinsic.
+    fn expr_forces_host(&self, expr: &Expression) -> bool {
+        match &expr.node {
+            ExpressionKind::Call(func_expr, args) => {
+                if let ExpressionKind::Identifier(name, _) = &func_expr.node {
+                    // Check if this is a host intrinsic
+                    if matches!(
+                        name.as_str(),
+                        "println" | "print" | "printf" | "eprintln" | "eprint" | "input" | "readln"
+                    ) {
+                        return true;
+                    }
+                }
+                args.iter().any(|arg| self.expr_forces_host(arg))
+            }
+            ExpressionKind::Binary(left, _, right) => {
+                self.expr_forces_host(left) || self.expr_forces_host(right)
+            }
+            ExpressionKind::Unary(_, expr) => self.expr_forces_host(expr),
+            ExpressionKind::Member(_, _) | ExpressionKind::Index(_, _) => {
+                // Don't recurse; index/member access is buffer-touching, not host-forcing
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Checks if a function body performs buffer-touching operations on params.
+    /// Buffer-touching includes element indexing or capture in gpu forall.
+    fn body_touches_param_buffer(
+        &self,
+        stmt: &Statement,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        match &stmt.node {
+            StatementKind::Expression(expr) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+            StatementKind::Variable(vars, _visibility) => {
+                // Check if any initializer touches param buffer (e.g., let b = a where a is param)
+                vars.iter().any(|v| {
+                    v.initializer.as_ref().is_some_and(|e| {
+                        self.expr_touches_param_buffer(e, param_names, params, context)
+                    })
+                })
+            }
+            StatementKind::If(cond, then_stmt, else_stmt, _if_type) => {
+                self.expr_touches_param_buffer(cond, param_names, params, context)
+                    || self.body_touches_param_buffer(then_stmt, param_names, params, context)
+                    || else_stmt.as_ref().is_some_and(|s| {
+                        self.body_touches_param_buffer(s, param_names, params, context)
+                    })
+            }
+            StatementKind::While(cond, body_stmt, _while_type) => {
+                self.expr_touches_param_buffer(cond, param_names, params, context)
+                    || self.body_touches_param_buffer(body_stmt, param_names, params, context)
+            }
+            StatementKind::For(_vars, iterable, body_stmt) => {
+                self.expr_touches_param_buffer(iterable, param_names, params, context)
+                    || self.body_touches_param_buffer(body_stmt, param_names, params, context)
+            }
+            StatementKind::Forall {
+                device: _,
+                vars: _,
+                iterable,
+                body: body_stmt,
+            } => {
+                self.expr_touches_param_buffer(iterable, param_names, params, context)
+                    || self.body_touches_param_buffer(body_stmt, param_names, params, context)
+            }
+            StatementKind::Return(expr_opt) => expr_opt.as_ref().is_some_and(|expr| {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }),
+            StatementKind::Block(stmts) => stmts
+                .iter()
+                .any(|s| self.body_touches_param_buffer(s, param_names, params, context)),
+            // Genuinely inert statement kinds
+            StatementKind::Empty | StatementKind::Break | StatementKind::Continue => false,
+            StatementKind::Use(_, _) | StatementKind::Type(_, _) => false,
+            StatementKind::Enum(_, _, _, _, _, _) => false,
+            StatementKind::Struct(_, _, _, _, _, _) => false,
+            StatementKind::Class(_) => false,
+            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::FunctionDeclaration(_) => {
+                // Nested function declarations don't reference params
+                false
+            }
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => false,
+            StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::GpuFrame(_, _, _) => false,
+            StatementKind::GpuFrameBlock(_) => false,
+        }
+    }
+
+    /// Checks if an expression performs buffer-touching on a parameter.
+    /// FAIL-CLOSED: Default is to reject (deny) unless explicitly whitelisted.
+    /// The ONLY safe param position: call to .length() on a static array param.
+    fn expr_touches_param_buffer(
+        &self,
+        expr: &Expression,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        match &expr.node {
+            // SAFE WHITELIST: param.length() with zero arguments on static arrays only
+            ExpressionKind::Call(func_expr, args) => {
+                if args.is_empty() {
+                    if let ExpressionKind::Member(base, member_expr) = &func_expr.node {
+                        if let ExpressionKind::Identifier(method_name, _) = &member_expr.node {
+                            if method_name == "length" {
+                                if let ExpressionKind::Identifier(name, _) = &base.node {
+                                    if param_names.contains(name) {
+                                        // Safe only if param is a static Array<T,N>, not List<T>
+                                        if self.param_is_static_array(name, params, context) {
+                                            return false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Any other call: check func and args for param usage
+                self.expr_touches_param_buffer(func_expr, param_names, params, context)
+                    || args.iter().any(|arg| {
+                        self.expr_touches_param_buffer(arg, param_names, params, context)
+                    })
+            }
+
+            // UNSAFE: parameter as index base
+            ExpressionKind::Index(base, index) => {
+                self.expr_touches_param_buffer(base, param_names, params, context)
+                    || self.expr_touches_param_buffer(index, param_names, params, context)
+            }
+
+            // UNSAFE: binary operations containing param
+            ExpressionKind::Binary(left, _, right) => {
+                self.expr_touches_param_buffer(left, param_names, params, context)
+                    || self.expr_touches_param_buffer(right, param_names, params, context)
+            }
+
+            // UNSAFE: unary operations
+            ExpressionKind::Unary(_, expr) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+
+            // UNSAFE: member access (other than .length() above)
+            ExpressionKind::Member(expr, _) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+
+            // UNSAFE: assignment/aliasing
+            ExpressionKind::Assignment(target, _op, value) => {
+                // Check if assignment target or value references param
+                let target_touches = match &**target {
+                    crate::ast::expression::LeftHandSideExpression::Identifier(expr) => {
+                        if let ExpressionKind::Identifier(name, _) = &expr.node {
+                            param_names.contains(name)
+                        } else {
+                            false
+                        }
+                    }
+                    crate::ast::expression::LeftHandSideExpression::Member(expr) => {
+                        self.expr_touches_param_buffer(expr, param_names, params, context)
+                    }
+                    crate::ast::expression::LeftHandSideExpression::Index(expr) => {
+                        self.expr_touches_param_buffer(expr, param_names, params, context)
+                    }
+                };
+                target_touches
+                    || self.expr_touches_param_buffer(value, param_names, params, context)
+            }
+
+            // UNSAFE: direct param identifier usage (forwarding, return, aliasing)
+            ExpressionKind::Identifier(name, _) => param_names.contains(name),
+
+            // UNSAFE: formatted strings contain param
+            ExpressionKind::FormattedString(parts) => parts
+                .iter()
+                .any(|expr| self.expr_touches_param_buffer(expr, param_names, params, context)),
+
+            // UNSAFE: param in collections
+            ExpressionKind::List(elements) | ExpressionKind::Array(elements, _) => elements
+                .iter()
+                .any(|e| self.expr_touches_param_buffer(e, param_names, params, context)),
+            ExpressionKind::Map(pairs) => pairs.iter().any(|(k, v)| {
+                self.expr_touches_param_buffer(k, param_names, params, context)
+                    || self.expr_touches_param_buffer(v, param_names, params, context)
+            }),
+            ExpressionKind::Tuple(elements) | ExpressionKind::Set(elements) => elements
+                .iter()
+                .any(|e| self.expr_touches_param_buffer(e, param_names, params, context)),
+
+            // UNSAFE: lambda with param access
+            ExpressionKind::Lambda(boxed) => {
+                self.body_contains_param_identifier(&boxed.body, param_names, params, context)
+            }
+
+            // UNSAFE: logical operations with params
+            ExpressionKind::Logical(left, _, right) => {
+                self.expr_touches_param_buffer(left, param_names, params, context)
+                    || self.expr_touches_param_buffer(right, param_names, params, context)
+            }
+
+            // UNSAFE: ranges with params
+            ExpressionKind::Range(start, end, _range_type) => {
+                self.expr_touches_param_buffer(start, param_names, params, context)
+                    || end.as_ref().is_some_and(|e| {
+                        self.expr_touches_param_buffer(e, param_names, params, context)
+                    })
+            }
+
+            // UNSAFE: import paths can reference params
+            ExpressionKind::ImportPath(parts, _) => parts
+                .iter()
+                .any(|part| self.expr_touches_param_buffer(part, param_names, params, context)),
+
+            // UNSAFE: block expressions
+            ExpressionKind::Block(stmts, expr) => {
+                stmts
+                    .iter()
+                    .any(|s| self.body_contains_param_identifier(s, param_names, params, context))
+                    || self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+
+            // SAFE: literals, type refs, super don't reference params
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Type(_, _)
+            | ExpressionKind::GenericType(_, _, _)
+            | ExpressionKind::TypeDeclaration(_, _, _, _)
+            | ExpressionKind::EnumValue(_, _)
+            | ExpressionKind::StructMember(_, _)
+            | ExpressionKind::Guard(_, _)
+            | ExpressionKind::Cast(_, _)
+            | ExpressionKind::NamedArgument(_, _)
+            | ExpressionKind::Match(_, _)
+            | ExpressionKind::Conditional(_, _, _, _)
+            | ExpressionKind::Super => false,
+        }
+    }
+
+    /// Helper: checks if a body contains direct usage of a param identifier.
+    fn body_contains_param_identifier(
+        &self,
+        stmt: &Statement,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        match &stmt.node {
+            StatementKind::Expression(expr) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+            StatementKind::Variable(_vars, _visibility) => false,
+            StatementKind::If(cond, then_stmt, else_stmt, _if_type) => {
+                self.expr_touches_param_buffer(cond, param_names, params, context)
+                    || self.body_contains_param_identifier(then_stmt, param_names, params, context)
+                    || else_stmt.as_ref().is_some_and(|s| {
+                        self.body_contains_param_identifier(s, param_names, params, context)
+                    })
+            }
+            StatementKind::While(cond, body_stmt, _while_type) => {
+                self.expr_touches_param_buffer(cond, param_names, params, context)
+                    || self.body_contains_param_identifier(body_stmt, param_names, params, context)
+            }
+            StatementKind::For(_vars, iterable, body_stmt) => {
+                self.expr_touches_param_buffer(iterable, param_names, params, context)
+                    || self.body_contains_param_identifier(body_stmt, param_names, params, context)
+            }
+            StatementKind::Forall {
+                device: _,
+                vars: _,
+                iterable,
+                body: body_stmt,
+            } => {
+                self.expr_touches_param_buffer(iterable, param_names, params, context)
+                    || self.body_contains_param_identifier(body_stmt, param_names, params, context)
+            }
+            StatementKind::Return(expr_opt) => expr_opt.as_ref().is_some_and(|expr| {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }),
+            StatementKind::Block(stmts) => stmts
+                .iter()
+                .any(|s| self.body_contains_param_identifier(s, param_names, params, context)),
+            _ => false,
+        }
+    }
+
+    /// Checks if a parameter's declared type is a static array `Array<T,N>`.
+    /// Recognizes both forms: `[T;N]` sugar and `Array<T,N>` constructor.
+    /// Returns false if the type is dynamic (List<T>) or cannot be determined.
+    fn param_is_static_array(
+        &self,
+        param_name: &str,
+        params: &[Parameter],
+        _context: &Context,
+    ) -> bool {
+        let Some(param) = params.iter().find(|p| p.name == param_name) else {
+            return false;
+        };
+        match &param.typ.node {
+            ExpressionKind::Type(type_wrapped, _is_nullable) => {
+                match &type_wrapped.kind {
+                    // [T;N] sugar form
+                    TypeKind::Array(_, _) => true,
+                    // Array<T,N> constructor form
+                    TypeKind::Custom(name, Some(_)) => {
+                        use crate::ast::types::BuiltinCollectionKind;
+                        BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Validates parameter residency annotations.
+    /// A `gpu fn` with an explicit `host` parameter annotation is a conflict.
+    fn validate_parameter_residencies(
+        &mut self,
+        params: &[Parameter],
+        properties: &FunctionProperties,
+    ) {
+        if properties.is_gpu {
+            for param in params {
+                if let Some(crate::ast::statement::BindingResidency::Host) = param.residency {
+                    self.report_error(
+                        format!(
+                            "conflict: parameter '{}' cannot be explicitly marked 'host' in a gpu function",
+                            param.name
+                        ),
+                        param.typ.span,
+                    );
+                }
             }
         }
     }

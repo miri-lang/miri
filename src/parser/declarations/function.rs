@@ -252,6 +252,19 @@ impl<'source> Parser<'source> {
             false
         };
 
+        let residency = if self.match_lookahead_type(|t| matches!(t, Token::Gpu)) {
+            self.eat_token(&Token::Gpu)?;
+            Some(crate::ast::statement::BindingResidency::Gpu)
+        } else if self.is_contextual_host_keyword() {
+            // "host" is a contextual residency keyword (only in parameter position).
+            // Consume it as an annotation. Non-annotation uses of "host" (as a variable/type name)
+            // are handled by NOT matching this condition (they'll be parsed as regular identifiers/types).
+            self.eat_token(&Token::Identifier)?;
+            Some(crate::ast::statement::BindingResidency::Host)
+        } else {
+            None
+        };
+
         let typ = match self.type_expression()? {
             Some(typ) => Box::new(typ),
             None if name == "self" => {
@@ -282,6 +295,7 @@ impl<'source> Parser<'source> {
             guard,
             default_value,
             is_out,
+            residency,
         })
     }
 
@@ -304,5 +318,15 @@ impl<'source> Parser<'source> {
 
         let expression = self.expression()?;
         Ok(ast::guard(guard_op, expression))
+    }
+
+    /// Checks if the lookahead is the contextual keyword "host" in parameter-annotation position.
+    /// "host" is only treated as a residency keyword here; elsewhere it's a regular identifier.
+    fn is_contextual_host_keyword(&self) -> bool {
+        if let Some((Token::Identifier, span)) = &self.lookahead {
+            &self.source[span.start..span.end] == "host"
+        } else {
+            false
+        }
     }
 }

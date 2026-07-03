@@ -38,6 +38,7 @@ pub mod persistent_buffer;
 pub mod ping_pong;
 pub mod read_only_capture;
 pub mod residency;
+pub mod residency_polymorphic;
 pub mod scalar_capture;
 pub mod sized_constructor;
 pub mod slice_readback;

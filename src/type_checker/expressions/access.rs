@@ -890,6 +890,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: false,
+                    residency: None,
                 },
                 Parameter {
                     name: "offset".to_string(),
@@ -897,6 +898,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: false,
+                    residency: None,
                 },
             ],
             return_type: Some(Box::new(ast_factory::type_expr_non_null(
@@ -925,6 +927,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: false,
+                    residency: None,
                 },
                 Parameter {
                     name: "block".to_string(),
@@ -932,6 +935,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: false,
+                    residency: None,
                 },
             ],
             return_type: Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
@@ -1256,6 +1260,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: method_info.is_param_out(i),
+                    residency: None,
                 }
             })
             .collect();
@@ -1409,6 +1414,7 @@ impl TypeChecker {
                 guard: None,
                 default_value: None,
                 is_out: method_info.is_param_out(i),
+                residency: None,
             })
             .collect();
 
@@ -1574,6 +1580,7 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                     is_out: method_info.is_param_out(i),
+                    residency: None,
                 }
             })
             .collect()
@@ -1728,6 +1735,7 @@ impl TypeChecker {
                 guard: None,
                 default_value: None,
                 is_out: false,
+                residency: None,
             })
             .collect()
     }

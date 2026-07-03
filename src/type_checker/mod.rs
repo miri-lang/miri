@@ -60,6 +60,15 @@ pub fn resolve_type_name(expr: &Expression) -> Option<Type> {
     }
 }
 
+/// Residency verdict for a function: whether it can safely accept gpu-resident args.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FnResidency {
+    /// Function body contains host-forcing operations (println, element access).
+    HostOnly,
+    /// Function body only performs buffer-untouching ops (length on fixed arrays).
+    PolymorphicSafe,
+}
+
 /// The TypeChecker struct is responsible for validating the type safety of the program.
 /// It traverses the AST, infers types for expressions, and ensures that operations
 /// and assignments are performed on compatible types.
@@ -142,6 +151,10 @@ pub struct TypeChecker {
     /// specialized body per instantiation without re-walking the AST. Tuples are
     /// deduplicated by their type kinds (source spans are ignored).
     pub generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
+    /// Computed residency verdict for each function (HostOnly or PolymorphicSafe).
+    /// Populated during function declaration checking; used at call sites to
+    /// determine if gpu-resident args are allowed.
+    pub(crate) fn_residencies: HashMap<String, FnResidency>,
 }
 
 impl Default for TypeChecker {
@@ -185,6 +198,7 @@ impl TypeChecker {
             function_out_params: HashMap::new(),
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
+            fn_residencies: HashMap::new(),
         }
     }
 

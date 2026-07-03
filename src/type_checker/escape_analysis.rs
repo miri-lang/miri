@@ -884,6 +884,7 @@ fn synthetic_self_param() -> Parameter {
         guard: None,
         default_value: None,
         is_out: false,
+        residency: None,
     }
 }
 
