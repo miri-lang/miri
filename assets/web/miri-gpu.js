@@ -241,6 +241,94 @@ function paint(ctx, width, height, values, colormap) {
     ctx.putImageData(image, 0, 0);
 }
 
+// Map a buffer name to its allocated device-buffer entry, erroring on an
+// unknown name. Shared by the canvas `mount` and headless `runHeadless` paths.
+function makeBufferResolver(buffers) {
+    return (name) => {
+        const entry = buffers.get(name);
+        if (!entry) throw new MiriGpuError(`manifest references unknown buffer '${name}'`);
+        return entry;
+    };
+}
+
+// Seed kernels: compile + dispatch once, binding each kernel's buffers by name.
+function runSeedKernels(device, manifest, bufferOf) {
+    for (const kernel of manifest.seed ?? []) {
+        const compiled = compilePipeline(device, kernel);
+        dispatchKernel(device, compiled, kernel, (name) => bufferOf(name).buffer);
+    }
+}
+
+// Build the binding resolver for pass `i` of a multi-pass frame. The first
+// pass's ping-pong source and the last pass's ping-pong destination are swapped
+// to the caller-supplied physical buffers; every other name resolves normally.
+function pingPongBind(framePasses, i, read, write, bufferOf) {
+    const pass = framePasses[i];
+    return (name) => {
+        if (i === 0 && name === pass.read && read) return read;
+        if (i === framePasses.length - 1 && name === pass.write && write) return write;
+        return bufferOf(name).buffer;
+    };
+}
+
+/// Run a Miri GPU demo headlessly (no canvas, no requestAnimationFrame) and
+/// return the paint buffer's values. This is the CI smoke path a Node/Deno
+/// runner drives to verify a `--target web-gpu` bundle actually boots and
+/// dispatches without a browser. Static demos run their seed kernels once;
+/// animated demos additionally run `opts.frames` (default 1) frame rounds with
+/// ping-pong. Returns `{ name, paint, values }`.
+export async function runHeadless(manifest, opts = {}) {
+    if (!manifest || !manifest.buffers) throw new MiriGpuError("runHeadless: invalid manifest");
+
+    const device = await initGpu(opts);
+    try {
+        const buffers = createBuffers(device, manifest);
+        const bufferOf = makeBufferResolver(buffers);
+        runSeedKernels(device, manifest, bufferOf);
+
+        const paintBuffer = bufferOf(manifest.paint);
+        const framePasses = manifest.framePasses ?? (manifest.frame ? [manifest.frame] : null);
+        let outputBuffer = paintBuffer.buffer;
+
+        if (framePasses) {
+            const frames = Math.max(0, opts.frames ?? 1);
+            const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
+            let read = framePasses[0].read ? bufferOf(framePasses[0].read).buffer : null;
+            let write = framePasses[framePasses.length - 1].write
+                ? bufferOf(framePasses[framePasses.length - 1].write).buffer
+                : null;
+            for (let f = 0; f < frames; f++) {
+                for (let i = 0; i < framePasses.length; i++) {
+                    const resolve = pingPongBind(framePasses, i, read, write, bufferOf);
+                    dispatchKernel(device, compiledPasses[i], framePasses[i], resolve);
+                }
+                outputBuffer = write || paintBuffer.buffer;
+                if (read && write) {
+                    const tmp = read;
+                    read = write;
+                    write = tmp;
+                }
+            }
+        }
+
+        await device.queue.onSubmittedWorkDone();
+        const ArrayType = typedArrayFor(paintBuffer.elemType);
+        const view = await readBackInto(
+            device,
+            outputBuffer,
+            paintBuffer.length * ArrayType.BYTES_PER_ELEMENT,
+            ArrayType,
+        );
+        return {
+            name: manifest.name ?? null,
+            paint: manifest.paint,
+            values: Array.from(view, Number),
+        };
+    } finally {
+        if (typeof device.destroy === "function") device.destroy();
+    }
+}
+
 /// Mount a Miri GPU demo described by `manifest` onto `canvas`.
 /// Returns `{ stop() }`. Static demos paint one frame; demos with `framePasses`
 /// animate via requestAnimationFrame, dispatching all passes per frame with ping-pong.
@@ -257,17 +345,10 @@ export async function mount(canvas, manifest, opts = {}) {
 
     const device = await initGpu(opts);
     const buffers = createBuffers(device, manifest);
-    const bufferOf = (name) => {
-        const entry = buffers.get(name);
-        if (!entry) throw new MiriGpuError(`manifest references unknown buffer '${name}'`);
-        return entry;
-    };
+    const bufferOf = makeBufferResolver(buffers);
 
     // Seed kernels: compile + dispatch once, binding by name.
-    for (const kernel of manifest.seed ?? []) {
-        const compiled = compilePipeline(device, kernel);
-        dispatchKernel(device, compiled, kernel, (name) => bufferOf(name).buffer);
-    }
+    runSeedKernels(device, manifest, bufferOf);
 
     const paintBuffer = bufferOf(manifest.paint);
 
@@ -307,21 +388,11 @@ export async function mount(canvas, manifest, opts = {}) {
 
     const step = async () => {
         if (!running) return;
-        // Dispatch all passes in order.
+        // Dispatch all passes in order. The first pass reads the current
+        // ping-pong source, the last writes the current destination.
         for (let i = 0; i < framePasses.length; i++) {
-            const pass = framePasses[i];
-            const compiled = compiledPasses[i];
-            // For multi-pass: first pass uses 'read' ping-pong, last uses 'write'.
-            // Middle passes bind their own buffers.
-            let bindBuffer = (name) => {
-                // First pass: its read → current read, its write → intermediate buffer
-                if (i === 0 && name === pass.read && read) return read;
-                // Last pass: its write → current write
-                if (i === framePasses.length - 1 && name === pass.write && write) return write;
-                // All passes: other names → their own buffers
-                return bufferOf(name).buffer;
-            };
-            dispatchKernel(device, compiled, pass, bindBuffer);
+            const resolve = pingPongBind(framePasses, i, read, write, bufferOf);
+            dispatchKernel(device, compiledPasses[i], framePasses[i], resolve);
         }
         await device.queue.onSubmittedWorkDone();
         // Paint from the last pass's write buffer (or the paint buffer if no write).

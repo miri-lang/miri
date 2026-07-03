@@ -29,6 +29,7 @@ pub mod game_of_life;
 pub mod gpu_fn_launch;
 pub mod gpu_for_capture_residency;
 pub mod gpu_frame;
+pub mod headless_runner;
 pub mod helpers;
 pub mod i32_range_validation;
 pub mod kernel_callable_fns;

@@ -28,7 +28,13 @@ use std::path::PathBuf;
 
 const MIRI_GPU_JS: &str = include_str!("../../../assets/web/miri-gpu.js");
 const MIRI_GPU_JS_FILENAME: &str = "miri-gpu.js";
+const MIRI_GPU_HEADLESS_JS: &str = include_str!("../../../assets/web/miri-gpu-headless.js");
+const MIRI_GPU_HEADLESS_JS_FILENAME: &str = "miri-gpu-headless.js";
 const INDEX_HTML_FILENAME: &str = "index.html";
+/// Marks the bundle as an ES-module package so a JS runtime (Node/Deno) imports
+/// the `.js` harness and headless runner as modules, not CommonJS.
+const PACKAGE_JSON: &str = "{\n  \"type\": \"module\"\n}\n";
+const PACKAGE_JSON_FILENAME: &str = "package.json";
 
 /// Per-binding metadata for a kernel's storage buffer.
 #[derive(Debug, Clone)]
@@ -101,6 +107,14 @@ pub fn emit_bundle(
 
     // Copy miri-gpu.js runtime
     fs::write(bundle_dir.join(MIRI_GPU_JS_FILENAME), MIRI_GPU_JS)?;
+
+    // Headless runner + ES-module marker: a WebGPU-capable JS runtime
+    // (Deno/Node) can boot the bundle without a browser for a CI smoke run.
+    fs::write(
+        bundle_dir.join(MIRI_GPU_HEADLESS_JS_FILENAME),
+        MIRI_GPU_HEADLESS_JS,
+    )?;
+    fs::write(bundle_dir.join(PACKAGE_JSON_FILENAME), PACKAGE_JSON)?;
 
     // Generate a self-contained index.html dev preview: inline the runtime and
     // the manifest so it runs from a `file://` double-click (ES-module import +
