@@ -55,6 +55,7 @@ struct GpuLaunchTerminatorParams<'a> {
     grid_local: Local,
     block_local: Local,
     bounds: BoundsArray,
+    starts: BoundsArray,
 }
 
 /// Specifies the bound (end value) for a single axis in an N-D forall loop.
@@ -68,6 +69,18 @@ pub enum AxisBound {
     Runtime(Expression, RangeExpressionType),
 }
 
+/// Specifies the start (first index) for a single axis in an N-D forall loop.
+///
+/// - `Literal(start)`: compile-time-constant start, baked into the kernel as
+///   `i = thread + const`.
+/// - `Runtime(start_expr)`: runtime-computed start passed to the kernel via a
+///   second uniform scalar, so `i = thread + start_uniform`.
+#[derive(Debug, Clone)]
+pub enum AxisStart {
+    Literal(i64),
+    Runtime(Expression),
+}
+
 /// Specifies one axis (dimension) of an N-D forall loop.
 ///
 /// Fields describe the iteration bounds and the loop variable name.
@@ -76,12 +89,33 @@ pub enum AxisBound {
 pub struct AxisSpec {
     /// The loop variable name (e.g., "i", "j", "k").
     pub name: String,
-    /// Start value (must be an integer literal).
-    pub start: i64,
+    /// Start bound (literal or runtime expression).
+    pub start: AxisStart,
     /// Loop dimension (X=0, Y=1, Z=2). Derived from axis index.
     pub dimension: Dimension,
     /// End bound (literal or runtime expression).
     pub bound: AxisBound,
+}
+
+impl AxisSpec {
+    /// The compile-time start value when it is a literal, or an internal error.
+    /// Only called on the all-literal fast path, where the start is guaranteed
+    /// literal; the error keeps the call total without a panic.
+    fn start_literal(&self, span: Span) -> Result<i64, LoweringError> {
+        match &self.start {
+            AxisStart::Literal(v) => Ok(*v),
+            AxisStart::Runtime(_) => Err(LoweringError::unsupported_expression(
+                "forall: runtime range start reached the literal grid path".to_string(),
+                span,
+            )),
+        }
+    }
+
+    /// Whether this axis needs the runtime lowering path: true when either the
+    /// start or the end is a runtime expression.
+    fn is_runtime(&self) -> bool {
+        matches!(self.start, AxisStart::Runtime(_)) || matches!(self.bound, AxisBound::Runtime(..))
+    }
 }
 
 /// Lowers a `forall` loop targeting GPU into a synthesized kernel + `GpuLaunch`.
@@ -140,7 +174,11 @@ fn axis_from_range(
             span,
         ));
     };
-    let start_lit = read_int_literal(start, span)?;
+    let start_spec = if matches!(&start.node, ExpressionKind::Literal(Literal::Integer(_))) {
+        AxisStart::Literal(read_int_literal(start, span)?)
+    } else {
+        AxisStart::Runtime((**start).clone())
+    };
     let bound = if matches!(&end.node, ExpressionKind::Literal(Literal::Integer(_))) {
         AxisBound::Literal(read_int_literal(end, span)?, range_type.clone())
     } else {
@@ -148,7 +186,7 @@ fn axis_from_range(
     };
     Ok(AxisSpec {
         name: var_decl.name.clone(),
-        start: start_lit,
+        start: start_spec,
         dimension,
         bound,
     })
@@ -231,7 +269,8 @@ fn compute_kernel_grid_size(
     let mut grid = [1u32; 3];
     for (i, axis) in axes.iter().enumerate() {
         if let AxisBound::Literal(end, range_type) = &axis.bound {
-            let length = compute_range_length(axis.start, *end, range_type.clone(), span)?;
+            let length =
+                compute_range_length(axis.start_literal(span)?, *end, range_type.clone(), span)?;
             grid[i] = literal_grid_dim(length, block[i]);
         } else {
             unreachable!("literal mode checked above");
@@ -240,13 +279,52 @@ fn compute_kernel_grid_size(
     Ok(Some(grid))
 }
 
+/// The kernel-side start offset for an axis: a compile-time constant for a
+/// literal start, or the (i64-cast) start uniform for a runtime start.
+///
+/// `start_uniform` is the kernel's `_start_{x,y,z}` uniform parameter local; it
+/// is `Some` exactly when the axis start is runtime. When it is missing for a
+/// runtime start (never emitted in practice), a `0` offset keeps the kernel
+/// total without a panic.
+fn axis_start_operand(
+    ctx: &mut LoweringContext,
+    axis: &AxisSpec,
+    start_uniform: Option<Local>,
+    span: Span,
+) -> Operand {
+    match (&axis.start, start_uniform) {
+        (AxisStart::Literal(v), _) => int_constant(*v, span),
+        (AxisStart::Runtime(_), Some(uniform)) => {
+            let i64_ty = Type::new(TypeKind::Int, span);
+            let cast_local = ctx.push_temp(i64_ty.clone(), span);
+            push_assign(
+                ctx,
+                cast_local,
+                Rvalue::Cast(Box::new(Operand::Copy(Place::new(uniform))), i64_ty),
+                span,
+            );
+            Operand::Copy(Place::new(cast_local))
+        }
+        (AxisStart::Runtime(_), None) => int_constant(0, span),
+    }
+}
+
 /// Builds loop local variables from thread indices and axis starts.
-fn build_loop_locals(ctx: &mut LoweringContext, axes: &[AxisSpec], span: Span) -> Vec<Local> {
+/// `start_uniforms[i]` carries the runtime start uniform for axis `i`, or `None`
+/// when the axis start is a compile-time literal.
+fn build_loop_locals(
+    ctx: &mut LoweringContext,
+    axes: &[AxisSpec],
+    start_uniforms: &[Option<Local>],
+    span: Span,
+) -> Vec<Local> {
     let i64_ty = Type::new(TypeKind::Int, span);
     let mut loop_locals = Vec::new();
 
-    for axis in axes {
+    for (i, axis) in axes.iter().enumerate() {
         let thread_int = compute_thread_index(ctx, axis.dimension, span);
+        let start_op =
+            axis_start_operand(ctx, axis, start_uniforms.get(i).copied().flatten(), span);
         let loop_local = ctx.push_local(axis.name.clone(), i64_ty.clone(), span);
         push_assign(
             ctx,
@@ -254,7 +332,7 @@ fn build_loop_locals(ctx: &mut LoweringContext, axes: &[AxisSpec], span: Span) -
             Rvalue::BinaryOp(
                 BinOp::Add,
                 Box::new(Operand::Copy(Place::new(thread_int))),
-                Box::new(int_constant(axis.start, span)),
+                Box::new(start_op),
             ),
             span,
         );
@@ -264,8 +342,21 @@ fn build_loop_locals(ctx: &mut LoweringContext, axes: &[AxisSpec], span: Span) -
     loop_locals
 }
 
-/// Pushes kernel parameters: buffer globals, scalar uniforms, and optional bounds.
-/// Returns the uniform bounds locals for runtime mode (empty for literal mode).
+/// The kernel parameter locals for the runtime uniforms of a `forall` loop.
+struct UniformParams {
+    /// One loop-bound (end) uniform per axis, in axis order. Empty in literal mode.
+    bounds: Vec<Local>,
+    /// One entry per axis: `Some(local)` for the runtime-start uniform of that
+    /// axis, `None` when the axis start is a compile-time literal.
+    starts: Vec<Option<Local>>,
+}
+
+/// Pushes kernel parameters: buffer globals, scalar uniforms, the per-axis loop
+/// bound uniforms, and the runtime-start uniforms.
+///
+/// Parameter order is buffers, scalars, all bound uniforms, then the start
+/// uniforms. The start uniforms follow the bounds so the WGSL emitter and the
+/// runtime assign their binding indices in the same order (bounds, then starts).
 fn push_kernel_params(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
@@ -273,7 +364,7 @@ fn push_kernel_params(
     scalar_captures: &[&CaptureInfo],
     runtime: bool,
     span: Span,
-) -> Vec<Local> {
+) -> UniformParams {
     for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
         ctx.body.local_decls[local.0].storage_class =
@@ -286,7 +377,8 @@ fn push_kernel_params(
             capture_storage_class(&cap.ty.kind, StorageClass::UniformBuffer);
     }
 
-    let mut uniform_bounds = Vec::new();
+    let mut bounds = Vec::new();
+    let mut starts = vec![None; axes.len()];
     if runtime {
         for axis in axes {
             let bound_name = match axis.dimension {
@@ -297,10 +389,24 @@ fn push_kernel_params(
             let local =
                 ctx.push_param(bound_name.to_string(), Type::new(TypeKind::Int, span), span);
             ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
-            uniform_bounds.push(local);
+            bounds.push(local);
+        }
+        for (i, axis) in axes.iter().enumerate() {
+            if !matches!(axis.start, AxisStart::Runtime(_)) {
+                continue;
+            }
+            let start_name = match axis.dimension {
+                Dimension::X => "_start_x",
+                Dimension::Y => "_start_y",
+                Dimension::Z => "_start_z",
+            };
+            let local =
+                ctx.push_param(start_name.to_string(), Type::new(TypeKind::Int, span), span);
+            ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+            starts[i] = Some(local);
         }
     }
-    uniform_bounds
+    UniformParams { bounds, starts }
 }
 
 /// Storage class a forall capture of `kind` binds with, sourced from the
@@ -336,12 +442,17 @@ fn build_kernel_body_nd(
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
-    let runtime = axes
-        .iter()
-        .any(|a| matches!(a.bound, AxisBound::Runtime(..)));
+    let runtime = axes.iter().any(|a| a.is_runtime());
 
     let bound_count = if runtime { rank } else { 0 };
-    let arg_count = buffer_captures.len() + scalar_captures.len() + bound_count;
+    let start_count = if runtime {
+        axes.iter()
+            .filter(|a| matches!(a.start, AxisStart::Runtime(_)))
+            .count()
+    } else {
+        0
+    };
+    let arg_count = buffer_captures.len() + scalar_captures.len() + bound_count + start_count;
 
     let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
     kernel
@@ -360,12 +471,12 @@ fn build_kernel_body_nd(
 
     let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
     out_params.extend(scalar_captures.iter().map(|_| false));
-    out_params.extend(std::iter::repeat_n(false, bound_count));
+    out_params.extend(std::iter::repeat_n(false, bound_count + start_count));
     kernel.out_params = out_params;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
-    let uniform_bounds = push_kernel_params(
+    let uniforms = push_kernel_params(
         &mut ctx,
         axes,
         &buffer_captures,
@@ -374,13 +485,13 @@ fn build_kernel_body_nd(
         span,
     );
 
-    let loop_locals = build_loop_locals(&mut ctx, axes, span);
+    let loop_locals = build_loop_locals(&mut ctx, axes, &uniforms.starts, span);
 
     emit_bounds_check_nd(
         &mut ctx,
         axes,
         &loop_locals,
-        &uniform_bounds,
+        &uniforms.bounds,
         runtime,
         body,
         span,
@@ -413,14 +524,9 @@ fn build_per_axis_check(
         Operand::Copy(Place::new(uniform_cast_local))
     } else {
         if let AxisBound::Literal(end, range_type) = &axis.bound {
-            let limit = axis
-                .start
-                .checked_add(compute_range_length(
-                    axis.start,
-                    *end,
-                    range_type.clone(),
-                    span,
-                )?)
+            let start = axis.start_literal(span)?;
+            let limit = start
+                .checked_add(compute_range_length(start, *end, range_type.clone(), span)?)
                 .ok_or_else(|| bounds_overflow_err(span))?;
             int_constant(limit, span)
         } else {
@@ -546,9 +652,9 @@ fn compute_axis_end_op(
 ) -> Result<Operand, LoweringError> {
     match &axis.bound {
         AxisBound::Literal(end, range_type) => {
-            let length = compute_range_length(axis.start, *end, range_type.clone(), span)?;
-            let end_val = axis
-                .start
+            let start = axis.start_literal(span)?;
+            let length = compute_range_length(start, *end, range_type.clone(), span)?;
+            let end_val = start
                 .checked_add(length)
                 .ok_or_else(|| bounds_overflow_err(span))?;
             Ok(materialize_operand_to_local(
@@ -574,27 +680,58 @@ fn compute_axis_end_op(
     }
 }
 
-/// Computes runtime grid dimensions and bounds for forall GPU loop.
-/// Returns (grid_local, [bound_x, bound_y, bound_z]).
+/// Computes the host-side start operand for a single axis: a constant for a
+/// literal start, or the lowered start expression for a runtime start. A
+/// runtime start is materialized to a local so it can be reused for both the
+/// grid-length arithmetic and the uniform value passed to the kernel.
+fn compute_axis_start_op(
+    ctx: &mut LoweringContext,
+    axis: &AxisSpec,
+    span: Span,
+) -> Result<Operand, LoweringError> {
+    match &axis.start {
+        // A literal start stays a bare constant so the existing runtime-*end*
+        // path (literal start, runtime end) keeps its exact MIR shape — no extra
+        // temp is introduced for the common `0..n` case.
+        AxisStart::Literal(v) => Ok(int_constant(*v, span)),
+        AxisStart::Runtime(start_expr) => {
+            let op = lower_expression(ctx, start_expr, None)?;
+            Ok(materialize_operand_to_local(ctx, op, span))
+        }
+    }
+}
+
+/// Computes runtime grid dimensions, per-axis end bounds, and per-axis runtime
+/// range starts for a forall GPU loop.
+///
+/// Returns `(grid_local, bounds, starts)` where `bounds[i]` is the end operand
+/// carried into the kernel as the loop limit and `starts[i]` is `Some(start_op)`
+/// only for an axis whose start is a runtime expression (literal starts are
+/// baked into the kernel and produce `None`).
 fn compute_runtime_grid_and_bounds(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
     block_size: &[u32; 3],
     span: Span,
-) -> Result<(Local, BoundsArray), LoweringError> {
+) -> Result<(Local, BoundsArray, BoundsArray), LoweringError> {
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
     let i64_ty = Type::new(TypeKind::Int, span);
 
     let mut grid_values = vec![int_constant(1, span); 3];
-    let mut bounds: [Option<Box<Operand>>; 3] = [None, None, None];
+    let mut bounds: BoundsArray = [None, None, None];
+    let mut starts: BoundsArray = [None, None, None];
 
     for (i, axis) in axes.iter().enumerate() {
         let end_op = compute_axis_end_op(ctx, axis, &i64_ty, span)?;
-        let clamped_length = compute_clamped_length(ctx, end_op.clone(), axis.start, span);
+        let start_op = compute_axis_start_op(ctx, axis, span)?;
+        let clamped_length = compute_clamped_length(ctx, end_op.clone(), start_op.clone(), span);
         let grid_dim = compute_grid_size(ctx, clamped_length, block_size[i], span);
         grid_values[i] = Operand::Copy(Place::new(grid_dim));
 
         bounds[i] = Some(Box::new(end_op));
+        if matches!(axis.start, AxisStart::Runtime(_)) {
+            starts[i] = Some(Box::new(start_op));
+        }
     }
 
     let grid_x = operand_to_local(ctx, &grid_values[0], span);
@@ -616,7 +753,7 @@ fn compute_runtime_grid_and_bounds(
         span,
     );
 
-    Ok((grid_local, bounds))
+    Ok((grid_local, bounds, starts))
 }
 
 /// Builds literal (compile-time) grid Dim3 for forall GPU loop.
@@ -631,7 +768,8 @@ fn build_literal_grid_dim3(
 
     for (i, axis) in axes.iter().enumerate() {
         if let AxisBound::Literal(end, range_type) = &axis.bound {
-            let length = compute_range_length(axis.start, *end, range_type.clone(), span)?;
+            let length =
+                compute_range_length(axis.start_literal(span)?, *end, range_type.clone(), span)?;
             grid[i] = literal_grid_dim(length, block_size[i]);
         }
     }
@@ -724,6 +862,9 @@ fn assemble_gpu_launch_terminator(
             uniform_bound_x: params.bounds[0].clone(),
             uniform_bound_y: params.bounds[1].clone(),
             uniform_bound_z: params.bounds[2].clone(),
+            uniform_start_x: params.starts[0].clone(),
+            uniform_start_y: params.starts[1].clone(),
+            uniform_start_z: params.starts[2].clone(),
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -747,15 +888,13 @@ fn emit_gpu_launch_nd(
     let block = config.block_size(rank);
     let block_size = [block[0], block[1], block[2]];
 
-    let runtime = axes
-        .iter()
-        .any(|a| matches!(a.bound, AxisBound::Runtime(..)));
+    let runtime = axes.iter().any(|a| a.is_runtime());
 
-    let (grid_local, bounds) = if runtime {
+    let (grid_local, bounds, starts) = if runtime {
         compute_runtime_grid_and_bounds(ctx, axes, &block_size, span)?
     } else {
         let grid_local = build_literal_grid_dim3(ctx, axes, &block_size, span)?;
-        (grid_local, [None, None, None])
+        (grid_local, [None, None, None], [None, None, None])
     };
 
     let block_local = build_block_dim3(ctx, &block_size, span);
@@ -768,6 +907,7 @@ fn emit_gpu_launch_nd(
             grid_local,
             block_local,
             bounds,
+            starts,
         },
         span,
     )
@@ -1473,7 +1613,7 @@ pub fn compute_grid_size(
 pub fn compute_clamped_length(
     ctx: &mut LoweringContext,
     end_op: Operand,
-    start: i64,
+    start_op: Operand,
     span: Span,
 ) -> Local {
     let i64_ty = Type::new(TypeKind::Int, span);
@@ -1485,7 +1625,7 @@ pub fn compute_clamped_length(
         Rvalue::BinaryOp(
             BinOp::Sub,
             Box::new(end_op.clone()),
-            Box::new(int_constant(start, span)),
+            Box::new(start_op.clone()),
         ),
         span,
     );
@@ -1494,11 +1634,7 @@ pub fn compute_clamped_length(
     push_assign(
         ctx,
         is_in_range_local,
-        Rvalue::BinaryOp(
-            BinOp::Gt,
-            Box::new(end_op),
-            Box::new(int_constant(start, span)),
-        ),
+        Rvalue::BinaryOp(BinOp::Gt, Box::new(end_op), Box::new(start_op)),
         span,
     );
 

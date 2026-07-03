@@ -506,9 +506,8 @@ impl TypeChecker {
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).
     /// - For 1D: single loop variable; for 2D: exactly two loop variables.
-    /// - The range start must be an integer literal.
-    /// - The range end may be a runtime Int expression.
-    ///   Non-literal ends are lowered to uniform buffers in the MIR kernel.
+    /// - The range start and end may each be a runtime Int expression.
+    ///   Non-literal bounds are lowered to uniform buffers in the MIR kernel.
     /// - The loop body is checked with `context.in_gpu_function = true`, so
     ///   discarded values and variable types are validated against
     ///   [`is_gpu_compatible`](crate::type_checker::utils::is_gpu_compatible).
@@ -566,13 +565,14 @@ impl TypeChecker {
                 );
                 return false;
             }
-            if !is_int_literal(start) {
+            let start_type = self.infer_expression(start, context);
+            if !matches!(start_type.kind, TypeKind::Int) {
                 self.report_error(
                     format!(
-                        "'gpu forall' range {} start must be an Int literal",
-                        dim_names[i]
+                        "'gpu forall' range {} start must be Int, got {}",
+                        dim_names[i], start_type.kind
                     ),
-                    range_expr.span,
+                    start.span,
                 );
                 return false;
             }
@@ -666,10 +666,14 @@ impl TypeChecker {
             );
             return;
         }
-        if !is_int_literal(start) {
+        let start_type = self.infer_expression(start, context);
+        if !matches!(start_type.kind, TypeKind::Int) {
             self.report_error(
-                "'gpu forall' range start must be an Int literal".to_string(),
-                iterable.span,
+                format!(
+                    "'gpu forall' range start must be Int, got {}",
+                    start_type.kind
+                ),
+                start.span,
             );
             return;
         }

@@ -174,6 +174,9 @@ impl fmt::Display for Terminator {
                 uniform_bound_x: _,
                 uniform_bound_y: _,
                 uniform_bound_z: _,
+                uniform_start_x: _,
+                uniform_start_y: _,
+                uniform_start_z: _,
                 destination,
                 target,
             } => {
@@ -410,6 +413,14 @@ pub enum TerminatorKind {
         /// When present, an i64 operand containing the loop-bound limit value for the z axis.
         /// For 3D loops only; `None` for 1D/2D loops or literal bounds.
         uniform_bound_z: Option<Box<Operand>>,
+        /// When present, an i64 operand carrying the runtime range *start* for the
+        /// x axis. The kernel computes its per-thread index as `thread + start`.
+        /// `None` when the start is a compile-time literal (baked into the kernel).
+        uniform_start_x: Option<Box<Operand>>,
+        /// Runtime range start for the y axis (2D/3D loops). `None` for a literal start.
+        uniform_start_y: Option<Box<Operand>>,
+        /// Runtime range start for the z axis (3D loops). `None` for a literal start.
+        uniform_start_z: Option<Box<Operand>>,
         destination: Place,
         target: Option<BasicBlock>,
     },
