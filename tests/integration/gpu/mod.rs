@@ -44,6 +44,7 @@ pub mod runtime_start_gpu_for;
 pub mod scalar_capture;
 pub mod sized_constructor;
 pub mod slice_readback;
+pub mod uniform_portability;
 pub mod variable_bound_gpu_for;
 pub mod vectors;
 pub mod warp;
