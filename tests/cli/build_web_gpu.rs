@@ -155,6 +155,55 @@ fn target_web_gpu_emits_manifest_and_runtime() {
 }
 
 #[test]
+fn target_web_gpu_emits_native_host_binary() {
+    // Alongside the browser bundle, `--target web-gpu` re-emits the native host
+    // binary so the same GPU program can also run on the host. It lives inside
+    // the bundle directory under the bundle's own name.
+    let source = write_source(GPU_FOR_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    // The bundle files still land next to the native binary.
+    assert!(
+        bundle_dir.join("bundle.json").is_file(),
+        "manifest must still be emitted alongside the native binary"
+    );
+
+    let native_path = bundle_dir.join("bundle");
+    let meta = fs::metadata(&native_path).unwrap_or_else(|err| {
+        panic!(
+            "expected native host binary at {:?} (dir contents: {:?}): {}",
+            native_path,
+            fs::read_dir(&bundle_dir)
+                .ok()
+                .map(|entries| entries.flatten().map(|e| e.file_name()).collect::<Vec<_>>()),
+            err
+        )
+    });
+    assert!(meta.is_file(), "native binary must be a regular file");
+    assert!(meta.len() > 0, "native binary must be non-empty");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            meta.permissions().mode() & 0o111 != 0,
+            "native binary must have an executable bit set"
+        );
+    }
+}
+
+#[test]
 fn target_web_gpu_frame_kernel_in_manifest() {
     let source = write_source(GPU_FRAME_SOURCE);
     let out_dir = tempfile::tempdir().unwrap();

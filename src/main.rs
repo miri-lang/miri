@@ -34,6 +34,9 @@ pub fn main() -> Result<()> {
                     opt_level,
                     cpu_backend,
                     target,
+                    // The CLI emits the native host binary alongside a web-gpu
+                    // bundle; the flag is a no-op for the native target.
+                    emit_native_host: true,
                 },
                 cli.verify_mir,
             ),
