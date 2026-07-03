@@ -130,6 +130,9 @@ pub trait Visitor {
                 uniform_bound_x,
                 uniform_bound_y,
                 uniform_bound_z,
+                uniform_start_x,
+                uniform_start_y,
+                uniform_start_z,
                 destination,
                 target: _,
             } => {
@@ -142,14 +145,17 @@ pub trait Visitor {
                 for scalar_arg in scalar_args {
                     self.visit_operand(scalar_arg, block);
                 }
-                if let Some(bound) = uniform_bound_x {
+                for bound in [uniform_bound_x, uniform_bound_y, uniform_bound_z]
+                    .into_iter()
+                    .flatten()
+                {
                     self.visit_operand(bound, block);
                 }
-                if let Some(bound) = uniform_bound_y {
-                    self.visit_operand(bound, block);
-                }
-                if let Some(bound) = uniform_bound_z {
-                    self.visit_operand(bound, block);
+                for start in [uniform_start_x, uniform_start_y, uniform_start_z]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.visit_operand(start, block);
                 }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);
             }
@@ -345,6 +351,9 @@ pub trait MutVisitor {
                 uniform_bound_x,
                 uniform_bound_y,
                 uniform_bound_z,
+                uniform_start_x,
+                uniform_start_y,
+                uniform_start_z,
                 destination,
                 target: _,
             } => {
@@ -357,14 +366,17 @@ pub trait MutVisitor {
                 for scalar_arg in scalar_args {
                     self.visit_operand(scalar_arg, block);
                 }
-                if let Some(bound) = uniform_bound_x {
+                for bound in [uniform_bound_x, uniform_bound_y, uniform_bound_z]
+                    .into_iter()
+                    .flatten()
+                {
                     self.visit_operand(bound, block);
                 }
-                if let Some(bound) = uniform_bound_y {
-                    self.visit_operand(bound, block);
-                }
-                if let Some(bound) = uniform_bound_z {
-                    self.visit_operand(bound, block);
+                for start in [uniform_start_x, uniform_start_y, uniform_start_z]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.visit_operand(start, block);
                 }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);
             }

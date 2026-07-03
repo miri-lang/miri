@@ -328,6 +328,9 @@ impl<'a> FunctionTranslator<'a> {
                 uniform_bound_x,
                 uniform_bound_y,
                 uniform_bound_z,
+                uniform_start_x,
+                uniform_start_y,
+                uniform_start_z,
                 destination: _,
                 target,
             } => {
@@ -342,6 +345,9 @@ impl<'a> FunctionTranslator<'a> {
                     uniform_bound_x,
                     uniform_bound_y,
                     uniform_bound_z,
+                    uniform_start_x,
+                    uniform_start_y,
+                    uniform_start_z,
                     locals,
                     type_ctx,
                 )?;

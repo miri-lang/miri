@@ -469,6 +469,9 @@ fn emit_gpu_frame_launch_literal(
             uniform_bound_x: None,
             uniform_bound_y: None,
             uniform_bound_z: None,
+            uniform_start_x: None,
+            uniform_start_y: None,
+            uniform_start_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -493,7 +496,9 @@ fn emit_gpu_frame_launch_runtime(
 
     let void_ty = Type::new(TypeKind::Void, span);
 
-    let clamped_length_local = forall_gpu::compute_clamped_length(ctx, end_op.clone(), start, span);
+    let start_op = forall_gpu::int_constant(start, span);
+    let clamped_length_local =
+        forall_gpu::compute_clamped_length(ctx, end_op.clone(), start_op, span);
     let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
     let grid_x_local = forall_gpu::compute_grid_size(ctx, clamped_length_local, block_size, span);
     let grid_x = crate::mir::Local(grid_x_local.0);
@@ -550,6 +555,9 @@ fn emit_gpu_frame_launch_runtime(
             uniform_bound_x: Some(Box::new(bounds_limit_op)),
             uniform_bound_y: None,
             uniform_bound_z: None,
+            uniform_start_x: None,
+            uniform_start_y: None,
+            uniform_start_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

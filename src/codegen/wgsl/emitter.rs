@@ -390,8 +390,12 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             .map(sanitize_identifier)
             .unwrap_or_else(|| format!("_uniform{}", param_idx));
 
-        let is_loop_bound =
-            var_name.starts_with("_bound") || var_name.starts_with("_uniform_bound");
+        // Loop-bound (`_bound_*`) and runtime range-start (`_start_*`) uniforms
+        // are compiler-injected control scalars, each bound as its own `u32`
+        // uniform rather than pooled into the `_Inputs` scalar-capture struct.
+        let is_loop_bound = var_name.starts_with("_bound")
+            || var_name.starts_with("_uniform_bound")
+            || var_name.starts_with("_start");
 
         if is_loop_bound {
             bindings.push(BufferBinding {

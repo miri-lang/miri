@@ -117,7 +117,7 @@ fn define_bytes(
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
 /// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_int_narrow,
-/// scalar inputs).
+/// scalar inputs, and the runtime range-start uniforms).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -141,7 +141,10 @@ mod desc_layout {
     pub(super) const UNIFORM_BOUND_Z_VALUE: i32 = 128;
     pub(super) const SCALAR_INPUTS_PTR: i32 = 136;
     pub(super) const SCALAR_INPUTS_LEN: i32 = 144;
-    pub(super) const DESC_SIZE: u32 = 152;
+    pub(super) const UNIFORM_START_X_VALUE: i32 = 152;
+    pub(super) const UNIFORM_START_Y_VALUE: i32 = 160;
+    pub(super) const UNIFORM_START_Z_VALUE: i32 = 168;
+    pub(super) const DESC_SIZE: u32 = 176;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -166,6 +169,9 @@ pub(crate) fn translate(
     uniform_bound_x: &Option<Box<Operand>>,
     uniform_bound_y: &Option<Box<Operand>>,
     uniform_bound_z: &Option<Box<Operand>>,
+    uniform_start_x: &Option<Box<Operand>>,
+    uniform_start_y: &Option<Box<Operand>>,
+    uniform_start_z: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
@@ -276,68 +282,35 @@ pub(crate) fn translate(
         [block_x, block_y, block_z],
     );
 
-    // Populate uniform bounds if present.
+    // Populate uniform bounds (loop end) and runtime range starts if present.
+    // `uniform_bound_present` packs both: bits 0..3 = bound x/y/z present,
+    // bits 3..6 = start x/y/z present.
     let zero_i64 = builder.ins().iconst(cl_types::I64, 0);
-    let mut bound_present = 0u64;
+    let mut present = 0u64;
 
-    if let Some(bound_op) = uniform_bound_x {
-        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
-        builder.ins().store(
-            MemFlags::new(),
-            bound_value,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_X_VALUE,
-        );
-        bound_present |= 1u64;
-    } else {
-        builder.ins().store(
-            MemFlags::new(),
-            zero_i64,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_X_VALUE,
-        );
+    for (op, offset, bit) in [
+        (uniform_bound_x, desc_layout::UNIFORM_BOUND_X_VALUE, 1u64),
+        (uniform_bound_y, desc_layout::UNIFORM_BOUND_Y_VALUE, 2u64),
+        (uniform_bound_z, desc_layout::UNIFORM_BOUND_Z_VALUE, 4u64),
+        (uniform_start_x, desc_layout::UNIFORM_START_X_VALUE, 8u64),
+        (uniform_start_y, desc_layout::UNIFORM_START_Y_VALUE, 16u64),
+        (uniform_start_z, desc_layout::UNIFORM_START_Z_VALUE, 32u64),
+    ] {
+        let value = if let Some(op) = op {
+            present |= bit;
+            read_operand_value(builder, op, locals, type_ctx)?
+        } else {
+            zero_i64
+        };
+        builder
+            .ins()
+            .store(MemFlags::new(), value, slots.desc_addr, offset);
     }
 
-    if let Some(bound_op) = uniform_bound_y {
-        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
-        builder.ins().store(
-            MemFlags::new(),
-            bound_value,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_Y_VALUE,
-        );
-        bound_present |= 2u64;
-    } else {
-        builder.ins().store(
-            MemFlags::new(),
-            zero_i64,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_Y_VALUE,
-        );
-    }
-
-    if let Some(bound_op) = uniform_bound_z {
-        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
-        builder.ins().store(
-            MemFlags::new(),
-            bound_value,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_Z_VALUE,
-        );
-        bound_present |= 4u64;
-    } else {
-        builder.ins().store(
-            MemFlags::new(),
-            zero_i64,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_Z_VALUE,
-        );
-    }
-
-    let bound_present_i64 = builder.ins().iconst(cl_types::I64, bound_present as i64);
+    let present_i64 = builder.ins().iconst(cl_types::I64, present as i64);
     builder.ins().store(
         MemFlags::new(),
-        bound_present_i64,
+        present_i64,
         slots.desc_addr,
         desc_layout::UNIFORM_BOUND_PRESENT,
     );
@@ -757,6 +730,6 @@ mod tests {
 
     #[test]
     fn gpu_launch_desc_size_matches_runtime() {
-        assert_eq!(desc_layout::DESC_SIZE as usize, 152);
+        assert_eq!(desc_layout::DESC_SIZE as usize, 176);
     }
 }
