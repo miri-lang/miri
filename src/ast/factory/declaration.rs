@@ -20,6 +20,7 @@ pub fn parameter(
         guard,
         default_value,
         is_out: false,
+        residency: None,
     }
 }
 
@@ -36,6 +37,7 @@ pub fn out_parameter(
         guard,
         default_value,
         is_out: true,
+        residency: None,
     }
 }
 

@@ -1250,11 +1250,9 @@ impl TypeChecker {
         )))
     }
 
-    /// Rejects a gpu-resident binding passed as an argument to a host call.
-    /// A host function reads its arguments on the host, so a gpu-resident
-    /// value would need an implicit readback. To prevent silent readbacks, the
-    /// caller must explicitly copy to host first (`let h = g`) and pass the copy.
-    /// GPU functions are exempt from this check: they accept gpu-resident arrays directly.
+    /// Validates gpu-resident arguments against function residency.
+    /// GPU functions and PolymorphicSafe functions accept gpu-resident args.
+    /// HostOnly functions (and host intrinsics) reject them.
     fn reject_gpu_resident_call_args(
         &mut self,
         func: &Expression,
@@ -1275,24 +1273,79 @@ impl TypeChecker {
             return;
         }
 
+        // Host intrinsics are inherently HostOnly and must reject gpu-resident args
+        let is_host_intrinsic_call = callee_name
+            .map(|name| self.is_host_intrinsic(name))
+            .unwrap_or(false);
+
+        if is_host_intrinsic_call {
+            let callee = match &func.node {
+                ExpressionKind::Identifier(name, _) => name.clone(),
+                _ => "this host function".to_string(),
+            };
+
+            for arg in args {
+                let value = match &arg.node {
+                    ExpressionKind::NamedArgument(_, inner) => inner.as_ref(),
+                    _ => arg,
+                };
+                let Some(arg_name) = self.gpu_resident_identifier(value, context) else {
+                    continue;
+                };
+
+                self.report_error(
+                    format!(
+                        "cannot pass gpu-resident '{}' to host function '{}'",
+                        arg_name, callee
+                    ),
+                    arg.span,
+                );
+            }
+            return;
+        }
+
+        // For user-defined functions, check the computed residency verdict
+        let callee_residency = callee_name.and_then(|name| self.fn_residencies.get(name).copied());
+
         let callee = match &func.node {
-            ExpressionKind::Identifier(name, _) => format!("'{name}'"),
-            _ => "this host function".to_string(),
+            ExpressionKind::Identifier(name, _) => name.clone(),
+            _ => "this function".to_string(),
         };
+
         for arg in args {
             let value = match &arg.node {
                 ExpressionKind::NamedArgument(_, inner) => inner.as_ref(),
                 _ => arg,
             };
-            let Some(name) = self.gpu_resident_identifier(value, context) else {
+            let Some(arg_name) = self.gpu_resident_identifier(value, context) else {
                 continue;
             };
-            let name = name.to_string();
-            self.report_error_with_help(
-                format!("cannot pass gpu-resident '{name}' to host function {callee}"),
-                arg.span,
-                format!("copy it to host first: 'let h = {name}', then pass 'h'"),
-            );
+
+            match callee_residency {
+                Some(crate::type_checker::FnResidency::PolymorphicSafe) => {
+                    // Allow polymorphic-safe functions to accept gpu-resident args
+                    continue;
+                }
+                Some(crate::type_checker::FnResidency::HostOnly) => {
+                    self.report_error(
+                        format!(
+                            "cannot pass gpu-resident '{}' to host-only function '{}' (buffer-touching or host-forcing operations)",
+                            arg_name, callee
+                        ),
+                        arg.span,
+                    );
+                }
+                None => {
+                    // Residency unknown: buffer-touching operations need device-handle ABI
+                    self.report_error(
+                        format!(
+                            "passing gpu-resident '{}' to function '{}' that indexes, calls methods on, forwards, or returns the array is not yet supported (requires device-handle argument passing)",
+                            arg_name, callee
+                        ),
+                        arg.span,
+                    );
+                }
+            }
         }
     }
 
@@ -1385,6 +1438,10 @@ impl TypeChecker {
                         arg_expr.map(|e| e.span).unwrap_or(span),
                     );
                 }
+
+                if let Some(arg_e) = arg_expr {
+                    self.validate_parameter_residency_annotation(param, arg_e, context);
+                }
             } else if param.default_value.is_none() {
                 self.report_error(
                     format!("Missing argument for parameter '{}'", param.name),
@@ -1424,6 +1481,60 @@ impl TypeChecker {
             }
         } else {
             ast_factory::make_type(TypeKind::Void)
+        }
+    }
+
+    fn validate_parameter_residency_annotation(
+        &mut self,
+        param: &Parameter,
+        arg_expr: &Expression,
+        context: &Context,
+    ) {
+        if let Some(residency) = param.residency {
+            let arg_residency = self.infer_expression_residency(arg_expr, context);
+
+            match (residency, arg_residency) {
+                (
+                    crate::ast::statement::BindingResidency::Host,
+                    Some(crate::ast::statement::BindingResidency::Gpu),
+                ) => {
+                    let arg_name = self.gpu_resident_identifier(arg_expr, context);
+                    if let Some(name) = arg_name {
+                        self.report_error(
+                            format!(
+                                "parameter '{}' is explicitly marked 'host' but received gpu-resident '{}'",
+                                param.name, name
+                            ),
+                            arg_expr.span,
+                        );
+                    }
+                }
+                (
+                    crate::ast::statement::BindingResidency::Gpu,
+                    Some(crate::ast::statement::BindingResidency::Host),
+                ) => {
+                    self.report_error(
+                        format!(
+                            "parameter '{}' is explicitly marked 'gpu' but received host-resident argument",
+                            param.name
+                        ),
+                        arg_expr.span,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn infer_expression_residency(
+        &self,
+        expr: &Expression,
+        context: &Context,
+    ) -> Option<crate::ast::statement::BindingResidency> {
+        if self.gpu_resident_identifier(expr, context).is_some() {
+            Some(crate::ast::statement::BindingResidency::Gpu)
+        } else {
+            Some(crate::ast::statement::BindingResidency::Host)
         }
     }
 

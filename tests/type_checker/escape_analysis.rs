@@ -204,6 +204,7 @@ fn param(name: &str) -> Parameter {
         guard: None,
         default_value: None,
         is_out: false,
+        residency: None,
     }
 }
 
