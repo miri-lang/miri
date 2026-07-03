@@ -45,6 +45,7 @@ use crate::ast::types::{
     KERNEL_TYPE_NAME,
 };
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::statements::{check_returns, ReturnStatus};
 use crate::type_checker::utils::is_gpu_signature_type;
@@ -57,6 +58,7 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
     pub return_type: &'a Option<Box<Expression>>,
     pub body: Option<&'a Statement>, // None for abstract functions
     pub properties: &'a FunctionProperties,
+    pub span: Span,
 }
 
 impl TypeChecker {
@@ -77,6 +79,7 @@ impl TypeChecker {
             return_type: return_type_expr,
             body,
             properties,
+            span,
         } = info;
 
         self.register_function_symbol(
@@ -107,6 +110,10 @@ impl TypeChecker {
 
         // Validate parameter residency annotations
         self.validate_parameter_residencies(params, properties);
+
+        if properties.is_gpu {
+            self.check_gpu_function_name(name, span);
+        }
 
         let previous_in_gpu = context.in_gpu_function;
         self.handle_gpu_function(
@@ -330,6 +337,27 @@ impl TypeChecker {
         self.define_kernel_context(context);
 
         self.check_gpu_function_param_types(params, context);
+    }
+
+    /// Rejects a `gpu fn` whose name collides with a WGSL reserved form.
+    ///
+    /// The name is emitted verbatim as the WGSL entry-point/helper name, so a
+    /// reserved name (a `__` prefix or a WGSL keyword) would otherwise fail late
+    /// at shader-module compilation with a generic backend error. Reporting here
+    /// gives a source-cited diagnostic and a rename hint instead.
+    fn check_gpu_function_name(&mut self, name: &str, span: Span) {
+        let Some(conflict) = crate::mir::backend::gpu::wgsl_name_conflict(name) else {
+            return;
+        };
+        self.report_error_with_help(
+            format!(
+                "GPU function name '{}' {}, so it cannot be lowered to a valid GPU shader",
+                name,
+                conflict.describe()
+            ),
+            span,
+            format!("Rename '{name}' to a name that is not a reserved WGSL keyword and does not begin with '__'."),
+        );
     }
 
     /// Binds the implicit kernel context inside a `gpu fn` body.

@@ -39,6 +39,7 @@ pub mod math_kernels;
 pub mod persistent_buffer;
 pub mod ping_pong;
 pub mod read_only_capture;
+pub mod reserved_names;
 pub mod residency;
 pub mod residency_polymorphic;
 pub mod runtime_start_gpu_for;
