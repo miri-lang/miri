@@ -14,13 +14,14 @@
 mod manifest;
 
 use crate::ast::types::{FrameFieldKind, TypeKind, FRAME_INPUT_FIELDS};
-use crate::codegen::wgsl::{WgslBackend, WgslOptions};
-use crate::codegen::Backend;
+use crate::codegen::wgsl::{compile_module, WgslOptions};
 use crate::error::compiler::CompilerError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{Body, ExecutionModel};
 use crate::type_checker::GpuBufferInit;
-use manifest::{BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest};
+use manifest::{
+    BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest, SourceMapEntry,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -57,6 +58,8 @@ struct KernelArtifact {
     wgsl_source: String,
     bindings: Vec<BufferBinding>,
     is_frame_step: bool,
+    /// WGSL-line → Miri-line map, empty when the source was unavailable.
+    source_map: Vec<SourceMapEntry>,
 }
 
 /// Emit the web-gpu bundle to disk. Returns the path of the bundle directory.
@@ -90,7 +93,7 @@ pub fn emit_bundle(
         .map(|(name, body)| (name.as_str(), body))
         .collect();
 
-    let artifacts = compile_kernels(&kernels, &helpers, gpu_buffer_inits)?;
+    let artifacts = compile_kernels(&kernels, &helpers, gpu_buffer_inits, source)?;
 
     // Derive program name from output directory or use default
     let program_name = out_path
@@ -155,8 +158,8 @@ fn compile_kernels(
     kernels: &[(String, Body)],
     helpers: &[(&str, &Body)],
     gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
+    source: Option<&str>,
 ) -> Result<Vec<KernelArtifact>, CompilerError> {
-    let backend = WgslBackend;
     let options = WgslOptions::default();
     let mut artifacts = Vec::with_capacity(kernels.len());
 
@@ -166,30 +169,51 @@ fn compile_kernels(
         let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
         module_bodies.extend_from_slice(helpers);
         module_bodies.push((name.as_str(), body));
-        let artifact = backend
-            .compile(&module_bodies, &options)
+        let module = compile_module(&module_bodies, &options)
             .map_err(|err| CompilerError::Codegen(err.to_string()))?;
-        let wgsl_text = String::from_utf8(artifact.bytes).map_err(|err| {
-            CompilerError::Codegen(format!(
-                "WGSL backend produced non-UTF-8 output for kernel '{}': {}",
-                name, err
-            ))
-        })?;
 
         let bindings = extract_buffer_bindings(body, gpu_buffer_inits);
         let is_frame_step = is_frame_step_kernel(body);
         let grid_size = resolve_grid_size(body);
+        let source_map = build_source_map(&module.source_map, source);
 
         artifacts.push(KernelArtifact {
             entry_point: name.clone(),
             grid_size,
-            wgsl_source: wgsl_text,
+            wgsl_source: module.wgsl,
             bindings,
             is_frame_step,
+            source_map,
         });
     }
 
     Ok(artifacts)
+}
+
+/// Convert the backend's WGSL-line → Miri-byte-offset spans into WGSL-line →
+/// Miri-line entries against the displayed source. Empty when the source is
+/// unavailable (nothing to highlight against).
+fn build_source_map(
+    spans: &[crate::codegen::wgsl::WgslSourceSpan],
+    source: Option<&str>,
+) -> Vec<SourceMapEntry> {
+    let source = match source {
+        Some(src) => src,
+        None => return Vec::new(),
+    };
+    spans
+        .iter()
+        .map(|span| SourceMapEntry {
+            wgsl: span.wgsl_line,
+            miri: miri_line_of_offset(source, span.miri_offset),
+        })
+        .collect()
+}
+
+/// 1-based Miri source line containing `offset`.
+fn miri_line_of_offset(source: &str, offset: usize) -> u32 {
+    let clamped = offset.min(source.len());
+    source[..clamped].bytes().filter(|&b| b == b'\n').count() as u32 + 1
 }
 
 fn resolve_grid_size(body: &Body) -> Option<[u32; 3]> {
@@ -583,6 +607,7 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
         read,
         write,
         inputs,
+        source_map: artifact.source_map.clone(),
     })
 }
 

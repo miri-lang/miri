@@ -25,6 +25,67 @@ pub struct WgslOptions {
     pub default_workgroup_size: Option<[u32; 3]>,
 }
 
+/// One source-map span: the Miri source that produced a given WGSL line.
+///
+/// `wgsl_line` is 1-based into the emitted module text; `miri_offset` is a byte
+/// offset into the original Miri source. Consumers (the website, a debugger)
+/// convert the offset to a line/column against the source they display. Entries
+/// are sorted by `wgsl_line`; each applies until the next, so a WGSL line with
+/// no exact entry inherits the nearest preceding one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WgslSourceSpan {
+    /// 1-based line in the emitted WGSL module.
+    pub wgsl_line: u32,
+    /// Byte offset into the Miri source that produced the line.
+    pub miri_offset: usize,
+}
+
+/// A compiled WGSL module and its source map.
+#[derive(Debug, Clone)]
+pub struct WgslModule {
+    /// The WGSL module text.
+    pub wgsl: String,
+    /// WGSL-line → Miri-offset spans (see [`WgslSourceSpan`]).
+    pub source_map: Vec<WgslSourceSpan>,
+}
+
+/// Emit a WGSL module for `bodies` and return its text together with a source
+/// map back to the Miri source. Used by the web-gpu bundle emitter so the
+/// website can highlight the Miri line that produced a given WGSL line.
+pub fn compile_module(
+    bodies: &[(&str, &Body)],
+    options: &WgslOptions,
+) -> Result<WgslModule, CodegenError> {
+    let (wgsl, source_map) = emit_module(bodies, options)?.finish_with_map();
+    Ok(WgslModule { wgsl, source_map })
+}
+
+/// Shared module-emission core: run every body through the emitter and return
+/// it, ready for `finish` (WGSL only) or `finish_with_map` (WGSL + source map).
+fn emit_module(
+    bodies: &[(&str, &Body)],
+    options: &WgslOptions,
+) -> Result<emitter::Emitter, CodegenError> {
+    let mut emitter = emitter::Emitter::new();
+    let workgroup_default = options
+        .default_workgroup_size
+        .unwrap_or(DEFAULT_WORKGROUP_SIZE);
+
+    for (name, body) in bodies {
+        match body.execution_model {
+            ExecutionModel::GpuKernel => {
+                emitter.emit_kernel(name, body, workgroup_default)?;
+            }
+            ExecutionModel::GpuDevice => {
+                emitter.emit_helper(name, body)?;
+            }
+            ExecutionModel::Cpu | ExecutionModel::Async => {}
+        }
+    }
+
+    Ok(emitter)
+}
+
 /// WGSL backend.
 ///
 /// Produces a `CompiledArtifact` whose `bytes` field is UTF-8 WGSL source.
@@ -42,25 +103,9 @@ impl Backend for WgslBackend {
         bodies: &[(&str, &Body)],
         options: &Self::Options,
     ) -> Result<CompiledArtifact, Self::Error> {
-        let mut emitter = emitter::Emitter::new();
-        let workgroup_default = options
-            .default_workgroup_size
-            .unwrap_or(DEFAULT_WORKGROUP_SIZE);
-
-        for (name, body) in bodies {
-            match body.execution_model {
-                ExecutionModel::GpuKernel => {
-                    emitter.emit_kernel(name, body, workgroup_default)?;
-                }
-                ExecutionModel::GpuDevice => {
-                    emitter.emit_helper(name, body)?;
-                }
-                ExecutionModel::Cpu | ExecutionModel::Async => {}
-            }
-        }
-
+        let wgsl = emit_module(bodies, options)?.finish();
         Ok(CompiledArtifact::new(
-            emitter.finish().into_bytes(),
+            wgsl.into_bytes(),
             ArtifactFormat::ObjectFile,
         ))
     }
