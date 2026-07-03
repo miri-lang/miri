@@ -59,6 +59,59 @@ pub fn assert_gpu_wgsl_valid(source: &str) {
         .unwrap_or_else(|err| panic!("naga validate failed: {:?}\nWGSL:\n{}", err, wgsl));
 }
 
+/// Validate the kernel WGSL and return the validated naga module and its
+/// module-info. Shared by the SPIR-V (Vulkan) and HLSL (D3D) cross-compilers
+/// so the portability checks translate the exact same validated IR.
+fn validate_kernel_module(source: &str) -> (String, naga::Module, naga::valid::ModuleInfo) {
+    let wgsl = compile_to_wgsl(source);
+    let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|err| {
+        panic!(
+            "naga parse failed: {}\nWGSL:\n{}",
+            err.emit_to_string(&wgsl),
+            wgsl
+        )
+    });
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|err| panic!("naga validate failed: {:?}\nWGSL:\n{}", err, wgsl));
+    (wgsl, module, info)
+}
+
+/// Cross-compile the kernel to SPIR-V (the Vulkan shader form wgpu emits on the
+/// Vulkan backend) and return the word stream. Panics if lowering fails, which
+/// is what would surface a uniform-layout portability problem on Vulkan.
+pub fn compile_kernel_to_spirv(source: &str) -> Vec<u32> {
+    let (wgsl, module, info) = validate_kernel_module(source);
+    let options = naga::back::spv::Options::default();
+    naga::back::spv::write_vec(&module, &info, &options, None).unwrap_or_else(|err| {
+        panic!(
+            "naga SPIR-V (Vulkan) lowering failed: {:?}\nWGSL:\n{}",
+            err, wgsl
+        )
+    })
+}
+
+/// Cross-compile the kernel to HLSL Shader Model 6.0 (the D3D12 shader form wgpu
+/// emits on the DX12 backend) and return the source text. Panics if lowering
+/// fails, which is what would surface a uniform-layout portability problem on D3D.
+pub fn compile_kernel_to_hlsl(source: &str) -> String {
+    let (wgsl, module, info) = validate_kernel_module(source);
+    let options = naga::back::hlsl::Options::default();
+    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
+    let mut hlsl = String::new();
+    let mut writer = naga::back::hlsl::Writer::new(&mut hlsl, &options, &pipeline_options);
+    writer.write(&module, &info, None).unwrap_or_else(|err| {
+        panic!(
+            "naga HLSL (D3D) lowering failed: {:?}\nWGSL:\n{}",
+            err, wgsl
+        )
+    });
+    hlsl
+}
+
 /// Compile a Miri source and extract GPU kernel metadata.
 /// Returns a JSON-like value with kernel information (simplified for testing).
 pub fn compile_to_manifest(source: &str) -> Result<serde_json::Value, String> {
