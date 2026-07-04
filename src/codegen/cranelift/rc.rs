@@ -71,6 +71,44 @@ impl<'a> FunctionTranslator<'a> {
         Ok(Some(addr))
     }
 
+    /// Address of the decref helper to register as a collection's `elem_drop_fn`
+    /// for element type `elem_kind`, or `None` when the element needs no decref.
+    ///
+    /// A recorded generic-class instantiation (`Box<String>`) routes to its
+    /// per-instantiation `__decref_Box__String` wrapper so the concrete managed
+    /// field is released when the runtime drops an element (`clear`, `remove_at`,
+    /// `pop`). All other shapes — including non-generic classes and unrecorded
+    /// instantiations — fall back to the shared per-shape helper.
+    pub(crate) fn elem_decref_addr_for_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<Value>, CodegenError> {
+        let shape = Self::classify_element_shape(elem_kind);
+        if let ElementShape::UserClass(class_name) = shape {
+            let symbol = Self::generic_drop_thunk_name_part(
+                class_name,
+                Self::custom_type_args(elem_kind),
+                type_ctx,
+            );
+            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &symbol, ptr_type)?;
+            return Ok(Some(addr));
+        }
+        Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)
+    }
+
+    /// The type-argument expressions of a `TypeKind::Custom`, or `None` for any
+    /// other kind. Used to resolve a collection element's generic instantiation.
+    fn custom_type_args(kind: &TypeKind) -> Option<&[Expression]> {
+        if let TypeKind::Custom(_, args) = kind {
+            args.as_deref()
+        } else {
+            None
+        }
+    }
+
     /// Address of the runtime clone helper for an element of `shape`.
     ///
     /// Only user classes that implement `Cloneable` produce a clone helper;
@@ -107,14 +145,14 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         elem_kind: &TypeKind,
         list_ptr: Value,
-        ptr_type: cranelift_codegen::ir::Type,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
             return Ok(());
         }
-        let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)? {
+        if let Some(addr) =
+            Self::elem_decref_addr_for_kind(builder, ctx, elem_kind, type_ctx.ptr_type, type_ctx)?
+        {
             Self::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
@@ -211,14 +249,14 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         elem_kind: &TypeKind,
         set_ptr: Value,
-        ptr_type: cranelift_codegen::ir::Type,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
             return Ok(());
         }
-        let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)? {
+        if let Some(addr) =
+            Self::elem_decref_addr_for_kind(builder, ctx, elem_kind, type_ctx.ptr_type, type_ctx)?
+        {
             Self::call_rt_set_set_elem_drop_fn(builder, ctx, set_ptr, addr)?;
         }
         Ok(())
@@ -621,15 +659,22 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let needs_thunk = Self::has_managed_fields(name, type_ctx.type_definitions)
+        // A generic class instantiated at a recorded set of type arguments
+        // dispatches to its per-instantiation drop thunk (`__drop_Box__String`)
+        // so a managed field is DecRef'd and a scalar field skipped, each per
+        // instantiation. Non-generic types and unrecorded instantiations use
+        // the bare `__drop_Name` thunk.
+        let thunk_target = Self::generic_drop_thunk_name_part(name, type_args, type_ctx);
+        // A recorded generic instantiation always routes through its thunk: the
+        // class's declared field kinds see only the bare generic `T` (never
+        // managed), so `has_managed_fields` cannot detect a managed field that
+        // exists only after substitution (`Box<String>`). The per-instantiation
+        // thunk resolves the concrete field and frees the block either way.
+        let is_per_instantiation = thunk_target != name;
+        let needs_thunk = is_per_instantiation
+            || Self::has_managed_fields(name, type_ctx.type_definitions)
             || Self::type_has_user_drop(name, type_ctx.type_definitions);
         if needs_thunk {
-            // A generic class instantiated at a recorded set of type arguments
-            // dispatches to its per-instantiation drop thunk (`__drop_Box__String`)
-            // so a managed field is DecRef'd and a scalar field skipped, each per
-            // instantiation. Non-generic types and unrecorded instantiations use
-            // the bare `__drop_Name` thunk.
-            let thunk_target = Self::generic_drop_thunk_name_part(name, type_args, type_ctx);
             Self::call_drop_thunk(builder, ctx, &thunk_target, ptr, type_ctx.ptr_type)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
@@ -1001,9 +1046,17 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
         if let ElementShape::UserClass(class_name) = shape {
-            let mut decref_name = String::with_capacity(9 + class_name.len());
+            // Route a recorded generic-class instantiation (`Box<String>`) to its
+            // per-instantiation `__decref_Box__String` wrapper so the concrete
+            // managed field is released; other classes use the bare name.
+            let symbol = Self::generic_drop_thunk_name_part(
+                class_name,
+                Self::custom_type_args(elem_type_kind),
+                type_ctx,
+            );
+            let mut decref_name = String::with_capacity(9 + symbol.len());
             decref_name.push_str("__decref_");
-            decref_name.push_str(class_name);
+            decref_name.push_str(&symbol);
             let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
             let sig = Signature {
                 params: vec![AbiParam::new(ptr_type)],
@@ -1144,10 +1197,11 @@ impl<'a> FunctionTranslator<'a> {
     /// when user code later references them via Import declarations.
     /// `type_args = None` generates the bare `__drop_TypeName`; `Some(args)`
     /// generates a per-instantiation thunk (`__drop_Box__String`) whose body
-    /// resolves each bare-generic field against `args`. Only the bare thunk
-    /// carries the matching `__decref_TypeName` wrapper (used as a collection
-    /// element's decref helper); per-instantiation drops are reached directly
-    /// from `emit_type_drop`, never through a decref wrapper.
+    /// resolves each bare-generic field against `args`. This function emits only
+    /// the bare thunk's matching `__decref_TypeName` wrapper; the caller emits
+    /// the per-instantiation `__decref_Box__String` wrapper separately (via
+    /// `generate_decref_function`) so a `List<Box<String>>` element's runtime
+    /// decref helper routes through the per-instantiation drop.
     pub(crate) fn generate_drop_function(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
@@ -1196,7 +1250,8 @@ impl<'a> FunctionTranslator<'a> {
         ctx.clear();
 
         if type_args.is_some() {
-            // Per-instantiation thunks need no decref wrapper.
+            // The per-instantiation `__decref_Box__String` wrapper is emitted by
+            // the caller after this thunk is defined, keyed by the mangled name.
             return Ok(());
         }
         // Generate __decref_TypeName: the RC-decrement wrapper used as
@@ -1311,7 +1366,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Used as `elem_drop_fn` for List/Set/Map holding custom-type elements so
     /// that mutation operations (clear, remove_at, remove) properly DecRef
     /// each removed instance.
-    fn generate_decref_function(
+    pub(crate) fn generate_decref_function(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
