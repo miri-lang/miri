@@ -73,6 +73,16 @@ impl TypeChecker {
             return slice_ty;
         }
 
+        // Method-form calls on a gpu-resident receiver in host context
+        // (`g.element_at(i)`, `g.contains(x)`, `g.set(i, v)`, ...) would dispatch
+        // to CPU class methods against the stale host copy, silently returning or
+        // writing wrong data. Reject every buffer-touching method here, mirroring
+        // the index-form gate in `infer_index`; only the sanctioned readback
+        // methods (`length`/`slice`/`reduce`) are allowed through.
+        if let Some(result) = self.reject_gpu_resident_method_call(func, span, context) {
+            return result;
+        }
+
         let func_type = self.infer_expression(func, context);
 
         // Process arguments
@@ -1248,6 +1258,46 @@ impl TypeChecker {
             BuiltinCollectionKind::List.name().to_string(),
             Some(vec![elem_type_expr]),
         )))
+    }
+
+    /// Rejects a method-form call on a gpu-resident receiver from host context
+    /// unless the method is a sanctioned readback (`length`/`slice`/`reduce`).
+    ///
+    /// Returns `Some(Error)` when the call is rejected (the caller stops), `None`
+    /// when the call is not a gated gpu-resident method and normal inference
+    /// should proceed. `slice` never reaches here — `try_infer_gpu_slice_call`
+    /// intercepts it earlier — but stays whitelisted so the two paths agree.
+    fn reject_gpu_resident_method_call(
+        &mut self,
+        func: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        if context.in_gpu_function {
+            return None;
+        }
+        let ExpressionKind::Member(recv, method) = &func.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method.node else {
+            return None;
+        };
+        let name = self.gpu_resident_identifier(recv, context)?.to_string();
+        if Self::is_sanctioned_gpu_host_method(method_name) {
+            return None;
+        }
+        self.report_error_with_help(
+            format!(
+                "cannot call method '{method_name}' on gpu-resident '{name}' from host context; \
+                 a buffer-touching method would require a readback"
+            ),
+            span,
+            format!(
+                "copy '{name}' to host first, then call the method on the host copy: \
+                 'let h = {name}' then 'h.{method_name}(...)'"
+            ),
+        );
+        Some(make_type(TypeKind::Error))
     }
 
     /// Validates gpu-resident arguments against function residency.

@@ -759,7 +759,7 @@ impl TypeChecker {
                 if args.is_empty() {
                     if let ExpressionKind::Member(base, member_expr) = &func_expr.node {
                         if let ExpressionKind::Identifier(method_name, _) = &member_expr.node {
-                            if method_name == "length" {
+                            if Self::is_gpu_metadata_method(method_name) {
                                 if let ExpressionKind::Identifier(name, _) = &base.node {
                                     if param_names.contains(name) {
                                         // Safe only if param is a static Array<T,N>, not List<T>

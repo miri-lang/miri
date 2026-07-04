@@ -2279,6 +2279,25 @@ impl TypeChecker {
     /// is gpu-resident. Compound expressions, unresolved names, and host
     /// bindings yield `None`. Shared by the element-cross-read, host-call, and
     /// cross-residency-assignment validation.
+    /// Methods on a gpu-resident array that read only compile-time metadata and
+    /// never touch the device buffer. Safe from any host context and safe as a
+    /// function-param operation. Single source of truth shared by the host-context
+    /// member-call gate and F12's `compute_function_residency` whitelist so the
+    /// two cannot diverge on what counts as buffer-touching.
+    pub(crate) fn is_gpu_metadata_method(name: &str) -> bool {
+        name == "length"
+    }
+
+    /// Method-form calls on a gpu-resident array that are sanctioned from
+    /// top-level host context: metadata reads (`length`) plus the bulk device
+    /// operations that have dedicated readback hooks (`slice` returns a host
+    /// `List`, `reduce` returns a scalar). Each yields a fresh host value without
+    /// a per-element cross-read. Every other method touches the buffer and is
+    /// rejected (D22).
+    pub(crate) fn is_sanctioned_gpu_host_method(name: &str) -> bool {
+        Self::is_gpu_metadata_method(name) || matches!(name, "slice" | "reduce")
+    }
+
     pub(crate) fn gpu_resident_identifier<'a>(
         &self,
         expr: &'a Expression,
