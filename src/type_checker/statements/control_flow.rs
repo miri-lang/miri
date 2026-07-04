@@ -523,6 +523,7 @@ impl TypeChecker {
         context: &mut Context,
         stmt_span: Span,
     ) {
+        self.check_gpu_div_mod_range(body);
         match decls.len() {
             1 => self.check_gpu_for_1d(decls, iterable, body, context, stmt_span),
             2 => self.check_gpu_for_2d(decls, iterable, body, context, stmt_span),
