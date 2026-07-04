@@ -14,10 +14,11 @@ use crate::error::syntax::Span;
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
-    BinOp, Body, Constant, Dimension, GpuIndexNarrowing, GpuIntrinsic, Local, MathIntrinsic,
-    Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass, TerminatorKind, UnOp,
-    I32_INDEX_MAX,
+    BasicBlock, BinOp, Body, Constant, Dimension, GpuIndexNarrowing, GpuIntrinsic, Local,
+    MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass, TerminatorKind,
+    UnOp, I32_INDEX_MAX,
 };
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write;
 
 pub(super) struct Emitter {
@@ -557,21 +558,21 @@ fn sanitize_identifier(name: &str) -> String {
 #[derive(Debug, Clone)]
 struct LoopInfo {
     /// The block jumped to when the loop condition is false (loop exit).
-    exit: crate::mir::BasicBlock,
+    exit: BasicBlock,
     /// The block where the loop body begins (after the header's SwitchInt).
-    body_entry: crate::mir::BasicBlock,
+    body_entry: BasicBlock,
     /// For for-loops: the continuing block (single latch != body_entry).
     /// For while-loops: None (header is the continue target).
-    continuing: Option<crate::mir::BasicBlock>,
+    continuing: Option<BasicBlock>,
     /// The block to jump to on `continue` (either continuing block or header).
-    continue_target: crate::mir::BasicBlock,
+    continue_target: BasicBlock,
 }
 
 /// A frame on the loop stack, tracking where break/continue should jump.
 #[derive(Debug, Clone)]
 struct LoopFrame {
-    exit: crate::mir::BasicBlock,
-    continue_target: crate::mir::BasicBlock,
+    exit: BasicBlock,
+    continue_target: BasicBlock,
 }
 
 /// The classification of a back-edge target block.
@@ -600,9 +601,9 @@ struct BodyEmitter<'a> {
     map_line: u32,
     indent: usize,
     /// Blocks that are loop headers (targets of back-edges).
-    loop_headers: std::collections::HashSet<crate::mir::BasicBlock>,
+    loop_headers: HashSet<BasicBlock>,
     /// Per-header loop info (exit, body_entry, continuing, continue_target).
-    loop_info: std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
+    loop_info: HashMap<BasicBlock, LoopInfo>,
     /// Stack of active loop frames for break/continue resolution.
     loop_stack: Vec<LoopFrame>,
     /// For a value-returning helper function, the local holding the return
@@ -627,7 +628,9 @@ impl<'a> BodyEmitter<'a> {
             if let Some(bb) = invalid_headers.iter().min_by_key(|b| b.0) {
                 return Err(CodegenError::Internal(format!(
                     "WGSL backend: back-edge to block bb{} without loop condition (SwitchInt); \
-                     this is invalid loop structure and cannot be compiled to WGSL",
+                     WGSL only supports a structured loop whose header tests an exit condition \
+                     (lowered to `loop {{ if (!cond) {{ break; }} ... }}`), so a condition-less \
+                     or irreducible back-edge cannot be compiled to WGSL",
                     bb.0
                 )));
             }
@@ -707,21 +710,18 @@ impl<'a> BodyEmitter<'a> {
     fn detect_loops_and_build_info(
         body: &Body,
     ) -> (
-        std::collections::HashSet<crate::mir::BasicBlock>,
-        std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
-        std::collections::HashSet<crate::mir::BasicBlock>,
-        std::collections::HashSet<crate::mir::BasicBlock>,
+        HashSet<BasicBlock>,
+        HashMap<BasicBlock, LoopInfo>,
+        HashSet<BasicBlock>,
+        HashSet<BasicBlock>,
     ) {
-        let mut headers = std::collections::HashSet::new();
-        let mut latches: std::collections::HashMap<
-            crate::mir::BasicBlock,
-            std::collections::HashSet<crate::mir::BasicBlock>,
-        > = std::collections::HashMap::new();
-        let mut visited = std::collections::HashSet::new();
-        let mut on_stack = std::collections::HashSet::new();
+        let mut headers = HashSet::new();
+        let mut latches: HashMap<BasicBlock, HashSet<BasicBlock>> = HashMap::new();
+        let mut visited = HashSet::new();
+        let mut on_stack = HashSet::new();
 
         Self::dfs_find_back_edges(
-            crate::mir::BasicBlock(0),
+            BasicBlock(0),
             body,
             &mut visited,
             &mut on_stack,
@@ -731,9 +731,9 @@ impl<'a> BodyEmitter<'a> {
 
         // Classify each back-edge target as a structured loop, an unstructurable
         // multi-latch loop, or an invalid (non-SwitchInt) header.
-        let mut loop_info = std::collections::HashMap::new();
-        let mut multi_latch_headers = std::collections::HashSet::new();
-        let mut invalid_headers = std::collections::HashSet::new();
+        let mut loop_info = HashMap::new();
+        let mut multi_latch_headers = HashSet::new();
+        let mut invalid_headers = HashSet::new();
         for header in &headers {
             let latch_set = latches.get(header).cloned().unwrap_or_default();
             match Self::classify_loop_header(*header, body, &latch_set) {
@@ -765,9 +765,9 @@ impl<'a> BodyEmitter<'a> {
     /// `continue` routes through the one increment latch — so the multi-latch arm
     /// is a defensive guard against a future lowering change.)
     fn classify_loop_header(
-        header: crate::mir::BasicBlock,
+        header: BasicBlock,
         body: &Body,
-        latch_set: &std::collections::HashSet<crate::mir::BasicBlock>,
+        latch_set: &HashSet<BasicBlock>,
     ) -> HeaderClass {
         let Some(header_block) = body.basic_blocks.get(header.0) else {
             return HeaderClass::Invalid;
@@ -821,21 +821,18 @@ impl<'a> BodyEmitter<'a> {
     /// taken from [`Terminator::successors`], preserving the exact
     /// Goto/SwitchInt(targets…, otherwise)/Call visit order the recursion used.
     fn dfs_find_back_edges(
-        root: crate::mir::BasicBlock,
+        root: BasicBlock,
         body: &Body,
-        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
-        on_stack: &mut std::collections::HashSet<crate::mir::BasicBlock>,
-        headers: &mut std::collections::HashSet<crate::mir::BasicBlock>,
-        latches: &mut std::collections::HashMap<
-            crate::mir::BasicBlock,
-            std::collections::HashSet<crate::mir::BasicBlock>,
-        >,
+        visited: &mut HashSet<BasicBlock>,
+        on_stack: &mut HashSet<BasicBlock>,
+        headers: &mut HashSet<BasicBlock>,
+        latches: &mut HashMap<BasicBlock, HashSet<BasicBlock>>,
     ) {
         if visited.contains(&root) {
             return;
         }
 
-        let successors_of = |bb: crate::mir::BasicBlock| -> Vec<crate::mir::BasicBlock> {
+        let successors_of = |bb: BasicBlock| -> Vec<BasicBlock> {
             body.basic_blocks
                 .get(bb.0)
                 .and_then(|block| block.terminator.as_ref())
@@ -845,7 +842,7 @@ impl<'a> BodyEmitter<'a> {
 
         visited.insert(root);
         on_stack.insert(root);
-        let mut stack: Vec<(crate::mir::BasicBlock, Vec<crate::mir::BasicBlock>, usize)> =
+        let mut stack: Vec<(BasicBlock, Vec<BasicBlock>, usize)> =
             vec![(root, successors_of(root), 0)];
 
         while let Some(&(bb, _, _)) = stack.last() {
@@ -963,8 +960,8 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn emit_blocks(&mut self) -> Result<(), CodegenError> {
-        let mut visited = std::collections::HashSet::new();
-        self.emit_from(crate::mir::BasicBlock(0), None, &mut visited)
+        let mut visited = HashSet::new();
+        self.emit_from(BasicBlock(0), None, &mut visited)
     }
 
     /// Emits MIR basic blocks starting at `start`, following `Goto` chains
@@ -973,9 +970,9 @@ impl<'a> BodyEmitter<'a> {
     /// Stops when reaching `stop` (if any) or a `Return`.
     fn emit_from(
         &mut self,
-        start: crate::mir::BasicBlock,
-        stop: Option<crate::mir::BasicBlock>,
-        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+        start: BasicBlock,
+        stop: Option<BasicBlock>,
+        visited: &mut HashSet<BasicBlock>,
     ) -> Result<(), CodegenError> {
         let mut cur = start;
         loop {
@@ -993,17 +990,7 @@ impl<'a> BodyEmitter<'a> {
                 if self.loop_headers.contains(&cur) {
                     self.emit_loop(cur, visited)?;
                     // After the loop, set cur to the exit and continue.
-                    let exit = self
-                        .loop_info
-                        .get(&cur)
-                        .ok_or_else(|| {
-                            CodegenError::Internal(format!(
-                                "WGSL backend: loop header bb{} missing LoopInfo",
-                                cur.0
-                            ))
-                        })?
-                        .exit;
-                    cur = exit;
+                    cur = self.loop_info_or_err(cur)?.exit;
                     continue;
                 } else {
                     // Visited non-header block: this is a convergence point (diamond).
@@ -1016,17 +1003,7 @@ impl<'a> BodyEmitter<'a> {
             if self.loop_headers.contains(&cur) {
                 self.emit_loop(cur, visited)?;
                 // After the loop, set cur to the exit and continue.
-                let exit = self
-                    .loop_info
-                    .get(&cur)
-                    .ok_or_else(|| {
-                        CodegenError::Internal(format!(
-                            "WGSL backend: loop header bb{} missing LoopInfo",
-                            cur.0
-                        ))
-                    })?
-                    .exit;
-                cur = exit;
+                cur = self.loop_info_or_err(cur)?.exit;
                 continue;
             }
 
@@ -1182,16 +1159,12 @@ impl<'a> BodyEmitter<'a> {
 
     /// Check if `target` is forward-reachable from `source` without crossing loop back-edges.
     /// Returns true if a path exists from source to target following only forward edges.
-    fn forward_reachable(
-        &self,
-        source: crate::mir::BasicBlock,
-        target: crate::mir::BasicBlock,
-    ) -> bool {
+    fn forward_reachable(&self, source: BasicBlock, target: BasicBlock) -> bool {
         if source == target {
             return true;
         }
-        let mut visited = std::collections::HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
         queue.push_back(source);
         visited.insert(source);
 
@@ -1217,13 +1190,9 @@ impl<'a> BodyEmitter<'a> {
 
     /// Find the nearest block reachable from BOTH `a` and `b` by forward edges.
     /// Returns None if no common reachable block exists (both paths diverge/return).
-    fn find_merge(
-        &self,
-        a: crate::mir::BasicBlock,
-        b: crate::mir::BasicBlock,
-    ) -> Option<crate::mir::BasicBlock> {
-        let mut visited_a = std::collections::HashSet::new();
-        let mut queue_a = std::collections::VecDeque::new();
+    fn find_merge(&self, a: BasicBlock, b: BasicBlock) -> Option<BasicBlock> {
+        let mut visited_a = HashSet::new();
+        let mut queue_a = VecDeque::new();
         queue_a.push_back(a);
         visited_a.insert(a);
 
@@ -1247,7 +1216,7 @@ impl<'a> BodyEmitter<'a> {
     }
 
     /// Extract successor blocks from a terminator.
-    fn terminator_successors(term: &TerminatorKind) -> Vec<crate::mir::BasicBlock> {
+    fn terminator_successors(term: &TerminatorKind) -> Vec<BasicBlock> {
         match term {
             TerminatorKind::Return => vec![],
             TerminatorKind::Unreachable => vec![],
@@ -1265,22 +1234,26 @@ impl<'a> BodyEmitter<'a> {
         }
     }
 
+    /// Look up the [`LoopInfo`] recorded for a loop `header`, erroring if none
+    /// exists. Every block retained in `loop_headers` has a matching entry (both
+    /// are populated together in `detect_loops_and_build_info`), so a miss can
+    /// only mean an internal invariant break — reported with the header named.
+    fn loop_info_or_err(&self, header: BasicBlock) -> Result<&LoopInfo, CodegenError> {
+        self.loop_info.get(&header).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "WGSL backend: loop header bb{} missing LoopInfo",
+                header.0
+            ))
+        })
+    }
+
     /// Emit a loop starting at `header`.
     fn emit_loop(
         &mut self,
-        header: crate::mir::BasicBlock,
-        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+        header: BasicBlock,
+        visited: &mut HashSet<BasicBlock>,
     ) -> Result<(), CodegenError> {
-        let loop_info = self
-            .loop_info
-            .get(&header)
-            .ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "WGSL backend: loop header bb{} missing LoopInfo",
-                    header.0
-                ))
-            })?
-            .clone();
+        let loop_info = self.loop_info_or_err(header)?.clone();
 
         self.write_indent()?;
         writeln!(self.output, "loop {{").map_err(emit_err)?;
@@ -1367,7 +1340,7 @@ impl<'a> BodyEmitter<'a> {
         func: &Operand,
         args: &[Operand],
         destination: &Place,
-        _target: Option<&crate::mir::BasicBlock>,
+        _target: Option<&BasicBlock>,
     ) -> Result<(), CodegenError> {
         let func_name = match func {
             Operand::Constant(c) => match &c.literal {
@@ -2137,8 +2110,8 @@ mod tests {
             map_scan_pos: 0,
             map_line: 1,
             indent: 0,
-            loop_headers: std::collections::HashSet::new(),
-            loop_info: std::collections::HashMap::new(),
+            loop_headers: HashSet::new(),
+            loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
         };
@@ -2196,8 +2169,8 @@ mod tests {
             map_scan_pos: 0,
             map_line: 1,
             indent: 0,
-            loop_headers: std::collections::HashSet::new(),
-            loop_info: std::collections::HashMap::new(),
+            loop_headers: HashSet::new(),
+            loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
         };
@@ -2254,8 +2227,8 @@ mod tests {
             map_scan_pos: 0,
             map_line: 1,
             indent: 0,
-            loop_headers: std::collections::HashSet::new(),
-            loop_info: std::collections::HashMap::new(),
+            loop_headers: HashSet::new(),
+            loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
         };
@@ -2283,7 +2256,7 @@ mod tests {
     }
 
     /// Build a block with a `Goto` terminator to `target`.
-    fn goto_block(target: crate::mir::BasicBlock) -> crate::mir::BasicBlockData {
+    fn goto_block(target: BasicBlock) -> crate::mir::BasicBlockData {
         crate::mir::BasicBlockData::new(Some(Terminator::new(
             crate::mir::TerminatorKind::Goto { target },
             Span::default(),
@@ -2300,10 +2273,7 @@ mod tests {
 
     /// A canonical for-loop header: `SwitchInt` on a dummy operand with a single
     /// `bool_true` target (the body entry) and `otherwise` as the loop exit.
-    fn loop_header_block(
-        body_entry: crate::mir::BasicBlock,
-        exit: crate::mir::BasicBlock,
-    ) -> crate::mir::BasicBlockData {
+    fn loop_header_block(body_entry: BasicBlock, exit: BasicBlock) -> crate::mir::BasicBlockData {
         crate::mir::BasicBlockData::new(Some(Terminator::new(
             crate::mir::TerminatorKind::SwitchInt {
                 discr: Operand::Copy(Place::new(crate::mir::Local(0))),
@@ -2323,8 +2293,7 @@ mod tests {
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
         let depth = 100_000usize;
         for i in 0..depth {
-            body.basic_blocks
-                .push(goto_block(crate::mir::BasicBlock(i + 1)));
+            body.basic_blocks.push(goto_block(BasicBlock(i + 1)));
         }
         body.basic_blocks.push(return_block());
 
@@ -2356,21 +2325,17 @@ mod tests {
         // bb2: latch   Goto -> bb0   (back-edge)
         // bb3: exit     Return
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-        body.basic_blocks.push(loop_header_block(
-            crate::mir::BasicBlock(1),
-            crate::mir::BasicBlock(3),
-        ));
         body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(2)));
-        body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(0)));
+            .push(loop_header_block(BasicBlock(1), BasicBlock(3)));
+        body.basic_blocks.push(goto_block(BasicBlock(2)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
         body.basic_blocks.push(return_block());
 
         let (headers, loop_info, invalid, multi_latch) =
             BodyEmitter::detect_loops_and_build_info(&body);
 
         assert_eq!(headers.len(), 1, "one loop header expected");
-        assert!(headers.contains(&crate::mir::BasicBlock(0)));
+        assert!(headers.contains(&BasicBlock(0)));
         assert!(invalid.is_empty(), "header is a valid SwitchInt loop");
         assert!(
             multi_latch.is_empty(),
@@ -2378,12 +2343,12 @@ mod tests {
         );
 
         let info = loop_info
-            .get(&crate::mir::BasicBlock(0))
+            .get(&BasicBlock(0))
             .expect("LoopInfo for header bb0");
-        assert_eq!(info.body_entry, crate::mir::BasicBlock(1));
-        assert_eq!(info.exit, crate::mir::BasicBlock(3));
-        assert_eq!(info.continuing, Some(crate::mir::BasicBlock(2)));
-        assert_eq!(info.continue_target, crate::mir::BasicBlock(2));
+        assert_eq!(info.body_entry, BasicBlock(1));
+        assert_eq!(info.exit, BasicBlock(3));
+        assert_eq!(info.continuing, Some(BasicBlock(2)));
+        assert_eq!(info.continue_target, BasicBlock(2));
     }
 
     /// A back-edge whose target is not a `SwitchInt` loop header (here a `Goto`
@@ -2393,10 +2358,8 @@ mod tests {
         // bb0: Goto -> bb1
         // bb1: Goto -> bb1  (self back-edge to a non-SwitchInt block)
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-        body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(1)));
-        body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(1)));
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
 
         let (headers, loop_info, invalid, multi_latch) =
             BodyEmitter::detect_loops_and_build_info(&body);
@@ -2410,7 +2373,7 @@ mod tests {
             "no LoopInfo for a non-SwitchInt header"
         );
         assert!(
-            invalid.contains(&crate::mir::BasicBlock(1)),
+            invalid.contains(&BasicBlock(1)),
             "self back-edge to a Goto block is an invalid header"
         );
         assert!(
@@ -2431,38 +2394,103 @@ mod tests {
         // bb3: latch B Goto -> bb0   (back-edge)
         // bb4: exit    Return
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-        body.basic_blocks.push(loop_header_block(
-            crate::mir::BasicBlock(1),
-            crate::mir::BasicBlock(4),
-        ));
-        body.basic_blocks.push(loop_header_block(
-            crate::mir::BasicBlock(2),
-            crate::mir::BasicBlock(3),
-        ));
         body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(0)));
+            .push(loop_header_block(BasicBlock(1), BasicBlock(4)));
         body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(0)));
+            .push(loop_header_block(BasicBlock(2), BasicBlock(3)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
         body.basic_blocks.push(return_block());
 
         let (headers, loop_info, invalid, multi_latch) =
             BodyEmitter::detect_loops_and_build_info(&body);
 
         assert!(
-            multi_latch.contains(&crate::mir::BasicBlock(0)),
+            multi_latch.contains(&BasicBlock(0)),
             "header with two latches must be reported as multi-latch"
         );
         assert!(
-            !headers.contains(&crate::mir::BasicBlock(0)),
+            !headers.contains(&BasicBlock(0)),
             "a multi-latch header is not a compilable loop header"
         );
         assert!(
-            !loop_info.contains_key(&crate::mir::BasicBlock(0)),
+            !loop_info.contains_key(&BasicBlock(0)),
             "no LoopInfo is built for a multi-latch header"
         );
         assert!(
-            !invalid.contains(&crate::mir::BasicBlock(0)),
+            !invalid.contains(&BasicBlock(0)),
             "a multi-latch header is distinct from an invalid (non-SwitchInt) header"
+        );
+    }
+
+    /// A canonical single-latch while-loop — the latch jumps straight back to
+    /// the header (latch == body entry has no separate increment block) — is
+    /// classified with `continuing == None` and the header itself as the
+    /// continue target. Pins the while-style arm of `classify_loop_header`.
+    #[test]
+    fn test_back_edges_while_loop_classified() {
+        // bb0: header  SwitchInt(true -> bb1, otherwise -> bb2)
+        // bb1: body    Goto -> bb0   (back-edge straight to header = while latch)
+        // bb2: exit    Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(1), BasicBlock(2)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
+        body.basic_blocks.push(return_block());
+
+        let (headers, loop_info, invalid, multi_latch) =
+            BodyEmitter::detect_loops_and_build_info(&body);
+
+        assert_eq!(headers.len(), 1, "one while-loop header expected");
+        assert!(invalid.is_empty(), "while header is a valid SwitchInt loop");
+        assert!(
+            multi_latch.is_empty(),
+            "single-latch loop is not multi-latch"
+        );
+
+        let info = loop_info
+            .get(&BasicBlock(0))
+            .expect("LoopInfo for while header bb0");
+        assert_eq!(info.body_entry, BasicBlock(1));
+        assert_eq!(info.exit, BasicBlock(2));
+        assert_eq!(
+            info.continuing, None,
+            "a while-loop has no separate continuing block"
+        );
+        assert_eq!(
+            info.continue_target,
+            BasicBlock(0),
+            "a while-loop's continue jumps back to the header"
+        );
+    }
+
+    /// Constructing a `BodyEmitter` over an irreducible / condition-less
+    /// back-edge (a header whose terminator is a `Goto`, not a `SwitchInt`)
+    /// fails with a diagnostic that names the header and explains WGSL's
+    /// structured-loop requirement, rather than a bare "invalid" rejection.
+    #[test]
+    fn test_irreducible_back_edge_rejected_with_structured_loop_diagnostic() {
+        // bb0: Goto -> bb1
+        // bb1: Goto -> bb1  (condition-less self back-edge)
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
+
+        let mut output = String::new();
+        let mut source_map = Vec::new();
+        let result = BodyEmitter::new(&body, &[], [256, 1, 1], &mut output, &mut source_map);
+
+        let msg = match result {
+            Ok(_) => panic!("condition-less back-edge must be rejected"),
+            Err(e) => format!("{e:?}"),
+        };
+        assert!(
+            msg.contains("bb1"),
+            "diagnostic must name the offending header, got: {msg}"
+        );
+        assert!(
+            msg.contains("structured loop"),
+            "diagnostic must explain WGSL's structured-loop requirement, got: {msg}"
         );
     }
 
@@ -2472,18 +2500,12 @@ mod tests {
     #[test]
     fn test_multi_latch_loop_rejected_by_new() {
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-        body.basic_blocks.push(loop_header_block(
-            crate::mir::BasicBlock(1),
-            crate::mir::BasicBlock(4),
-        ));
-        body.basic_blocks.push(loop_header_block(
-            crate::mir::BasicBlock(2),
-            crate::mir::BasicBlock(3),
-        ));
         body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(0)));
+            .push(loop_header_block(BasicBlock(1), BasicBlock(4)));
         body.basic_blocks
-            .push(goto_block(crate::mir::BasicBlock(0)));
+            .push(loop_header_block(BasicBlock(2), BasicBlock(3)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
         body.basic_blocks.push(return_block());
 
         let mut output = String::new();
