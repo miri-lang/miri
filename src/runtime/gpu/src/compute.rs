@@ -78,7 +78,7 @@ impl CompiledKernel {
                         label: Some(name),
                         source: wgpu::ShaderSource::Wgsl(source.into()),
                     });
-                let bind_group_layout = build_bind_group_layout(ctx, name, num_bindings);
+                let bind_group_layout = build_bind_group_layout(&ctx, name, num_bindings);
                 let pipeline_layout =
                     ctx.device
                         .create_pipeline_layout(&PipelineLayoutDescriptor {

@@ -6,12 +6,22 @@
 //! A single process-wide `GpuContext` is held in a `OnceCell`. All
 //! buffer / kernel FFI functions look it up via `get_gpu_context`.
 
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use wgpu::{Adapter, Device, Features, Instance, Queue};
 
-pub static GPU_CONTEXT: OnceCell<Arc<GpuContext>> = OnceCell::new();
+/// The process-wide GPU context. `None` until the first lazy initialization
+/// and again after `miri_gpu_reset_context()` drops a lost device so the next
+/// launch rebuilds a fresh one on the currently active adapter.
+pub static GPU_CONTEXT: Lazy<RwLock<Option<Arc<GpuContext>>>> = Lazy::new(|| RwLock::new(None));
+
+/// Monotonic device-generation counter. Every resident device buffer is tagged
+/// with the generation current when it was allocated; a buffer whose tag no
+/// longer matches [`current_device_generation`] belongs to a device that has
+/// since been reset and must not be bound on the replacement device.
+static DEVICE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub enum GpuError {
@@ -233,16 +243,35 @@ pub fn encode_backend(backend: wgpu::Backend) -> u8 {
     }
 }
 
-pub fn get_gpu_context() -> Result<&'static Arc<GpuContext>, GpuError> {
-    GPU_CONTEXT.get().ok_or(GpuError::NotInitialized)
+pub fn get_gpu_context() -> Result<Arc<GpuContext>, GpuError> {
+    GPU_CONTEXT.read().clone().ok_or(GpuError::NotInitialized)
+}
+
+/// The current device generation. Runtime buffer tables compare each resident
+/// buffer's stored generation against this value; a mismatch means the buffer
+/// outlived its device (a reset happened) and must be discarded rather than
+/// bound on the new device.
+pub fn current_device_generation() -> u64 {
+    DEVICE_GENERATION.load(Ordering::SeqCst)
 }
 
 /// `pub(crate)` so the inline launch path can lazily initialize the
-/// process-wide `GPU_CONTEXT` instead of holding its own. Keeping a single
-/// `OnceCell` is what makes `miri_gpu_is_available()` reflect the actual
-/// state after a `forall` dispatch.
-pub(crate) fn init_gpu_context() -> Result<&'static Arc<GpuContext>, GpuError> {
-    GPU_CONTEXT.get_or_try_init(|| GpuContext::new().map(Arc::new))
+/// process-wide `GPU_CONTEXT` instead of holding its own. A single shared
+/// context is what makes `miri_gpu_is_available()` reflect the actual state
+/// after a `forall` dispatch.
+pub(crate) fn init_gpu_context() -> Result<Arc<GpuContext>, GpuError> {
+    if let Some(ctx) = GPU_CONTEXT.read().clone() {
+        return Ok(ctx);
+    }
+    let mut slot = GPU_CONTEXT.write();
+    // Another thread may have initialized the context between dropping the read
+    // lock above and acquiring this write lock; reuse it if so.
+    if let Some(ctx) = slot.clone() {
+        return Ok(ctx);
+    }
+    let ctx = Arc::new(GpuContext::new()?);
+    *slot = Some(ctx.clone());
+    Ok(ctx)
 }
 
 /// Runs `build` inside a wgpu validation error scope. Any validation error
@@ -275,7 +304,32 @@ pub extern "C" fn miri_gpu_init() -> u8 {
 
 #[no_mangle]
 pub extern "C" fn miri_gpu_is_available() -> u8 {
-    u8::from(GPU_CONTEXT.get().is_some())
+    u8::from(GPU_CONTEXT.read().is_some())
+}
+
+/// Drops the current GPU device and queue and invalidates every resident
+/// device buffer, then returns the new device generation. The next launch or
+/// buffer operation lazily rebuilds a fresh context on the currently active
+/// adapter. This is the device-loss / adapter-change recovery entry point:
+/// cached `wgpu::Buffer` handles from the old device are keyed to the previous
+/// generation and to tables cleared here, so they can never be bound on the
+/// replacement device.
+///
+/// An in-flight launch that already cloned the old context keeps it alive
+/// through its `Arc` until it finishes; only work started after the reset sees
+/// the fresh device.
+#[no_mangle]
+pub extern "C" fn miri_gpu_reset_context() -> u64 {
+    // Advance the generation first so a buffer allocated concurrently under the
+    // old device is already considered stale by the time the tables are cleared.
+    let new_generation = DEVICE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    // Release the device/queue. A lost device is deliberately not polled here —
+    // waiting on it could hang — so the `Arc` is simply dropped and wgpu tears
+    // the old device down.
+    GPU_CONTEXT.write().take();
+    crate::device_table::clear_resident();
+    crate::buffer::clear_registry();
+    new_generation
 }
 
 /// # Safety

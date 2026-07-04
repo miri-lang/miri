@@ -167,6 +167,12 @@ pub fn get_buffer(id: u64) -> Option<Arc<GpuBuffer>> {
     BUFFER_REGISTRY.read().get(&id).cloned()
 }
 
+/// Removes every registered explicit buffer. Called during a context reset so
+/// no handle keeps a `wgpu::Buffer` from the dropped device alive.
+pub fn clear_registry() {
+    BUFFER_REGISTRY.write().clear();
+}
+
 fn register_buffer(buffer: GpuBuffer) -> Arc<GpuBuffer> {
     let id = buffer.id;
     let arc = Arc::new(buffer);
