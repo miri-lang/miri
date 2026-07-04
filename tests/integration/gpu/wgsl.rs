@@ -733,6 +733,71 @@ fn main()
         );
     }
 
+    /// Nested unary intrinsic: `log2(log2(x))` on an f32 buffer. The inner
+    /// call's result type must narrow to f32 inside the kernel so the outer
+    /// call sees an f32 argument; otherwise the outer result stays f64 and the
+    /// store into the f32 `dst` is a width mismatch naga rejects.
+    #[test]
+    fn nested_log2_f32_stays_f32() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [2.0, 4.0, 16.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = log2(log2(a[i]))
+",
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
+    fn nested_log2_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [16.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = log2(log2(a[i]))
+    let result = dst
+    println(f'{result[0]}')
+",
+            "2.0",
+        );
+    }
+
+    /// Composed intrinsic: `clamp(sqrt(x), 0.0, 1.0)` on an f32 buffer. The
+    /// inner `sqrt` must narrow to f32 so the outer `clamp` carries an f32
+    /// witness and its result stays f32.
+    #[test]
+    fn clamp_of_sqrt_f32_stays_f32() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.25, 4.0, 16.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = clamp(sqrt(a[i]), 0.0, 1.0)
+",
+        );
+    }
+
     /// Unary: fract(x) on f32 buffers.
     #[test]
     fn fract_f32_emits_naga_valid_wgsl() {

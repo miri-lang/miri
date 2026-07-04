@@ -132,7 +132,65 @@ impl TypeChecker {
             self.check_gpu_call_types(func, &positional_args, context);
         }
 
+        if context.in_gpu_function {
+            return self.narrow_gpu_math_result(func, &positional_args, result_type);
+        }
+
         result_type
+    }
+
+    /// Extracts the bare function name from a call target that is either a
+    /// direct identifier (`abs`) or a module member (`M.abs`).
+    fn call_func_name(func: &Expression) -> Option<&str> {
+        match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            ExpressionKind::Member(_, func_expr) => match &func_expr.node {
+                ExpressionKind::Identifier(func_name, _) => Some(func_name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Inside a GPU kernel, a math intrinsic declared to return `float` (f64)
+    /// narrows to f32 when any argument is f32. WGSL on Metal has no enable
+    /// directive for 64-bit scalars, so an un-narrowed f64 result forces
+    /// `SHADER_F64` and mismatches the surrounding f32 storage. Recording the
+    /// narrowed type here (not only at MIR lowering) lets nested intrinsics
+    /// such as `log2(log2(x))` observe an f32 argument for the outer call.
+    /// Mirrors the arg scan in `mir::lowering::helpers::gpu_math_return_type`.
+    fn narrow_gpu_math_result(
+        &self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        result: Type,
+    ) -> Type {
+        if !matches!(result.kind, TypeKind::Float | TypeKind::F64) {
+            return result;
+        }
+        let Some(func_name) = Self::call_func_name(func) else {
+            return result;
+        };
+        if MathIntrinsic::from_name(func_name).is_none() {
+            return result;
+        }
+        // Sanctioned stdlib-independence deviation (see the module gate in
+        // `try_infer_polymorphic_math_call`): the `system.math` origin check
+        // prevents a user-defined `sqrt`/`log2` from being narrowed.
+        let is_from_math = self
+            .get_variable_module(func_name)
+            .map(|m| m == "system.math")
+            .unwrap_or(false);
+        if !is_from_math {
+            return result;
+        }
+        if positional_args
+            .iter()
+            .any(|(_, ty)| ty.kind == TypeKind::F32)
+        {
+            return Type::new(TypeKind::F32, result.span);
+        }
+        result
     }
 
     /// Dispatches to function or constructor call based on the function type.
@@ -209,19 +267,9 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) -> Option<Type> {
-        // Extract the function name from direct identifier or module member access.
-        let func_name = match &func.node {
-            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
-            ExpressionKind::Member(_module_expr, func_expr) => {
-                // Handle `M.abs` where M is `use system.math as M`.
-                if let ExpressionKind::Identifier(func_name, _) = &func_expr.node {
-                    Some(func_name.as_str())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }?;
+        // Extract the function name from direct identifier or module member access
+        // (`M.abs` where `M` is `use system.math as M`).
+        let func_name = Self::call_func_name(func)?;
 
         // Check if this is a polymorphic math intrinsic (only Abs, Min, Max).
         // Bind the intrinsic once; validate arity in exhaustive match below.
