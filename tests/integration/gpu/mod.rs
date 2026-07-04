@@ -4,8 +4,9 @@
 //! GPU integration tests.
 //!
 //! Test surfaces sharing this directory:
-//!   * `device` — GPU availability detection via int round-trip probe.
-//!     Exposes `gpu_adapter_available()` and `assert_gpu_runs_with_output()`.
+//!   * `device` — GPU availability detection via scalar-capability round-trip
+//!     probes. Exposes `gpu_float_available()`, `gpu_int64_available()`, and
+//!     `assert_gpu_runs_with_output()`.
 //!   * `launch` — full Cranelift → `miri_gpu_launch_inline` → `wgpu` native
 //!     dispatch path. Owns end-to-end value correctness for `forall`
 //!     kernels now that the WGSL scalar mapping aligns host and device

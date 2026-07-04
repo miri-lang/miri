@@ -13,35 +13,72 @@
 //! without an adapter instead of silently degrading a value check to a green
 //! no-op (see `decide_value_check`).
 //!
-//! `gpu_adapter_available()` returns true iff the machine has a GPU device
-//! that supports SHADER_INT64. It probes by compiling and running a simple
-//! int round-trip test through `forall` and checking the output.
+//! Availability is probed per scalar capability so a value test gates on the
+//! capability it actually exercises:
+//!   * `gpu_float_available()` — a basic f32 add round-trip; the baseline every
+//!     compute adapter supports. Value asserts (`assert_gpu_runs_with_output`)
+//!     gate on this so f32 value tests do not over-gate on `SHADER_INT64`.
+//!   * `gpu_int64_available()` — an i64 add round-trip; true only when the
+//!     adapter also supports `SHADER_INT64`. Tests launching integer kernels
+//!     gate on this so they skip on an adapter that lacks 64-bit integers.
+//!
+//! An adapter that supports `SHADER_INT64` always supports f32, so on real GPU
+//! hardware both probes agree; they diverge only on a hypothetical f32-only
+//! adapter, where the split lets f32 tests run while integer tests skip.
 
 use super::utils::assert_runs_with_output;
 use std::sync::OnceLock;
 
-/// Cache of GPU availability result.
-static GPU_ADAPTER_AVAILABLE: OnceLock<bool> = OnceLock::new();
+/// Cache of the f32 availability result.
+static GPU_FLOAT_AVAILABLE: OnceLock<bool> = OnceLock::new();
+/// Cache of the i64 (`SHADER_INT64`) availability result.
+static GPU_INT64_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-/// Determine whether a working GPU adapter with SHADER_INT64 support is
+/// Determine whether a working GPU adapter with basic f32 support is available
+/// on this machine.
+///
+/// The oracle runs an f32 add round-trip through `forall`: it compiles a kernel
+/// that adds two float arrays and reads the result back. Returns true only if
+/// the computation succeeds and produces the expected sums, confirming device
+/// availability and the baseline floating-point capability every value test
+/// relies on.
+///
+/// The result is cached: the first call runs the probe, subsequent calls return
+/// the cached answer. See [`run_availability_probe`] for the missing-adapter vs
+/// harness-break contract.
+pub fn gpu_float_available() -> bool {
+    *GPU_FLOAT_AVAILABLE.get_or_init(|| {
+        let probe_source = "
+use system.gpu
+use system.collections.array
+
+gpu let probe_fa = [1.0, 2.0, 3.0, 4.0]
+gpu let probe_fb = [10.0, 20.0, 30.0, 40.0]
+gpu var probe_fdst = [0.0, 0.0, 0.0, 0.0]
+
+gpu forall i in 0..4
+    probe_fdst[i] = probe_fa[i] + probe_fb[i]
+
+let probe_fhost = probe_fdst
+println(f'{probe_fhost[0]} {probe_fhost[1]} {probe_fhost[2]} {probe_fhost[3]}')
+";
+        run_availability_probe(probe_source, "11.0 22.0 33.0 44.0")
+    })
+}
+
+/// Determine whether a working GPU adapter that also supports `SHADER_INT64` is
 /// available on this machine.
 ///
-/// The oracle works by running an int round-trip probe through `forall`:
-/// it compiles a simple kernel that adds two arrays and reads back the result.
-/// Returns true only if the computation succeeds and produces the expected
-/// output, confirming both device availability and the required 64-bit
-/// integer capability.
+/// The oracle runs an i64 add round-trip through `forall`: it compiles a kernel
+/// that adds two integer arrays and reads the result back. Returns true only if
+/// the computation succeeds and produces the expected sums, confirming both
+/// device availability and the 64-bit integer capability integer kernels need.
 ///
-/// **Contract**: a missing or unusable GPU adapter (e.g. on a GPU-less CI
-/// runner) returns `false` so callers skip — it is an expected environment
-/// condition, not a harness break. Any *other* probe failure (compile, link,
-/// or codegen error) still panics, since that indicates a real harness break.
-/// `true` is returned only when the probe runs and produces the expected sum.
-///
-/// The result is cached: the first call runs the probe, subsequent calls
-/// return the cached answer.
-pub fn gpu_adapter_available() -> bool {
-    *GPU_ADAPTER_AVAILABLE.get_or_init(|| {
+/// The result is cached: the first call runs the probe, subsequent calls return
+/// the cached answer. See [`run_availability_probe`] for the missing-adapter vs
+/// harness-break contract.
+pub fn gpu_int64_available() -> bool {
+    *GPU_INT64_AVAILABLE.get_or_init(|| {
         let probe_source = "
 use system.gpu
 use system.collections.array
@@ -56,24 +93,36 @@ gpu forall i in 0..4
 let probe_host = probe_dst
 println(f'{probe_host[0]} {probe_host[1]} {probe_host[2]} {probe_host[3]}')
 ";
-        let result = crate::utils::miri_run(probe_source);
-        if result.success {
-            return result.output().contains("11 22 33 44");
-        }
-        let output = result.output();
-        // No adapter / no device is expected on GPU-less runners → skip.
-        if output.contains("no compatible GPU adapter found")
-            || output.contains("device creation failed")
-        {
-            return false;
-        }
-        panic!(
-            "GPU availability probe failed to compile, link, or run. \
-            This indicates a broken test harness, not a missing GPU adapter. \
-            Output: {}",
-            output
-        );
+        run_availability_probe(probe_source, "11 22 33 44")
     })
+}
+
+/// Run a GPU availability probe and report whether the device produced the
+/// expected output.
+///
+/// **Contract**: a missing or unusable GPU adapter (e.g. on a GPU-less CI
+/// runner) returns `false` so callers skip — it is an expected environment
+/// condition, not a harness break. Any *other* probe failure (compile, link,
+/// or codegen error) still panics, since that indicates a real harness break.
+/// `true` is returned only when the probe runs and produces `expected`.
+fn run_availability_probe(source: &str, expected: &str) -> bool {
+    let result = crate::utils::miri_run(source);
+    if result.success {
+        return result.output().contains(expected);
+    }
+    let output = result.output();
+    // No adapter / no device is expected on GPU-less runners → skip.
+    if output.contains("no compatible GPU adapter found")
+        || output.contains("device creation failed")
+    {
+        return false;
+    }
+    panic!(
+        "GPU availability probe failed to compile, link, or run. \
+        This indicates a broken test harness, not a missing GPU adapter. \
+        Output: {}",
+        output
+    );
 }
 
 /// Assert that a GPU program compiles, runs, and produces expected output
@@ -81,13 +130,15 @@ println(f'{probe_host[0]} {probe_host[1]} {probe_host[2]} {probe_host[3]}')
 /// and runs without crashing.
 ///
 /// This abstraction keeps test code uniform: tests using this function do not
-/// need to branch on GPU availability. If `gpu_adapter_available()` is true,
-/// the full output is checked against `expected`. If false, the test is skipped
-/// — a GPU program cannot run without an adapter (the launch hard-errors), so
-/// there is nothing to assert; WGSL validity is covered separately by the
-/// adapter-free `assert_gpu_wgsl_valid` tests.
+/// need to branch on GPU availability. It gates on [`gpu_float_available`] —
+/// the baseline f32 capability — so f32 value tests do not over-gate on
+/// `SHADER_INT64`. If an adapter is present, the full output is checked against
+/// `expected`. If not, the test is skipped — a GPU program cannot run without
+/// an adapter (the launch hard-errors), so there is nothing to assert; WGSL
+/// validity is covered separately by the adapter-free `assert_gpu_wgsl_valid`
+/// tests.
 pub fn assert_gpu_runs_with_output(source: &str, expected: &str) {
-    match decide_value_check(gpu_adapter_available(), cfg!(feature = "gpu_hardware")) {
+    match decide_value_check(gpu_float_available(), cfg!(feature = "gpu_hardware")) {
         ValueCheck::Assert => assert_runs_with_output(source, expected),
         ValueCheck::Skip => {
             eprintln!("[skipped: no compatible GPU adapter available]");
@@ -144,4 +195,13 @@ fn value_check_skips_without_adapter_when_suite_inactive() {
 #[test]
 fn value_check_is_harness_break_without_adapter_under_value_suite() {
     assert_eq!(decide_value_check(false, true), ValueCheck::HarnessBreak);
+}
+
+/// An adapter that supports `SHADER_INT64` always supports f32, so the int64
+/// probe can never be true while the float probe is false. This invariant holds
+/// on every machine: with no adapter both are false (vacuously true); with an
+/// int64-capable adapter the float baseline must also hold.
+#[test]
+fn int64_availability_implies_float_availability() {
+    assert!(!gpu_int64_available() || gpu_float_available());
 }

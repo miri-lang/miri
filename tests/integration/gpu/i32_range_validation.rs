@@ -9,7 +9,7 @@
 //! - Out-of-range runtime error (non-literal, avoiding compile-time rejection)
 //! - Out-of-range compile error (literal array with out-of-range elements)
 
-use super::device::gpu_adapter_available;
+use super::device::gpu_int64_available;
 use super::utils::{assert_compiler_error, assert_runs_with_output, assert_runtime_error};
 
 #[test]
@@ -18,7 +18,7 @@ use super::utils::{assert_compiler_error, assert_runs_with_output, assert_runtim
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i32_range_inrange_roundtrip() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         return;
     }
 
@@ -48,7 +48,7 @@ println(f'{max_host[0]} {min_host[0]}')
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i32_range_outofrange_runtime_error() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         return;
     }
 
@@ -118,7 +118,7 @@ gpu let arr = [-2147483648]
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i32_range_negative_overflow_runtime_error() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         return;
     }
 
