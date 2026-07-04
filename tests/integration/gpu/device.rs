@@ -7,6 +7,12 @@
 //! availability gate is abstracted into the assert function so test code
 //! is uniform regardless of GPU availability.
 //!
+//! The green/smoke boundary is explicit: value tests are `#[ignore]`-gated by
+//! the `gpu_hardware` feature so they run only on the real-GPU job, and
+//! `assert_gpu_runs_with_output` fails loudly if that value suite is active
+//! without an adapter instead of silently degrading a value check to a green
+//! no-op (see `decide_value_check`).
+//!
 //! `gpu_adapter_available()` returns true iff the machine has a GPU device
 //! that supports SHADER_INT64. It probes by compiling and running a simple
 //! int round-trip test through `forall` and checking the output.
@@ -81,9 +87,61 @@ println(f'{probe_host[0]} {probe_host[1]} {probe_host[2]} {probe_host[3]}')
 /// there is nothing to assert; WGSL validity is covered separately by the
 /// adapter-free `assert_gpu_wgsl_valid` tests.
 pub fn assert_gpu_runs_with_output(source: &str, expected: &str) {
-    if gpu_adapter_available() {
-        assert_runs_with_output(source, expected);
-    } else {
-        eprintln!("[skipped: no compatible GPU adapter available]");
+    match decide_value_check(gpu_adapter_available(), cfg!(feature = "gpu_hardware")) {
+        ValueCheck::Assert => assert_runs_with_output(source, expected),
+        ValueCheck::Skip => {
+            eprintln!("[skipped: no compatible GPU adapter available]");
+        }
+        ValueCheck::HarnessBreak => panic!(
+            "GPU value suite (`gpu_hardware`) ran without an available adapter. \
+            The hardware job guarantees a real GPU, so a missing adapter is a \
+            harness/environment break — not a silent smoke-degradation to green. \
+            WGSL validity is covered separately by the adapter-free tests."
+        ),
     }
+}
+
+/// What a GPU value assertion should do, given adapter availability and whether
+/// the adapter-gated value suite is active (`gpu_hardware` feature).
+///
+/// Making this a distinct decision keeps the green/smoke boundary explicit: a
+/// value test that reports green under the value suite genuinely asserted device
+/// output; it never silently degrades to a no-op when the adapter is absent.
+#[derive(Debug, PartialEq, Eq)]
+enum ValueCheck {
+    /// Adapter present — assert the exact expected output on the device.
+    Assert,
+    /// Adapter absent and the value suite is inactive (adapter-free build) —
+    /// skip; WGSL validity is covered by the adapter-free tests.
+    Skip,
+    /// Adapter absent while the value suite is active — a harness break, since
+    /// the hardware job guarantees a real GPU. Fail loudly rather than green.
+    HarnessBreak,
+}
+
+/// Decide how a GPU value assertion resolves. Adapter present always asserts;
+/// adapter absent skips only when the value suite is inactive, otherwise it is
+/// a harness break.
+fn decide_value_check(adapter_available: bool, value_suite_active: bool) -> ValueCheck {
+    match (adapter_available, value_suite_active) {
+        (true, _) => ValueCheck::Assert,
+        (false, true) => ValueCheck::HarnessBreak,
+        (false, false) => ValueCheck::Skip,
+    }
+}
+
+#[test]
+fn value_check_asserts_when_adapter_available() {
+    assert_eq!(decide_value_check(true, false), ValueCheck::Assert);
+    assert_eq!(decide_value_check(true, true), ValueCheck::Assert);
+}
+
+#[test]
+fn value_check_skips_without_adapter_when_suite_inactive() {
+    assert_eq!(decide_value_check(false, false), ValueCheck::Skip);
+}
+
+#[test]
+fn value_check_is_harness_break_without_adapter_under_value_suite() {
+    assert_eq!(decide_value_check(false, true), ValueCheck::HarnessBreak);
 }
