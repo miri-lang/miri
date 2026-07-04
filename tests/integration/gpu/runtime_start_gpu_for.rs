@@ -6,7 +6,7 @@
 // carried into the kernel via a second uniform scalar and the per-thread index
 // is computed as `i = thread + start_uniform`.
 
-use super::device::{assert_gpu_runs_with_output, gpu_adapter_available};
+use super::device::{assert_gpu_runs_with_output, gpu_int64_available};
 use super::helpers::assert_gpu_wgsl_valid;
 
 /// A runtime range start type-checks and emits valid WGSL with a uniform-bound
@@ -155,7 +155,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn runtime_start_uniform_is_not_counted_as_upload() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         eprintln!(
             "[gpu] skipped runtime_start_uniform_is_not_counted_as_upload: no suitable adapter"
         );

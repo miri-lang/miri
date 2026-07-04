@@ -8,7 +8,7 @@
 //   * the readback is a copy — the gpu binding survives and may be sliced or
 //     read back again.
 
-use super::device::gpu_adapter_available;
+use super::device::gpu_int64_available;
 use super::utils::*;
 
 #[test]
@@ -128,7 +128,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn slice_reads_back_computed_values() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         eprintln!("[gpu] skipped slice_reads_back_computed_values: no suitable adapter");
         return;
     }
@@ -156,7 +156,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn slice_leaves_gpu_binding_readable() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         eprintln!("[gpu] skipped slice_leaves_gpu_binding_readable: no suitable adapter");
         return;
     }

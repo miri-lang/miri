@@ -9,7 +9,7 @@
 //   * passing a gpu-resident value to a host call (`println(gpu_g)`) is
 //     rejected.
 
-use super::device::gpu_adapter_available;
+use super::device::gpu_int64_available;
 use super::utils::*;
 
 #[test]
@@ -213,7 +213,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn vector_add_demo_value_correctness() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         eprintln!("[gpu] skipped vector_add_demo_value_correctness: no suitable adapter");
         return;
     }
@@ -242,7 +242,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn two_readbacks_produce_independent_host_arrays() {
-    if !gpu_adapter_available() {
+    if !gpu_int64_available() {
         eprintln!(
             "[gpu] skipped two_readbacks_produce_independent_host_arrays: no suitable adapter"
         );
