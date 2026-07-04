@@ -765,8 +765,20 @@ impl<'a> BodyEmitter<'a> {
         (headers, loop_info, invalid_headers)
     }
 
+    /// Depth-first search for loop back-edges using an explicit worklist rather
+    /// than recursion, so a pathologically deep CFG (long block chains) cannot
+    /// overflow the call stack. A back-edge is an edge whose target is an
+    /// ancestor still on the active DFS path (`on_stack`): its target is
+    /// recorded as a loop header and its source as a latch of that header.
+    ///
+    /// Each `stack` frame carries a block, its ordered successors, and the index
+    /// of the next successor to visit. Advancing a frame's index mirrors one
+    /// iteration of the recursive successor loop; popping a frame mirrors the
+    /// recursive return that clears the block from `on_stack`. Successors are
+    /// taken from [`Terminator::successors`], preserving the exact
+    /// Goto/SwitchInt(targets…, otherwise)/Call visit order the recursion used.
     fn dfs_find_back_edges(
-        bb: crate::mir::BasicBlock,
+        root: crate::mir::BasicBlock,
         body: &Body,
         visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
         on_stack: &mut std::collections::HashSet<crate::mir::BasicBlock>,
@@ -776,68 +788,47 @@ impl<'a> BodyEmitter<'a> {
             std::collections::HashSet<crate::mir::BasicBlock>,
         >,
     ) {
-        if visited.contains(&bb) {
+        if visited.contains(&root) {
             return;
         }
-        visited.insert(bb);
-        on_stack.insert(bb);
 
-        if let Some(block) = body.basic_blocks.get(bb.0) {
-            if let Some(term) = &block.terminator {
-                match &term.kind {
-                    crate::mir::TerminatorKind::Goto { target } => {
-                        if on_stack.contains(target) {
-                            headers.insert(*target);
-                            latches.entry(*target).or_default().insert(bb);
-                        } else if !visited.contains(target) {
-                            Self::dfs_find_back_edges(
-                                *target, body, visited, on_stack, headers, latches,
-                            );
-                        }
-                    }
-                    crate::mir::TerminatorKind::SwitchInt {
-                        targets, otherwise, ..
-                    } => {
-                        for (_, t) in targets {
-                            if on_stack.contains(t) {
-                                headers.insert(*t);
-                                latches.entry(*t).or_default().insert(bb);
-                            } else if !visited.contains(t) {
-                                Self::dfs_find_back_edges(
-                                    *t, body, visited, on_stack, headers, latches,
-                                );
-                            }
-                        }
-                        if on_stack.contains(otherwise) {
-                            headers.insert(*otherwise);
-                            latches.entry(*otherwise).or_default().insert(bb);
-                        } else if !visited.contains(otherwise) {
-                            Self::dfs_find_back_edges(
-                                *otherwise, body, visited, on_stack, headers, latches,
-                            );
-                        }
-                    }
-                    crate::mir::TerminatorKind::Call { target, .. }
-                    | crate::mir::TerminatorKind::VirtualCall { target, .. }
-                    | crate::mir::TerminatorKind::GpuLaunch { target, .. } => {
-                        if let Some(t) = target {
-                            if on_stack.contains(t) {
-                                headers.insert(*t);
-                                latches.entry(*t).or_default().insert(bb);
-                            } else if !visited.contains(t) {
-                                Self::dfs_find_back_edges(
-                                    *t, body, visited, on_stack, headers, latches,
-                                );
-                            }
-                        }
-                    }
-                    crate::mir::TerminatorKind::Return
-                    | crate::mir::TerminatorKind::Unreachable => {}
+        let successors_of = |bb: crate::mir::BasicBlock| -> Vec<crate::mir::BasicBlock> {
+            body.basic_blocks
+                .get(bb.0)
+                .and_then(|block| block.terminator.as_ref())
+                .map(|term| term.successors())
+                .unwrap_or_default()
+        };
+
+        visited.insert(root);
+        on_stack.insert(root);
+        let mut stack: Vec<(crate::mir::BasicBlock, Vec<crate::mir::BasicBlock>, usize)> =
+            vec![(root, successors_of(root), 0)];
+
+        while let Some(&(bb, _, _)) = stack.last() {
+            let top = stack.len() - 1;
+            let next = stack[top].2;
+            if next < stack[top].1.len() {
+                let target = stack[top].1[next];
+                stack[top].2 += 1;
+                if on_stack.contains(&target) {
+                    // Back-edge: `target` is an active ancestor => loop header.
+                    headers.insert(target);
+                    latches.entry(target).or_default().insert(bb);
+                } else if !visited.contains(&target) {
+                    // Tree-edge: descend into `target` next (LIFO), so its whole
+                    // subtree is explored and popped before `bb`'s remaining
+                    // successors — identical to the recursive traversal.
+                    visited.insert(target);
+                    on_stack.insert(target);
+                    let succs = successors_of(target);
+                    stack.push((target, succs, 0));
                 }
+            } else {
+                on_stack.remove(&bb);
+                stack.pop();
             }
         }
-
-        on_stack.remove(&bb);
     }
 
     fn write_indent(&mut self) -> Result<(), CodegenError> {
@@ -2065,7 +2056,7 @@ mod tests {
     use super::*;
     use crate::ast::types::Type;
     use crate::error::syntax::Span;
-    use crate::mir::LocalDecl;
+    use crate::mir::{LocalDecl, Terminator};
 
     /// Test that an I64 index is rendered with clamp to saturate into i32 range.
     #[test]
@@ -2245,6 +2236,128 @@ mod tests {
             rendered.contains("["),
             "Expected [ in rendered place, got: {}",
             rendered
+        );
+    }
+
+    /// Build a block with a `Goto` terminator to `target`.
+    fn goto_block(target: crate::mir::BasicBlock) -> crate::mir::BasicBlockData {
+        crate::mir::BasicBlockData::new(Some(Terminator::new(
+            crate::mir::TerminatorKind::Goto { target },
+            Span::default(),
+        )))
+    }
+
+    /// Build a block whose terminator returns.
+    fn return_block() -> crate::mir::BasicBlockData {
+        crate::mir::BasicBlockData::new(Some(Terminator::new(
+            crate::mir::TerminatorKind::Return,
+            Span::default(),
+        )))
+    }
+
+    /// A canonical for-loop header: `SwitchInt` on a dummy operand with a single
+    /// `bool_true` target (the body entry) and `otherwise` as the loop exit.
+    fn loop_header_block(
+        body_entry: crate::mir::BasicBlock,
+        exit: crate::mir::BasicBlock,
+    ) -> crate::mir::BasicBlockData {
+        crate::mir::BasicBlockData::new(Some(Terminator::new(
+            crate::mir::TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::new(crate::mir::Local(0))),
+                targets: vec![(crate::mir::Discriminant::bool_true(), body_entry)],
+                otherwise: exit,
+            },
+            Span::default(),
+        )))
+    }
+
+    /// A deep acyclic `Goto` chain must not overflow the call stack and must
+    /// report no loop headers (a straight-line CFG has no back-edges). With the
+    /// recursive detector this depth blew the thread stack; the explicit-worklist
+    /// version handles it iteratively.
+    #[test]
+    fn test_back_edges_deep_chain_no_overflow() {
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        let depth = 100_000usize;
+        for i in 0..depth {
+            body.basic_blocks
+                .push(goto_block(crate::mir::BasicBlock(i + 1)));
+        }
+        body.basic_blocks.push(return_block());
+
+        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+
+        assert!(
+            headers.is_empty(),
+            "acyclic chain must have no loop headers"
+        );
+        assert!(loop_info.is_empty(), "acyclic chain must have no LoopInfo");
+        assert!(
+            invalid.is_empty(),
+            "acyclic chain must have no invalid headers"
+        );
+    }
+
+    /// A canonical single-latch for-loop is classified with the header, exit,
+    /// body entry, and the increment block as the continuing/continue target.
+    /// Pins that the iterative detector preserves the recursive one's semantics.
+    #[test]
+    fn test_back_edges_for_loop_classified() {
+        // bb0: header  SwitchInt(true -> bb1, otherwise -> bb3)
+        // bb1: body    Goto -> bb2
+        // bb2: latch   Goto -> bb0   (back-edge)
+        // bb3: exit     Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks.push(loop_header_block(
+            crate::mir::BasicBlock(1),
+            crate::mir::BasicBlock(3),
+        ));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(2)));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(0)));
+        body.basic_blocks.push(return_block());
+
+        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+
+        assert_eq!(headers.len(), 1, "one loop header expected");
+        assert!(headers.contains(&crate::mir::BasicBlock(0)));
+        assert!(invalid.is_empty(), "header is a valid SwitchInt loop");
+
+        let info = loop_info
+            .get(&crate::mir::BasicBlock(0))
+            .expect("LoopInfo for header bb0");
+        assert_eq!(info.body_entry, crate::mir::BasicBlock(1));
+        assert_eq!(info.exit, crate::mir::BasicBlock(3));
+        assert_eq!(info.continuing, Some(crate::mir::BasicBlock(2)));
+        assert_eq!(info.continue_target, crate::mir::BasicBlock(2));
+    }
+
+    /// A back-edge whose target is not a `SwitchInt` loop header (here a `Goto`
+    /// self-loop) is reported as an invalid header, not a real loop.
+    #[test]
+    fn test_back_edges_invalid_header_rejected() {
+        // bb0: Goto -> bb1
+        // bb1: Goto -> bb1  (self back-edge to a non-SwitchInt block)
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(1)));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(1)));
+
+        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+
+        assert!(
+            headers.is_empty(),
+            "invalid header must be removed from headers"
+        );
+        assert!(
+            loop_info.is_empty(),
+            "no LoopInfo for a non-SwitchInt header"
+        );
+        assert!(
+            invalid.contains(&crate::mir::BasicBlock(1)),
+            "self back-edge to a Goto block is an invalid header"
         );
     }
 }
