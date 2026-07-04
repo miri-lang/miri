@@ -344,6 +344,7 @@ impl CraneliftBackend {
                     name,
                     body,
                     &self.type_definitions,
+                    &self.generic_class_instantiations,
                 )?;
             }
         }
@@ -520,7 +521,12 @@ impl CraneliftBackend {
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         // Create function translator
-        let mut translator = FunctionTranslator::new(isa, body, &self.type_definitions);
+        let mut translator = FunctionTranslator::new(
+            isa,
+            body,
+            &self.type_definitions,
+            &self.generic_class_instantiations,
+        );
 
         // Translate MIR to Cranelift IR
         translator
@@ -664,7 +670,6 @@ impl CraneliftBackend {
             if emitted.contains(&mangled) {
                 continue;
             }
-            emitted.push(mangled);
             FunctionTranslator::generate_drop_function(
                 module,
                 ctx,
@@ -674,6 +679,13 @@ impl CraneliftBackend {
                 &self.type_definitions,
                 &self.generic_class_instantiations,
             )?;
+            // Per-instantiation `__decref_Box__String` wrapper: the collection
+            // element decref helper for a `List<Box<String>>` must route to the
+            // per-instantiation drop thunk so the concrete managed field is
+            // released. The bare `__decref_Box` would reach only `__drop_Box`,
+            // which skips the unresolved generic field.
+            FunctionTranslator::generate_decref_function(module, ctx, isa, &mangled)?;
+            emitted.push(mangled);
         }
         Ok(())
     }

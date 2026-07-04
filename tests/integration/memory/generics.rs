@@ -270,6 +270,94 @@ fn main()
     );
 }
 
+#[test]
+fn test_generic_class_managed_field_direct_drop_no_leak() {
+    // A directly-dropped monomorphized `Box<String>` whose only managed field is
+    // the generic `value T` (resolved to `String`). The `has_managed_fields`
+    // gate that decides whether to call the drop thunk sees only the bare `T`
+    // field and must still route through the per-instantiation `__drop_Box__String`
+    // thunk, or the heap String leaks. Uses `f"..{..}"` so the String is a real
+    // heap allocation (a string literal would be immortal and hide the leak).
+    assert_runs_with_output(
+        r#"
+class Box<T>
+    var value T
+
+fn main()
+    let s = f"a{1}"
+    let b = Box<String>(value: s)
+    println("done")
+"#,
+        "done",
+    );
+}
+
+#[test]
+fn test_generic_class_managed_field_in_list_no_leak() {
+    // A `List<Box<String>>` holds monomorphized generic-class elements whose
+    // `value T` field resolves to a managed `String`. When the list is dropped,
+    // each element's decref must route to the per-instantiation drop thunk
+    // (`__drop_Box__String`) so the inner String is released. Routing through
+    // the bare `__drop_Box` frees the Box shell but leaks the String field.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Box<T>
+    var value T
+
+fn main()
+    let items = List([Box<String>(value: f"a{1}"), Box<String>(value: f"b{2}")])
+    println(f"{items.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_generic_class_managed_field_in_list_cleared_no_leak() {
+    // `clear()` drops each element through the collection's runtime
+    // `elem_drop_fn`. That helper must be the per-instantiation
+    // `__decref_Box__String` so the inner heap String is released; the bare
+    // `__decref_Box` frees only the Box shell.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Box<T>
+    var value T
+
+fn main()
+    var items = List([Box<String>(value: f"a{1}"), Box<String>(value: f"b{2}")])
+    items.clear()
+    println(f"{items.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_generic_class_scalar_field_in_list_no_leak() {
+    // Sibling instantiation `Box<int>` has a scalar field — its per-instantiation
+    // decref must be a genuine no-op on the field, and the routing must not
+    // confuse it with the managed `Box<String>` instantiation.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Box<T>
+    var value T
+
+fn main()
+    let a = List([Box<String>(value: f"x{1}")])
+    let b = List([Box<int>(value: 7)])
+    println(f"{a.length()}")
+    println(f"{b.length()}")
+"#,
+        "1\n1",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // E. Multi-param descriptive generics
 // ---------------------------------------------------------------------------

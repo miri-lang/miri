@@ -476,7 +476,7 @@ impl<'a> FunctionTranslator<'a> {
                 elem_kind,
                 array_ptr,
                 ptr_type,
-                type_ctx.type_definitions,
+                type_ctx,
                 ElementCallbackSetters {
                     set_drop: Self::call_rt_array_set_elem_drop_fn,
                     set_clone: Self::call_rt_array_set_elem_clone_fn,
@@ -519,7 +519,7 @@ impl<'a> FunctionTranslator<'a> {
                     elem_kind,
                     list_ptr,
                     ptr_type,
-                    type_ctx.type_definitions,
+                    type_ctx,
                     ElementCallbackSetters {
                         set_drop: Self::call_rt_list_set_elem_drop_fn,
                         set_clone: Self::call_rt_list_set_elem_clone_fn,
@@ -622,7 +622,7 @@ impl<'a> FunctionTranslator<'a> {
             val_kind,
             map_ptr,
             ptr_type,
-            type_ctx.type_definitions,
+            type_ctx,
             ElementCallbackSetters {
                 set_drop: Self::call_rt_map_set_val_drop_fn,
                 set_clone: Self::call_rt_map_set_val_clone_fn,
@@ -655,7 +655,7 @@ impl<'a> FunctionTranslator<'a> {
                     elem_kind,
                     set_ptr,
                     ptr_type,
-                    type_ctx.type_definitions,
+                    type_ctx,
                     ElementCallbackSetters {
                         set_drop: Self::call_rt_set_set_elem_drop_fn,
                         set_clone: Self::call_rt_set_set_elem_clone_fn,
@@ -676,16 +676,22 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         container_ptr: Value,
         ptr_type: cl_types::Type,
-        type_definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
+        type_ctx: &TypeCtx,
         setters: ElementCallbackSetters,
     ) -> Result<(), CodegenError> {
-        let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)? {
+        if let Some(addr) =
+            Self::elem_decref_addr_for_kind(builder, ctx, elem_kind, ptr_type, type_ctx)?
+        {
             (setters.set_drop)(builder, ctx, container_ptr, addr)?;
         }
-        if let Some(addr) =
-            Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
-        {
+        let shape = Self::classify_element_shape(elem_kind);
+        if let Some(addr) = Self::elem_clone_addr_for_shape(
+            builder,
+            ctx,
+            shape,
+            type_ctx.type_definitions,
+            ptr_type,
+        )? {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
         }
         Ok(())

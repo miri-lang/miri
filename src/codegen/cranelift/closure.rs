@@ -7,6 +7,7 @@
 //! values, so the runtime can DecRef captures when the closure RC reaches 0
 //! without needing static knowledge of capture types at the drop site.
 
+use crate::ast::types::Type;
 use crate::codegen::cranelift::translator::{
     empty_module_ctx, is_capture_managed, FunctionTranslator, TypeCtx,
 };
@@ -39,6 +40,7 @@ impl<'a> FunctionTranslator<'a> {
         lambda_name: &str,
         body: &Body,
         type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
@@ -64,6 +66,7 @@ impl<'a> FunctionTranslator<'a> {
             &mut builder_ctx,
             body,
             type_definitions,
+            generic_class_instantiations,
             ptr_type,
             ptr_size,
         )?;
@@ -85,6 +88,7 @@ impl<'a> FunctionTranslator<'a> {
         builder_ctx: &mut FunctionBuilderContext,
         body: &Body,
         type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
         ptr_type: cl_types::Type,
         ptr_size: i64,
     ) -> Result<(), CodegenError> {
@@ -101,14 +105,13 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
-        let no_instantiations = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             type_definitions,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            generic_class_instantiations: &no_instantiations,
+            generic_class_instantiations,
         };
 
         for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {

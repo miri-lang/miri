@@ -47,6 +47,11 @@ pub struct FunctionTranslator<'a> {
     /// Type definitions from the type checker (for layout computation).
     /// Borrowed from the backend to avoid cloning the entire HashMap per function.
     pub(crate) type_definitions: &'a HashMap<String, TypeDefinition>,
+    /// Recorded generic-class instantiations, borrowed from the backend. A
+    /// function body inline-drops generic-class locals (`let b = Box<String>()`),
+    /// so the drop path needs the registry to route to the per-instantiation
+    /// `__drop_Box__String` thunk that releases the concrete managed field.
+    pub(crate) generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
 }
 
 /// Context for module-level resources during translation.
@@ -165,6 +170,7 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         body: &'a Body,
         type_definitions: &'a HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
     ) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
@@ -180,6 +186,7 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             local_types,
             type_definitions,
+            generic_class_instantiations,
         }
     }
     /// Translate a MIR function body to Cranelift IR.
@@ -198,16 +205,13 @@ impl<'a> FunctionTranslator<'a> {
             Self::setup_entry_params(&mut builder, body, &locals, &blocks, self.ptr_type);
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
-        // Struct/class drop thunks are generated on a separate path; normal
-        // function translation never resolves generic-class field drops.
-        let no_instantiations = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             type_definitions: self.type_definitions,
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
-            generic_class_instantiations: &no_instantiations,
+            generic_class_instantiations: self.generic_class_instantiations,
         };
 
         Self::translate_blocks(

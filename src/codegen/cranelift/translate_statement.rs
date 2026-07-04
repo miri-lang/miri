@@ -257,8 +257,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx,
             &elem_ty.kind,
             set_ptr,
-            ptr_type,
-            type_ctx.type_definitions,
+            type_ctx,
         )?;
         FunctionTranslator::emit_set_clone_fn_for_elem_kind(
             builder,
@@ -843,9 +842,18 @@ impl<'a> FunctionTranslator<'a> {
             ) | ElementShape::UserClass(_)
         );
         if needs_decref_override {
-            if let Some(addr) =
-                FunctionTranslator::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)?
-            {
+            // Route through `elem_decref_addr_for_kind` (not the shape-only
+            // helper): a generic-class element (`Box<String>`) resolves to its
+            // per-instantiation `__decref_Box__String` thunk so `clear`/`remove_at`
+            // release the concrete managed field. The array-argument type — unlike
+            // the element operand temps — preserves the concrete type arguments.
+            if let Some(addr) = FunctionTranslator::elem_decref_addr_for_kind(
+                builder,
+                ctx,
+                &inner_ty.kind,
+                ptr_type,
+                type_ctx,
+            )? {
                 FunctionTranslator::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
             }
         }
@@ -886,8 +894,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx,
             &elem_ty.kind,
             list_ptr,
-            ptr_type,
-            type_ctx.type_definitions,
+            type_ctx,
         )?;
         FunctionTranslator::emit_list_clone_fn_for_elem_kind(
             builder,
