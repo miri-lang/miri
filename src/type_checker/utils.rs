@@ -684,6 +684,53 @@ fn scalar_host_byte_size(kind: &TypeKind) -> Option<usize> {
     }
 }
 
+/// Follows a bare, non-generic type alias (`type Byte is u8`) to its underlying
+/// `TypeKind`, chasing alias chains. Returns `None` — leaving the caller to use
+/// the original — when `kind` is not an alias reference, when it carries generic
+/// arguments (a generic alias needs substitution, handled during resolution),
+/// or when an alias cycle is detected. The syntactic [`resolve_element_type_kind`]
+/// cannot dereference aliases because it has no type table; call sites that own
+/// the table do so through this helper.
+fn dealias_element_kind(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> Option<TypeKind> {
+    if !matches!(kind, TypeKind::Custom(_, None)) {
+        return None;
+    }
+    let mut current = kind.clone();
+    let mut seen: Vec<String> = Vec::new();
+    let mut followed = false;
+    while let TypeKind::Custom(name, None) = &current {
+        match type_definitions.get(name) {
+            Some(TypeDefinition::Alias(alias_def))
+                if alias_def.generics.as_ref().is_none_or(|g| g.is_empty()) =>
+            {
+                // A cycle (`type A is B`, `type B is A`) has no underlying type;
+                // return `None` so the caller stops rather than re-following the
+                // still-aliased result forever.
+                if seen.iter().any(|seen_name| seen_name == name) {
+                    return None;
+                }
+                seen.push(name.clone());
+                current = alias_def.template.kind.clone();
+                followed = true;
+            }
+            // A generic alias reference needs argument substitution (handled
+            // during type resolution), and no other definition — nor an unknown
+            // name — is a bare alias to follow.
+            Some(TypeDefinition::Alias(_))
+            | Some(TypeDefinition::Struct(_))
+            | Some(TypeDefinition::Enum(_))
+            | Some(TypeDefinition::Generic(_))
+            | Some(TypeDefinition::Class(_))
+            | Some(TypeDefinition::Trait(_))
+            | None => break,
+        }
+    }
+    followed.then_some(current)
+}
+
 /// Recursion core of [`accelerable_byte_size`]. `in_progress` records the
 /// nominal types currently being sized so a pathological self-referential
 /// definition terminates with `None` instead of overflowing the stack.
@@ -692,6 +739,13 @@ fn accelerable_byte_size_inner(
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     in_progress: &mut Vec<String>,
 ) -> Option<usize> {
+    // Element type expressions reach the byte-size path through the syntactic
+    // [`resolve_element_type_kind`], which sees an alias name literally. Follow a
+    // non-generic alias (`type Byte is u8`) to its underlying type before sizing
+    // so a scalar or collection alias reports its true device width.
+    if let Some(dealiased) = dealias_element_kind(kind, type_definitions) {
+        return accelerable_byte_size_inner(&dealiased, type_definitions, in_progress);
+    }
     if let Some(width) = scalar_host_byte_size(kind) {
         return Some(width);
     }
@@ -2337,11 +2391,20 @@ mod accelerable_registry_tests {
     use crate::ast::expression::{Expression, ExpressionKind};
     use crate::ast::types::{VEC3_TYPE_NAME, VEC4_TYPE_NAME};
     use crate::error::syntax::Span;
-    use crate::type_checker::context::StructDefinition;
+    use crate::type_checker::context::{AliasDefinition, StructDefinition};
     use std::collections::HashMap;
 
     fn array_name() -> &'static str {
         BuiltinCollectionKind::Array.name()
+    }
+
+    /// Builds a non-generic type alias whose underlying template is `template`,
+    /// e.g. `alias(TypeKind::U8)` models `type Byte is u8`.
+    fn alias(template: TypeKind) -> TypeDefinition {
+        TypeDefinition::Alias(AliasDefinition {
+            template: Type::new(template, span()),
+            generics: None,
+        })
     }
 
     fn list_name() -> &'static str {
@@ -2535,5 +2598,76 @@ mod accelerable_registry_tests {
     #[test]
     fn byte_size_string_has_no_device_width() {
         assert_eq!(accelerable_byte_size(&TypeKind::String, &no_defs()), None);
+    }
+
+    #[test]
+    fn byte_size_follows_scalar_alias_to_its_width() {
+        // `type Byte is u8`
+        let mut defs = no_defs();
+        defs.insert("Byte".to_string(), alias(TypeKind::U8));
+
+        // A bare alias reference sizes as its underlying scalar.
+        assert_eq!(
+            accelerable_byte_size(&TypeKind::Custom("Byte".to_string(), None), &defs),
+            Some(1)
+        );
+        // An `Array<Byte, N>` reports the alias element width, not `None`.
+        assert_eq!(
+            accelerable_byte_size(
+                &custom(
+                    array_name(),
+                    vec![TypeKind::Custom("Byte".to_string(), None), TypeKind::Int],
+                ),
+                &defs
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn byte_size_follows_alias_chain() {
+        // `type A is B`, `type B is u16`
+        let mut defs = no_defs();
+        defs.insert(
+            "A".to_string(),
+            alias(TypeKind::Custom("B".to_string(), None)),
+        );
+        defs.insert("B".to_string(), alias(TypeKind::U16));
+        assert_eq!(
+            accelerable_byte_size(&TypeKind::Custom("A".to_string(), None), &defs),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn byte_size_follows_alias_to_a_collection() {
+        // `type Buf is Array<i32, 4>` — the element width is still what matters.
+        let mut defs = no_defs();
+        defs.insert(
+            "Buf".to_string(),
+            alias(custom(array_name(), vec![TypeKind::I32, TypeKind::Int])),
+        );
+        assert_eq!(
+            accelerable_byte_size(&TypeKind::Custom("Buf".to_string(), None), &defs),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn byte_size_alias_cycle_terminates_without_a_width() {
+        // A pathological `type A is B`, `type B is A` must not loop forever.
+        let mut defs = no_defs();
+        defs.insert(
+            "A".to_string(),
+            alias(TypeKind::Custom("B".to_string(), None)),
+        );
+        defs.insert(
+            "B".to_string(),
+            alias(TypeKind::Custom("A".to_string(), None)),
+        );
+        assert_eq!(
+            accelerable_byte_size(&TypeKind::Custom("A".to_string(), None), &defs),
+            None
+        );
     }
 }
