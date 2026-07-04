@@ -88,7 +88,7 @@ pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
 /// `system.gpu.is_gpu_available()`) start returning true. Keeping a
 /// separate `OnceCell` here would leave the public probe permanently
 /// false even after the runtime has booted a device.
-fn ensure_context() -> Result<&'static Arc<GpuContext>, GpuError> {
+fn ensure_context() -> Result<Arc<GpuContext>, GpuError> {
     init_gpu_context()
 }
 

@@ -30,6 +30,10 @@ struct ResidentBuffer {
     byte_len: usize,
     /// True if this buffer's host data was narrowed (i64→i32) on upload.
     needs_widen: bool,
+    /// Device generation at allocation time. A buffer whose generation no
+    /// longer matches the current one belongs to a device that has been reset
+    /// (device loss or adapter change) and must not be bound again.
+    generation: u64,
 }
 
 static DEVICE_BUFFERS: Lazy<RwLock<HashMap<u64, ResidentBuffer>>> =
@@ -38,14 +42,18 @@ static DEVICE_BUFFERS: Lazy<RwLock<HashMap<u64, ResidentBuffer>>> =
 /// Returns a clone of the resident buffer handle for `handle_id` paired with
 /// its uploaded byte length and narrowing flag, or `None` when nothing has been allocated for it yet.
 pub fn resident_buffer(handle_id: u64) -> Option<(Buffer, usize, bool)> {
+    let current = crate::context::current_device_generation();
     DEVICE_BUFFERS
         .read()
         .get(&handle_id)
+        .filter(|entry| entry.generation == current)
         .map(|entry| (entry.buffer.clone(), entry.byte_len, entry.needs_widen))
 }
 
-/// Records `buffer` as the persistent device buffer for `handle_id`.
-/// `needs_widen` tracks whether the buffer was narrowed on upload and needs widening on readback.
+/// Records `buffer` as the persistent device buffer for `handle_id`, tagged
+/// with the current device generation so a later reset can recognize it as
+/// stale. `needs_widen` tracks whether the buffer was narrowed on upload and
+/// needs widening on readback.
 pub fn insert_resident(handle_id: u64, buffer: Buffer, byte_len: usize, needs_widen: bool) {
     DEVICE_BUFFERS.write().insert(
         handle_id,
@@ -53,8 +61,16 @@ pub fn insert_resident(handle_id: u64, buffer: Buffer, byte_len: usize, needs_wi
             buffer,
             byte_len,
             needs_widen,
+            generation: crate::context::current_device_generation(),
         },
     );
+}
+
+/// Removes every resident buffer. Called by `miri_gpu_reset_context` when the
+/// device is dropped: the buffers reference the old device and cannot be used
+/// on the replacement.
+pub fn clear_resident() {
+    DEVICE_BUFFERS.write().clear();
 }
 
 /// Releases the device buffer owned by a dropped host-side binding. Returns
