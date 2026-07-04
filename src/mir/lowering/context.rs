@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use super::kernel_namer::{new_shared_kernel_namer, SharedKernelNamer};
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
 use crate::mir::declaration::Declaration;
@@ -76,6 +77,12 @@ pub struct LoweringContext<'a> {
     /// a `T`-typed intrinsic element read (e.g. `self.items.element_at(0)`) to
     /// the instantiation's concrete type instead of the pointer-width fallback.
     pub generic_subs: HashMap<String, Type>,
+    /// Per-compilation allocator of deterministic kernel-name indices. Shared
+    /// across every body lowered in one compilation (and inherited by nested
+    /// lambda/block contexts) so kernel names are unique within the build and
+    /// stable across builds. Defaults to a private allocator; the compilation
+    /// driver injects the shared one via [`LoweringContext::use_kernel_namer`].
+    pub kernel_namer: SharedKernelNamer,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -111,10 +118,25 @@ impl<'a> LoweringContext<'a> {
             source,
             source_path,
             generic_subs: HashMap::new(),
+            kernel_namer: new_shared_kernel_namer(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
         ctx
+    }
+
+    /// Share `namer` with this context so kernel names are allocated from the
+    /// compilation-wide sequence. Called by the compilation driver for each
+    /// top-level body, and by nested lambda/block lowering to inherit the
+    /// parent's allocator.
+    pub fn use_kernel_namer(&mut self, namer: SharedKernelNamer) {
+        self.kernel_namer = namer;
+    }
+
+    /// Allocate (or reuse) the deterministic, compilation-local kernel-name
+    /// index for the kernel-bearing AST node `ast_id`.
+    pub fn kernel_index(&self, ast_id: usize) -> usize {
+        self.kernel_namer.borrow_mut().index_for(ast_id)
     }
 
     /// Compute a 1-based line number for the given byte offset within

@@ -183,6 +183,9 @@ pub(crate) fn lower_lambda_expr(
     // so the LoweringContext sees them as proper parameters.
     let outer_variable_map = ctx.variable_map.clone();
     let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker, ctx.is_release);
+    // Inherit the compilation-wide kernel-name allocator so a kernel lowered
+    // inside the lambda body stays deterministic and collision-free.
+    lambda_ctx.use_kernel_namer(ctx.kernel_namer.clone());
 
     // Local 1: env_ptr (implicit first parameter — pointer to the closure struct payload).
     // We use push_param so it does NOT emit StorageLive.

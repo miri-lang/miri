@@ -69,7 +69,7 @@ pub(crate) fn try_lower_gpu_reduce(
     let array_length = extract_array_length_from_type(obj_ty, *span)?;
 
     // Build the reduction kernel.
-    let kernel_name = format!("miri_gpu_reduce_{}", call_expr_id);
+    let kernel_name = format!("miri_gpu_reduce_{}", ctx.kernel_index(call_expr_id));
     let kernel_body = build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {

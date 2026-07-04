@@ -373,6 +373,59 @@ gpu forall i in 0..4
     );
 }
 
+/// Collects the sorted kernel entry-point names from a freshly built bundle.
+fn kernel_entry_names(source: &str) -> Vec<String> {
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
+    let seed_array = manifest["seed"].as_array().expect("seed is array");
+    let mut names: Vec<String> = seed_array
+        .iter()
+        .map(|k| {
+            k["entryPoint"]
+                .as_str()
+                .expect("entryPoint is string")
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// F31a: kernel entry names are per-compilation deterministic. Compiling the
+/// same source twice in one process (as a long-lived REPL/daemon host would)
+/// must yield identical kernel entry names, even though the process-global AST
+/// id counter keeps advancing between the two compilations. Names are derived
+/// from a per-compilation sequential index rather than the raw AST node id.
+#[test]
+fn kernel_names_are_deterministic_across_compilations() {
+    let source = r#"
+use system.gpu
+
+gpu var dst_a = [0, 0, 0, 0]
+gpu var dst_b = [0, 0, 0, 0]
+
+gpu forall i in 0..4
+    dst_a[i] = i + 100
+
+gpu forall i in 0..4
+    dst_b[i] = i + 200
+"#;
+
+    let first = kernel_entry_names(source);
+    let second = kernel_entry_names(source);
+
+    assert_eq!(
+        first.len(),
+        2,
+        "expected two kernels per compilation; got {}",
+        first.len()
+    );
+    assert_eq!(
+        first, second,
+        "kernel entry names must be identical across two compilations of the same source"
+    );
+}
+
 /// A kernel that calls a device-side helper `fn` must emit that helper's
 /// definition into its own WGSL module, or the browser validator rejects the
 /// call as an unknown identifier. The native kernel registry already bundles

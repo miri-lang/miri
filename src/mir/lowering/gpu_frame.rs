@@ -182,8 +182,14 @@ fn emit_frame_pass(
 ) -> Result<(), LoweringError> {
     let loop_var_name = &decls[0].name;
 
-    // Distinct kernel name to avoid runtime cache collision.
-    let kernel_name = format!("miri_gpu_for_{}_{}", frame_stmt_id, pass_idx);
+    // Distinct kernel name to avoid runtime cache collision. Every pass of one
+    // frame statement shares its compilation-local index; `pass_idx` keeps the
+    // passes distinct.
+    let kernel_name = format!(
+        "miri_gpu_for_{}_{}",
+        ctx.kernel_index(frame_stmt_id),
+        pass_idx
+    );
 
     if is_literal_end {
         let end_lit = forall_gpu::read_int_literal(end, *span)?;
