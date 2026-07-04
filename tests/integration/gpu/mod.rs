@@ -25,6 +25,7 @@ pub mod concurrent_write;
 pub mod cross_residency;
 pub mod demos;
 pub mod device;
+pub mod div_mod_range;
 pub mod forall_routing;
 pub mod game_of_life;
 pub mod gpu_fn_launch;
