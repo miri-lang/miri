@@ -20,6 +20,7 @@ pub mod forall_cpu;
 pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
+pub mod kernel_namer;
 pub mod loops;
 pub mod reduce_gpu;
 pub mod statement;
@@ -42,6 +43,7 @@ use std::collections::HashMap;
 pub use context::LoweringContext;
 pub use expression::lower_expression;
 pub use helpers::{bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type};
+pub use kernel_namer::{new_shared_kernel_namer, SharedKernelNamer};
 pub use statement::lower_statement;
 
 /// Lower an AST function declaration to a MIR Body.
@@ -86,6 +88,26 @@ pub fn lower_function(
     is_release: bool,
     inject_allocator: bool,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_function_with_kernel_namer(
+        ast_func,
+        tc,
+        is_release,
+        inject_allocator,
+        new_shared_kernel_namer(),
+    )
+}
+
+/// Lower a function while allocating any GPU kernel names from `kernel_namer`,
+/// the compilation-wide sequence. The compilation driver passes one shared
+/// namer for every body so kernel names are unique within the build and stable
+/// across builds; [`lower_function`] wraps this with a private per-call namer.
+pub fn lower_function_with_kernel_namer(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -113,6 +135,7 @@ pub fn lower_function(
     // Initialize lowering context
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
+    ctx.use_kernel_namer(kernel_namer);
 
     // Populate generic type parameter names so that `is_managed_type` can
     // distinguish unresolved generic placeholders from concrete user types.
@@ -298,6 +321,26 @@ pub fn lower_generic_instantiation(
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_generic_instantiation_with_kernel_namer(
+        ast_func,
+        tc,
+        is_release,
+        inject_allocator,
+        subs,
+        new_shared_kernel_namer(),
+    )
+}
+
+/// [`lower_generic_instantiation`] that allocates GPU kernel names from the
+/// compilation-wide `kernel_namer` instead of a private per-call one.
+pub fn lower_generic_instantiation_with_kernel_namer(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    subs: &HashMap<String, Type>,
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -317,6 +360,7 @@ pub fn lower_generic_instantiation(
 
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
+    ctx.use_kernel_namer(kernel_namer);
 
     // For an instantiated generic, `subs` maps each generic name to its concrete
     // type — those names no longer remain as unresolved placeholders after
@@ -399,7 +443,33 @@ pub fn lower_class_method(
     tc: &TypeChecker,
     is_release: bool,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    lower_class_method_impl(ast_method, self_type, tc, is_release, &HashMap::new())
+    lower_class_method_impl(
+        ast_method,
+        self_type,
+        tc,
+        is_release,
+        &HashMap::new(),
+        new_shared_kernel_namer(),
+    )
+}
+
+/// [`lower_class_method`] that allocates GPU kernel names from the
+/// compilation-wide `kernel_namer` instead of a private per-call one.
+pub fn lower_class_method_with_kernel_namer(
+    ast_method: &Statement,
+    self_type: Type,
+    tc: &TypeChecker,
+    is_release: bool,
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_class_method_impl(
+        ast_method,
+        self_type,
+        tc,
+        is_release,
+        &HashMap::new(),
+        kernel_namer,
+    )
 }
 
 /// Lower a generic class method for one concrete instantiation.
@@ -419,8 +489,28 @@ pub fn lower_class_method_instantiation(
     is_release: bool,
     subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_class_method_instantiation_with_kernel_namer(
+        ast_method,
+        class_name,
+        tc,
+        is_release,
+        subs,
+        new_shared_kernel_namer(),
+    )
+}
+
+/// [`lower_class_method_instantiation`] that allocates GPU kernel names from the
+/// compilation-wide `kernel_namer` instead of a private per-call one.
+pub fn lower_class_method_instantiation_with_kernel_namer(
+    ast_method: &Statement,
+    class_name: &str,
+    tc: &TypeChecker,
+    is_release: bool,
+    subs: &HashMap<String, Type>,
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let self_type = monomorphized_self_type(class_name, tc, subs, ast_method.span);
-    lower_class_method_impl(ast_method, self_type, tc, is_release, subs)
+    lower_class_method_impl(ast_method, self_type, tc, is_release, subs, kernel_namer)
 }
 
 /// Build the `self` type for a monomorphized method: `Custom(class, Some(args))`
@@ -467,6 +557,7 @@ fn lower_class_method_impl(
     tc: &TypeChecker,
     is_release: bool,
     subs: &HashMap<String, Type>,
+    kernel_namer: SharedKernelNamer,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
@@ -490,6 +581,7 @@ fn lower_class_method_impl(
     // not added to variable_map.
     let body = Body::new(params.len() + 1, ast_method.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
+    ctx.use_kernel_namer(kernel_namer);
     // Carry the instantiation substitution so an intrinsic element read typed
     // `T` (e.g. `self.items.element_at(0)`) resolves to the concrete
     // instantiation type instead of the pointer-width fallback.

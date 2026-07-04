@@ -719,6 +719,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             Self::lower_instantiation_methods(
@@ -730,6 +731,7 @@ impl Pipeline {
                 &mangle_args,
                 bodies,
                 lowered_names,
+                kernel_namer,
             )?;
         }
         Ok(())
@@ -792,6 +794,7 @@ impl Pipeline {
         mangle_args: &[(String, Type)],
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         for method_stmt in &class_data.body {
             let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node else {
@@ -810,6 +813,7 @@ impl Pipeline {
                 mangle_args,
                 bodies,
                 lowered_names,
+                kernel_namer,
             )?;
         }
         Ok(())
@@ -832,22 +836,25 @@ impl Pipeline {
         mangle_args: &[(String, Type)],
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         let base = Self::mangle_method_name(class_name, method_name);
         let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
         if lowered_names.contains(&mangled) {
             return Ok(());
         }
-        let (mir_body, lambdas) = mir::lowering::lower_class_method_instantiation(
-            method_stmt,
-            class_name,
-            &result.type_checker,
-            is_release,
-            subs,
-        )
-        .map_err(|e| {
-            CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
-        })?;
+        let (mir_body, lambdas) =
+            mir::lowering::lower_class_method_instantiation_with_kernel_namer(
+                method_stmt,
+                class_name,
+                &result.type_checker,
+                is_release,
+                subs,
+                kernel_namer.clone(),
+            )
+            .map_err(|e| {
+                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
+            })?;
         lowered_names.insert(mangled.clone());
         bodies.push((mangled, mir_body));
         for lambda in lambdas {
@@ -876,6 +883,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             // The trait-default body is written in the trait's own generic
@@ -899,6 +907,7 @@ impl Pipeline {
                 &mangle_args,
                 bodies,
                 lowered_names,
+                kernel_namer,
             )?;
         }
         Ok(())
@@ -912,10 +921,40 @@ impl Pipeline {
         let mut bodies = Vec::new();
         let mut lowered_names = std::collections::HashSet::new();
 
-        self.lower_program_bodies(result, is_release, &mut bodies, &mut lowered_names)?;
-        self.lower_imported_bodies(result, is_release, &mut bodies, &mut lowered_names)?;
-        self.lower_inherited_methods(result, is_release, &mut bodies, &mut lowered_names)?;
-        self.lower_trait_default_methods(result, is_release, &mut bodies, &mut lowered_names)?;
+        // One kernel-name allocator per compilation, shared across every body so
+        // GPU kernel names are unique within this build and reproduced identically
+        // on any later build of the same source (a long-lived host would otherwise
+        // drift because the raw AST-id counter never resets).
+        let kernel_namer = mir::lowering::new_shared_kernel_namer();
+
+        self.lower_program_bodies(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
+        self.lower_imported_bodies(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
+        self.lower_inherited_methods(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
+        self.lower_trait_default_methods(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
 
         if bodies.is_empty() {
             return Err(CompilerError::Codegen(
@@ -923,7 +962,13 @@ impl Pipeline {
             ));
         }
 
-        self.lower_monomorphized_generics(result, is_release, &mut bodies, &mut lowered_names)?;
+        self.lower_monomorphized_generics(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
@@ -978,16 +1023,20 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
-                    let (body, lambdas) =
-                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
-                            })?;
+                    let (body, lambdas) = mir::lowering::lower_function_with_kernel_namer(
+                        stmt,
+                        &result.type_checker,
+                        is_release,
+                        true,
+                        kernel_namer.clone(),
+                    )
+                    .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
                     lowered_names.insert(decl.name.clone());
                     bodies.push((decl.name.clone(), body));
                     for lambda in lambdas {
@@ -1036,18 +1085,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1065,6 +1116,7 @@ impl Pipeline {
                         is_release,
                         bodies,
                         lowered_names,
+                        kernel_namer,
                     )?;
                 }
                 StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
@@ -1088,18 +1140,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1176,18 +1230,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1212,16 +1268,20 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) if !lowered_names.contains(&decl.name) => {
-                    let (body, lambdas) =
-                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
-                            })?;
+                    let (body, lambdas) = mir::lowering::lower_function_with_kernel_namer(
+                        stmt,
+                        &result.type_checker,
+                        is_release,
+                        true,
+                        kernel_namer.clone(),
+                    )
+                    .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
                     lowered_names.insert(decl.name.clone());
                     bodies.push((decl.name.clone(), body));
                     for lambda in lambdas {
@@ -1273,18 +1333,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1302,6 +1364,7 @@ impl Pipeline {
                         is_release,
                         bodies,
                         lowered_names,
+                        kernel_namer,
                     )?;
                 }
                 StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
@@ -1323,18 +1386,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1366,18 +1431,20 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -1408,6 +1475,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
@@ -1500,18 +1568,20 @@ impl Pipeline {
                                     if lowered_names.contains(&mangled) {
                                         continue;
                                     }
-                                    let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                        method_stmt,
-                                        self_type.clone(),
-                                        &result.type_checker,
-                                        is_release,
-                                    )
-                                    .map_err(|e| {
-                                        CompilerError::Codegen(format!(
-                                            "MIR lowering failed for {}: {}",
-                                            mangled, e
-                                        ))
-                                    })?;
+                                    let (mir_body, lambdas) =
+                                        mir::lowering::lower_class_method_with_kernel_namer(
+                                            method_stmt,
+                                            self_type.clone(),
+                                            &result.type_checker,
+                                            is_release,
+                                            kernel_namer.clone(),
+                                        )
+                                        .map_err(|e| {
+                                            CompilerError::Codegen(format!(
+                                                "MIR lowering failed for {}: {}",
+                                                mangled, e
+                                            ))
+                                        })?;
                                     lowered_names.insert(mangled.clone());
                                     bodies.push((mangled, mir_body));
                                     for lambda in lambdas {
@@ -1546,6 +1616,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
@@ -1671,18 +1742,20 @@ impl Pipeline {
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
-                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                            )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            let (mir_body, lambdas) =
+                                mir::lowering::lower_class_method_with_kernel_namer(
+                                    method_stmt,
+                                    self_type.clone(),
+                                    &result.type_checker,
+                                    is_release,
+                                    kernel_namer.clone(),
+                                )
+                                .map_err(|e| {
+                                    CompilerError::Codegen(format!(
+                                        "MIR lowering failed for {}: {}",
+                                        mangled, e
+                                    ))
+                                })?;
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
                             for lambda in lambdas {
@@ -1702,6 +1775,7 @@ impl Pipeline {
                                 is_release,
                                 bodies,
                                 lowered_names,
+                                kernel_namer,
                             )?;
                         }
                     }
@@ -1720,6 +1794,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
         {
             // Build a map from original function name → AST statement for quick lookup.
@@ -1807,19 +1882,21 @@ impl Pipeline {
                     continue;
                 }
                 if let Some(&ast_stmt) = ast_func_map.get(original_name.as_str()) {
-                    let (body, lambdas) = mir::lowering::lower_generic_instantiation(
-                        ast_stmt,
-                        &result.type_checker,
-                        is_release,
-                        true,
-                        &subs,
-                    )
-                    .map_err(|e| {
-                        CompilerError::Codegen(format!(
-                            "MIR lowering failed for {}: {}",
-                            mangled_name, e
-                        ))
-                    })?;
+                    let (body, lambdas) =
+                        mir::lowering::lower_generic_instantiation_with_kernel_namer(
+                            ast_stmt,
+                            &result.type_checker,
+                            is_release,
+                            true,
+                            &subs,
+                            kernel_namer.clone(),
+                        )
+                        .map_err(|e| {
+                            CompilerError::Codegen(format!(
+                                "MIR lowering failed for {}: {}",
+                                mangled_name, e
+                            ))
+                        })?;
                     lowered_names.insert(mangled_name.clone());
                     bodies.push((mangled_name, body));
                     for lambda in lambdas {

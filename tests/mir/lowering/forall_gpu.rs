@@ -3,7 +3,9 @@
 
 use crate::mir::utils::mir_lower_code;
 use miri::ast::statement::StatementKind;
-use miri::mir::lowering::lower_function;
+use miri::mir::lowering::{
+    lower_function, lower_function_with_kernel_namer, new_shared_kernel_namer,
+};
 use miri::mir::{ExecutionModel, StorageClass, TerminatorKind};
 use miri::pipeline::Pipeline;
 
@@ -286,8 +288,12 @@ fn main()
 
 #[test]
 fn test_forall_gpu_loops_in_different_functions_have_unique_kernel_names() {
-    let names_a = synthesize_kernel_names(
-        "
+    // Cross-body kernel-name uniqueness comes from the compilation-wide kernel
+    // namer, which the driver shares across every body. Lower two functions of
+    // one program through one shared namer (as the pipeline does) and confirm
+    // their kernels get distinct names.
+    let pipeline = Pipeline::new();
+    let source = "
 use system.gpu
 use system.collections.array
 
@@ -295,25 +301,41 @@ fn a()
     gpu var a = [0, 0, 0, 0]
     gpu forall i in 0..4
         a[i] = i
-",
-    );
-    let names_b = synthesize_kernel_names(
-        "
-use system.gpu
-use system.collections.array
 
 fn b()
     gpu var b = [0, 0, 0, 0]
     gpu forall i in 0..4
         b[i] = i
-",
-    );
-    assert_eq!(names_a.len(), 1);
-    assert_eq!(names_b.len(), 1);
+";
+    let result = pipeline.frontend(source).expect("frontend");
+    let kernel_namer = new_shared_kernel_namer();
+    let mut names = Vec::new();
+    for func_stmt in result
+        .ast
+        .body
+        .iter()
+        .filter(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+    {
+        let (_body, lambdas) = lower_function_with_kernel_namer(
+            func_stmt,
+            &result.type_checker,
+            false,
+            false,
+            kernel_namer.clone(),
+        )
+        .expect("lowering");
+        names.extend(
+            lambdas
+                .into_iter()
+                .filter(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+                .map(|l| l.name),
+        );
+    }
+    assert_eq!(names.len(), 2, "expected one kernel per function");
     assert_ne!(
-        names_a[0], names_b[0],
+        names[0], names[1],
         "kernel names collide between functions: {} vs {}",
-        names_a[0], names_b[0]
+        names[0], names[1]
     );
 }
 

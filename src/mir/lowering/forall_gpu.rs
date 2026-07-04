@@ -146,7 +146,7 @@ pub fn lower_forall_gpu(
     let loop_var_name = decls[0].name.clone();
     let captures = collect_capture_infos(ctx, body, &loop_var_name, *span)?;
 
-    let kernel_name = format!("miri_gpu_forall_{}", stmt_id);
+    let kernel_name = format!("miri_gpu_forall_{}", ctx.kernel_index(stmt_id));
 
     let kernel_body = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
 
