@@ -574,6 +574,18 @@ struct LoopFrame {
     continue_target: crate::mir::BasicBlock,
 }
 
+/// The classification of a back-edge target block.
+enum HeaderClass {
+    /// A single-latch `SwitchInt` header that maps to a WGSL structured loop.
+    Loop(LoopInfo),
+    /// A valid `SwitchInt` header reached by more than one back-edge. WGSL's
+    /// single continuing block cannot represent this without a `continue`
+    /// skipping the loop increment, so it is rejected with a diagnostic.
+    MultiLatch,
+    /// A back-edge target that is not a `SwitchInt` boolean loop header at all.
+    Invalid,
+}
+
 struct BodyEmitter<'a> {
     body: &'a Body,
     bindings: &'a [BufferBinding],
@@ -607,7 +619,8 @@ impl<'a> BodyEmitter<'a> {
         output: &'a mut String,
         source_map: &'a mut Vec<WgslSourceSpan>,
     ) -> Result<Self, CodegenError> {
-        let (loop_headers, loop_info, invalid_headers) = Self::detect_loops_and_build_info(body);
+        let (loop_headers, loop_info, invalid_headers, multi_latch_headers) =
+            Self::detect_loops_and_build_info(body);
 
         // Reject if there are back-edges to non-SwitchInt blocks (invalid loop structure).
         if !invalid_headers.is_empty() {
@@ -618,6 +631,18 @@ impl<'a> BodyEmitter<'a> {
                     bb.0
                 )));
             }
+        }
+
+        // Reject multi-latch loops: a header reached by more than one back-edge
+        // cannot map to WGSL's single-`continuing`-block loop, since a `continue`
+        // would then skip a for-loop's increment. Report the lowest header.
+        if let Some(bb) = multi_latch_headers.iter().min_by_key(|b| b.0) {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: loop header bb{} has multiple latches (back-edges); \
+                 WGSL's single continuing block cannot represent this without a \
+                 `continue` skipping the loop increment, so it cannot be compiled to WGSL",
+                bb.0
+            )));
         }
 
         Ok(Self {
@@ -675,13 +700,16 @@ impl<'a> BodyEmitter<'a> {
     }
 
     /// Detect loop headers and build per-header LoopInfo.
-    /// Returns (valid_headers, loop_info, invalid_headers).
-    /// Invalid headers are back-edges to blocks that are not proper SwitchInt loop headers.
+    /// Returns (valid_headers, loop_info, invalid_headers, multi_latch_headers).
+    /// Invalid headers are back-edges to blocks that are not proper SwitchInt
+    /// loop headers. Multi-latch headers are valid SwitchInt loop headers reached
+    /// by more than one back-edge — unstructurable for WGSL (see below).
     fn detect_loops_and_build_info(
         body: &Body,
     ) -> (
         std::collections::HashSet<crate::mir::BasicBlock>,
         std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
+        std::collections::HashSet<crate::mir::BasicBlock>,
         std::collections::HashSet<crate::mir::BasicBlock>,
     ) {
         let mut headers = std::collections::HashSet::new();
@@ -701,68 +729,83 @@ impl<'a> BodyEmitter<'a> {
             &mut latches,
         );
 
-        // Build LoopInfo for each header.
+        // Classify each back-edge target as a structured loop, an unstructurable
+        // multi-latch loop, or an invalid (non-SwitchInt) header.
         let mut loop_info = std::collections::HashMap::new();
+        let mut multi_latch_headers = std::collections::HashSet::new();
+        let mut invalid_headers = std::collections::HashSet::new();
         for header in &headers {
-            if let Some(header_block) = body.basic_blocks.get(header.0) {
-                if let Some(term) = &header_block.terminator {
-                    if let TerminatorKind::SwitchInt {
-                        targets, otherwise, ..
-                    } = &term.kind
-                    {
-                        if targets.len() == 1
-                            && targets[0].0 == crate::mir::Discriminant::bool_true()
-                        {
-                            let body_entry = targets[0].1;
-                            let exit = *otherwise;
-                            let latch_set = latches.get(header).cloned().unwrap_or_default();
-
-                            // Determine if this is a for-loop or while-loop.
-                            let (continuing, continue_target) = if latch_set.len() == 1 {
-                                if let Some(&latch) = latch_set.iter().next() {
-                                    if latch == body_entry {
-                                        // Single latch == body_entry => while-loop style.
-                                        (None, *header)
-                                    } else {
-                                        // Single latch != body_entry => for-loop style.
-                                        (Some(latch), latch)
-                                    }
-                                } else {
-                                    // len() == 1 but iter().next() is None: impossible but fallback.
-                                    (None, *header)
-                                }
-                            } else {
-                                // Multiple or zero latches => while-loop style.
-                                (None, *header)
-                            };
-
-                            loop_info.insert(
-                                *header,
-                                LoopInfo {
-                                    exit,
-                                    body_entry,
-                                    continuing,
-                                    continue_target,
-                                },
-                            );
-                        }
-                    }
+            let latch_set = latches.get(header).cloned().unwrap_or_default();
+            match Self::classify_loop_header(*header, body, &latch_set) {
+                HeaderClass::Loop(info) => {
+                    loop_info.insert(*header, info);
+                }
+                HeaderClass::MultiLatch => {
+                    multi_latch_headers.insert(*header);
+                }
+                HeaderClass::Invalid => {
+                    invalid_headers.insert(*header);
                 }
             }
         }
 
-        // Identify invalid headers: back-edges to blocks that are not proper SwitchInt loop headers.
-        let mut invalid_headers = std::collections::HashSet::new();
-        for header in &headers {
-            if !loop_info.contains_key(header) {
-                invalid_headers.insert(*header);
-            }
-        }
-
-        // Remove invalid headers so they are not treated as loops.
+        // Keep only compilable loop headers; invalid and multi-latch headers are
+        // reported separately and are not treated as loops.
         headers.retain(|h| loop_info.contains_key(h));
 
-        (headers, loop_info, invalid_headers)
+        (headers, loop_info, invalid_headers, multi_latch_headers)
+    }
+
+    /// Classify a back-edge target block. A header is a structured loop only if
+    /// its terminator is a `SwitchInt` with a single `bool_true` target (the body
+    /// entry) and it has at most one latch. A header with more than one latch is
+    /// unstructurable for WGSL: its single continuing block cannot carry a
+    /// for-loop's increment for more than one back-edge, so a `continue` would
+    /// skip that increment. (Miri's current lowering never emits this — a
+    /// `continue` routes through the one increment latch — so the multi-latch arm
+    /// is a defensive guard against a future lowering change.)
+    fn classify_loop_header(
+        header: crate::mir::BasicBlock,
+        body: &Body,
+        latch_set: &std::collections::HashSet<crate::mir::BasicBlock>,
+    ) -> HeaderClass {
+        let Some(header_block) = body.basic_blocks.get(header.0) else {
+            return HeaderClass::Invalid;
+        };
+        let Some(term) = &header_block.terminator else {
+            return HeaderClass::Invalid;
+        };
+        let TerminatorKind::SwitchInt {
+            targets, otherwise, ..
+        } = &term.kind
+        else {
+            return HeaderClass::Invalid;
+        };
+        if targets.len() != 1 || targets[0].0 != crate::mir::Discriminant::bool_true() {
+            return HeaderClass::Invalid;
+        }
+
+        let body_entry = targets[0].1;
+        let exit = *otherwise;
+        if latch_set.len() > 1 {
+            return HeaderClass::MultiLatch;
+        }
+
+        // A single latch distinct from the body entry is a for-loop's increment
+        // (the continuing block); otherwise (latch == body_entry, or the header
+        // has no recorded latch) the loop is while-style and continues at the
+        // header itself.
+        let (continuing, continue_target) = match latch_set.iter().next() {
+            Some(&latch) if latch != body_entry => (Some(latch), latch),
+            _ => (None, header),
+        };
+
+        HeaderClass::Loop(LoopInfo {
+            exit,
+            body_entry,
+            continuing,
+            continue_target,
+        })
     }
 
     /// Depth-first search for loop back-edges using an explicit worklist rather
@@ -2285,7 +2328,8 @@ mod tests {
         }
         body.basic_blocks.push(return_block());
 
-        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+        let (headers, loop_info, invalid, multi_latch) =
+            BodyEmitter::detect_loops_and_build_info(&body);
 
         assert!(
             headers.is_empty(),
@@ -2295,6 +2339,10 @@ mod tests {
         assert!(
             invalid.is_empty(),
             "acyclic chain must have no invalid headers"
+        );
+        assert!(
+            multi_latch.is_empty(),
+            "acyclic chain must have no multi-latch headers"
         );
     }
 
@@ -2318,11 +2366,16 @@ mod tests {
             .push(goto_block(crate::mir::BasicBlock(0)));
         body.basic_blocks.push(return_block());
 
-        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+        let (headers, loop_info, invalid, multi_latch) =
+            BodyEmitter::detect_loops_and_build_info(&body);
 
         assert_eq!(headers.len(), 1, "one loop header expected");
         assert!(headers.contains(&crate::mir::BasicBlock(0)));
         assert!(invalid.is_empty(), "header is a valid SwitchInt loop");
+        assert!(
+            multi_latch.is_empty(),
+            "single-latch loop is not multi-latch"
+        );
 
         let info = loop_info
             .get(&crate::mir::BasicBlock(0))
@@ -2345,7 +2398,8 @@ mod tests {
         body.basic_blocks
             .push(goto_block(crate::mir::BasicBlock(1)));
 
-        let (headers, loop_info, invalid) = BodyEmitter::detect_loops_and_build_info(&body);
+        let (headers, loop_info, invalid, multi_latch) =
+            BodyEmitter::detect_loops_and_build_info(&body);
 
         assert!(
             headers.is_empty(),
@@ -2358,6 +2412,91 @@ mod tests {
         assert!(
             invalid.contains(&crate::mir::BasicBlock(1)),
             "self back-edge to a Goto block is an invalid header"
+        );
+        assert!(
+            multi_latch.is_empty(),
+            "a single self back-edge is not multi-latch"
+        );
+    }
+
+    /// A `SwitchInt` header reached by two distinct back-edges (two latches)
+    /// cannot be structured for WGSL: only one latch can be the `continuing`
+    /// block, so a `continue` would skip a for-loop's increment. It is reported
+    /// as a multi-latch header — not a valid loop, not an invalid header.
+    #[test]
+    fn test_back_edges_multi_latch_reported() {
+        // bb0: header  SwitchInt(true -> bb1, otherwise -> bb4)
+        // bb1: inner   SwitchInt(true -> bb2, otherwise -> bb3)
+        // bb2: latch A Goto -> bb0   (back-edge)
+        // bb3: latch B Goto -> bb0   (back-edge)
+        // bb4: exit    Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks.push(loop_header_block(
+            crate::mir::BasicBlock(1),
+            crate::mir::BasicBlock(4),
+        ));
+        body.basic_blocks.push(loop_header_block(
+            crate::mir::BasicBlock(2),
+            crate::mir::BasicBlock(3),
+        ));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(0)));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(0)));
+        body.basic_blocks.push(return_block());
+
+        let (headers, loop_info, invalid, multi_latch) =
+            BodyEmitter::detect_loops_and_build_info(&body);
+
+        assert!(
+            multi_latch.contains(&crate::mir::BasicBlock(0)),
+            "header with two latches must be reported as multi-latch"
+        );
+        assert!(
+            !headers.contains(&crate::mir::BasicBlock(0)),
+            "a multi-latch header is not a compilable loop header"
+        );
+        assert!(
+            !loop_info.contains_key(&crate::mir::BasicBlock(0)),
+            "no LoopInfo is built for a multi-latch header"
+        );
+        assert!(
+            !invalid.contains(&crate::mir::BasicBlock(0)),
+            "a multi-latch header is distinct from an invalid (non-SwitchInt) header"
+        );
+    }
+
+    /// Constructing a `BodyEmitter` over a multi-latch loop fails with an
+    /// actionable diagnostic naming the offending header, rather than silently
+    /// misclassifying the loop as while-style (which would drop the increment).
+    #[test]
+    fn test_multi_latch_loop_rejected_by_new() {
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks.push(loop_header_block(
+            crate::mir::BasicBlock(1),
+            crate::mir::BasicBlock(4),
+        ));
+        body.basic_blocks.push(loop_header_block(
+            crate::mir::BasicBlock(2),
+            crate::mir::BasicBlock(3),
+        ));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(0)));
+        body.basic_blocks
+            .push(goto_block(crate::mir::BasicBlock(0)));
+        body.basic_blocks.push(return_block());
+
+        let mut output = String::new();
+        let mut source_map = Vec::new();
+        let result = BodyEmitter::new(&body, &[], [256, 1, 1], &mut output, &mut source_map);
+
+        let msg = match result {
+            Ok(_) => panic!("multi-latch loop must be rejected"),
+            Err(e) => format!("{e:?}"),
+        };
+        assert!(
+            msg.contains("multiple latches") && msg.contains("bb0"),
+            "diagnostic must name the multi-latch header, got: {msg}"
         );
     }
 }
