@@ -1010,6 +1010,16 @@ impl<'a> FunctionTranslator<'a> {
             return builder.ins().fabs(val);
         }
         // Integer abs: (x ^ (x >> (bits-1))) - (x >> (bits-1))
+        //
+        // For the most-negative value (e.g. `i64::MIN`, whose magnitude has no
+        // representable positive counterpart) this wraps back to that same value:
+        // `x >> 63` is all-ones (-1), so `x ^ -1` is `!MIN == MAX`, and
+        // `MAX - (-1) == MAX + 1` overflows two's-complement back to `MIN`.
+        // This is deliberate: the result stays in range and is bit-identical to
+        // the platform `abs`/WGSL `abs` builtin (see `math_intrinsic_name`), so
+        // CPU and GPU agree. It is correct-by-semantics (defined two's-complement
+        // wrap), not by mathematics (|MIN| is not representable). Callers that need
+        // the mathematically-correct magnitude must widen before taking `abs`.
         let shift = ty.bits() - 1;
         let sign_mask = builder.ins().sshr_imm(val, shift as i64);
         let xor = builder.ins().bxor(val, sign_mask);

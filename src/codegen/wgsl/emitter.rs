@@ -1907,6 +1907,10 @@ fn unop_symbol(op: UnOp) -> Result<&'static str, CodegenError> {
 
 fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
     match intrinsic {
+        // WGSL `abs` of the most-negative signed integer (e.g. `i32::MIN`) wraps
+        // back to that same value, matching the CPU bit-twiddle in the Cranelift
+        // backend's `emit_math_abs` — both are correct-by-semantics two's-complement
+        // wrap, not by mathematics (|MIN| is not representable). CPU and GPU agree.
         MathIntrinsic::Abs => "abs",
         MathIntrinsic::Min => "min",
         MathIntrinsic::Max => "max",
