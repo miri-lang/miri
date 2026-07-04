@@ -49,6 +49,109 @@ fn main()
 }
 
 #[test]
+fn method_element_at_cross_read_from_host_is_rejected() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    let v = arr.element_at(1)
+",
+        "cannot call method 'element_at' on gpu-resident",
+    );
+}
+
+#[test]
+fn method_contains_cross_read_from_host_is_rejected() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    let found = arr.contains(10)
+",
+        "cannot call method 'contains' on gpu-resident",
+    );
+}
+
+#[test]
+fn method_index_of_cross_read_from_host_is_rejected() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    let idx = arr.index_of(9)
+",
+        "cannot call method 'index_of' on gpu-resident",
+    );
+}
+
+#[test]
+fn method_set_host_write_is_rejected() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    arr.set(0, 99)
+",
+        "cannot call method 'set' on gpu-resident",
+    );
+}
+
+#[test]
+fn method_cross_read_diagnostic_proposes_readback_fixit() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    let v = arr.element_at(0)
+",
+        "let h = arr",
+    );
+}
+
+#[test]
+fn method_length_on_gpu_resident_is_allowed() {
+    // `.length()` reads only compile-time array metadata, never the buffer, so
+    // it stays legal from host context (whitelisted alongside slice/reduce).
+    assert_type_checks(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    let n = arr.length()
+",
+    );
+}
+
+#[test]
 fn host_element_read_is_allowed() {
     assert_type_checks(
         "
