@@ -602,6 +602,13 @@ struct BodyEmitter<'a> {
     indent: usize,
     /// Blocks that are loop headers (targets of back-edges).
     loop_headers: HashSet<BasicBlock>,
+    /// Per-block forward reachability, precomputed once. `reachability[b.0]` is
+    /// the set of blocks reachable from `b` by forward edges without traversing
+    /// *through* a loop header (a header may still be an endpoint). This turns
+    /// the per-`if` `forward_reachable`/`find_merge` queries from O(blocks²) BFS
+    /// into O(1) set lookups. Indexed by `BasicBlock.0`; empty for the
+    /// render-place unit tests that never emit control flow.
+    reachability: Vec<HashSet<BasicBlock>>,
     /// Per-header loop info (exit, body_entry, continuing, continue_target).
     loop_info: HashMap<BasicBlock, LoopInfo>,
     /// Stack of active loop frames for break/continue resolution.
@@ -648,6 +655,8 @@ impl<'a> BodyEmitter<'a> {
             )));
         }
 
+        let reachability = Self::compute_reachability(body, &loop_headers);
+
         Ok(Self {
             body,
             bindings,
@@ -658,10 +667,59 @@ impl<'a> BodyEmitter<'a> {
             map_line: 1,
             indent: 1,
             loop_headers,
+            reachability,
             loop_info,
             loop_stack: Vec::new(),
             return_local: None,
         })
+    }
+
+    /// Precompute, for every block, the set of blocks forward-reachable from it
+    /// under the same rules `forward_reachable` used to walk on demand: follow
+    /// terminator successors, never traverse *through* a loop header, but treat
+    /// a header reached directly as a valid endpoint. Runs one BFS per block
+    /// (O(blocks·(blocks+edges)) once) so each later `if`/merge query is an O(1)
+    /// set lookup instead of an O(blocks²) walk.
+    fn compute_reachability(
+        body: &Body,
+        loop_headers: &HashSet<BasicBlock>,
+    ) -> Vec<HashSet<BasicBlock>> {
+        (0..body.basic_blocks.len())
+            .map(|i| Self::reachable_from(body, loop_headers, BasicBlock(i)))
+            .collect()
+    }
+
+    /// The forward-reachability set of a single `source`. A block is included if
+    /// it equals `source` or is a successor of any node reachable from `source`
+    /// via non-loop-header intermediates — matching the old on-demand BFS exactly.
+    fn reachable_from(
+        body: &Body,
+        loop_headers: &HashSet<BasicBlock>,
+        source: BasicBlock,
+    ) -> HashSet<BasicBlock> {
+        let mut reachable = HashSet::new();
+        reachable.insert(source);
+
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(source);
+        visited.insert(source);
+
+        while let Some(bb) = queue.pop_front() {
+            if let Some(block) = body.basic_blocks.get(bb.0) {
+                if let Some(term) = &block.terminator {
+                    for succ in Self::terminator_successors(&term.kind) {
+                        reachable.insert(succ);
+                        // Don't traverse through loop back-edges.
+                        if !loop_headers.contains(&succ) && !visited.contains(&succ) {
+                            visited.insert(succ);
+                            queue.push_back(succ);
+                        }
+                    }
+                }
+            }
+        }
+        reachable
     }
 
     /// The 1-based WGSL line the next byte written to `output` will land on.
@@ -1159,33 +1217,13 @@ impl<'a> BodyEmitter<'a> {
 
     /// Check if `target` is forward-reachable from `source` without crossing loop back-edges.
     /// Returns true if a path exists from source to target following only forward edges.
+    /// Backed by the reachability sets precomputed in [`Self::compute_reachability`];
+    /// a `source` outside the block range (no precomputed set) is reachable only to itself.
     fn forward_reachable(&self, source: BasicBlock, target: BasicBlock) -> bool {
-        if source == target {
-            return true;
+        match self.reachability.get(source.0) {
+            Some(set) => set.contains(&target),
+            None => source == target,
         }
-        let mut visited = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(source);
-        visited.insert(source);
-
-        while let Some(bb) = queue.pop_front() {
-            if let Some(block) = self.body.basic_blocks.get(bb.0) {
-                if let Some(term) = &block.terminator {
-                    let successors = Self::terminator_successors(&term.kind);
-                    for succ in successors {
-                        if succ == target {
-                            return true;
-                        }
-                        // Don't cross loop back-edges.
-                        if !self.loop_headers.contains(&succ) && !visited.contains(&succ) {
-                            visited.insert(succ);
-                            queue.push_back(succ);
-                        }
-                    }
-                }
-            }
-        }
-        false
     }
 
     /// Find the nearest block reachable from BOTH `a` and `b` by forward edges.
@@ -2111,6 +2149,7 @@ mod tests {
             map_line: 1,
             indent: 0,
             loop_headers: HashSet::new(),
+            reachability: Vec::new(),
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
@@ -2170,6 +2209,7 @@ mod tests {
             map_line: 1,
             indent: 0,
             loop_headers: HashSet::new(),
+            reachability: Vec::new(),
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
@@ -2228,6 +2268,7 @@ mod tests {
             map_line: 1,
             indent: 0,
             loop_headers: HashSet::new(),
+            reachability: Vec::new(),
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
@@ -2520,5 +2561,98 @@ mod tests {
             msg.contains("multiple latches") && msg.contains("bb0"),
             "diagnostic must name the multi-latch header, got: {msg}"
         );
+    }
+
+    /// A plain-if shape: the then-block falls through to the otherwise-block, so
+    /// `then` is forward-reachable to `otherwise` (the emitter picks a plain
+    /// `if`, no `else`). Pins the precomputed reachability against the old BFS.
+    #[test]
+    fn test_forward_reachable_then_reaches_otherwise() {
+        // bb0: SwitchInt(true -> bb1, otherwise -> bb2)
+        // bb1: Goto -> bb2   (then falls through to the merge)
+        // bb2: Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(1), BasicBlock(2)));
+        body.basic_blocks.push(goto_block(BasicBlock(2)));
+        body.basic_blocks.push(return_block());
+
+        let mut out = String::new();
+        let mut map = Vec::new();
+        let em = BodyEmitter::new(&body, &[], [256, 1, 1], &mut out, &mut map)
+            .expect("acyclic body must build");
+
+        assert!(em.forward_reachable(BasicBlock(1), BasicBlock(2)));
+        assert!(em.forward_reachable(BasicBlock(2), BasicBlock(2)));
+        assert!(!em.forward_reachable(BasicBlock(2), BasicBlock(1)));
+    }
+
+    /// An if-else diamond: neither branch reaches the other, and both converge on
+    /// a shared merge block — `find_merge` must return that block.
+    #[test]
+    fn test_find_merge_diamond() {
+        // bb0: SwitchInt(true -> bb1, otherwise -> bb2)
+        // bb1: Goto -> bb3 ; bb2: Goto -> bb3 ; bb3: Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(1), BasicBlock(2)));
+        body.basic_blocks.push(goto_block(BasicBlock(3)));
+        body.basic_blocks.push(goto_block(BasicBlock(3)));
+        body.basic_blocks.push(return_block());
+
+        let mut out = String::new();
+        let mut map = Vec::new();
+        let em = BodyEmitter::new(&body, &[], [256, 1, 1], &mut out, &mut map)
+            .expect("acyclic body must build");
+
+        assert!(!em.forward_reachable(BasicBlock(1), BasicBlock(2)));
+        assert_eq!(
+            em.find_merge(BasicBlock(1), BasicBlock(2)),
+            Some(BasicBlock(3))
+        );
+    }
+
+    /// Diverging branches that both `Return` share no forward-reachable block, so
+    /// `find_merge` returns `None` (the emitter ends the region there).
+    #[test]
+    fn test_find_merge_diverging_returns_none() {
+        // bb0: SwitchInt(true -> bb1, otherwise -> bb2) ; bb1: Return ; bb2: Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(1), BasicBlock(2)));
+        body.basic_blocks.push(return_block());
+        body.basic_blocks.push(return_block());
+
+        let mut out = String::new();
+        let mut map = Vec::new();
+        let em = BodyEmitter::new(&body, &[], [256, 1, 1], &mut out, &mut map)
+            .expect("acyclic body must build");
+
+        assert_eq!(em.find_merge(BasicBlock(1), BasicBlock(2)), None);
+    }
+
+    /// Reachability never traverses *through* a loop header, but a header reached
+    /// directly is a valid endpoint. From the latch, the header (bb0) is reachable
+    /// as an endpoint, yet the post-loop exit (bb2) behind it is not.
+    #[test]
+    fn test_forward_reachable_stops_at_loop_header() {
+        // bb0: header SwitchInt(true -> bb1, otherwise -> bb2)
+        // bb1: latch  Goto -> bb0   (back-edge)
+        // bb2: Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(1), BasicBlock(2)));
+        body.basic_blocks.push(goto_block(BasicBlock(0)));
+        body.basic_blocks.push(return_block());
+
+        let mut out = String::new();
+        let mut map = Vec::new();
+        let em = BodyEmitter::new(&body, &[], [256, 1, 1], &mut out, &mut map)
+            .expect("single-latch loop must build");
+
+        // bb0 is a direct successor of the latch → reachable endpoint.
+        assert!(em.forward_reachable(BasicBlock(1), BasicBlock(0)));
+        // But traversal does not continue through the header to the loop exit.
+        assert!(!em.forward_reachable(BasicBlock(1), BasicBlock(2)));
     }
 }
