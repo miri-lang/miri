@@ -244,10 +244,6 @@ impl TypeChecker {
     }
 
     fn resolve_module_path(&mut self, path_str: &str, span: Span) -> Option<PathBuf> {
-        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
-
         let current_dir = std::env::current_dir().unwrap_or_default();
         let project_root = self
             .source_dir
@@ -260,10 +256,20 @@ impl TypeChecker {
                 vec![(project_root.clone(), project_root.join(&relative_path))]
             } else {
                 let relative_path = path_str.replace('.', "/") + ".mi";
-                vec![
-                    (stdlib_base.clone(), stdlib_base.join(&relative_path)),
-                    (current_dir.clone(), current_dir.join(&relative_path)),
-                ]
+                let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
+                let exe_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(Path::to_path_buf));
+                let mut locations: Vec<(PathBuf, PathBuf)> =
+                    stdlib_search_roots(env_override, exe_dir.as_deref())
+                        .into_iter()
+                        .map(|base| {
+                            let loc = base.join(&relative_path);
+                            (base, loc)
+                        })
+                        .collect();
+                locations.push((current_dir.clone(), current_dir.join(&relative_path)));
+                locations
             };
 
         for (base, loc) in possible_locations {
@@ -851,5 +857,89 @@ impl TypeChecker {
             }
         }
         None
+    }
+}
+
+/// Ordered stdlib search roots, highest priority first, so the compiler
+/// locates `system.*` modules whether it runs from the repo root during
+/// development or as an installed binary invoked from an arbitrary directory.
+///
+/// The first existing root that contains the requested module wins:
+/// 1. `MIRI_STDLIB_PATH` override, when set.
+/// 2. `src/stdlib` relative to the current directory (in-repo development).
+/// 3. Roots derived from the compiler binary's own location, covering both a
+///    binary shipped with a sibling `stdlib/` directory and the common
+///    `<prefix>/bin/miri` + `<prefix>/{lib,share}/miri/stdlib` install layouts.
+///
+/// Deriving from the binary location (rather than the current directory) is
+/// what lets an installed `miri` resolve the stdlib from any working directory.
+fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(base) = env_override {
+        roots.push(base);
+    }
+    roots.push(PathBuf::from("src/stdlib"));
+    if let Some(dir) = exe_dir {
+        roots.push(dir.join("stdlib"));
+        if let Some(prefix) = dir.parent() {
+            roots.push(prefix.join("lib").join("miri").join("stdlib"));
+            roots.push(prefix.join("share").join("miri").join("stdlib"));
+        }
+    }
+    roots
+}
+
+#[cfg(test)]
+mod stdlib_search_root_tests {
+    use super::stdlib_search_roots;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn repo_relative_root_present_without_env_or_exe() {
+        let roots = stdlib_search_roots(None, None);
+        assert_eq!(roots, vec![PathBuf::from("src/stdlib")]);
+    }
+
+    #[test]
+    fn env_override_takes_priority() {
+        let roots = stdlib_search_roots(Some(PathBuf::from("/custom/stdlib")), None);
+        assert_eq!(roots.first(), Some(&PathBuf::from("/custom/stdlib")));
+        // The repo-relative fallback is still appended after the override.
+        assert!(roots.contains(&PathBuf::from("src/stdlib")));
+    }
+
+    #[test]
+    fn exe_dir_yields_sibling_and_install_prefix_roots() {
+        let roots = stdlib_search_roots(None, Some(Path::new("/opt/miri/bin")));
+        assert!(roots.contains(&PathBuf::from("/opt/miri/bin/stdlib")));
+        assert!(roots.contains(&PathBuf::from("/opt/miri/lib/miri/stdlib")));
+        assert!(roots.contains(&PathBuf::from("/opt/miri/share/miri/stdlib")));
+    }
+
+    #[test]
+    fn priority_order_env_then_repo_then_install() {
+        let roots = stdlib_search_roots(
+            Some(PathBuf::from("/env/stdlib")),
+            Some(Path::new("/opt/miri/bin")),
+        );
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/env/stdlib"),
+                PathBuf::from("src/stdlib"),
+                PathBuf::from("/opt/miri/bin/stdlib"),
+                PathBuf::from("/opt/miri/lib/miri/stdlib"),
+                PathBuf::from("/opt/miri/share/miri/stdlib"),
+            ]
+        );
+    }
+
+    #[test]
+    fn exe_dir_at_filesystem_root_has_no_prefix_roots() {
+        // A binary directly at `/` has no parent prefix; only the sibling
+        // `stdlib` root is derivable, never a panic.
+        let roots = stdlib_search_roots(None, Some(Path::new("/")));
+        assert!(roots.contains(&PathBuf::from("/stdlib")));
+        assert!(!roots.iter().any(|r| r.ends_with("lib/miri/stdlib")));
     }
 }
