@@ -230,6 +230,38 @@ impl BuiltinCollectionKind {
     }
 }
 
+/// Canonical mapping from a primitive type's source spelling to its `TypeKind`.
+///
+/// This is the single source of truth for the primitive-name table shared by
+/// the parser (`type_name_to_type`), collection element-type resolution
+/// (`resolve_element_type_kind`), and GPU buffer-init scalar inference. Any
+/// caller that needs "does this identifier name a primitive scalar/string type"
+/// routes here rather than re-listing the names.
+pub fn primitive_type_kind(name: &str) -> Option<TypeKind> {
+    let kind = match name {
+        "int" => TypeKind::Int,
+        "i8" => TypeKind::I8,
+        "i16" => TypeKind::I16,
+        "i32" => TypeKind::I32,
+        "i64" => TypeKind::I64,
+        "i128" => TypeKind::I128,
+        "u8" => TypeKind::U8,
+        "u16" => TypeKind::U16,
+        "u32" => TypeKind::U32,
+        "u64" => TypeKind::U64,
+        "u128" => TypeKind::U128,
+        "float" => TypeKind::Float,
+        "f16" => TypeKind::F16,
+        "f32" => TypeKind::F32,
+        "f64" => TypeKind::F64,
+        "bool" => TypeKind::Boolean,
+        "RawPtr" => TypeKind::RawPtr,
+        n if n == STRING_TYPE_NAME => TypeKind::String,
+        _ => return None,
+    };
+    Some(kind)
+}
+
 /// Resolves a type expression to a `TypeKind`, covering forms produced by the
 /// pipeline: a `Type(...)` node (post-normalization), a bare identifier, or a
 /// literal identifier.
@@ -247,23 +279,7 @@ pub fn resolve_element_type_kind(expr: &crate::ast::expression::Expression) -> O
         ExpressionKind::Literal(Literal::Identifier(name)) => name.as_str(),
         _ => return None,
     };
-    match name {
-        "int" => Some(TypeKind::Int),
-        "i64" => Some(TypeKind::I64),
-        "i32" => Some(TypeKind::I32),
-        "i16" => Some(TypeKind::I16),
-        "i8" => Some(TypeKind::I8),
-        "u64" => Some(TypeKind::U64),
-        "u32" => Some(TypeKind::U32),
-        "u16" => Some(TypeKind::U16),
-        "u8" => Some(TypeKind::U8),
-        "i128" => Some(TypeKind::I128),
-        "u128" => Some(TypeKind::U128),
-        "f16" => Some(TypeKind::F16),
-        "f32" => Some(TypeKind::F32),
-        "f64" => Some(TypeKind::F64),
-        _ => None,
-    }
+    primitive_type_kind(name)
 }
 
 /// Data for a function type, boxed to reduce `TypeKind` enum size.

@@ -3,7 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::types::{
-    BuiltinCollectionKind, FunctionTypeData, Type, TypeKind, RESULT_TYPE_NAME, STRING_TYPE_NAME,
+    primitive_type_kind, BuiltinCollectionKind, FunctionTypeData, Type, TypeKind, RESULT_TYPE_NAME,
     TUPLE_TYPE_NAME,
 };
 use crate::ast::*;
@@ -13,31 +13,6 @@ use crate::lexer::Token;
 use super::Parser;
 
 const FUTURE_TYPE_NAME: &str = "Future";
-
-fn primitive_type_kind(name: &str) -> Option<TypeKind> {
-    let kind = match name {
-        "int" => TypeKind::Int,
-        "i8" => TypeKind::I8,
-        "i16" => TypeKind::I16,
-        "i32" => TypeKind::I32,
-        "i64" => TypeKind::I64,
-        "i128" => TypeKind::I128,
-        "u8" => TypeKind::U8,
-        "u16" => TypeKind::U16,
-        "u32" => TypeKind::U32,
-        "u64" => TypeKind::U64,
-        "u128" => TypeKind::U128,
-        "float" => TypeKind::Float,
-        "f16" => TypeKind::F16,
-        "f32" => TypeKind::F32,
-        "f64" => TypeKind::F64,
-        "bool" => TypeKind::Boolean,
-        "RawPtr" => TypeKind::RawPtr,
-        n if n == STRING_TYPE_NAME => TypeKind::String,
-        _ => return None,
-    };
-    Some(kind)
-}
 
 impl<'source> Parser<'source> {
     /*

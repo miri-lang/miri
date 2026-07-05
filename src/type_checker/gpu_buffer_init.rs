@@ -15,7 +15,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::operator::BinaryOp;
 use crate::ast::statement::{BindingResidency, Statement, StatementKind};
-use crate::ast::types::{wgsl_scalar_name, BuiltinCollectionKind, TypeKind};
+use crate::ast::types::{primitive_type_kind, wgsl_scalar_name, BuiltinCollectionKind, TypeKind};
 use crate::ast::Program;
 
 use super::TypeChecker;
@@ -174,23 +174,8 @@ fn infer_sized_array_elem_type(func_expr: &Expression) -> String {
 }
 
 fn scalar_name_from_identifier(type_name: &str) -> String {
-    let kind = match type_name {
-        "int" => Some(TypeKind::Int),
-        "i8" => Some(TypeKind::I8),
-        "i16" => Some(TypeKind::I16),
-        "i32" => Some(TypeKind::I32),
-        "i64" => Some(TypeKind::I64),
-        "u8" => Some(TypeKind::U8),
-        "u16" => Some(TypeKind::U16),
-        "u32" => Some(TypeKind::U32),
-        "u64" => Some(TypeKind::U64),
-        "f16" => Some(TypeKind::F16),
-        "f32" => Some(TypeKind::F32),
-        "float" => Some(TypeKind::Float),
-        "f64" => Some(TypeKind::F64),
-        _ => None,
-    };
-    kind.and_then(|k| wgsl_scalar_name(&k))
+    primitive_type_kind(type_name)
+        .and_then(|k| wgsl_scalar_name(&k))
         .map(|s| s.to_string())
         .unwrap_or_else(|| "i32".to_string())
 }

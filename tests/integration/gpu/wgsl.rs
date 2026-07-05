@@ -173,6 +173,110 @@ fn main()
         );
     }
 
+    /// A bare float literal defaults to `f32`, but multiplying an `f16` buffer
+    /// element by one narrows the literal to `f16` so the kernel stays within a
+    /// single scalar width. The emitted shader must be naga-valid.
+    #[test]
+    fn f16_buffer_scaled_by_float_literal_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * 2.0
+",
+        );
+    }
+
+    /// The narrowed literal renders with the WGSL `f16` suffix (`2.0h`), not a
+    /// bare `f32` literal — otherwise naga would reject the `f16 * f32` mix.
+    #[test]
+    fn f16_float_literal_renders_with_f16_suffix() {
+        let wgsl = super::super::helpers::compile_to_wgsl(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * 2.0
+",
+        );
+        assert!(
+            wgsl.contains("2.0h"),
+            "f16 * float-literal must emit an f16-suffixed literal, got:\n{}",
+            wgsl
+        );
+    }
+
+    /// Narrowing is symmetric: the literal narrows whether it is the left or the
+    /// right operand (`2.0 * a[i]` as well as `a[i] * 2.0`).
+    #[test]
+    fn f16_float_literal_on_left_narrows() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = 2.0 * a[i]
+",
+        );
+    }
+
+    /// A unary-negated float literal (`-2.0`) still narrows to `f16` through the
+    /// unary wrapper, rendering the `f16` suffix on the literal.
+    #[test]
+    fn f16_negated_float_literal_narrows() {
+        let wgsl = super::super::helpers::compile_to_wgsl(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * -2.0
+",
+        );
+        assert!(
+            wgsl.contains("2.0h"),
+            "negated f16 float-literal must emit an f16-suffixed literal, got:\n{}",
+            wgsl
+        );
+    }
+
+    /// The narrowing is literal-only: a genuine `f32` buffer element against an
+    /// `f16` element is a scalar-width mismatch and must be rejected, not
+    /// silently narrowed (which would lose precision on a runtime value).
+    #[test]
+    fn f16_times_f32_buffer_is_rejected() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = Array<f16, 4>()
+    gpu let b = Array<f32, 4>()
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = a[i] * b[i]
+",
+            "not compatible",
+        );
+    }
+
     /// `f16` has no host (Cranelift) representation, so a plain host `let`
     /// carrying it — here a host `Array<f16, 4>` — is rejected at the type
     /// checker rather than reaching CPU codegen.
