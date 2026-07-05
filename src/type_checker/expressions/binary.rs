@@ -50,6 +50,15 @@ use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
+/// True for the numeric arithmetic operators (`+`, `-`, `*`, `/`, `%`) — the
+/// operators over which an `f16` operand narrows a bare float literal.
+fn is_arithmetic_op(op: &BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+    )
+}
+
 impl TypeChecker {
     /// Infers the type of a binary operation.
     ///
@@ -89,12 +98,69 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         }
 
+        // A bare float literal defaults to `f32`/`f64`, so `f16_elem * 2.0` would
+        // otherwise fail as a scalar-width mismatch. Narrow the literal operand to
+        // `f16` (retyping it so MIR/WGSL render the `2.0h` suffix) and keep the
+        // result `f16`. Narrowing is literal-only — a genuine `f32` value stays a
+        // mismatch, since silently narrowing a runtime value would lose precision.
+        if is_arithmetic_op(op) {
+            if let Some(narrowed) = self.narrow_f16_float_literal(&left_ty, left, &right_ty, right)
+            {
+                return narrowed;
+            }
+        }
+
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {
                 self.report_error(msg, span);
                 ast_factory::make_type(TypeKind::Error)
             }
+        }
+    }
+
+    /// Narrows a bare float literal operand to `f16` when the other operand is
+    /// `f16`, returning the `f16` result type. Only one operand may be `f16` for
+    /// narrowing to apply — two `f16` operands need no narrowing, and a genuine
+    /// non-`f16` float value (a buffer element, a binding) is left to the normal
+    /// compatibility check, which rejects the scalar-width mismatch.
+    fn narrow_f16_float_literal(
+        &mut self,
+        left_ty: &Type,
+        left: &Expression,
+        right_ty: &Type,
+        right: &Expression,
+    ) -> Option<Type> {
+        let left_f16 = matches!(left_ty.kind, TypeKind::F16);
+        let right_f16 = matches!(right_ty.kind, TypeKind::F16);
+        if left_f16 && !right_f16 && self.retype_float_literal_to_f16(right) {
+            return Some(ast_factory::make_type(TypeKind::F16));
+        }
+        if right_f16 && !left_f16 && self.retype_float_literal_to_f16(left) {
+            return Some(ast_factory::make_type(TypeKind::F16));
+        }
+        None
+    }
+
+    /// Records `expr` as `f16` when it is a bare float literal, optionally wrapped
+    /// in a unary `+`/`-`. Retyping the recorded expression type is what makes MIR
+    /// lowering emit an `f16` constant (and thus the WGSL `h` suffix). Returns
+    /// `true` when `expr` was a float literal and was retyped.
+    fn retype_float_literal_to_f16(&mut self, expr: &Expression) -> bool {
+        match &expr.node {
+            ExpressionKind::Literal(Literal::Float(_)) => {
+                self.types
+                    .insert(expr.id, Type::new(TypeKind::F16, expr.span));
+                true
+            }
+            ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand)
+                if self.retype_float_literal_to_f16(operand) =>
+            {
+                self.types
+                    .insert(expr.id, Type::new(TypeKind::F16, expr.span));
+                true
+            }
+            _ => false,
         }
     }
 
