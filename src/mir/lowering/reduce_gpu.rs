@@ -329,6 +329,7 @@ fn emit_void_runtime_call(
             func,
             args,
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

@@ -165,3 +165,130 @@ fn main()
 ",
     );
 }
+
+/// A method-form write `buf.set(index, value)` is checked exactly like a
+/// subscript write: a buffer-derived index is a disguised scatter and rejected.
+#[test]
+fn method_set_at_buffer_derived_index_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu let perm = [3, 2, 1, 0]
+    gpu var out = Array<int, 4>()
+    gpu forall i in 0..4
+        out.set(perm[i], i)
+",
+        "not provably unique per thread",
+    );
+}
+
+/// A nested CPU loop iterates its full range in every `forall` thread, so a
+/// write indexed by the nested-loop variable is written by every thread and
+/// races. It is rejected.
+#[test]
+fn write_indexed_by_nested_loop_variable_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu var out = Array<int, 4>()
+    gpu forall i in 0..4
+        for j in 0..4
+            out[j] = i
+",
+        "not provably unique per thread",
+    );
+}
+
+/// An affine index that mixes the `forall` variable with a nested-loop variable
+/// collides across threads (thread `i`, iteration `j` and thread `i+1`,
+/// iteration `j-1` hit the same element), so it too is rejected.
+#[test]
+fn write_indexed_by_forall_plus_nested_loop_variable_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu var out = Array<int, 8>()
+    gpu forall i in 0..4
+        for j in 0..4
+            out[i + j] = i
+",
+        "not provably unique per thread",
+    );
+}
+
+/// Writing the `forall` element inside a nested loop targets exactly one element
+/// per thread (re-written sequentially by the same thread), so it is allowed.
+#[test]
+fn write_forall_variable_inside_nested_loop_is_allowed() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+
+fn main()
+    gpu var out = Array<int, 4>()
+    gpu forall i in 0..4
+        for j in 0..4
+            out[i] = j
+",
+    );
+}
+
+/// A `gpu fn` explicit-launch kernel whose write is indexed by the per-thread
+/// `kernel.global_idx` is unique per thread and allowed.
+#[test]
+fn kernel_write_indexed_by_global_idx_is_allowed() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.collections.array
+
+gpu fn fill(dst out Array<int, 4>)
+    let i = kernel.global_idx.x
+    dst[i] = i
+
+fn main()
+    gpu var out = Array<int, 4>()
+    fill(out).launch(Dim3(4, 1, 1), Dim3(1, 1, 1))
+",
+    );
+}
+
+/// A `gpu fn` scatter — the write index is read out of another buffer — is not
+/// provably unique per thread and is rejected at the kernel declaration.
+#[test]
+fn kernel_scatter_write_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+use system.collections.array
+
+gpu fn scatter(dst out Array<int, 4>, idx Array<int, 4>)
+    let i = kernel.global_idx.x
+    dst[idx[i]] = i
+",
+        "not provably unique per thread",
+    );
+}
+
+/// A `gpu fn` write whose index divides the thread id folds distinct threads
+/// onto one element and is rejected.
+#[test]
+fn kernel_divided_index_write_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+use system.collections.array
+
+gpu fn fold(dst out Array<int, 4>)
+    let i = kernel.global_idx.x
+    dst[i / 2] = i
+",
+        "not provably unique per thread",
+    );
+}

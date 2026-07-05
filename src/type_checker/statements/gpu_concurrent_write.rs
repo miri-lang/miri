@@ -1,33 +1,54 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Concurrent-write check for `forall` kernel bodies (syntactic baseline).
+//! Concurrent-write check for GPU kernel bodies (syntactic baseline).
 //!
-//! A `forall` launches one thread per index in its range. A write `arr[i] = e`
+//! A GPU kernel launches one thread per index in its range. A write `arr[i] = e`
 //! to a non-atomic gpu buffer is race-free only when `i` is a unique address
 //! per thread. Static race-freedom is undecidable in general, so this pass
 //! applies a conservative syntactic rule: the index must be a literal, a
-//! `forall` variable, or a linear function of `forall` variables (built from
-//! `+`, `-`, `*` over variables and constants). Any other index — a buffer read
-//! used as a subscript (scatter), an integer division/modulo that folds several
-//! threads onto one element, or a call — is rejected as not provably unique.
+//! thread-unique coordinate, or a linear function of thread-unique coordinates
+//! (built from `+`, `-`, `*` over coordinates and constants). Any other index —
+//! a buffer read used as a subscript (scatter), an integer division/modulo that
+//! folds several threads onto one element, a call, or a value that is uniform
+//! across the thread grid — is rejected as not provably unique.
 //!
-//! The rule biases toward "noisy but safe" over "permissive but unsound": some
-//! provably-disjoint indices the checker cannot see are also rejected. The
-//! escape hatch is an atomic element (`Array<Atomic<T>, N>`), whose writes are
-//! race-free by construction and exempt from this pass.
+//! A thread-unique coordinate is a `forall` loop variable (for the `forall`
+//! surface) or any `kernel` context access (`kernel.global_idx.x`,
+//! `kernel.thread_idx.y`, `kernel.block_idx.x`, `kernel.warp.lane_id`, …) for the
+//! explicit-launch `gpu fn` surface. Kernel builtins are scalars, never buffers,
+//! so an index built from them is a coordinate/uniform atom and never a scatter
+//! source. A nested CPU loop variable is *not* thread-unique — every thread runs
+//! the full nested range — so an index that depends on it is rejected.
+//!
+//! Both surfaces route through the same walk. They differ only in how the set of
+//! writable gpu buffers is discovered: the `forall` pass takes the captured
+//! bindings; the `gpu fn` pass takes the buffer-typed parameters.
+//!
+//! Writes are flagged in subscript form (`buf[i] = e`) and in method form
+//! (`buf.set(i, e)`). The rule biases toward "noisy but safe" over "permissive
+//! but unsound": some provably-disjoint indices the checker cannot see are also
+//! rejected. The escape hatch is an atomic element (`Array<Atomic<T>, N>`),
+//! whose writes are race-free by construction and exempt from this pass.
 
 use std::collections::HashSet;
 
 use crate::ast::captures::collect_free_identifiers_excluding;
+use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
 use crate::ast::operator::BinaryOp;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
-use crate::ast::types::{Type, TypeKind, ATOMIC_TYPE_NAME};
+use crate::ast::types::{
+    Type, TypeKind, ATOMIC_TYPE_NAME, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
+};
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::utils::captured_buffer_element;
 use crate::type_checker::TypeChecker;
+
+/// The index-write collection method (`buf.set(index, value)`), the method-form
+/// equivalent of a `buf[index] = value` subscript write.
+const INDEX_SET_METHOD: &str = "set";
 
 impl TypeChecker {
     /// Reject every non-injective write to a captured non-atomic gpu buffer in a
@@ -40,19 +61,38 @@ impl TypeChecker {
         context: &Context,
     ) {
         let loop_vars: HashSet<String> = decls.iter().map(|d| d.name.clone()).collect();
-        let buffers = self.checkable_buffers(body, &loop_vars, context);
+        let buffers = self.captured_checkable_buffers(body, &loop_vars, context);
+        self.check_kernel_body_writes(body, &buffers);
+    }
+
+    /// Reject every non-injective write to a non-atomic buffer parameter in an
+    /// explicit-launch `gpu fn` body. Called once per GPU function after its body
+    /// is type-checked, while the parameters are still resolvable in `context`.
+    /// Thread uniqueness here is carried by `kernel.global_idx`/`thread_idx`
+    /// rather than a `forall` loop variable.
+    pub(crate) fn check_kernel_concurrent_writes(
+        &mut self,
+        params: &[Parameter],
+        body: &Statement,
+        context: &Context,
+    ) {
+        let buffers = self.parameter_checkable_buffers(params, context);
+        self.check_kernel_body_writes(body, &buffers);
+    }
+
+    /// Walk a kernel body and flag each non-injective write to one of `buffers`.
+    fn check_kernel_body_writes(&mut self, body: &Statement, buffers: &HashSet<String>) {
         if buffers.is_empty() {
             return;
         }
-
         let mut buffer_derived: HashSet<String> = HashSet::new();
-        self.walk_writes(body, &buffers, &mut buffer_derived);
+        self.walk_writes(body, buffers, &mut buffer_derived);
     }
 
-    /// The set of captured, non-atomic gpu-buffer names whose element writes
-    /// this pass must validate. Atomic buffers are race-free by construction and
-    /// excluded; body-local declarations (never free in `body`) are excluded.
-    fn checkable_buffers(
+    /// The set of captured, non-atomic gpu-buffer names whose element writes a
+    /// `forall` pass must validate. Atomic buffers are race-free by construction
+    /// and excluded; body-local declarations (never free in `body`) are excluded.
+    fn captured_checkable_buffers(
         &self,
         body: &Statement,
         loop_vars: &HashSet<String>,
@@ -61,20 +101,40 @@ impl TypeChecker {
         let captured = collect_free_identifiers_excluding(body, loop_vars);
         let mut buffers = HashSet::new();
         for name in captured {
-            let Some(info) = context.resolve_info(&name) else {
-                continue;
-            };
-            if let Some(elem) = captured_buffer_element(&info.ty.kind) {
-                if !is_atomic_element(&elem) {
-                    buffers.insert(name);
-                }
+            if self.is_non_atomic_buffer(&name, context) {
+                buffers.insert(name);
             }
         }
         buffers
     }
 
-    /// Walk the body, tracking locals whose value derives from a buffer read (a
-    /// disguised scatter source), and flag each non-injective buffer write.
+    /// The set of non-atomic gpu-buffer parameter names whose element writes a
+    /// `gpu fn` pass must validate. Atomic buffers are excluded.
+    fn parameter_checkable_buffers(
+        &self,
+        params: &[Parameter],
+        context: &Context,
+    ) -> HashSet<String> {
+        let mut buffers = HashSet::new();
+        for param in params {
+            if self.is_non_atomic_buffer(&param.name, context) {
+                buffers.insert(param.name.clone());
+            }
+        }
+        buffers
+    }
+
+    /// True if `name` resolves to a non-atomic gpu-buffer binding in `context`.
+    fn is_non_atomic_buffer(&self, name: &str, context: &Context) -> bool {
+        let Some(info) = context.resolve_info(name) else {
+            return false;
+        };
+        captured_buffer_element(&info.ty.kind).is_some_and(|elem| !is_atomic_element(&elem))
+    }
+
+    /// Walk the body, tracking locals whose value derives from a non-injective
+    /// source (a buffer read, or a nested-loop variable), and flag each
+    /// non-injective buffer write.
     fn walk_writes(
         &mut self,
         stmt: &Statement,
@@ -102,10 +162,31 @@ impl TypeChecker {
             StatementKind::While(_, loop_body, _) => {
                 self.walk_writes(loop_body, buffers, buffer_derived);
             }
-            StatementKind::For(_, _, loop_body) => {
-                self.walk_writes(loop_body, buffers, buffer_derived);
+            StatementKind::For(decls, _, loop_body) => {
+                self.walk_nested_loop(decls, loop_body, buffers, buffer_derived);
             }
             _ => {}
+        }
+    }
+
+    /// Walk a nested CPU loop. Its induction variables are the same across every
+    /// `forall`/kernel thread, so writes indexed by them race; taint them as
+    /// non-injective for the loop body, then restore the outer scope's taint.
+    fn walk_nested_loop(
+        &mut self,
+        decls: &[VariableDeclaration],
+        loop_body: &Statement,
+        buffers: &HashSet<String>,
+        buffer_derived: &mut HashSet<String>,
+    ) {
+        let tainted: Vec<String> = decls
+            .iter()
+            .filter(|d| buffer_derived.insert(d.name.clone()))
+            .map(|d| d.name.clone())
+            .collect();
+        self.walk_writes(loop_body, buffers, buffer_derived);
+        for name in tainted {
+            buffer_derived.remove(&name);
         }
     }
 
@@ -126,35 +207,86 @@ impl TypeChecker {
         }
     }
 
-    /// Flag a non-injective buffer write, and propagate index-derivation taint
-    /// through a plain identifier reassignment.
+    /// Flag a non-injective buffer write — in subscript (`buf[i] = e`) or method
+    /// (`buf.set(i, e)`) form — and propagate index-derivation taint through a
+    /// plain identifier reassignment.
     fn check_write_expression(
         &mut self,
         expr: &Expression,
         buffers: &HashSet<String>,
         buffer_derived: &mut HashSet<String>,
     ) {
-        let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node else {
+        if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
+            self.check_subscript_write(lhs, buffers, buffer_derived, expr.span);
+            self.propagate_reassignment_taint(lhs, rhs, buffer_derived);
+            return;
+        }
+        self.check_method_set_write(expr, buffers, buffer_derived);
+    }
+
+    /// Flag a subscript write `buf[index] = e` when `buf` is a checkable buffer
+    /// and `index` is not provably unique per thread.
+    fn check_subscript_write(
+        &mut self,
+        lhs: &LeftHandSideExpression,
+        buffers: &HashSet<String>,
+        buffer_derived: &HashSet<String>,
+        span: Span,
+    ) {
+        let LeftHandSideExpression::Index(index_expr) = lhs else {
             return;
         };
-
-        if let LeftHandSideExpression::Index(index_expr) = lhs.as_ref() {
-            if let ExpressionKind::Index(base, index) = &index_expr.node {
-                if let ExpressionKind::Identifier(buf, _) = &base.node {
-                    if buffers.contains(buf) && !is_injective_index(index, buffer_derived) {
-                        self.report_concurrent_write(buf, expr.span);
-                    }
-                }
+        let ExpressionKind::Index(base, index) = &index_expr.node else {
+            return;
+        };
+        if let ExpressionKind::Identifier(buf, _) = &base.node {
+            if buffers.contains(buf) && !is_injective_index(index, buffer_derived) {
+                self.report_concurrent_write(buf, span);
             }
         }
+    }
 
-        if let LeftHandSideExpression::Identifier(name_expr) = lhs.as_ref() {
-            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                if is_injective_index(rhs, buffer_derived) {
-                    buffer_derived.remove(name);
-                } else {
-                    buffer_derived.insert(name.clone());
-                }
+    /// Flag a method-form write `buf.set(index, value)` when `buf` is a checkable
+    /// buffer and `index` is not provably unique per thread. This mirrors the
+    /// subscript path for the collection index-write method.
+    fn check_method_set_write(
+        &mut self,
+        expr: &Expression,
+        buffers: &HashSet<String>,
+        buffer_derived: &HashSet<String>,
+    ) {
+        let ExpressionKind::Call(callee, args) = &expr.node else {
+            return;
+        };
+        let ExpressionKind::Member(receiver, method) = &callee.node else {
+            return;
+        };
+        if !is_named_method(method, INDEX_SET_METHOD) || args.len() != 2 {
+            return;
+        }
+        if let ExpressionKind::Identifier(buf, _) = &receiver.node {
+            if buffers.contains(buf) && !is_injective_index(&args[0], buffer_derived) {
+                self.report_concurrent_write(buf, expr.span);
+            }
+        }
+    }
+
+    /// Propagate index-derivation taint through a plain identifier reassignment
+    /// (`name = rhs`): the local becomes tainted iff `rhs` is not injective.
+    fn propagate_reassignment_taint(
+        &self,
+        lhs: &LeftHandSideExpression,
+        rhs: &Expression,
+        buffer_derived: &mut HashSet<String>,
+    ) {
+        let LeftHandSideExpression::Identifier(name_expr) = lhs else {
+            return;
+        };
+        if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+            if is_injective_index(rhs, buffer_derived) {
+                buffer_derived.remove(name);
+            } else {
+                buffer_derived.insert(name.clone());
             }
         }
     }
@@ -165,9 +297,9 @@ impl TypeChecker {
         self.report_error(
             format!(
                 "concurrent write to gpu buffer '{buffer}': the index is not provably unique per \
-                 thread, so parallel threads may write the same element. Index by the 'forall' \
-                 variable (or a linear function of it), or use an atomic element \
-                 ('Array<Atomic<T>, N>')."
+                 thread, so parallel threads may write the same element. Index by the per-thread \
+                 coordinate (a 'forall' variable or 'kernel.global_idx', or a linear function of \
+                 it), or use an atomic element ('Array<Atomic<T>, N>')."
             ),
             span,
         );
@@ -179,14 +311,22 @@ fn is_atomic_element(elem: &Type) -> bool {
     matches!(&elem.kind, TypeKind::Custom(name, _) if name == ATOMIC_TYPE_NAME)
 }
 
-/// True if `expr` is a syntactically injective index over the `forall`
-/// variables — a literal, an identifier (a loop variable or a uniform constant),
-/// or an affine combination built from `+`, `-`, `*`. A buffer read, division,
-/// modulo, call, or any buffer-derived local is not injective.
+/// True if `method` is the identifier `name` (a method selector expression).
+fn is_named_method(method: &Expression, name: &str) -> bool {
+    matches!(&method.node, ExpressionKind::Identifier(m, _) if m == name)
+}
+
+/// True if `expr` is a syntactically injective index over the per-thread
+/// coordinates — a literal, an identifier (a loop variable or a uniform
+/// constant), a `kernel` context access (`kernel.global_idx.x`,
+/// `kernel.warp.lane_id`, …), or an affine combination built from `+`, `-`, `*`.
+/// A buffer read, division, modulo, call, or any nested-loop-/buffer-derived
+/// local is not injective.
 fn is_injective_index(expr: &Expression, buffer_derived: &HashSet<String>) -> bool {
     match &expr.node {
         ExpressionKind::Literal(_) => true,
         ExpressionKind::Identifier(name, _) => !buffer_derived.contains(name),
+        ExpressionKind::Member(..) => is_kernel_context_access(expr),
         ExpressionKind::Unary(_, inner) | ExpressionKind::Cast(inner, _) => {
             is_injective_index(inner, buffer_derived)
         }
@@ -197,4 +337,25 @@ fn is_injective_index(expr: &Expression, buffer_derived: &HashSet<String>) -> bo
         }
         _ => false,
     }
+}
+
+/// True if `expr` is a member access rooted at the `kernel` context identifier —
+/// a thread-index coordinate (`kernel.global_idx.x`, `kernel.thread_idx.y`,
+/// `kernel.block_idx.x`, `kernel.warp.lane_id`) or a uniform launch dimension
+/// (`kernel.block_dim.x`). Kernel builtins are scalars, never buffers, so an
+/// index built from them is a coordinate/uniform atom, never a scatter source.
+fn is_kernel_context_access(expr: &Expression) -> bool {
+    let ExpressionKind::Member(obj, _) = &expr.node else {
+        return false;
+    };
+    is_kernel_context_identifier(obj) || is_kernel_context_access(obj)
+}
+
+/// True if `expr` is the `kernel` context identifier (or its deprecated alias).
+fn is_kernel_context_identifier(expr: &Expression) -> bool {
+    matches!(
+        &expr.node,
+        ExpressionKind::Identifier(name, _)
+            if name == KERNEL_CONTEXT_IDENT || name == GPU_CONTEXT_DEPRECATED_IDENT
+    )
 }

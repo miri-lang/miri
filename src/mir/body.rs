@@ -318,6 +318,11 @@ pub struct LocalDecl {
     /// host-resident locals; `Some` is assigned at lowering whenever
     /// `residency` is [`BindingResidency::Gpu`].
     pub device_handle: Option<DeviceHandleId>,
+    /// True when this local carries a `device_handle` it does not own — a
+    /// residency-specialized parameter borrows the caller's persistent buffer.
+    /// A borrowed handle is used to launch on the buffer but must never release
+    /// it at scope exit; the owning binding in the caller frees it.
+    pub device_handle_borrowed: bool,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -339,6 +344,7 @@ impl LocalDecl {
             storage_class: StorageClass::Stack,
             residency: BindingResidency::Host,
             device_handle: None,
+            device_handle_borrowed: false,
             mir_ty,
         }
     }

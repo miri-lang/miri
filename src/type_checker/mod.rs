@@ -67,6 +67,9 @@ pub enum FnResidency {
     HostOnly,
     /// Function body only performs buffer-untouching ops (length on fixed arrays).
     PolymorphicSafe,
+    /// Function body performs buffer access only inside forall bodies (device-context).
+    /// Can accept gpu-resident args via device-handle ABI and is launch-safe.
+    GpuLaunchSafe,
 }
 
 /// The TypeChecker struct is responsible for validating the type safety of the program.

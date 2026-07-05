@@ -1424,6 +1424,11 @@ impl TypeChecker {
                     // Allow polymorphic-safe functions to accept gpu-resident args
                     continue;
                 }
+                Some(crate::type_checker::FnResidency::GpuLaunchSafe) => {
+                    // Allow launch-safe functions to accept gpu-resident args
+                    // (they have buffer-touching only in forall bodies)
+                    continue;
+                }
                 Some(crate::type_checker::FnResidency::HostOnly) => {
                     self.report_error(
                         format!(

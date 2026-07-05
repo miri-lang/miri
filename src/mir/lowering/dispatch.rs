@@ -77,6 +77,95 @@ pub(crate) fn mangle_generic_name(
     path
 }
 
+/// Residency-mangled name for a call that passes gpu-resident buffers into a
+/// `GpuLaunchSafe` callee. Each gpu-resident argument contributes its argument
+/// position and device handle, so distinct buffers monomorphize to distinct
+/// bodies (and the same buffer reused across calls maps to one). The `__gpu`
+/// segment can never appear in a user identifier, so the name cannot collide
+/// with a user function or a generic instantiation. The original name is
+/// recoverable as the substring before the first `__`.
+pub(crate) fn residency_mangled_name(
+    base: &str,
+    handles: &[(usize, crate::mir::body::DeviceHandleId)],
+) -> String {
+    let mut name = String::from(base);
+    name.push_str("__gpu");
+    for (idx, handle) in handles {
+        name.push_str(&format!("_p{}h{}", idx, handle.0));
+    }
+    name
+}
+
+/// Positional arguments that are gpu-resident bindings carrying a device handle.
+/// Only bare identifier arguments bound to a `Gpu`-residency local qualify — the
+/// buffer must reach the callee as the persistent device buffer, not a temp.
+fn gpu_resident_call_args(
+    ctx: &LoweringContext,
+    args: &[Expression],
+) -> Vec<(usize, crate::mir::body::DeviceHandleId)> {
+    let mut out = Vec::new();
+    for (idx, arg) in args.iter().enumerate() {
+        let ExpressionKind::Identifier(name, _) = &arg.node else {
+            continue;
+        };
+        let Some(local) = ctx.variable_map.get(name.as_str()) else {
+            continue;
+        };
+        let decl = &ctx.body.local_decls[local.0];
+        if matches!(decl.residency, crate::mir::body::BindingResidency::Gpu) {
+            if let Some(handle) = decl.device_handle {
+                out.push((idx, handle));
+            }
+        }
+    }
+    out
+}
+
+/// If a direct call passes gpu-resident buffers into a `GpuLaunchSafe` callee,
+/// retarget `func_op` to the residency-specialized body and return the per-arg
+/// device handles (positional, sized to `arg_ops`). Otherwise leaves `func_op`
+/// untouched and returns an empty vector (an ordinary host call).
+///
+/// Only a `GpuLaunchSafe` callee is specialized: its buffer touches occur solely
+/// inside `forall` (device) context, so the passed buffer is never read on the
+/// host — the very property the type checker's residency gate enforces.
+fn residency_specialize_call(
+    ctx: &LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    func_op: &mut Operand,
+    arg_ops: &[Operand],
+) -> Vec<Option<crate::mir::body::DeviceHandleId>> {
+    let ExpressionKind::Identifier(func_name, _) = &func.node else {
+        return Vec::new();
+    };
+    if !matches!(
+        ctx.type_checker.fn_residencies.get(func_name.as_str()),
+        Some(crate::type_checker::FnResidency::GpuLaunchSafe)
+    ) {
+        return Vec::new();
+    }
+    let gpu_args = gpu_resident_call_args(ctx, args);
+    if gpu_args.is_empty() {
+        return Vec::new();
+    }
+
+    if let Operand::Constant(constant) = &*func_op {
+        if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
+            let mangled = residency_mangled_name(base, &gpu_args);
+            *func_op = runtime_fn_operand(&mangled, func.span);
+        }
+    }
+
+    let mut handles = vec![None; arg_ops.len()];
+    for (idx, handle) in gpu_args {
+        if idx < handles.len() {
+            handles[idx] = Some(handle);
+        }
+    }
+    handles
+}
+
 fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
     match kind {
         TypeKind::Int => "int".to_string(),
@@ -392,7 +481,15 @@ fn lower_aliased_function_call(
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest, *span);
 
-    emit_call_terminator(ctx, func_op, arg_ops, Vec::new(), destination, *span);
+    emit_call_terminator(
+        ctx,
+        func_op,
+        arg_ops,
+        Vec::new(),
+        Vec::new(),
+        destination,
+        *span,
+    );
     Ok(Some(result_op))
 }
 
@@ -818,6 +915,7 @@ fn emit_static_method_call(
             func: func_op,
             args: call_args.clone(),
             out_args,
+            arg_handles: Vec::new(),
             destination: destination.clone(),
             target: Some(target_bb),
         },
@@ -1222,6 +1320,7 @@ fn emit_cow_check(
             func: cow_fn,
             args: vec![Operand::Move(Place::new(self_local))],
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(cow_result),
             target: Some(cow_target),
         },
@@ -1409,6 +1508,7 @@ fn lower_list_push(
             func: func_op,
             args: vec![obj_op, Operand::Copy(Place::new(item_local))],
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(dummy_dest),
             target: Some(target_bb),
         },
@@ -1448,6 +1548,7 @@ fn lower_list_insert(
             func: func_op,
             args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(result_temp),
             target: Some(target_bb),
         },
@@ -1644,6 +1745,7 @@ fn lower_gpu_slice(
             func: func_op,
             args: vec![obj_op, start_op, end_op],
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
         },
@@ -1732,6 +1834,12 @@ fn lower_direct_call(
 
     inject_allocator_arg(ctx, &func.node, &func_op, &mut arg_ops);
 
+    // Per-residency device-handle Call-ABI: when a gpu-resident buffer is passed
+    // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
+    // body (lowered by the pipeline monomorph driver) and record each argument's
+    // device handle so that body's kernel launches on the same persistent buffer.
+    let arg_handles = residency_specialize_call(ctx, func, args, &mut func_op, &arg_ops);
+
     let return_ty = ctx
         .type_checker
         .get_type(call_expr_id)
@@ -1751,6 +1859,7 @@ fn lower_direct_call(
         func_op,
         arg_ops.clone(),
         out_args,
+        arg_handles,
         destination.clone(),
         *span,
     );
@@ -1766,20 +1875,34 @@ fn lower_direct_call(
 }
 
 /// Emit a `Call` terminator to `destination` and advance to its successor block.
+///
+/// `arg_handles` records, per positional argument, the persistent device-buffer
+/// handle when that argument is a gpu-resident binding reaching a residency-
+/// specialized callee (empty for an ordinary host call). It is either empty or
+/// exactly `args.len()` long — the invariant validated in [`crate::mir::terminator`].
 fn emit_call_terminator(
     ctx: &mut LoweringContext,
     func_op: Operand,
     args: Vec<Operand>,
     out_args: Vec<bool>,
+    arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>>,
     destination: Place,
     span: Span,
 ) {
+    // Enforce the empty-or-equal-length `arg_handles` invariant at the sole
+    // construction seam, so a future edit that mis-sizes the vector is caught in
+    // debug/test builds instead of silently corrupting the device-handle ABI.
+    debug_assert!(
+        crate::mir::terminator::validate_call_arg_handles(&args, &arg_handles).is_ok(),
+        "Call arg_handles must be empty or equal to args.len()"
+    );
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
             args,
             out_args,
+            arg_handles,
             destination,
             target: Some(target_bb),
         },

@@ -151,10 +151,13 @@ impl TypeChecker {
             self.update_const_symbol(name, const_value, context);
         }
 
-        // Reject barriers under thread-divergent control flow in GPU kernels.
+        // Reject barriers under thread-divergent control flow, and non-injective
+        // buffer writes, in GPU kernels. Both run while the parameters are still
+        // resolvable in the current scope.
         if properties.is_gpu {
             if let Some(body_stmt) = body {
                 self.check_barrier_uniformity(body_stmt);
+                self.check_kernel_concurrent_writes(params, body_stmt, context);
             }
         }
 
@@ -575,9 +578,10 @@ impl TypeChecker {
     }
 
     /// Computes the residency verdict for a function: whether it can safely
-    /// accept gpu-resident arguments. Returns PolymorphicSafe if the body only
-    /// performs buffer-untouching operations on parameters; HostOnly if it
-    /// performs host-forcing operations like element access or println.
+    /// accept gpu-resident arguments. Returns one of:
+    /// - PolymorphicSafe: only buffer-untouching operations (e.g., .length() on fixed arrays)
+    /// - GpuLaunchSafe: buffer access only inside forall bodies (device-context)
+    /// - HostOnly: host-forcing operations or buffer access in host context
     fn compute_function_residency(
         &self,
         params: &[Parameter],
@@ -587,13 +591,26 @@ impl TypeChecker {
         let param_names: std::collections::HashSet<_> =
             params.iter().map(|p| p.name.clone()).collect();
 
-        if self.body_forces_host(body)
-            || self.body_touches_param_buffer(body, &param_names, params, context)
-        {
-            crate::type_checker::FnResidency::HostOnly
-        } else {
-            crate::type_checker::FnResidency::PolymorphicSafe
+        if self.body_forces_host(body) {
+            return crate::type_checker::FnResidency::HostOnly;
         }
+
+        // Check if params are touched and in what context
+        let host_touch =
+            self.body_touches_param_buffer_in_host_context(body, &param_names, params, context);
+        if host_touch {
+            return crate::type_checker::FnResidency::HostOnly;
+        }
+
+        // Check if params are touched only in device context (inside forall)
+        let device_touch =
+            self.body_touches_param_buffer_in_device_context(body, &param_names, params, context);
+        if device_touch {
+            return crate::type_checker::FnResidency::GpuLaunchSafe;
+        }
+
+        // No buffer touching at all
+        crate::type_checker::FnResidency::PolymorphicSafe
     }
 
     /// Checks if a function body calls any host-forcing intrinsic (println, etc).
@@ -964,6 +981,191 @@ impl TypeChecker {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Checks if a function body performs buffer-touching on params in HOST context.
+    /// Returns true if params are accessed outside of forall bodies.
+    fn body_touches_param_buffer_in_host_context(
+        &self,
+        stmt: &Statement,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        match &stmt.node {
+            StatementKind::Expression(expr) => {
+                self.expr_touches_param_buffer_in_host_context(expr, param_names, params, context)
+            }
+            StatementKind::Variable(vars, _visibility) => vars.iter().any(|v| {
+                v.initializer.as_ref().is_some_and(|e| {
+                    self.expr_touches_param_buffer_in_host_context(e, param_names, params, context)
+                })
+            }),
+            StatementKind::If(cond, then_stmt, else_stmt, _if_type) => {
+                self.expr_touches_param_buffer_in_host_context(cond, param_names, params, context)
+                    || self.body_touches_param_buffer_in_host_context(
+                        then_stmt,
+                        param_names,
+                        params,
+                        context,
+                    )
+                    || else_stmt.as_ref().is_some_and(|s| {
+                        self.body_touches_param_buffer_in_host_context(
+                            s,
+                            param_names,
+                            params,
+                            context,
+                        )
+                    })
+            }
+            StatementKind::While(cond, body_stmt, _while_type) => {
+                self.expr_touches_param_buffer_in_host_context(cond, param_names, params, context)
+                    || self.body_touches_param_buffer_in_host_context(
+                        body_stmt,
+                        param_names,
+                        params,
+                        context,
+                    )
+            }
+            StatementKind::For(_vars, iterable, body_stmt) => {
+                self.expr_touches_param_buffer_in_host_context(
+                    iterable,
+                    param_names,
+                    params,
+                    context,
+                ) || self.body_touches_param_buffer_in_host_context(
+                    body_stmt,
+                    param_names,
+                    params,
+                    context,
+                )
+            }
+            StatementKind::Forall {
+                device: _,
+                vars: _,
+                iterable,
+                body: _body_stmt,
+            } => {
+                // Forall body is device context: don't count touches inside it as host context
+                // Only check the iterable expression (which is evaluated at host)
+                self.expr_touches_param_buffer_in_host_context(
+                    iterable,
+                    param_names,
+                    params,
+                    context,
+                )
+            }
+            StatementKind::Return(expr_opt) => expr_opt.as_ref().is_some_and(|expr| {
+                self.expr_touches_param_buffer_in_host_context(expr, param_names, params, context)
+            }),
+            StatementKind::Block(stmts) => stmts.iter().any(|s| {
+                self.body_touches_param_buffer_in_host_context(s, param_names, params, context)
+            }),
+            // Inert statement kinds
+            StatementKind::Empty | StatementKind::Break | StatementKind::Continue => false,
+            StatementKind::Use(_, _) | StatementKind::Type(_, _) => false,
+            StatementKind::Enum(_, _, _, _, _, _) => false,
+            StatementKind::Struct(_, _, _, _, _, _) => false,
+            StatementKind::Class(_) => false,
+            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::FunctionDeclaration(_) => false,
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => false,
+            StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::GpuFrame(_, _, _) => false,
+            StatementKind::GpuFrameBlock(_) => false,
+        }
+    }
+
+    /// Checks if an expression performs buffer-touching on params in HOST context.
+    fn expr_touches_param_buffer_in_host_context(
+        &self,
+        expr: &Expression,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        // Same checks as the original expr_touches_param_buffer
+        self.expr_touches_param_buffer(expr, param_names, params, context)
+    }
+
+    /// Checks if a function body performs buffer-touching on params in DEVICE context.
+    /// Returns true if params are accessed ONLY inside forall bodies.
+    fn body_touches_param_buffer_in_device_context(
+        &self,
+        stmt: &Statement,
+        param_names: &std::collections::HashSet<String>,
+        params: &[Parameter],
+        context: &Context,
+    ) -> bool {
+        match &stmt.node {
+            StatementKind::Expression(_expr) => {
+                // Expression outside forall is not device context
+                false
+            }
+            StatementKind::Variable(_vars, _visibility) => {
+                // Variable declaration outside forall is not device context
+                false
+            }
+            StatementKind::If(_cond, then_stmt, else_stmt, _if_type) => {
+                self.body_touches_param_buffer_in_device_context(
+                    then_stmt,
+                    param_names,
+                    params,
+                    context,
+                ) || else_stmt.as_ref().is_some_and(|s| {
+                    self.body_touches_param_buffer_in_device_context(
+                        s,
+                        param_names,
+                        params,
+                        context,
+                    )
+                })
+            }
+            StatementKind::While(_cond, body_stmt, _while_type) => self
+                .body_touches_param_buffer_in_device_context(
+                    body_stmt,
+                    param_names,
+                    params,
+                    context,
+                ),
+            StatementKind::For(_vars, _iterable, body_stmt) => {
+                // For loops are not device context (CPU)
+                self.body_touches_param_buffer_in_device_context(
+                    body_stmt,
+                    param_names,
+                    params,
+                    context,
+                )
+            }
+            StatementKind::Forall {
+                device: _,
+                vars: _,
+                iterable: _,
+                body: body_stmt,
+            } => {
+                // Inside forall body: any buffer touching here is device context
+                self.body_touches_param_buffer(body_stmt, param_names, params, context)
+            }
+            StatementKind::Return(_expr_opt) => {
+                // Return outside forall is not device context
+                false
+            }
+            StatementKind::Block(stmts) => stmts.iter().any(|s| {
+                self.body_touches_param_buffer_in_device_context(s, param_names, params, context)
+            }),
+            // Inert statement kinds
+            StatementKind::Empty | StatementKind::Break | StatementKind::Continue => false,
+            StatementKind::Use(_, _) | StatementKind::Type(_, _) => false,
+            StatementKind::Enum(_, _, _, _, _, _) => false,
+            StatementKind::Struct(_, _, _, _, _, _) => false,
+            StatementKind::Class(_) => false,
+            StatementKind::Trait(_, _, _, _, _) => false,
+            StatementKind::FunctionDeclaration(_) => false,
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => false,
+            StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
+            StatementKind::GpuFrame(_, _, _) => false,
+            StatementKind::GpuFrameBlock(_) => false,
         }
     }
 

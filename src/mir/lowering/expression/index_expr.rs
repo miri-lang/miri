@@ -171,6 +171,7 @@ fn lower_map_index_read(
             func: func_op,
             args: vec![obj_op, key_op],
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
         },
