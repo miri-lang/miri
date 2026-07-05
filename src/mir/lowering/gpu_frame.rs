@@ -620,8 +620,18 @@ fn create_zero_local(ctx: &mut LoweringContext, ty: Type, span: Span) -> Operand
     Operand::Copy(Place::new(temp))
 }
 
+/// Number of leading frame-input uniform parameters a kernel carries, derived
+/// from the single source of truth [`FRAME_INPUT_FIELDS`] so adding a field
+/// keeps the parameter count and the field-registration loop in lockstep.
+fn frame_uniform_param_count(uses_frame: bool) -> usize {
+    if uses_frame {
+        FRAME_INPUT_FIELDS.len()
+    } else {
+        0
+    }
+}
+
 fn detect_frame_usage(stmt: &Statement) -> bool {
-    use crate::ast::statement::StatementKind;
     match &stmt.node {
         StatementKind::Block(stmts) => stmts.iter().any(detect_frame_usage),
         StatementKind::Expression(expr) => detect_frame_usage_expr(expr),
@@ -642,12 +652,26 @@ fn detect_frame_usage(stmt: &Statement) -> bool {
         StatementKind::GpuFrame(_, iterable, body) => {
             detect_frame_usage_expr(iterable) || detect_frame_usage(body)
         }
+        StatementKind::GpuFrameBlock(body) => detect_frame_usage(body),
         StatementKind::Variable(decls, _) => decls.iter().any(|d| {
             d.initializer
                 .as_ref()
                 .is_some_and(|e| detect_frame_usage_expr(e))
         }),
-        _ => false,
+        StatementKind::Return(expr) => expr.as_ref().is_some_and(|e| detect_frame_usage_expr(e)),
+        // Statements that carry no expression which can reference `frame`.
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
     }
 }
 
@@ -733,7 +757,7 @@ fn build_frame_kernel_literal(
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
-    let frame_param_count = if uses_frame { 11 } else { 0 };
+    let frame_param_count = frame_uniform_param_count(uses_frame);
     let total_params = buffer_captures.len() + scalar_captures.len() + frame_param_count;
     let mut kernel = Body::new(total_params, span, ExecutionModel::GpuKernel);
     kernel
@@ -797,7 +821,7 @@ fn build_frame_kernel_runtime(
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
-    let frame_param_count = if uses_frame { 11 } else { 0 };
+    let frame_param_count = frame_uniform_param_count(uses_frame);
     let arg_count = captures.len() + 1 + frame_param_count;
     let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
     kernel
@@ -960,4 +984,58 @@ fn frame_repeat_count(iterable: &Expression) -> Result<usize, (String, Span)> {
         ));
     }
     Ok((e - s) as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::node::IdNode;
+
+    fn ident(name: &str) -> Expression {
+        IdNode::new(
+            0,
+            ExpressionKind::Identifier(name.to_string(), None),
+            Span::default(),
+        )
+    }
+
+    /// `frame.time` member access — the atom `detect_frame_usage_expr` flags.
+    fn frame_access() -> Expression {
+        IdNode::new(
+            0,
+            ExpressionKind::Member(Box::new(ident("frame")), Box::new(ident("time"))),
+            Span::default(),
+        )
+    }
+
+    fn stmt(kind: StatementKind) -> Statement {
+        IdNode::new(0, kind, Span::default())
+    }
+
+    #[test]
+    fn detect_frame_usage_finds_frame_in_gpu_frame_block() {
+        let inner = stmt(StatementKind::Expression(frame_access()));
+        let block = stmt(StatementKind::Block(vec![inner]));
+        let frame_block = stmt(StatementKind::GpuFrameBlock(Box::new(block)));
+        assert!(detect_frame_usage(&frame_block));
+    }
+
+    #[test]
+    fn detect_frame_usage_finds_frame_in_return() {
+        let ret = stmt(StatementKind::Return(Some(Box::new(frame_access()))));
+        assert!(detect_frame_usage(&ret));
+    }
+
+    #[test]
+    fn detect_frame_usage_false_for_frameless_statements() {
+        assert!(!detect_frame_usage(&stmt(StatementKind::Return(None))));
+        assert!(!detect_frame_usage(&stmt(StatementKind::Break)));
+        assert!(!detect_frame_usage(&stmt(StatementKind::Empty)));
+    }
+
+    #[test]
+    fn frame_uniform_param_count_tracks_field_list() {
+        assert_eq!(frame_uniform_param_count(true), FRAME_INPUT_FIELDS.len());
+        assert_eq!(frame_uniform_param_count(false), 0);
+    }
 }
