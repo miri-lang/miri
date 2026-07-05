@@ -341,6 +341,56 @@ pub fn lower_generic_instantiation_with_kernel_namer(
     subs: &HashMap<String, Type>,
     kernel_namer: SharedKernelNamer,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_instantiation_core(
+        ast_func,
+        tc,
+        is_release,
+        inject_allocator,
+        subs,
+        &[],
+        kernel_namer,
+    )
+}
+
+/// Lower a residency-specialized instantiation of a `GpuLaunchSafe` function.
+///
+/// `param_handles[i]` is the persistent device handle for parameter `i` when
+/// that parameter received a gpu-resident buffer at the call site. Stamping the
+/// handle (and `Gpu` residency) on the parameter local before the body is
+/// lowered means the body's `forall` capture resolves to that same device
+/// buffer — the whole GPU launch path is reused unchanged. No generic
+/// substitution applies (`subs` is empty); the specialization axis is residency.
+pub fn lower_residency_instantiation_with_kernel_namer(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    param_handles: &[Option<crate::mir::body::DeviceHandleId>],
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_instantiation_core(
+        ast_func,
+        tc,
+        is_release,
+        inject_allocator,
+        &HashMap::new(),
+        param_handles,
+        kernel_namer,
+    )
+}
+
+/// Shared core for generic and residency instantiations. `subs` monomorphizes
+/// generic type parameters; `param_handles` stamps device handles onto gpu-
+/// resident parameters. The two axes are independent and may combine.
+fn lower_instantiation_core(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    subs: &HashMap<String, Type>,
+    param_handles: &[Option<crate::mir::body::DeviceHandleId>],
+    kernel_namer: SharedKernelNamer,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -378,6 +428,7 @@ pub fn lower_generic_instantiation_with_kernel_namer(
         let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
+    stamp_residency_param_handles(&mut ctx, param_handles);
     assign_gpu_param_storage_classes(&mut ctx, params.len());
 
     if inject_allocator {
@@ -391,6 +442,26 @@ pub fn lower_generic_instantiation_with_kernel_namer(
     }
 
     finalize_body(&mut ctx, ast_func.span)
+}
+
+/// Stamp the caller's device handle and `Gpu` residency onto each specialized
+/// parameter local. Parameter `i` lives at local `i + 1` (`_0` is the return
+/// slot). A `None` entry leaves the parameter host-resident.
+fn stamp_residency_param_handles(
+    ctx: &mut LoweringContext,
+    param_handles: &[Option<crate::mir::body::DeviceHandleId>],
+) {
+    for (i, handle) in param_handles.iter().enumerate() {
+        let Some(handle) = handle else { continue };
+        let local = i + 1;
+        if local < ctx.body.local_decls.len() {
+            ctx.body.local_decls[local].device_handle = Some(*handle);
+            ctx.body.local_decls[local].residency = crate::mir::body::BindingResidency::Gpu;
+            // The parameter borrows the caller's device buffer; it must not be
+            // released when the specialized body's scope exits.
+            ctx.body.local_decls[local].device_handle_borrowed = true;
+        }
+    }
 }
 
 /// Lower a stdlib class method to a MIR Body.

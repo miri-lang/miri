@@ -128,6 +128,7 @@ pub(crate) fn lower_formattedstring_expr(
                 func: func_op,
                 args: call_args,
                 out_args: Vec::new(),
+                arg_handles: Vec::new(),
                 destination: Place::new(result),
                 target: Some(target_bb),
             },

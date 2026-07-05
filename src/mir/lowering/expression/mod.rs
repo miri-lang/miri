@@ -230,6 +230,7 @@ fn emit_runtime_to_string(
             func: func_op,
             args,
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(target_bb),
         },

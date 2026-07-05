@@ -80,9 +80,19 @@ impl<'a> FunctionTranslator<'a> {
         // id is a `u64`, so the runtime ABI is a single `I64` parameter.
         const RELEASE_FN: &str = "miri_gpu_release";
 
-        let Some(handle) = body.local_decls[place.local.0].device_handle else {
+        let decl = &body.local_decls[place.local.0];
+        let Some(handle) = decl.device_handle else {
             return Ok(());
         };
+        // A borrowed handle (residency-specialized parameter) launches on the
+        // caller's buffer but does not own it; the caller's binding frees it.
+        // This flag is the sole gate preventing a borrowed parameter from
+        // releasing a caller-owned buffer (a double-free); it is set only by
+        // `stamp_residency_param_handles`, which every residency specialization
+        // routes through.
+        if decl.device_handle_borrowed {
+            return Ok(());
+        }
         let handle_val = builder
             .ins()
             .iconst(cranelift_codegen::ir::types::I64, handle.0 as i64);
@@ -296,6 +306,7 @@ impl<'a> FunctionTranslator<'a> {
                 func,
                 args,
                 out_args,
+                arg_handles: _,
                 destination,
                 target,
             } => Self::translate_call(

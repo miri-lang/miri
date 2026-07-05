@@ -220,6 +220,49 @@ impl fmt::Display for Terminator {
     }
 }
 
+/// Raised when the `arg_handles` vector of a [`TerminatorKind::Call`] does not
+/// match the length of `args`. Per-residency device-handle Call-ABI requires
+/// that `arg_handles` is either empty (no handle metadata) or equal in length
+/// to `args`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallArgHandlesError {
+    /// Length of `args` (the expected length when `arg_handles` is non-empty).
+    pub expected: usize,
+    /// Actual length of `arg_handles`.
+    pub got: usize,
+}
+
+impl fmt::Display for CallArgHandlesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Call arg_handles length mismatch: expected {} or 0, got {}",
+            self.expected, self.got
+        )
+    }
+}
+
+/// Validates the `arg_handles` length invariant for a Call terminator.
+///
+/// `arg_handles` must be either empty (no device-handle metadata — an ordinary
+/// host call) or exactly equal in length to `args` (one entry per argument when
+/// a residency-specialized call threads device handles). Returns `Ok(())` if
+/// valid, or `CallArgHandlesError` if the lengths mismatch and `arg_handles` is
+/// non-empty.
+pub fn validate_call_arg_handles(
+    args: &[Operand],
+    arg_handles: &[Option<DeviceHandleId>],
+) -> Result<(), CallArgHandlesError> {
+    if arg_handles.is_empty() || arg_handles.len() == args.len() {
+        Ok(())
+    } else {
+        Err(CallArgHandlesError {
+            expected: args.len(),
+            got: arg_handles.len(),
+        })
+    }
+}
+
 /// Raised when the parallel per-capture vectors of a [`GpuLaunchArgs`] do not
 /// all match the length of `args`. Carries the offending field so the lowering
 /// pass can surface a precise compiler error instead of producing a launch the
@@ -367,6 +410,12 @@ pub enum TerminatorKind {
         /// Which arguments are `out` parameters. `out_args[i]` is true when
         /// the callee's i-th parameter is declared `out`. Empty means none.
         out_args: Vec<bool>,
+        /// Persistent device-buffer handle for each argument, in `args` order:
+        /// `Some(id)` when a gpu-resident buffer is threaded into a residency-
+        /// specialized callee, `None` otherwise. Empty means an ordinary host
+        /// call with no device-handle metadata; when non-empty it must equal
+        /// `args.len()`. Validated by [`validate_call_arg_handles`].
+        arg_handles: Vec<Option<DeviceHandleId>>,
         destination: Place,
         target: Option<BasicBlock>,
     },
@@ -517,5 +566,44 @@ mod tests {
         args.args_mut()[0] = dummy_operand();
         assert_eq!(args.len(), 1);
         assert_eq!(args.arg_read_only().len(), args.args().len());
+    }
+
+    #[test]
+    fn call_arg_handles_accepts_empty() {
+        // Empty arg_handles is always valid: an ordinary host call carries no
+        // device-handle metadata.
+        let handles: Vec<Option<DeviceHandleId>> = Vec::new();
+        let args = vec![dummy_operand()];
+        assert!(validate_call_arg_handles(&args, &handles).is_ok());
+    }
+
+    #[test]
+    fn call_arg_handles_accepts_equal_length() {
+        // Non-empty arg_handles matching args.len() is valid.
+        let handles = vec![None, None];
+        let args = vec![dummy_operand(), dummy_operand()];
+        assert!(validate_call_arg_handles(&args, &handles).is_ok());
+    }
+
+    #[test]
+    fn call_arg_handles_rejects_short() {
+        // Non-empty arg_handles shorter than args is invalid.
+        let handles = vec![None];
+        let args = vec![dummy_operand(), dummy_operand()];
+        let err = validate_call_arg_handles(&args, &handles)
+            .expect_err("mismatched arg_handles must be rejected");
+        assert_eq!(err.expected, 2);
+        assert_eq!(err.got, 1);
+    }
+
+    #[test]
+    fn call_arg_handles_rejects_long() {
+        // Non-empty arg_handles longer than args is invalid.
+        let handles = vec![None, None, None];
+        let args = vec![dummy_operand()];
+        let err = validate_call_arg_handles(&args, &handles)
+            .expect_err("mismatched arg_handles must be rejected");
+        assert_eq!(err.expected, 1);
+        assert_eq!(err.got, 3);
     }
 }

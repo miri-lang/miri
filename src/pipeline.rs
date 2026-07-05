@@ -1816,6 +1816,22 @@ impl Pipeline {
                 }
             }
 
+            // Residency specialization applies to any function (generic or not),
+            // so it needs every function declaration by name, not only generic
+            // ones.
+            let mut residency_func_map: std::collections::HashMap<&str, &Statement> =
+                std::collections::HashMap::new();
+            for stmt in result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter())
+            {
+                if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                    residency_func_map.entry(decl.name.as_str()).or_insert(stmt);
+                }
+            }
+
             // Collect all call-site generic mappings from the type checker.
             // Build: mangled_name → (original_name, substitution_map)
             let mut needed: std::collections::HashMap<
@@ -1839,35 +1855,53 @@ impl Pipeline {
                 let _ = subs;
             }
 
+            // Residency-specialized calls (base__gpu_p…h…): a gpu-resident buffer
+            // passed to a launch-safe callee, keyed mangled_name → (original,
+            // per-arg device handles read straight off the call terminator). A
+            // single scan suffices: a specialized body cannot itself reach
+            // another specialization, because forwarding a buffer parameter to a
+            // further call is buffer-touching and the type checker rejects it —
+            // so no transitive chain of specializations can form.
+            let mut needed_residency: std::collections::HashMap<
+                String,
+                (String, Vec<Option<mir::body::DeviceHandleId>>),
+            > = std::collections::HashMap::new();
+
             // Scan all lowered bodies for calls to names containing "__" that look
-            // like mangled generics (base__type1__type2…).
+            // like mangled generics (base__type1__type2…) or residency
+            // specializations (base__gpu_p…h…).
             for (_, body) in &*bodies {
                 for block in &body.basic_blocks {
                     if let Some(term) = &block.terminator {
                         if let mir::TerminatorKind::Call {
                             func: mir::Operand::Constant(c),
+                            arg_handles,
                             ..
                         } = &term.kind
                         {
                             if let crate::ast::literal::Literal::Identifier(fname) = &c.literal {
-                                if fname.contains("__") && !lowered_names.contains(fname) {
-                                    let original =
-                                        fname.split("__").next().unwrap_or("").to_string();
-                                    for type_args in
-                                        result.type_checker.call_generic_mappings.values()
-                                    {
-                                        let subs: std::collections::HashMap<
-                                            String,
-                                            crate::ast::types::Type,
-                                        > = type_args.iter().cloned().collect();
-                                        let candidate =
-                                            mir::lowering::control_flow::mangle_generic_name(
-                                                &original, type_args,
-                                            );
-                                        if candidate == *fname {
-                                            needed.insert(fname.clone(), (original.clone(), subs));
-                                            break;
-                                        }
+                                if !fname.contains("__") || lowered_names.contains(fname) {
+                                    continue;
+                                }
+                                let original = fname.split("__").next().unwrap_or("").to_string();
+                                if fname.contains("__gpu_p") {
+                                    needed_residency
+                                        .insert(fname.clone(), (original, arg_handles.clone()));
+                                    continue;
+                                }
+                                for type_args in result.type_checker.call_generic_mappings.values()
+                                {
+                                    let subs: std::collections::HashMap<
+                                        String,
+                                        crate::ast::types::Type,
+                                    > = type_args.iter().cloned().collect();
+                                    let candidate =
+                                        mir::lowering::control_flow::mangle_generic_name(
+                                            &original, type_args,
+                                        );
+                                    if candidate == *fname {
+                                        needed.insert(fname.clone(), (original.clone(), subs));
+                                        break;
                                     }
                                 }
                             }
@@ -1876,7 +1910,7 @@ impl Pipeline {
                 }
             }
 
-            // Lower each needed specialization.
+            // Lower each needed generic specialization.
             for (mangled_name, (original_name, subs)) in needed {
                 if lowered_names.contains(&mangled_name) {
                     continue;
@@ -1889,6 +1923,38 @@ impl Pipeline {
                             is_release,
                             true,
                             &subs,
+                            kernel_namer.clone(),
+                        )
+                        .map_err(|e| {
+                            CompilerError::Codegen(format!(
+                                "MIR lowering failed for {}: {}",
+                                mangled_name, e
+                            ))
+                        })?;
+                    lowered_names.insert(mangled_name.clone());
+                    bodies.push((mangled_name, body));
+                    for lambda in lambdas {
+                        lowered_names.insert(lambda.name.clone());
+                        bodies.push((lambda.name, lambda.body));
+                    }
+                }
+            }
+
+            // Lower each needed residency specialization. The parameter that
+            // received a gpu-resident buffer is stamped with its device handle
+            // so the specialized body's `forall` launches on that buffer.
+            for (mangled_name, (original_name, param_handles)) in needed_residency {
+                if lowered_names.contains(&mangled_name) {
+                    continue;
+                }
+                if let Some(&ast_stmt) = residency_func_map.get(original_name.as_str()) {
+                    let (body, lambdas) =
+                        mir::lowering::lower_residency_instantiation_with_kernel_namer(
+                            ast_stmt,
+                            &result.type_checker,
+                            is_release,
+                            true,
+                            &param_handles,
                             kernel_namer.clone(),
                         )
                         .map_err(|e| {

@@ -174,6 +174,7 @@ fn return_negated_method_call(
             func: func_op,
             args: call_args,
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination: Place::new(eq_temp),
             target: Some(after_eq_bb),
         },
@@ -228,6 +229,7 @@ fn return_method_call(
             func: func_op,
             args: call_args,
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
         },
@@ -295,6 +297,7 @@ fn lower_in_operator(
             func: contains_fn,
             args: vec![rhs_op, lhs_op], // (collection, element)
             out_args: Vec::new(),
+            arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
         },
