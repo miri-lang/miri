@@ -19,6 +19,7 @@
 
 pub mod alloc;
 pub mod array;
+pub mod hash;
 pub mod io;
 pub mod list;
 pub mod map;

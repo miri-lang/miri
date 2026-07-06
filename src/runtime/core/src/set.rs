@@ -51,23 +51,13 @@ pub struct MiriSet {
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
 
-/// FNV-1a hash for raw byte sequences.
-fn fnv1a(data: *const u8, len: usize) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for i in 0..len {
-        hash ^= unsafe { *data.add(i) } as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 impl MiriSet {
     /// Returns the slot index for a given element.
     unsafe fn find_slot(&self, elem: *const u8) -> Option<usize> {
         if self.capacity == 0 {
             return None;
         }
-        let hash = fnv1a(elem, self.elem_size);
+        let hash = crate::hash::fnv1a(elem, self.elem_size);
         let mut idx = (hash as usize) % self.capacity;
         for _ in 0..self.capacity {
             let state = *self.states.add(idx);
@@ -91,7 +81,7 @@ impl MiriSet {
     /// further in the probe chain. Returns the first available slot
     /// (tombstone or empty) only after confirming no duplicate exists.
     unsafe fn find_insert_slot(&self, elem: *const u8) -> usize {
-        let hash = fnv1a(elem, self.elem_size);
+        let hash = crate::hash::fnv1a(elem, self.elem_size);
         let mut idx = (hash as usize) % self.capacity;
         let mut first_tombstone: Option<usize> = None;
         for _ in 0..self.capacity {

@@ -196,7 +196,7 @@ pub unsafe extern "C" fn miri_rt_string_char_at(
 
 /// Repeats a string `count` times.
 ///
-/// Returns an empty string if `ptr` is null or `count` is 0.
+/// Returns an empty string if `ptr` is null, `count` is 0, or the total length would overflow.
 ///
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
@@ -210,6 +210,10 @@ pub unsafe extern "C" fn miri_rt_string_repeat(
         return miri_rt_string_new();
     }
     let s = (*ptr).as_str();
+    // Guard against integer overflow: check that s.len() * count doesn't overflow.
+    if s.len().checked_mul(count).is_none() {
+        return miri_rt_string_new();
+    }
     let repeated = s.repeat(count);
     into_raw_ptr(MiriString::from_str(&repeated))
 }
@@ -243,4 +247,59 @@ unsafe fn transform_str_ref(
     }
     let result = transform((*ptr).as_str());
     into_raw_ptr(MiriString::from_str(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::constructors::miri_rt_string_free;
+    use super::*;
+
+    #[test]
+    fn repeat_with_huge_count_returns_empty() {
+        unsafe {
+            // usize::MAX with any non-zero string length would overflow.
+            let s = MiriString::from_str("hello");
+            let ptr = into_raw_ptr(s);
+            let result = miri_rt_string_repeat(ptr, usize::MAX);
+            // Result should be an empty string.
+            assert!((*result).len == 0, "huge count should return empty string");
+            miri_rt_string_free(result);
+            miri_rt_string_free(ptr);
+        }
+    }
+
+    #[test]
+    fn repeat_with_normal_count_works() {
+        unsafe {
+            let s = MiriString::from_str("ab");
+            let ptr = into_raw_ptr(s);
+            let result = miri_rt_string_repeat(ptr, 3);
+            assert_eq!((*result).len, 6, "3x 'ab' should be 6 bytes");
+            let repeated_str = (*result).as_str();
+            assert_eq!(repeated_str, "ababab", "3x 'ab' should be 'ababab'");
+            miri_rt_string_free(result);
+            miri_rt_string_free(ptr);
+        }
+    }
+
+    #[test]
+    fn repeat_with_zero_returns_empty() {
+        unsafe {
+            let s = MiriString::from_str("hello");
+            let ptr = into_raw_ptr(s);
+            let result = miri_rt_string_repeat(ptr, 0);
+            assert_eq!((*result).len, 0, "count 0 should return empty string");
+            miri_rt_string_free(result);
+            miri_rt_string_free(ptr);
+        }
+    }
+
+    #[test]
+    fn repeat_with_null_returns_empty() {
+        unsafe {
+            let result = miri_rt_string_repeat(std::ptr::null(), 5);
+            assert_eq!((*result).len, 0, "null input should return empty string");
+            miri_rt_string_free(result);
+        }
+    }
 }

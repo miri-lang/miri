@@ -763,4 +763,35 @@ mod tests {
     fn gpu_launch_desc_size_matches_runtime() {
         assert_eq!(desc_layout::DESC_SIZE as usize, 176);
     }
+
+    #[test]
+    fn gpu_launch_desc_field_offsets_match_runtime() {
+        // Mirror the offset assertions from runtime::gpu::launch::desc_layout_tests
+        // to catch field reordering that preserves total size.
+        assert_eq!(desc_layout::WGSL_PTR, 0);
+        assert_eq!(desc_layout::WGSL_LEN, 8);
+        assert_eq!(desc_layout::ENTRY_PTR, 16);
+        assert_eq!(desc_layout::ENTRY_LEN, 24);
+        assert_eq!(desc_layout::GRID_X, 32);
+        assert_eq!(desc_layout::GRID_Y, 36);
+        assert_eq!(desc_layout::GRID_Z, 40);
+        assert_eq!(desc_layout::BLOCK_X, 44);
+        assert_eq!(desc_layout::BLOCK_Y, 48);
+        assert_eq!(desc_layout::BLOCK_Z, 52);
+        assert_eq!(desc_layout::NUM_BUFS, 56);
+        assert_eq!(desc_layout::BUF_DATA_PTRS, 64);
+        assert_eq!(desc_layout::BUF_BYTE_LENS, 72);
+        assert_eq!(desc_layout::BUF_HANDLE_IDS, 80);
+        assert_eq!(desc_layout::BUF_READ_ONLY, 88);
+        assert_eq!(desc_layout::BUF_INT_NARROW, 96);
+        assert_eq!(desc_layout::UNIFORM_BOUND_PRESENT, 104);
+        assert_eq!(desc_layout::UNIFORM_BOUND_X_VALUE, 112);
+        assert_eq!(desc_layout::UNIFORM_BOUND_Y_VALUE, 120);
+        assert_eq!(desc_layout::UNIFORM_BOUND_Z_VALUE, 128);
+        assert_eq!(desc_layout::SCALAR_INPUTS_PTR, 136);
+        assert_eq!(desc_layout::SCALAR_INPUTS_LEN, 144);
+        assert_eq!(desc_layout::UNIFORM_START_X_VALUE, 152);
+        assert_eq!(desc_layout::UNIFORM_START_Y_VALUE, 160);
+        assert_eq!(desc_layout::UNIFORM_START_Z_VALUE, 168);
+    }
 }
