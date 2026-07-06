@@ -112,7 +112,7 @@ pub unsafe fn incref(ptr: *mut u8) {
     let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
     let rc = *rc_ptr;
     if (rc as isize) >= 0 {
-        *rc_ptr = rc + 1;
+        *rc_ptr = rc.saturating_add(1);
     }
 }
 
@@ -173,4 +173,89 @@ pub unsafe extern "C" fn miri_rt_closure_free_track() {
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
     ensure_leak_check_registered();
     CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alloc_with_rc_returns_pointer_with_rc_one() {
+        unsafe {
+            let ptr = alloc_with_rc(64);
+            assert!(!ptr.is_null(), "alloc_with_rc should not return null");
+
+            // RC should be 1 at allocation.
+            let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
+            let rc = *rc_ptr;
+            assert_eq!(rc, 1, "RC should be 1 after allocation");
+
+            free_with_rc(ptr, 64);
+        }
+    }
+
+    #[test]
+    fn incref_increments_rc() {
+        unsafe {
+            let ptr = alloc_with_rc(64);
+            let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
+
+            assert_eq!(*rc_ptr, 1, "initial RC should be 1");
+            incref(ptr);
+            assert_eq!(*rc_ptr, 2, "RC should be 2 after incref");
+            incref(ptr);
+            assert_eq!(*rc_ptr, 3, "RC should be 3 after second incref");
+
+            free_with_rc(ptr, 64);
+        }
+    }
+
+    #[test]
+    fn incref_on_null_is_noop() {
+        // incref on null pointer should not panic or crash.
+        unsafe {
+            incref(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn incref_skips_immortal_objects() {
+        unsafe {
+            let ptr = alloc_with_rc(64);
+            let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
+
+            // Mark as immortal by setting RC to negative isize.
+            *rc_ptr = (-1isize) as usize;
+            incref(ptr);
+            // RC should remain unchanged (immortal objects are skipped).
+            assert_eq!(*rc_ptr, (-1isize) as usize, "immortal RC should not change");
+
+            free_with_rc(ptr, 64);
+        }
+    }
+
+    #[test]
+    fn free_with_rc_on_null_is_noop() {
+        // free_with_rc on null pointer should not panic.
+        unsafe {
+            free_with_rc(std::ptr::null_mut(), 64);
+        }
+    }
+
+    #[test]
+    fn alloc_and_free_balance() {
+        unsafe {
+            let before = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+
+            let ptr1 = alloc_with_rc(64);
+            let ptr2 = alloc_with_rc(128);
+            let after_alloc = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+            assert_eq!(after_alloc, before + 2, "balance should increase by 2");
+
+            free_with_rc(ptr1, 64);
+            free_with_rc(ptr2, 128);
+            let after_free = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+            assert_eq!(after_free, before, "balance should return to original");
+        }
+    }
 }

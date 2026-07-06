@@ -492,9 +492,11 @@ unsafe fn persistent_capture_buffer(
     )?;
     let device_byte_len = if needs_narrow {
         let elem_count = byte_len / 8;
-        elem_count
-            .checked_mul(4)
-            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count))
+        elem_count.checked_mul(4).ok_or_else(|| {
+            GpuError::GridTooLarge(
+                "persistent capture buffer overflow: element count * 4".to_string(),
+            )
+        })?
     } else {
         byte_len
     };
@@ -533,9 +535,9 @@ unsafe fn new_storage_buffer_with_upload(
         );
         let elem_count = byte_len / 8;
         // Defend against integer overflow: check that elem_count * 4 doesn't overflow.
-        let device_len = elem_count
-            .checked_mul(4)
-            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count));
+        let device_len = elem_count.checked_mul(4).ok_or_else(|| {
+            GpuError::GridTooLarge("storage buffer overflow: element count * 4".to_string())
+        })?;
         let padded = align_to_4(device_len.max(4));
         let mut upload_bytes = Vec::with_capacity(device_len);
         if byte_len > 0 && !host_ptr.is_null() {
@@ -849,9 +851,9 @@ unsafe fn readback_device_buffer(
             byte_len
         );
         let elem_count = byte_len / 8;
-        let device_len = elem_count
-            .checked_mul(4)
-            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count));
+        let device_len = elem_count.checked_mul(4).ok_or_else(|| {
+            GpuError::GridTooLarge("readback buffer overflow: element count * 4".to_string())
+        })?;
         (device_len, byte_len)
     } else {
         (byte_len, byte_len)
@@ -1093,7 +1095,13 @@ pub unsafe extern "C" fn miri_gpu_upload(handle: u64, arr: *const MiriArrayHeade
             // Host buffer is i64 elements that were narrowed to i32 on first upload.
             // Narrow again for this explicit upload.
             let elem_count = host_byte_len / 8;
-            let device_len = elem_count.checked_mul(4).unwrap_or(0);
+            let device_len = match elem_count.checked_mul(4) {
+                Some(len) => len,
+                None => {
+                    log::error!("miri_gpu_upload: buffer size overflow: element count * 4");
+                    return 0;
+                }
+            };
             if device_len > existing_byte_len {
                 log::error!("miri_gpu_upload: narrowed device buffer too small");
                 return 0;

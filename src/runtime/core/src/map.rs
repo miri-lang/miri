@@ -71,16 +71,6 @@ pub struct MiriMap {
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
 
-/// FNV-1a hash for raw byte sequences.
-fn fnv1a(data: *const u8, len: usize) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for i in 0..len {
-        hash ^= unsafe { *data.add(i) } as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 /// Compares two byte sequences for equality.
 unsafe fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
     for i in 0..len {
@@ -102,12 +92,12 @@ impl MiriMap {
             }
             let s = &*str_ptr;
             if s.data.is_null() || s.len == 0 {
-                return fnv1a(ptr::null(), 0);
+                return crate::hash::fnv1a(ptr::null(), 0);
             }
-            fnv1a(s.data, s.len)
+            crate::hash::fnv1a(s.data, s.len)
         } else {
             // Value key: hash the raw bytes
-            fnv1a(key, self.key_size)
+            crate::hash::fnv1a(key, self.key_size)
         }
     }
 
