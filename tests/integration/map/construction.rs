@@ -5,17 +5,41 @@ use super::utils::*;
 
 #[test]
 fn map_literal_int_values() {
-    assert_runs(r#"let m = {"a": 1, "b": 2}"#);
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+let m = {"a": 1, "b": 2}
+println(f"{m.length()}")
+"#,
+        "2",
+    );
 }
 
 #[test]
 fn map_literal_single_entry() {
-    assert_runs(r#"let m = {"key": 42}"#);
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+let m = {"key": 42}
+println(f"{m.length()}")
+"#,
+        "1",
+    );
 }
 
 #[test]
 fn map_literal_string_values() {
-    assert_runs(r#"let m = {"name": "Alice", "city": "NYC"}"#);
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+let m = {"name": "Alice", "city": "NYC"}
+println(f"{m.length()}")
+"#,
+        "2",
+    );
 }
 
 #[test]
