@@ -568,7 +568,38 @@ fn convert_scalar_for_uniform(
             }
         }
         TypeKind::F32 => Ok(value),
-        _ => Err(CodegenError::Internal(format!(
+        // Unsupported scalar types
+        TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::F16
+        | TypeKind::Float
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => Err(CodegenError::Internal(format!(
             "unsupported scalar capture type in codegen: {:?}",
             local_ty.kind
         ))),

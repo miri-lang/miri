@@ -351,7 +351,36 @@ fn scalar_type_to_wgsl(ty: &TypeKind) -> Result<WgslScalar, CodegenError> {
         TypeKind::Boolean => Ok(WgslScalar::U32),
         TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
-        _ => Err(CodegenError::Internal(format!(
+        // Unsupported scalar types
+        TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::F16
+        | TypeKind::String
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => Err(CodegenError::Internal(format!(
             "unsupported scalar capture type in WGSL backend: {:?}",
             ty
         ))),
@@ -452,16 +481,17 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             binding_index += 1;
         } else {
             // First scalar field: reserve the binding index for the _Inputs struct
-            if inputs_binding.is_none() {
-                inputs_binding = Some(binding_index);
+            let inputs_binding_idx = *inputs_binding.get_or_insert_with(|| {
+                let idx = binding_index;
                 binding_index += 1;
-            }
+                idx
+            });
             let scalar_field = format!("f{}", scalar_field_index);
             let element_type = scalar_type_to_wgsl(&decl.ty.kind)?;
             bindings.push(BufferBinding {
                 param_local: Local(param_idx),
                 group: 0,
-                index: inputs_binding.unwrap(),
+                index: inputs_binding_idx,
                 var_name,
                 element_type,
                 element_typename: None,
@@ -1389,7 +1419,7 @@ impl<'a> BodyEmitter<'a> {
                     ));
                 }
             },
-            _ => {
+            Operand::Copy(_) | Operand::Move(_) => {
                 return Err(CodegenError::Internal(
                     "WGSL backend: call with non-constant func".to_string(),
                 ));
@@ -1711,7 +1741,16 @@ impl<'a> BodyEmitter<'a> {
                     )))
                 }
             }
-            _ => Err(CodegenError::Internal(format!(
+            crate::mir::AggregateKind::Tuple
+            | crate::mir::AggregateKind::Array
+            | crate::mir::AggregateKind::Class(_)
+            | crate::mir::AggregateKind::List
+            | crate::mir::AggregateKind::FormattedString
+            | crate::mir::AggregateKind::Set
+            | crate::mir::AggregateKind::Map
+            | crate::mir::AggregateKind::Enum(_, _)
+            | crate::mir::AggregateKind::Option
+            | crate::mir::AggregateKind::Closure(_, _) => Err(CodegenError::Internal(format!(
                 "WGSL backend: rvalue aggregate kind {:?} not yet supported",
                 kind
             ))),
@@ -2099,7 +2138,14 @@ fn scan_for_warp_intrinsics(body: &Body) -> (bool, bool) {
                         GpuIntrinsic::ShuffleDown(_, _) => {
                             // ShuffleDown doesn't need a builtin parameter
                         }
-                        _ => {}
+                        GpuIntrinsic::ThreadIdx(_)
+                        | GpuIntrinsic::BlockIdx(_)
+                        | GpuIntrinsic::BlockDim(_)
+                        | GpuIntrinsic::GridDim(_)
+                        | GpuIntrinsic::GlobalIdx(_)
+                        | GpuIntrinsic::SyncThreads => {
+                            // These intrinsics don't use warp size or lane ID
+                        }
                     }
                 }
             }

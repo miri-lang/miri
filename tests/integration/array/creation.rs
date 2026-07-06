@@ -5,22 +5,34 @@ use super::utils::*;
 
 #[test]
 fn test_array_creation() {
-    assert_runs("let a = [1, 2, 3]");
+    assert_runs_with_output(
+        "use system.collections.array\nlet a = [1, 2, 3]\nprintln(f\"{a.length()}\")",
+        "3",
+    );
 }
 
 #[test]
 fn test_array_single_element() {
-    assert_runs("let a = [42]");
+    assert_runs_with_output(
+        "use system.collections.array\nlet a = [42]\nprintln(f\"{a.length()}\")",
+        "1",
+    );
 }
 
 #[test]
 fn test_array_strings() {
-    assert_runs(r#"let a = ["hello", "world"]"#);
+    assert_runs_with_output(
+        "use system.collections.array\nlet a = [\"hello\", \"world\"]\nprintln(f\"{a.length()}\")",
+        "2",
+    );
 }
 
 #[test]
 fn test_array_booleans() {
-    assert_runs("let a = [true, false, true]");
+    assert_runs_with_output(
+        "use system.collections.array\nlet a = [true, false, true]\nprintln(f\"{a.length()}\")",
+        "3",
+    );
 }
 
 #[test]
