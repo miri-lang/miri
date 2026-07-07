@@ -3,7 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::{Lexer, TokenSpan};
 
 pub mod declarations;
@@ -47,5 +47,34 @@ impl<'source> Parser<'source> {
     fn program(&mut self) -> Result<Program, SyntaxError> {
         let statements = self.statement_list()?;
         Ok(ast::program(statements))
+    }
+
+    /// Enters a recursive-descent frame, rejecting input that nests deeper than
+    /// `MAX_PARSE_DEPTH`. Every recursion cycle that can be driven arbitrarily
+    /// deep by input alone — statements, the `expression` entry, and the
+    /// operator rules that self-recurse without passing back through
+    /// `expression` (prefix unary, postfix conditional) — must call this so a
+    /// malformed program returns `RecursionLimitExceeded` instead of exhausting
+    /// the native stack. Each successful call must be paired with `exit_recursion`.
+    pub(super) fn enter_recursion(&mut self) -> Result<(), SyntaxError> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            return Err(self.recursion_limit_error());
+        }
+        Ok(())
+    }
+
+    pub(super) fn exit_recursion(&mut self) {
+        self.depth -= 1;
+    }
+
+    fn recursion_limit_error(&self) -> SyntaxError {
+        let span = self
+            .lookahead
+            .as_ref()
+            .map(|(_, s)| *s)
+            .unwrap_or(Span::new(0, 0));
+        SyntaxError::new(SyntaxErrorKind::RecursionLimitExceeded, span)
     }
 }

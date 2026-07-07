@@ -3,10 +3,11 @@
 
 use super::utils::{
     assert_function_parameter_count, assert_nested_for_structure, assert_nested_if_structure,
-    assert_nested_while_structure, assert_statement_count, parser_test,
+    assert_nested_while_structure, assert_statement_count, parser_error_test, parser_test,
 };
 use miri::ast::factory::{binary, expression_statement, int_literal_expression};
 use miri::ast::BinaryOp;
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_deeply_nested_binary_expression() {
@@ -202,6 +203,40 @@ fn test_complex_arithmetic_precedence() {
     let input = "result = 1 + 2 * 3 - 4 / 5 % 6 + (8 - 9) * 10";
 
     assert_statement_count(input, 1);
+}
+
+#[test]
+fn test_deeply_nested_unary_operators_report_recursion_limit() {
+    // Prefix unary operators self-recurse (unary_expression -> create_unary_expression
+    // -> unary_expression) without passing back through `expression`. Without a depth
+    // guard on that cycle a long prefix chain exhausts the native stack; the parser
+    // must instead reject it with RecursionLimitExceeded.
+    let input = format!("{}x", "not ".repeat(5000));
+
+    parser_error_test(&input, &SyntaxErrorKind::RecursionLimitExceeded);
+}
+
+#[test]
+fn test_deeply_nested_postfix_conditionals_report_recursion_limit() {
+    // Postfix `if/else` self-recurses (conditional_expression -> conditional_expression)
+    // without re-entering `expression`. A long postfix-conditional chain must be
+    // rejected with RecursionLimitExceeded rather than overflowing the stack.
+    let mut input = "x".to_string();
+    for _ in 0..5000 {
+        input = format!("{} if c else y", input);
+    }
+
+    parser_error_test(&input, &SyntaxErrorKind::RecursionLimitExceeded);
+}
+
+#[test]
+fn test_moderately_nested_unary_operators_parse() {
+    // A prefix-unary chain comfortably under the recursion limit still parses, proving
+    // the depth guard is balanced across the `?` exits of each frame and does not leak
+    // depth into sibling expressions.
+    let input = format!("{}x", "not ".repeat(20));
+
+    assert_statement_count(&input, 1);
 }
 
 #[test]

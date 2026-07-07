@@ -11,21 +11,9 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.depth += 1;
-        if self.depth > crate::parser::MAX_PARSE_DEPTH {
-            self.depth -= 1;
-            let span = self
-                .lookahead
-                .as_ref()
-                .map(|(_, s)| *s)
-                .unwrap_or(crate::error::syntax::Span::new(0, 0));
-            return Err(SyntaxError::new(
-                crate::error::syntax::SyntaxErrorKind::RecursionLimitExceeded,
-                span,
-            ));
-        }
+        self.enter_recursion()?;
         let res = self.assignment_expression();
-        self.depth -= 1;
+        self.exit_recursion();
         res
     }
 

@@ -10,6 +10,13 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.enter_recursion()?;
+        let res = self.conditional_expression_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn conditional_expression_inner(&mut self) -> Result<Expression, SyntaxError> {
         let expression = self.null_coalesce_expression()?;
 
         // A match block can't take a postfix `if`/`unless`; the following `if`

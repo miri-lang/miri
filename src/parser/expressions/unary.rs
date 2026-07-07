@@ -10,6 +10,13 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn unary_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.enter_recursion()?;
+        let res = self.unary_expression_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn unary_expression_inner(&mut self) -> Result<Expression, SyntaxError> {
         match &self.lookahead {
             Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
             Some((Token::Minus, _)) => self.create_unary_expression(&Token::Minus, UnaryOp::Negate),
