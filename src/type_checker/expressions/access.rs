@@ -44,7 +44,10 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, WARP_CONTEXT_TYPE_NAME};
+use crate::ast::types::{
+    BuiltinCollectionKind, Type, TypeKind, RESULT_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
+    WARP_CONTEXT_TYPE_NAME,
+};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -182,7 +185,7 @@ impl TypeChecker {
                     };
                     let new_size = crate::ast::factory::int_literal_expression(slice_size);
                     return make_type(TypeKind::Custom(
-                        "Array".to_string(),
+                        BuiltinCollectionKind::Array.name().to_string(),
                         Some(vec![inner, new_size]),
                     ));
                 }
@@ -203,7 +206,7 @@ impl TypeChecker {
     ) -> Type {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
-                "List".to_string(),
+                BuiltinCollectionKind::List.name().to_string(),
                 Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
             ));
         }
@@ -215,7 +218,7 @@ impl TypeChecker {
 
         if is_homogeneous {
             make_type(TypeKind::Custom(
-                "List".to_string(),
+                BuiltinCollectionKind::List.name().to_string(),
                 Some(vec![self.create_type_expression(first)]),
             ))
         } else {
@@ -607,7 +610,12 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-            if let Some(module_path) = self.module_aliases.get(alias_name.as_str()).cloned() {
+            if let Some(module_path) = self
+                .modules
+                .module_aliases
+                .get(alias_name.as_str())
+                .cloned()
+            {
                 return self.infer_member_module_alias(
                     alias_name,
                     &module_path,
@@ -707,7 +715,7 @@ impl TypeChecker {
             .resolve_visible_type(type_name, context)
             .or_else(|| {
                 if BuiltinCollectionKind::from_name(type_name).is_some() {
-                    self.global_type_definitions.get(type_name)
+                    self.type_table.global_type_definitions.get(type_name)
                 } else {
                     None
                 }
@@ -765,9 +773,16 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         };
 
-        self.types.insert(obj.id, make_type(TypeKind::Identifier));
+        self.type_table
+            .types
+            .insert(obj.id, make_type(TypeKind::Identifier));
 
-        if let Some(info) = self.global_scope.get(prop_name.as_str()).cloned() {
+        if let Some(info) = self
+            .type_table
+            .global_scope
+            .get(prop_name.as_str())
+            .cloned()
+        {
             if !self.check_visibility(&info.visibility, &info.module) {
                 self.report_error(format!("'{}' is not visible", prop_name), span);
                 return make_type(TypeKind::Error);
@@ -789,12 +804,21 @@ impl TypeChecker {
         context: &mut Context,
     ) -> (Option<String>, Option<Vec<Expression>>) {
         match &obj_type.kind {
-            TypeKind::String => (Some("String".to_string()), None),
-            TypeKind::List(elem) => (Some("List".to_string()), Some(vec![*elem.clone()])),
-            TypeKind::Map(k, v) => (Some("Map".to_string()), Some(vec![*k.clone(), *v.clone()])),
-            TypeKind::Set(elem) => (Some("Set".to_string()), Some(vec![*elem.clone()])),
+            TypeKind::String => (Some(STRING_TYPE_NAME.to_string()), None),
+            TypeKind::List(elem) => (
+                Some(BuiltinCollectionKind::List.name().to_string()),
+                Some(vec![*elem.clone()]),
+            ),
+            TypeKind::Map(k, v) => (
+                Some(BuiltinCollectionKind::Map.name().to_string()),
+                Some(vec![*k.clone(), *v.clone()]),
+            ),
+            TypeKind::Set(elem) => (
+                Some(BuiltinCollectionKind::Set.name().to_string()),
+                Some(vec![*elem.clone()]),
+            ),
             TypeKind::Array(elem, size) => (
-                Some("Array".to_string()),
+                Some(BuiltinCollectionKind::Array.name().to_string()),
                 Some(vec![*elem.clone(), *size.clone()]),
             ),
             TypeKind::Tuple(element_type_exprs) => {
@@ -802,7 +826,7 @@ impl TypeChecker {
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Result(ok, err) => (
-                Some("Result".to_string()),
+                Some(RESULT_TYPE_NAME.to_string()),
                 Some(vec![*ok.clone(), *err.clone()]),
             ),
             TypeKind::Option(_) => (None, None),
@@ -844,7 +868,7 @@ impl TypeChecker {
 
         if is_homogeneous {
             (
-                Some("Tuple".to_string()),
+                Some(TUPLE_TYPE_NAME.to_string()),
                 Some(vec![self.create_type_expression(first_type.clone())]),
             )
         } else {
@@ -1051,7 +1075,7 @@ impl TypeChecker {
                 .and_then(|base_class_name| {
                     context
                         .resolve_type_definition(base_class_name)
-                        .or_else(|| self.global_type_definitions.get(base_class_name))
+                        .or_else(|| self.type_table.global_type_definitions.get(base_class_name))
                         .and_then(|def| {
                             if let TypeDefinition::Class(c) = def {
                                 Some(c.clone())
@@ -1156,6 +1180,7 @@ impl TypeChecker {
                     }
                 } else {
                     let orig_generics_opt = self
+                        .type_table
                         .global_type_definitions
                         .get(name)
                         .and_then(|td| {
@@ -1208,9 +1233,14 @@ impl TypeChecker {
         let mut candidates: Vec<&str> = Vec::new();
         let mut collect_class_name = name;
         loop {
-            let collect_def_opt = context
-                .resolve_type_definition(collect_class_name)
-                .or_else(|| self.global_type_definitions.get(collect_class_name));
+            let collect_def_opt =
+                context
+                    .resolve_type_definition(collect_class_name)
+                    .or_else(|| {
+                        self.type_table
+                            .global_type_definitions
+                            .get(collect_class_name)
+                    });
 
             if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
                 candidates.extend(collect_def.fields.iter().map(|(n, _)| n.as_str()));
@@ -1293,12 +1323,13 @@ impl TypeChecker {
 
         let mut search_class_name = Some(name.to_string());
         while let Some(class_name) = search_class_name.take() {
-            let (traits, base_class) = match self.global_type_definitions.get(&class_name) {
-                Some(TypeDefinition::Class(class_def)) => {
-                    (class_def.traits.clone(), class_def.base_class.clone())
-                }
-                _ => break,
-            };
+            let (traits, base_class) =
+                match self.type_table.global_type_definitions.get(&class_name) {
+                    Some(TypeDefinition::Class(class_def)) => {
+                        (class_def.traits.clone(), class_def.base_class.clone())
+                    }
+                    _ => break,
+                };
             // A trait default method is written in the trait's own generic
             // parameters (`U`), which the class binds through `implements
             // Trait<...>` in class-param terms (`T`). Extend the receiver
@@ -1343,13 +1374,18 @@ impl TypeChecker {
         type_args: &Option<Vec<Expression>>,
     ) -> std::collections::HashMap<String, Type> {
         let mut m = std::collections::HashMap::new();
-        if let Some(orig_generics) = self.global_type_definitions.get(name).and_then(|td| {
-            if let TypeDefinition::Class(cd) = td {
-                cd.generics.clone()
-            } else {
-                None
-            }
-        }) {
+        if let Some(orig_generics) =
+            self.type_table
+                .global_type_definitions
+                .get(name)
+                .and_then(|td| {
+                    if let TypeDefinition::Class(cd) = td {
+                        cd.generics.clone()
+                    } else {
+                        None
+                    }
+                })
+        {
             if let Some(type_args) = type_args {
                 for (gen, arg_expr) in orig_generics.iter().zip(type_args.iter()) {
                     let arg_type = self
@@ -1374,7 +1410,7 @@ impl TypeChecker {
             if !visited.insert(t_name.clone()) {
                 continue;
             }
-            let (method_opt, parents) = match self.global_type_definitions.get(&t_name) {
+            let (method_opt, parents) = match self.type_table.global_type_definitions.get(&t_name) {
                 Some(TypeDefinition::Trait(t_def)) => (
                     t_def.methods.get(prop_name).cloned(),
                     t_def.parent_traits.clone(),
@@ -1453,7 +1489,7 @@ impl TypeChecker {
                     trait_def.parent_traits.clone(),
                 )
             } else {
-                match self.global_type_definitions.get(&t_name) {
+                match self.type_table.global_type_definitions.get(&t_name) {
                     Some(TypeDefinition::Trait(d)) => {
                         (d.methods.get(prop_name).cloned(), d.parent_traits.clone())
                     }
@@ -1491,7 +1527,9 @@ impl TypeChecker {
             if !all_visited.insert(t_name) {
                 continue;
             }
-            if let Some(TypeDefinition::Trait(td)) = self.global_type_definitions.get(t_name) {
+            if let Some(TypeDefinition::Trait(td)) =
+                self.type_table.global_type_definitions.get(t_name)
+            {
                 methods.extend(td.methods.keys().map(|s| s.as_str()));
                 all_to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
             }

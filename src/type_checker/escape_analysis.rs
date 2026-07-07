@@ -855,12 +855,12 @@ fn collect_function_defs<'a>(
             }
             StatementKind::Class(cd) => {
                 if let Some(cls) = extract_name_from_expr(&cd.name) {
-                    collect_function_defs(&cd.body, fn_defs, Some(&cls.clone()));
+                    collect_function_defs(&cd.body, fn_defs, Some(&cls));
                 }
             }
             StatementKind::Struct(name_expr, _, _, methods, _, _) => {
                 if let Some(s) = extract_name_from_expr(name_expr) {
-                    collect_function_defs(methods, fn_defs, Some(&s.clone()));
+                    collect_function_defs(methods, fn_defs, Some(&s));
                 }
             }
             StatementKind::Block(stmts) => {

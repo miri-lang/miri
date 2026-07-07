@@ -43,7 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
@@ -116,7 +116,7 @@ impl TypeChecker {
                 return Some(def.variants.clone());
             }
         }
-        if let Some(TypeDefinition::Enum(def)) = self.global_type_definitions.get(name) {
+        if let Some(TypeDefinition::Enum(def)) = self.type_table.global_type_definitions.get(name) {
             return Some(def.variants.clone());
         }
         None
@@ -214,7 +214,7 @@ impl TypeChecker {
                         }
                         Pattern::Member(parent, member) => {
                             if let Pattern::Identifier(parent_name) = &**parent {
-                                if parent_name == "Option" {
+                                if parent_name == OPTION_TYPE_NAME {
                                     match member.as_str() {
                                         "Some" => has_some = true,
                                         "None" => has_none = true,
@@ -229,7 +229,7 @@ impl TypeChecker {
                             }
                             Pattern::Member(enum_pat, variant) => {
                                 if let Pattern::Identifier(name) = &**enum_pat {
-                                    if name == "Option" && variant == "Some" {
+                                    if name == OPTION_TYPE_NAME && variant == "Some" {
                                         has_some = true;
                                     }
                                 }
@@ -417,7 +417,7 @@ impl TypeChecker {
                 is_mutable,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -471,7 +471,7 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         if let Pattern::Identifier(parent_name) = parent {
-            if parent_name == "Option"
+            if parent_name == OPTION_TYPE_NAME
                 && member == "None"
                 && matches!(subject_type.kind, TypeKind::Option(_))
             {
@@ -569,7 +569,7 @@ impl TypeChecker {
             Pattern::Identifier(name) => name == "Some",
             Pattern::Member(enum_pat, variant) => {
                 if let Pattern::Identifier(name) = &**enum_pat {
-                    name == "Option" && variant == "Some"
+                    name == OPTION_TYPE_NAME && variant == "Some"
                 } else {
                     false
                 }

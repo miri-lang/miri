@@ -71,7 +71,7 @@ fn binary_op_trait_method(op: &crate::ast::operator::BinaryOp) -> Option<(&'stat
 /// True when `class_name` is a class defining `method_name`.
 fn class_has_trait_method(ctx: &LoweringContext, class_name: &str, method_name: &str) -> bool {
     matches!(
-        ctx.type_checker.global_type_definitions.get(class_name),
+        ctx.type_checker.type_definitions().get(class_name),
         Some(crate::type_checker::context::TypeDefinition::Class(cd))
             if cd.methods.contains_key(method_name)
     )
@@ -97,7 +97,12 @@ fn emit_binary_trait_call(
     let mangled_name = format!("{}_{}", class_name, method_name);
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
 
-    let return_ty = match ctx.type_checker.global_type_definitions.get(class_name) {
+    let return_ty = match ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(class_name)
+    {
         Some(crate::type_checker::context::TypeDefinition::Class(cd)) => {
             cd.methods[method_name].return_type.clone()
         }

@@ -40,7 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME};
+use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME, STRING_TYPE_NAME};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
@@ -68,7 +68,7 @@ impl TypeChecker {
         let Some(name) = self.check_class_extract_and_validate_name(name_expr, span) else {
             return;
         };
-        self.pre_registered_types.remove(&name);
+        self.modules.pre_registered_types.remove(&name);
 
         let generic_defs = generics
             .as_ref()
@@ -137,9 +137,9 @@ impl TypeChecker {
                 return None;
             }
         };
-        if let Some(existing) = self.global_type_definitions.get(&name) {
+        if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
             let is_placeholder = matches!(existing, TypeDefinition::Class(_))
-                && self.pre_registered_types.contains(&name);
+                && self.modules.pre_registered_types.contains(&name);
             if !is_placeholder {
                 self.report_error(format!("Type '{}' is already defined", name), span);
                 return None;
@@ -172,7 +172,11 @@ impl TypeChecker {
         base_class_name: &Option<String>,
         trait_names: &[String],
     ) {
-        let entry = self.hierarchy.entry(name.to_string()).or_default();
+        let entry = self
+            .type_table
+            .hierarchy
+            .entry(name.to_string())
+            .or_default();
         if let Some(ref base_name) = base_class_name {
             entry.extends = Some(base_name.clone());
         }
@@ -246,7 +250,7 @@ impl TypeChecker {
             trait_args,
             fields,
             methods,
-            module: self.current_module.clone(),
+            module: self.modules.current_module.clone(),
             is_abstract,
             has_drop,
         };
@@ -265,14 +269,14 @@ impl TypeChecker {
         )))));
 
         if context.scopes.len() == 2 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
                     class_type_meta.clone(),
                     false,
                     false,
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -285,7 +289,7 @@ impl TypeChecker {
                 false,
                 false,
                 visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -305,7 +309,8 @@ impl TypeChecker {
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
                         );
-                    } else if let Some(def) = self.global_type_definitions.get(base_name) {
+                    } else if let Some(def) = self.type_table.global_type_definitions.get(base_name)
+                    {
                         if !matches!(def, TypeDefinition::Class(_)) {
                             let kind = match def {
                                 TypeDefinition::Trait(_) => "a trait",
@@ -360,7 +365,7 @@ impl TypeChecker {
                     break;
                 }
                 visited.insert(current);
-                if let Some(relation) = self.hierarchy.get(current) {
+                if let Some(relation) = self.type_table.hierarchy.get(current) {
                     if let Some(ref next_base) = relation.extends {
                         current = next_base;
                     } else {
@@ -410,7 +415,7 @@ impl TypeChecker {
             return;
         }
         for (field_name, field_ty) in fields {
-            if permits_accelerable(&field_ty.kind, &self.global_type_definitions) {
+            if permits_accelerable(&field_ty.kind, &self.type_table.global_type_definitions) {
                 continue;
             }
             self.report_error(
@@ -437,7 +442,7 @@ impl TypeChecker {
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
-                } else if let Some(def) = self.global_type_definitions.get(trait_name) {
+                } else if let Some(def) = self.type_table.global_type_definitions.get(trait_name) {
                     if !matches!(def, TypeDefinition::Trait(_)) {
                         let kind = match def {
                             TypeDefinition::Class(_) => "a class",
@@ -632,14 +637,14 @@ impl TypeChecker {
             return_type: return_type_expr.clone(),
         })));
 
-        self.global_scope.insert(
+        self.type_table.global_scope.insert(
             rt_name.to_string(),
             SymbolInfo::new(
                 func_type.clone(),
                 false,
                 false,
                 MemberVisibility::Private,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -651,7 +656,7 @@ impl TypeChecker {
                 false,
                 false,
                 MemberVisibility::Private,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -673,17 +678,21 @@ impl TypeChecker {
             return_type: return_type_expr.clone(),
         })));
 
-        self.global_scope.insert(
+        self.type_table.global_scope.insert(
             name.to_string(),
             SymbolInfo::new_intrinsic(
                 func_type.clone(),
                 visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
             ),
         );
         context.define(
             name.to_string(),
-            SymbolInfo::new_intrinsic(func_type, visibility.clone(), self.current_module.clone()),
+            SymbolInfo::new_intrinsic(
+                func_type,
+                visibility.clone(),
+                self.modules.current_module.clone(),
+            ),
         );
     }
 
@@ -727,7 +736,7 @@ impl TypeChecker {
                 break;
             }
             let (base_generics, base_methods, base_next_base, base_next_args) =
-                match self.global_type_definitions.get(&class_name) {
+                match self.type_table.global_type_definitions.get(&class_name) {
                     Some(TypeDefinition::Class(base_def)) => (
                         base_def.generics.clone(),
                         base_def.methods.clone(),
@@ -891,7 +900,7 @@ impl TypeChecker {
                 break;
             }
             if let Some(TypeDefinition::Class(base_def)) =
-                self.global_type_definitions.get(check_class)
+                self.type_table.global_type_definitions.get(check_class)
             {
                 if let Some(init_method) = base_def.methods.get("init") {
                     if matches!(
@@ -926,7 +935,7 @@ impl TypeChecker {
                 break;
             }
             let (abstract_method_names, next_base) =
-                match self.global_type_definitions.get(&class_name) {
+                match self.type_table.global_type_definitions.get(&class_name) {
                     Some(TypeDefinition::Class(base_def)) => {
                         let names: Vec<String> = base_def
                             .methods
@@ -1022,7 +1031,8 @@ impl TypeChecker {
         let initial_subst: HashMap<String, Type> = trait_direct_args
             .get(trait_name)
             .and_then(|args| {
-                let Some(TypeDefinition::Trait(td)) = self.global_type_definitions.get(trait_name)
+                let Some(TypeDefinition::Trait(td)) =
+                    self.type_table.global_type_definitions.get(trait_name)
                 else {
                     return None;
                 };
@@ -1049,8 +1059,10 @@ impl TypeChecker {
             }
             trait_substitutions.insert(current_trait_name.clone(), current_subst.clone());
 
-            if let Some(TypeDefinition::Trait(trait_def)) =
-                self.global_type_definitions.get(&current_trait_name)
+            if let Some(TypeDefinition::Trait(trait_def)) = self
+                .type_table
+                .global_type_definitions
+                .get(&current_trait_name)
             {
                 for (method_name, method_info) in &trait_def.methods {
                     if !all_methods.contains_key(method_name) {
@@ -1109,7 +1121,7 @@ impl TypeChecker {
             }
             if *trait_ty == trait_self_kind {
                 return *class_ty == class_type_kind
-                    || (class_name == "String" && *class_ty == TypeKind::String)
+                    || (class_name == STRING_TYPE_NAME && *class_ty == TypeKind::String)
                     || matches!(class_ty, TypeKind::Generic(..))
                     || matches!(class_ty, TypeKind::Custom(cn, _) if cn == class_name);
             }
@@ -1200,7 +1212,8 @@ impl TypeChecker {
         child_subst: &HashMap<String, Type>,
     ) -> Option<HashMap<String, Type>> {
         let parent_args = parent_args?;
-        let Some(TypeDefinition::Trait(parent_def)) = self.global_type_definitions.get(parent_name)
+        let Some(TypeDefinition::Trait(parent_def)) =
+            self.type_table.global_type_definitions.get(parent_name)
         else {
             return None;
         };

@@ -211,7 +211,9 @@ fn extract_array_size(expr: &Expression) -> Option<usize> {
 }
 
 /// Evaluates a simple constant size expression (a non-negative integer literal
-/// or integer arithmetic over such literals).
+/// or integer arithmetic over such literals). Uses checked arithmetic to detect
+/// and prevent overflow, which would otherwise silently wrap to a small value
+/// and cause incorrect buffer allocation sizes.
 fn try_eval_const_size(expr: &Expression) -> Option<usize> {
     match &expr.node {
         ExpressionKind::Literal(Literal::Integer(int_lit)) => {
@@ -222,9 +224,9 @@ fn try_eval_const_size(expr: &Expression) -> Option<usize> {
             let l = try_eval_const_size(left)?;
             let r = try_eval_const_size(right)?;
             match op {
-                BinaryOp::Add => Some(l + r),
+                BinaryOp::Add => l.checked_add(r),
                 BinaryOp::Sub => Some(l.saturating_sub(r)),
-                BinaryOp::Mul => Some(l * r),
+                BinaryOp::Mul => l.checked_mul(r),
                 BinaryOp::Div if r > 0 => Some(l / r),
                 _ => None,
             }

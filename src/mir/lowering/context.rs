@@ -463,10 +463,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Returns true if the given type has auto-copy semantics (no RC needed).
     pub fn is_type_auto_copy(&self, ty: &Type) -> bool {
-        crate::type_checker::utils::is_auto_copy(
-            &ty.kind,
-            &self.type_checker.global_type_definitions,
-        )
+        crate::type_checker::utils::is_auto_copy(&ty.kind, self.type_checker.type_definitions())
     }
 
     /// Computes the set of custom type names that qualify as auto-copy.
@@ -474,12 +471,9 @@ impl<'a> LoweringContext<'a> {
         type_checker: &crate::type_checker::TypeChecker,
     ) -> std::collections::HashSet<String> {
         let mut auto_copy = std::collections::HashSet::new();
-        for name in type_checker.global_type_definitions.keys() {
+        for name in type_checker.type_definitions().keys() {
             let kind = crate::ast::types::TypeKind::Custom(name.clone(), None);
-            if crate::type_checker::utils::is_auto_copy(
-                &kind,
-                &type_checker.global_type_definitions,
-            ) {
+            if crate::type_checker::utils::is_auto_copy(&kind, type_checker.type_definitions()) {
                 auto_copy.insert(name.clone());
             }
         }
@@ -495,7 +489,7 @@ impl<'a> LoweringContext<'a> {
         type_checker: &crate::type_checker::TypeChecker,
     ) -> std::collections::HashSet<String> {
         let mut has_drop = std::collections::HashSet::new();
-        for (name, def) in &type_checker.global_type_definitions {
+        for (name, def) in type_checker.type_definitions() {
             let drop = match def {
                 crate::type_checker::context::TypeDefinition::Struct(sd) => sd.has_drop,
                 crate::type_checker::context::TypeDefinition::Class(cd) => cd.has_drop,
@@ -523,7 +517,7 @@ impl<'a> LoweringContext<'a> {
     ) -> HashMap<String, Vec<crate::ast::types::Type>> {
         let mut field_types = HashMap::new();
 
-        for (name, def) in &type_checker.global_type_definitions {
+        for (name, def) in type_checker.type_definitions() {
             match def {
                 crate::type_checker::context::TypeDefinition::Struct(struct_def) => {
                     let types: Vec<_> = struct_def
@@ -536,7 +530,7 @@ impl<'a> LoweringContext<'a> {
                 crate::type_checker::context::TypeDefinition::Class(class_def) => {
                     let all_fields = crate::type_checker::context::collect_class_fields_all(
                         class_def,
-                        &type_checker.global_type_definitions,
+                        type_checker.type_definitions(),
                     );
                     let types: Vec<_> = all_fields.iter().map(|(_, fi)| fi.ty.clone()).collect();
                     field_types.insert(name.clone(), types);

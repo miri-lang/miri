@@ -14,7 +14,8 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
     vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
+    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
+    OPTION_TYPE_NAME, RANGE_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -629,18 +630,6 @@ pub fn accelerable_binding_kind(kind: &TypeKind) -> Option<AcceleratorBindingKin
     }
 }
 
-/// Maps an [`AcceleratorBindingKind`] to the MIR storage class a kernel
-/// parameter of that binding is declared with. Kept next to the registry so the
-/// binding taxonomy and its lowering stay in one place.
-pub fn binding_kind_storage_class(kind: AcceleratorBindingKind) -> crate::mir::StorageClass {
-    use crate::mir::StorageClass;
-    match kind {
-        AcceleratorBindingKind::Storage => StorageClass::GpuGlobal,
-        AcceleratorBindingKind::Uniform => StorageClass::UniformBuffer,
-        AcceleratorBindingKind::PushConstant => StorageClass::GpuConstant,
-    }
-}
-
 /// Marshalled byte width of a single element/unit of an accelerable type — the
 /// compiler-side `Accelerable::byte_size`. The runtime multiplies this by a
 /// collection's length to size a device buffer; for a scalar, `VecN`, tuple, or
@@ -1228,7 +1217,9 @@ fn is_auto_copy_struct<'a>(
     if !all_fields_copy {
         return false;
     }
-    estimated_type_size(kind, type_definitions) <= crate::mir::body::AUTO_COPY_MAX_SIZE
+    let mut size_visited = std::collections::HashSet::new();
+    estimated_type_size(kind, type_definitions, &mut size_visited)
+        <= crate::mir::body::AUTO_COPY_MAX_SIZE
 }
 
 fn is_auto_copy_enum<'a>(
@@ -1245,16 +1236,20 @@ fn is_auto_copy_enum<'a>(
     if !all_variants_copy {
         return false;
     }
-    estimated_type_size(kind, type_definitions) <= crate::mir::body::AUTO_COPY_MAX_SIZE
+    let mut size_visited = std::collections::HashSet::new();
+    estimated_type_size(kind, type_definitions, &mut size_visited)
+        <= crate::mir::body::AUTO_COPY_MAX_SIZE
 }
 
 /// Estimates the byte size of a type for auto-copy threshold checking.
 ///
 /// Returns a conservative (possibly over-) estimate. Uses 8 bytes as a
-/// default for pointer-sized/unknown types.
-fn estimated_type_size(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+/// default for pointer-sized/unknown types. Includes a cycle guard to avoid
+/// infinite recursion on cyclic custom types.
+fn estimated_type_size<'a>(
+    kind: &'a TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
 ) -> usize {
     match kind {
         TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
@@ -1267,34 +1262,42 @@ fn estimated_type_size(
         | TypeKind::F64
         | TypeKind::RawPtr => 8,
         TypeKind::I128 | TypeKind::U128 => 16,
-        TypeKind::Custom(name, _) => match type_definitions.get(name) {
-            Some(TypeDefinition::Struct(struct_def)) => struct_def
-                .fields
-                .iter()
-                .map(|(_, ty, _)| estimated_type_size(&ty.kind, type_definitions))
-                .sum(),
-            Some(TypeDefinition::Enum(enum_def)) => {
-                // discriminant (8) + max payload size
-                let max_payload: usize = enum_def
-                    .variants
-                    .values()
-                    .map(|fields| {
-                        fields
-                            .iter()
-                            .map(|ty| estimated_type_size(&ty.kind, type_definitions))
-                            .sum::<usize>()
-                    })
-                    .max()
-                    .unwrap_or(0);
-                8 + max_payload
+        TypeKind::Custom(name, _) => {
+            // Detect cycles: if we're already visiting this type, return default size
+            if !visited.insert(name.as_str()) {
+                return 8;
             }
-            _ => 8,
-        },
+            let size = match type_definitions.get(name) {
+                Some(TypeDefinition::Struct(struct_def)) => struct_def
+                    .fields
+                    .iter()
+                    .map(|(_, ty, _)| estimated_type_size(&ty.kind, type_definitions, visited))
+                    .sum(),
+                Some(TypeDefinition::Enum(enum_def)) => {
+                    // discriminant (8) + max payload size
+                    let max_payload: usize = enum_def
+                        .variants
+                        .values()
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .map(|ty| estimated_type_size(&ty.kind, type_definitions, visited))
+                                .sum::<usize>()
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    8 + max_payload
+                }
+                _ => 8,
+            };
+            visited.remove(name.as_str());
+            size
+        }
         TypeKind::Tuple(elements) => elements
             .iter()
             .map(|elem_expr| {
                 if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
-                    estimated_type_size(&ty.kind, type_definitions)
+                    estimated_type_size(&ty.kind, type_definitions, visited)
                 } else {
                     8
                 }
@@ -1312,8 +1315,8 @@ impl TypeChecker {
     /// All type registrations should go through this method so that
     /// `resolve_visible_type` works correctly.
     pub(crate) fn register_type_definition(&mut self, name: String, def: TypeDefinition) {
-        self.visible_type_names.insert(name.clone());
-        self.global_type_definitions.insert(name, def);
+        self.type_table.visible_type_names.insert(name.clone());
+        self.type_table.global_type_definitions.insert(name, def);
     }
 
     /// Resolves a type definition that is visible from user code.
@@ -1335,8 +1338,8 @@ impl TypeChecker {
         if let Some(def @ TypeDefinition::Generic(_)) = context.resolve_type_definition(name) {
             return Some(def);
         }
-        if self.visible_type_names.contains(name) {
-            self.global_type_definitions.get(name)
+        if self.type_table.visible_type_names.contains(name) {
+            self.type_table.global_type_definitions.get(name)
         } else {
             None
         }
@@ -1344,7 +1347,7 @@ impl TypeChecker {
 
     /// Returns true if the named type is visible from user code.
     pub(crate) fn is_type_visible(&self, name: &str) -> bool {
-        self.visible_type_names.contains(name)
+        self.type_table.visible_type_names.contains(name)
     }
 
     // ==================== Error Type Helper ====================
@@ -1416,9 +1419,10 @@ impl TypeChecker {
     pub(crate) fn check_visibility(&self, visibility: &MemberVisibility, module: &str) -> bool {
         match visibility {
             MemberVisibility::Public => true,
-            MemberVisibility::Private => module == self.current_module,
+            MemberVisibility::Private => module == self.modules.current_module,
             MemberVisibility::Protected => {
-                module == self.current_module || self.is_subtype(&self.current_module, module)
+                module == self.modules.current_module
+                    || self.is_subtype(&self.modules.current_module, module)
             }
         }
     }
@@ -1536,13 +1540,14 @@ impl TypeChecker {
         class_name: &str,
     ) -> std::collections::HashMap<String, Type> {
         let mut bindings = std::collections::HashMap::new();
-        let Some(TypeDefinition::Class(class_def)) = self.global_type_definitions.get(class_name)
+        let Some(TypeDefinition::Class(class_def)) =
+            self.type_table.global_type_definitions.get(class_name)
         else {
             return bindings;
         };
         for (trait_name, args) in &class_def.trait_args {
             let Some(TypeDefinition::Trait(trait_def)) =
-                self.global_type_definitions.get(trait_name)
+                self.type_table.global_type_definitions.get(trait_name)
             else {
                 continue;
             };
@@ -1609,7 +1614,7 @@ impl TypeChecker {
                 }
                 Self::error_type()
             }
-            TypeKind::Custom(name, args) if name == "Range" => {
+            TypeKind::Custom(name, args) if name == RANGE_TYPE_NAME => {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {
                         return self
@@ -1711,7 +1716,7 @@ impl TypeChecker {
     fn resolve_list_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
         let resolved_inner = self.resolve_type_expression(&inner, context);
         make_type(TypeKind::Custom(
-            "List".to_string(),
+            BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(resolved_inner)]),
         ))
     }
@@ -1722,7 +1727,7 @@ impl TypeChecker {
             self.report_error("Set elements cannot be optional".to_string(), inner.span);
         }
         make_type(TypeKind::Custom(
-            "Set".to_string(),
+            BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(resolved_inner)]),
         ))
     }
@@ -1739,7 +1744,7 @@ impl TypeChecker {
         }
         let rv = self.resolve_type_expression(&v, context);
         make_type(TypeKind::Custom(
-            "Map".to_string(),
+            BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
                 self.create_type_expression(rk),
                 self.create_type_expression(rv),
@@ -1766,7 +1771,7 @@ impl TypeChecker {
             size
         };
         make_type(TypeKind::Custom(
-            "Array".to_string(),
+            BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
                 self.create_type_expression(resolved_inner),
                 *folded_size,
@@ -1845,7 +1850,7 @@ impl TypeChecker {
             // that enforces `check_visibility`.  We close that gap here: if the
             // type name also has a symbol-table entry (all user-defined types do)
             // we check its top-level visibility now.
-            if let Some(sym) = self.global_scope.get(name) {
+            if let Some(sym) = self.type_table.global_scope.get(name) {
                 if !self.check_visibility(&sym.visibility, &sym.module) {
                     self.report_error(format!("Type '{}' is not visible", name), expr.span);
                     return Self::error_type();
@@ -1865,14 +1870,30 @@ impl TypeChecker {
         args: &Option<Vec<Expression>>,
         context: &Context,
     ) -> Option<Type> {
+        // Try collection types first (capitalized: "Array", "List", "Map", "Set")
+        if let Some(kind) = BuiltinCollectionKind::from_name(name) {
+            return match kind {
+                BuiltinCollectionKind::Array => self.resolve_alias_array(args, context),
+                BuiltinCollectionKind::List => self.resolve_alias_list(args, context),
+                BuiltinCollectionKind::Map => self.resolve_alias_map(args, context),
+                BuiltinCollectionKind::Set => self.resolve_alias_set(args, context),
+            };
+        }
+
+        // Lowercase aliases for collections (legacy support)
+        // These are case-insensitive aliases and intentionally use string literals.
         match name {
-            "Map" => self.resolve_alias_map(args, context),
-            "Array" => self.resolve_alias_array(args, context),
-            "List" | "list" => self.resolve_alias_list(args, context),
-            "Set" | "set" => self.resolve_alias_set(args, context),
-            "range" => self.resolve_alias_range(args, context),
-            "Option" => self.resolve_alias_option(args, context),
-            "Linear" => self.resolve_alias_linear(args, context),
+            "list" => return self.resolve_alias_list(args, context),
+            "set" => return self.resolve_alias_set(args, context),
+            _ => {}
+        }
+
+        // Non-collection types using constants
+        match name {
+            n if n == OPTION_TYPE_NAME => self.resolve_alias_option(args, context),
+            n if n == LINEAR_TYPE_NAME => self.resolve_alias_linear(args, context),
+            n if n == RANGE_TYPE_NAME => self.resolve_alias_range(args, context),
+            "range" => self.resolve_alias_range(args, context), // lowercase aliases
             _ => None,
         }
     }
@@ -1892,7 +1913,7 @@ impl TypeChecker {
         }
         let v = self.resolve_type_expression(&args[1], context);
         Some(make_type(TypeKind::Custom(
-            "Map".to_string(),
+            BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
                 self.create_type_expression(k),
                 self.create_type_expression(v),
@@ -1917,7 +1938,7 @@ impl TypeChecker {
             Box::new(size.clone())
         };
         Some(make_type(TypeKind::Custom(
-            "Array".to_string(),
+            BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![self.create_type_expression(elem), *folded_size]),
         )))
     }
@@ -1933,7 +1954,7 @@ impl TypeChecker {
         }
         let t = self.resolve_type_expression(&args[0], context);
         Some(make_type(TypeKind::Custom(
-            "List".to_string(),
+            BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(t)]),
         )))
     }
@@ -1952,7 +1973,7 @@ impl TypeChecker {
             self.report_error("Set elements cannot be optional".to_string(), args[0].span);
         }
         Some(make_type(TypeKind::Custom(
-            "Set".to_string(),
+            BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(t)]),
         )))
     }
@@ -1966,12 +1987,12 @@ impl TypeChecker {
             Some(args) if args.len() == 1 => {
                 let t = self.resolve_type_expression(&args[0], context);
                 Some(make_type(TypeKind::Custom(
-                    "Range".to_string(),
+                    RANGE_TYPE_NAME.to_string(),
                     Some(vec![self.create_type_expression(t)]),
                 )))
             }
             None => Some(make_type(TypeKind::Custom(
-                "Range".to_string(),
+                RANGE_TYPE_NAME.to_string(),
                 Some(vec![self.create_type_expression(make_type(TypeKind::Int))]),
             ))),
             _ => None,
@@ -2117,13 +2138,18 @@ impl TypeChecker {
             .iter()
             .map(|s| s.len())
             .sum::<usize>()
-            + self.global_type_definitions.len()
+            + self.type_table.global_type_definitions.len()
             + 6;
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.type_definitions {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
-        candidates.extend(self.global_type_definitions.keys().map(|s| s.as_str()));
+        candidates.extend(
+            self.type_table
+                .global_type_definitions
+                .keys()
+                .map(|s| s.as_str()),
+        );
         candidates.extend(["Int", "Float", "String", "Bool", "Void", "Any"]);
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
@@ -2156,7 +2182,7 @@ impl TypeChecker {
                     if name == "self" {
                         if let Some(class_name) = &context.current_class {
                             if let Some(TypeDefinition::Class(def)) =
-                                self.global_type_definitions.get(class_name)
+                                self.type_table.global_type_definitions.get(class_name)
                             {
                                 if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                                     if let Some((_, field_info)) =
@@ -2268,10 +2294,10 @@ impl TypeChecker {
     /// calling this so the error is attributed to the correct file.
     pub(crate) fn report_syntax_error(&mut self, syntax_err: &crate::error::syntax::SyntaxError) {
         let mut err = crate::error::type_error::TypeError::from_syntax_error(syntax_err);
-        err.source_override = self.current_source_override.clone();
+        err.source_override = self.modules.current_source_override.clone();
         let key = (format!("{}", syntax_err), syntax_err.span);
-        if self.reported_errors.insert(key) {
-            self.errors.push(err);
+        if self.diagnostics.mark_reported(key) {
+            self.diagnostics.push_error(err);
         }
     }
 
@@ -2314,20 +2340,20 @@ impl TypeChecker {
 
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
         let key = (message.clone(), span);
-        if self.reported_errors.insert(key) {
+        if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::custom(message, span, None);
-            err.source_override = self.current_source_override.clone();
-            self.errors.push(err);
+            err.source_override = self.modules.current_source_override.clone();
+            self.diagnostics.push_error(err);
         }
     }
 
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
         let key = (message.clone(), span);
-        if self.reported_errors.insert(key) {
+        if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::custom(message, span, Some(help));
-            err.source_override = self.current_source_override.clone();
-            self.errors.push(err);
+            err.source_override = self.modules.current_source_override.clone();
+            self.diagnostics.push_error(err);
         }
     }
 
@@ -2341,7 +2367,7 @@ impl TypeChecker {
         help: Option<String>,
     ) {
         use crate::error::diagnostic::{Diagnostic, Severity};
-        self.warnings.push(Diagnostic {
+        self.diagnostics.push_warning(Diagnostic {
             severity: Severity::Warning,
             code: Some(code),
             title,
@@ -2349,7 +2375,7 @@ impl TypeChecker {
             span: Some(span),
             help,
             notes: Vec::new(),
-            source_override: self.current_source_override.clone(),
+            source_override: self.modules.current_source_override.clone(),
         });
     }
 
@@ -2376,7 +2402,9 @@ impl TypeChecker {
                     return false; // Already checked, avoid infinite loop
                 }
                 // Check if this custom type transitively contains target_name
-                if let Some(TypeDefinition::Struct(def)) = self.global_type_definitions.get(name) {
+                if let Some(TypeDefinition::Struct(def)) =
+                    self.type_table.global_type_definitions.get(name)
+                {
                     def.fields.iter().any(|(_, field_ty, _)| {
                         self.contains_type_directly(target_name, &field_ty.kind, visited)
                     })

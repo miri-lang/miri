@@ -83,13 +83,13 @@ impl TypeChecker {
             file_path.to_string_lossy().to_string()
         };
 
-        if self.loaded_modules.contains(&abs_path_str) {
+        if self.modules.loaded_modules.contains(&abs_path_str) {
             self.restore_visibility_for_module(&path_str, &import_kind);
             self.replay_module_visibility(&path_str, &import_kind);
             return;
         }
 
-        if self.loading_stack.contains(&abs_path_str) {
+        if self.modules.loading_stack.contains(&abs_path_str) {
             if path_str.starts_with("local.") {
                 self.report_circular_import_error(&path_str, &abs_path_str, path.span);
             }
@@ -98,19 +98,19 @@ impl TypeChecker {
             return;
         }
 
-        self.loading_stack.push(abs_path_str.clone());
+        self.modules.loading_stack.push(abs_path_str.clone());
 
         // Load and parse module
         let (source, module_ast) =
             match self.load_and_parse_module(&file_path, &path_str, path.span) {
                 Some(result) => result,
                 None => {
-                    self.loading_stack.retain(|m| m != &abs_path_str);
+                    self.modules.loading_stack.retain(|m| m != &abs_path_str);
                     return;
                 }
             };
 
-        let visible_before_load: HashSet<String> = self.visible_type_names.clone();
+        let visible_before_load: HashSet<String> = self.type_table.visible_type_names.clone();
         self.process_loaded_module(
             &path_str,
             &file_path,
@@ -124,8 +124,8 @@ impl TypeChecker {
         );
         self.record_module_visibility(&path_str, &module_ast, &visible_before_load);
 
-        self.loading_stack.retain(|m| m != &abs_path_str);
-        self.loaded_modules.insert(abs_path_str);
+        self.modules.loading_stack.retain(|m| m != &abs_path_str);
+        self.modules.loaded_modules.insert(abs_path_str);
     }
 
     /// Records the full set of type names a module's load exposes, so a later
@@ -144,6 +144,7 @@ impl TypeChecker {
         visible_before_load: &HashSet<String>,
     ) {
         let mut names: HashSet<String> = self
+            .type_table
             .visible_type_names
             .difference(visible_before_load)
             .cloned()
@@ -151,13 +152,14 @@ impl TypeChecker {
         for stmt in &module_ast.body {
             if let StatementKind::Use(dep_path, _) = &stmt.node {
                 if let Some((dep_path_str, _)) = Self::extract_import_path_with_kind(dep_path) {
-                    if let Some(dep_names) = self.module_visibility.get(&dep_path_str) {
+                    if let Some(dep_names) = self.modules.module_visibility.get(&dep_path_str) {
                         names.extend(dep_names.iter().cloned());
                     }
                 }
             }
         }
-        self.module_visibility
+        self.modules
+            .module_visibility
             .insert(path_str.to_string(), names.into_iter().collect());
     }
 
@@ -171,12 +173,12 @@ impl TypeChecker {
         if matches!(import_kind, ImportPathKind::Multi(_)) {
             return;
         }
-        if !self.implicitly_preloaded_modules.contains(path_str) {
+        if !self.modules.implicitly_preloaded_modules.contains(path_str) {
             return;
         }
-        if let Some(names) = self.module_visibility.get(path_str) {
+        if let Some(names) = self.modules.module_visibility.get(path_str) {
             for name in names {
-                self.visible_type_names.insert(name.clone());
+                self.type_table.visible_type_names.insert(name.clone());
             }
         }
     }
@@ -195,12 +197,17 @@ impl TypeChecker {
         span: Span,
     ) {
         let pre_import_globals: HashMap<String, String> = self
+            .type_table
             .global_scope
             .iter()
             .map(|(k, v)| (k.clone(), v.module.clone()))
             .collect();
-        let pre_import_global_types: HashSet<String> =
-            self.global_type_definitions.keys().cloned().collect();
+        let pre_import_global_types: HashSet<String> = self
+            .type_table
+            .global_type_definitions
+            .keys()
+            .cloned()
+            .collect();
 
         self.type_check_module(path_str, file_path, source, module_ast, alias, context);
 
@@ -233,11 +240,11 @@ impl TypeChecker {
         match parser.parse() {
             Ok(ast) => Some((source, ast)),
             Err(e) => {
-                let old_source_override = self.current_source_override.take();
-                self.current_source_override =
+                let old_source_override = self.modules.current_source_override.take();
+                self.modules.current_source_override =
                     Some((file_path.to_string_lossy().to_string(), source.clone()));
                 self.report_syntax_error(&e);
-                self.current_source_override = old_source_override;
+                self.modules.current_source_override = old_source_override;
                 None
             }
         }
@@ -246,6 +253,7 @@ impl TypeChecker {
     fn resolve_module_path(&mut self, path_str: &str, span: Span) -> Option<PathBuf> {
         let current_dir = std::env::current_dir().unwrap_or_default();
         let project_root = self
+            .modules
             .source_dir
             .clone()
             .unwrap_or_else(|| current_dir.clone());
@@ -288,11 +296,12 @@ impl TypeChecker {
 
     fn report_circular_import_error(&mut self, path_str: &str, abs_path_str: &str, span: Span) {
         let cycle_start = self
+            .modules
             .loading_stack
             .iter()
             .position(|m| m == abs_path_str)
             .unwrap_or(0);
-        let chain: Vec<&str> = self.loading_stack[cycle_start..]
+        let chain: Vec<&str> = self.modules.loading_stack[cycle_start..]
             .iter()
             .map(|s| s.as_str())
             .collect();
@@ -316,8 +325,9 @@ impl TypeChecker {
         alias: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
-        let old_module = std::mem::replace(&mut self.current_module, path_str.to_string());
+        let old_module = std::mem::replace(&mut self.modules.current_module, path_str.to_string());
         let old_source_override = self
+            .modules
             .current_source_override
             .replace((file_path.to_string_lossy().to_string(), source.to_string()));
 
@@ -328,10 +338,10 @@ impl TypeChecker {
             self.check_statement(stmt, context);
         }
 
-        self.current_source_override = old_source_override;
+        self.modules.current_source_override = old_source_override;
         self.register_module_alias(path_str, alias);
         self.imported_statements.extend(module_ast.body.clone());
-        self.current_module = old_module;
+        self.modules.current_module = old_module;
     }
 
     fn module_collect_shells(&mut self, module_ast: &Program) {
@@ -385,7 +395,8 @@ impl TypeChecker {
     fn register_module_alias(&mut self, path_str: &str, alias: &Option<Box<Expression>>) {
         if let Some(alias_box) = alias {
             if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
-                self.module_aliases
+                self.modules
+                    .module_aliases
                     .insert(alias_name.clone(), path_str.to_string());
             }
         }
@@ -449,7 +460,7 @@ impl TypeChecker {
         if let Some(ref selected) = selected_names {
             for sel_name in selected.keys() {
                 if let Some(old_module) = pre_import_globals.get(sel_name) {
-                    if let Some(info) = self.global_scope.get(sel_name) {
+                    if let Some(info) = self.type_table.global_scope.get(sel_name) {
                         if info.module == module_name {
                             self.report_error(
                                 format!(
@@ -466,7 +477,7 @@ impl TypeChecker {
             }
         } else {
             let mut collisions: Vec<(String, String)> = Vec::new();
-            for (name, info) in &self.global_scope {
+            for (name, info) in &self.type_table.global_scope {
                 if info.module == module_name {
                     if let Some(old_module) = pre_import_globals.get(name) {
                         if old_module != module_name {
@@ -496,7 +507,7 @@ impl TypeChecker {
         should_be_visible: &dyn Fn(&str, Option<&str>) -> bool,
         context: &mut Context,
     ) {
-        self.global_scope.retain(|name, info| {
+        self.type_table.global_scope.retain(|name, info| {
             if !pre_import_globals.contains_key(name) {
                 return should_be_visible(name, Some(info.module.as_str()));
             }
@@ -519,7 +530,7 @@ impl TypeChecker {
         module_name: &str,
         should_be_visible: &dyn Fn(&str, Option<&str>) -> bool,
     ) {
-        self.global_type_definitions.retain(|name, def| {
+        self.type_table.global_type_definitions.retain(|name, def| {
             if !pre_import_global_types.contains(name) {
                 let def_module = match def {
                     TypeDefinition::Class(cd) => Some(cd.module.as_str()),
@@ -533,10 +544,10 @@ impl TypeChecker {
                 }
                 let is_transitive = def_module.is_some_and(|m| m != module_name);
                 if is_transitive {
-                    self.visible_type_names.remove(name);
+                    self.type_table.visible_type_names.remove(name);
                     return true;
                 }
-                self.visible_type_names.remove(name);
+                self.type_table.visible_type_names.remove(name);
                 return false;
             }
             true
@@ -549,10 +560,13 @@ impl TypeChecker {
                 if let ExpressionKind::Identifier(orig_name, _) = &name_expr.node {
                     if let Some(alias_box) = item_alias_opt {
                         if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
-                            if let Some(info) = self.global_scope.get(orig_name).cloned() {
+                            if let Some(info) = self.type_table.global_scope.get(orig_name).cloned()
+                            {
                                 let mut aliased = info;
                                 aliased.original_name = Some(orig_name.clone());
-                                self.global_scope.insert(alias_name.clone(), aliased);
+                                self.type_table
+                                    .global_scope
+                                    .insert(alias_name.clone(), aliased);
                             }
                         }
                     }
@@ -570,11 +584,13 @@ impl TypeChecker {
         if let Some(ref selected) = selected_names {
             for (sel_name, sel_span) in selected {
                 let in_scope = self
+                    .type_table
                     .global_scope
                     .get(sel_name.as_str())
                     .is_some_and(|info| info.module == module_name);
 
                 let in_types = self
+                    .type_table
                     .global_type_definitions
                     .get(sel_name.as_str())
                     .is_some_and(|def| {
@@ -587,7 +603,10 @@ impl TypeChecker {
                         };
                         def_module == Some(module_name)
                     })
-                    && self.visible_type_names.contains(sel_name.as_str());
+                    && self
+                        .type_table
+                        .visible_type_names
+                        .contains(sel_name.as_str());
 
                 if !in_scope && !in_types {
                     self.report_error(
@@ -607,9 +626,9 @@ impl TypeChecker {
     /// visible again without re-parsing or re-type-checking M.
     fn restore_visibility_for_module(&mut self, module_path: &str, import_kind: &ImportPathKind) {
         let selected_names = Self::extract_selected_names(import_kind);
-        for (name, def) in &self.global_type_definitions {
+        for (name, def) in &self.type_table.global_type_definitions {
             if self.should_restore_visibility(name, def, module_path, &selected_names) {
-                self.visible_type_names.insert(name.clone());
+                self.type_table.visible_type_names.insert(name.clone());
             }
         }
     }
@@ -717,10 +736,11 @@ impl TypeChecker {
     pub(crate) fn load_prelude(&mut self, context: &mut Context) {
         self.load_prelude_file("prelude.mi", context);
 
-        let visible_before = self.visible_type_names.clone();
-        let modules_before: HashSet<String> = self.module_visibility.keys().cloned().collect();
+        let visible_before = self.type_table.visible_type_names.clone();
+        let modules_before: HashSet<String> =
+            self.modules.module_visibility.keys().cloned().collect();
         self.load_prelude_file("prelude_internal.mi", context);
-        self.visible_type_names = visible_before;
+        self.type_table.visible_type_names = visible_before;
 
         // Every module loaded while processing the internal prelude — the listed
         // collection modules AND their transitive deps (queryable, ops, …) — is
@@ -728,12 +748,15 @@ impl TypeChecker {
         // full visibility (an explicit `use system.collections.queryable` must
         // still expose the transitive `Iterable` it would on a fresh load).
         let newly_loaded: Vec<String> = self
+            .modules
             .module_visibility
             .keys()
             .filter(|module| !modules_before.contains(*module))
             .cloned()
             .collect();
-        self.implicitly_preloaded_modules.extend(newly_loaded);
+        self.modules
+            .implicitly_preloaded_modules
+            .extend(newly_loaded);
     }
 
     /// Parses one stdlib prelude file under `system/` and runs each of its

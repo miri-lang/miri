@@ -103,7 +103,7 @@ impl TypeChecker {
             },
             traits: trait_names,
             has_drop,
-            module: self.current_module.clone(),
+            module: self.modules.current_module.clone(),
         };
 
         self.register_struct_definition(&name, struct_def, visibility, context);
@@ -119,7 +119,7 @@ impl TypeChecker {
     }
 
     fn check_struct_not_duplicate(&mut self, name: &str, name_expr: &Expression) -> bool {
-        if let Some(existing) = self.global_type_definitions.get(name) {
+        if let Some(existing) = self.type_table.global_type_definitions.get(name) {
             let is_placeholder = match existing {
                 TypeDefinition::Struct(def) => def.fields.is_empty(),
                 _ => false,
@@ -221,14 +221,14 @@ impl TypeChecker {
 
         let struct_type = make_type(TypeKind::Custom(name.to_string(), None));
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     false,
                     false,
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -241,7 +241,7 @@ impl TypeChecker {
                 false,
                 false,
                 visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );

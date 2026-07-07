@@ -149,14 +149,16 @@ impl TypeChecker {
     fn retype_float_literal_to_f16(&mut self, expr: &Expression) -> bool {
         match &expr.node {
             ExpressionKind::Literal(Literal::Float(_)) => {
-                self.types
+                self.type_table
+                    .types
                     .insert(expr.id, Type::new(TypeKind::F16, expr.span));
                 true
             }
             ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand)
                 if self.retype_float_literal_to_f16(operand) =>
             {
-                self.types
+                self.type_table
+                    .types
                     .insert(expr.id, Type::new(TypeKind::F16, expr.span));
                 true
             }

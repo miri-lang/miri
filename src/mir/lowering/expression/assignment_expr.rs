@@ -276,11 +276,8 @@ fn assign_to_member(
             .ok_or_else(|| LoweringError::type_not_found(obj.id, obj.span))?;
 
         if let TypeKind::Custom(type_name, _) = &obj_ty.kind {
-            let field_index = resolve_member_field_index(
-                type_name,
-                prop,
-                &ctx.type_checker.global_type_definitions.clone(),
-            );
+            let field_index =
+                resolve_member_field_index(type_name, prop, ctx.type_checker.type_definitions());
             if let Some(idx) = field_index {
                 let obj_place = ensure_place(ctx, obj_operand, obj.span);
                 let mut target_place = obj_place;

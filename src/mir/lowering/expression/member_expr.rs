@@ -203,6 +203,7 @@ fn try_module_alias_constant(
     if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
         if ctx
             .type_checker
+            .modules
             .module_aliases
             .contains_key(alias_name.as_str())
         {
@@ -431,8 +432,11 @@ pub(crate) fn lower_member_expr(
     }
 
     if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
-        if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
-            ctx.type_checker.global_type_definitions.get(struct_name)
+        if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) = ctx
+            .type_checker
+            .type_table
+            .global_type_definitions
+            .get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                 if let Some(idx) = def.fields.iter().position(|(f, _, _)| f == field_name) {
@@ -450,13 +454,16 @@ pub(crate) fn lower_member_expr(
             }
         }
 
-        if let Some(crate::type_checker::context::TypeDefinition::Class(def)) =
-            ctx.type_checker.global_type_definitions.get(struct_name)
+        if let Some(crate::type_checker::context::TypeDefinition::Class(def)) = ctx
+            .type_checker
+            .type_table
+            .global_type_definitions
+            .get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                 let all_fields = crate::type_checker::context::collect_class_fields_all(
                     def,
-                    &ctx.type_checker.global_type_definitions,
+                    ctx.type_checker.type_definitions(),
                 );
                 if let Some(idx) = all_fields
                     .iter()
@@ -470,8 +477,11 @@ pub(crate) fn lower_member_expr(
     }
 
     if let ExpressionKind::Identifier(type_name, _) = &obj.node {
-        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-            ctx.type_checker.global_type_definitions.get(type_name)
+        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+            .type_checker
+            .type_table
+            .global_type_definitions
+            .get(type_name)
         {
             if let ExpressionKind::Identifier(variant_name, _) = &prop.node {
                 if let Some((discriminant, _)) = enum_def
@@ -535,8 +545,11 @@ pub(crate) fn lower_member_expr(
 
     if let Some(class_name) = class_name {
         if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
-            if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
-                ctx.type_checker.global_type_definitions.get(&class_name)
+            if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) = ctx
+                .type_checker
+                .type_table
+                .global_type_definitions
+                .get(&class_name)
             {
                 if let Some(method_info) = class_def.methods.get(prop_name.as_str()) {
                     if method_info.params.is_empty() {

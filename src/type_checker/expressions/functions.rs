@@ -135,7 +135,7 @@ impl TypeChecker {
                     false,
                     false,
                     MemberVisibility::Public,
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );

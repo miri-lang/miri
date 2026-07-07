@@ -66,3 +66,46 @@ let l = List(42)
         "List(...) expects an array literal argument",
     );
 }
+
+// ── Slice a non-sliceable type ──────────────────────────────────────────
+
+#[test]
+fn struct_slice_is_not_sliceable() {
+    assert_compiler_error(
+        "
+struct Point
+    x int
+    y int
+
+let p = Point { x: 1, y: 2 }
+let slice = p[0..1]
+",
+        "is not sliceable",
+    );
+}
+
+#[test]
+fn enum_slice_is_not_sliceable() {
+    assert_compiler_error(
+        "
+enum Color
+    Red
+    Blue
+
+let c = Color.Red
+let slice = c[0..1]
+",
+        "is not sliceable",
+    );
+}
+
+#[test]
+fn scalar_slice_is_not_sliceable() {
+    assert_compiler_error(
+        "
+let x = 42
+let slice = x[0..1]
+",
+        "is not sliceable",
+    );
+}

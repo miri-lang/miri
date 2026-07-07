@@ -137,13 +137,15 @@ impl TypeChecker {
             is_mutable,
             is_constant,
             visibility.clone(),
-            self.current_module.clone(),
+            self.modules.current_module.clone(),
             const_value,
         );
         info.residency = decl.residency;
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(decl.name.clone(), info.clone());
+            self.type_table
+                .global_scope
+                .insert(decl.name.clone(), info.clone());
         }
         context.define(decl.name.clone(), info);
     }
@@ -192,7 +194,10 @@ impl TypeChecker {
             return;
         }
 
-        if is_accelerable(&inferred_type.kind, &self.global_type_definitions) {
+        if is_accelerable(
+            &inferred_type.kind,
+            &self.type_table.global_type_definitions,
+        ) {
             self.check_gpu_i32_range_literal(decl, inferred_type, context);
             return;
         }

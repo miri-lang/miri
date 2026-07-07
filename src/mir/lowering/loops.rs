@@ -393,7 +393,7 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
         })
         .filter(|name| {
             matches!(
-                ctx.type_checker.global_type_definitions.get(name),
+                ctx.type_checker.type_definitions().get(name),
                 Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == "Iterable")
             )
         })

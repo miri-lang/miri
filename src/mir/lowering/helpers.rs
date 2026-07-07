@@ -87,7 +87,7 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
             }
         }
         ExpressionKind::Identifier(name, _) => {
-            if tc.global_type_definitions.contains_key(name) {
+            if tc.type_definitions().contains_key(name) {
                 Type::new(TypeKind::Custom(name.clone(), None), expr.span)
             } else {
                 match name.as_str() {
@@ -247,7 +247,10 @@ pub fn bind_pattern(
                 if let Pattern::Member(type_pattern, variant_name) = parent.as_ref() {
                     if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
                         if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                            ctx.type_checker.global_type_definitions.get(type_name)
+                            ctx.type_checker
+                                .type_table
+                                .global_type_definitions
+                                .get(type_name)
                         {
                             enum_def.variants.get(variant_name.as_str()).cloned()
                         } else {

@@ -13,7 +13,9 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
+use crate::ast::types::{
+    BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind, STRING_TYPE_NAME,
+};
 
 impl TypeChecker {
     /// Checks if two types are compatible for assignment or operation.
@@ -606,7 +608,7 @@ impl TypeChecker {
             return true;
         }
 
-        if let Some(relation) = self.hierarchy.get(sub) {
+        if let Some(relation) = self.type_table.hierarchy.get(sub) {
             // Check extends
             if let Some(parent) = &relation.extends {
                 if self.is_subtype(parent, sup) {
@@ -661,11 +663,11 @@ impl TypeChecker {
         // Structural typing for structs
         let constraint_def = context
             .resolve_type_definition(constraint_name)
-            .or_else(|| self.global_type_definitions.get(constraint_name));
+            .or_else(|| self.type_table.global_type_definitions.get(constraint_name));
 
         let ty_def = context
             .resolve_type_definition(ty_name)
-            .or_else(|| self.global_type_definitions.get(ty_name));
+            .or_else(|| self.type_table.global_type_definitions.get(ty_name));
 
         match (constraint_def, ty_def) {
             (Some(TypeDefinition::Struct(c_def)), Some(TypeDefinition::Struct(t_def))) => {
@@ -702,11 +704,11 @@ impl TypeChecker {
         // Structural checking
         let constraint_def = context
             .resolve_type_definition(constraint_name)
-            .or_else(|| self.global_type_definitions.get(constraint_name));
+            .or_else(|| self.type_table.global_type_definitions.get(constraint_name));
 
         let ty_def = context
             .resolve_type_definition(ty_name)
-            .or_else(|| self.global_type_definitions.get(ty_name));
+            .or_else(|| self.type_table.global_type_definitions.get(ty_name));
 
         match constraint_def {
             Some(TypeDefinition::Class(class_def)) => {
@@ -823,11 +825,11 @@ impl TypeChecker {
     }
 
     /// Returns `true` if the type represents a string, either the built-in
-    /// `TypeKind::String` or the class `TypeKind::Custom("String", _)`.
+    /// `TypeKind::String` or the class `TypeKind::Custom(STRING_TYPE_NAME, _)`.
     fn is_string_type(&self, ty: &Type) -> bool {
         match &ty.kind {
             TypeKind::String => true,
-            TypeKind::Custom(name, _) => name == "String",
+            TypeKind::Custom(name, _) => name == STRING_TYPE_NAME,
             _ => false,
         }
     }

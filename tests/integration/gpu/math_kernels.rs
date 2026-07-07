@@ -9,7 +9,6 @@
 
 use super::device::assert_gpu_runs_with_output;
 use super::helpers::assert_gpu_wgsl_valid;
-use super::utils::*;
 
 /// A plain Miri `fn` is callable inside a kernel and value-verifies.
 #[test]

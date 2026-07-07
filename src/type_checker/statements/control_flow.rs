@@ -452,7 +452,7 @@ impl TypeChecker {
                     is_mutable,
                     false,
                     MemberVisibility::Public,
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -620,7 +620,7 @@ impl TypeChecker {
                     is_mutable,
                     false,
                     MemberVisibility::Public,
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -811,7 +811,7 @@ impl TypeChecker {
                 is_mutable,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -824,7 +824,7 @@ impl TypeChecker {
                 false,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -899,7 +899,7 @@ impl TypeChecker {
                 false,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1015,7 +1015,7 @@ impl TypeChecker {
                 is_mutable,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1070,7 +1070,7 @@ impl TypeChecker {
                 is_mutable_0,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1081,7 +1081,7 @@ impl TypeChecker {
                 is_mutable_1,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1118,7 +1118,7 @@ impl TypeChecker {
                 is_mutable_0,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1129,7 +1129,7 @@ impl TypeChecker {
                 is_mutable_1,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1151,7 +1151,7 @@ impl TypeChecker {
                 is_mutable_0,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -1162,7 +1162,7 @@ impl TypeChecker {
                 is_mutable_1,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );

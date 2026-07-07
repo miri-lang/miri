@@ -89,8 +89,11 @@ fn enum_variant_discriminant(
     type_name: &str,
     variant_name: &str,
 ) -> Option<usize> {
-    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-        ctx.type_checker.global_type_definitions.get(type_name)
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(type_name)
     else {
         return None;
     };

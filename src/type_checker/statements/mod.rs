@@ -166,8 +166,10 @@ impl TypeChecker {
         let expr_type = self.infer_expression(expr, context);
         if !context.suppress_must_use {
             if let TypeKind::Custom(type_name, _) = &expr_type.kind {
-                if let Some(TypeDefinition::Enum(def)) =
-                    self.global_type_definitions.get(type_name.as_str())
+                if let Some(TypeDefinition::Enum(def)) = self
+                    .type_table
+                    .global_type_definitions
+                    .get(type_name.as_str())
                 {
                     if def.must_use {
                         self.report_error(
@@ -222,14 +224,14 @@ impl TypeChecker {
         })));
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
                     func_type.clone(),
                     false,
                     false,
                     MemberVisibility::Private,
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -242,7 +244,7 @@ impl TypeChecker {
                 false,
                 false,
                 MemberVisibility::Private,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -272,19 +274,23 @@ impl TypeChecker {
         })));
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new_intrinsic(
                     func_type.clone(),
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                 ),
             );
         }
 
         context.define(
             name.to_string(),
-            SymbolInfo::new_intrinsic(func_type, visibility.clone(), self.current_module.clone()),
+            SymbolInfo::new_intrinsic(
+                func_type,
+                visibility.clone(),
+                self.modules.current_module.clone(),
+            ),
         );
 
         if let Some(gens) = generics {
@@ -456,11 +462,15 @@ impl TypeChecker {
                     generics: None,
                     traits: vec![],
                     has_drop: false,
-                    module: self.current_module.clone(),
+                    module: self.modules.current_module.clone(),
                 }),
             );
 
-            let entry = self.hierarchy.entry(name.to_string()).or_default();
+            let entry = self
+                .type_table
+                .hierarchy
+                .entry(name.to_string())
+                .or_default();
             match kind {
                 TypeDeclarationKind::Extends => entry.extends = Some(target_name),
                 TypeDeclarationKind::Implements => entry.implements.push(target_name),

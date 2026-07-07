@@ -133,8 +133,11 @@ fn compute_pattern_discriminants(
         }
         Pattern::Member(type_pattern, variant_name) => {
             if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                    ctx.type_checker.global_type_definitions.get(type_name)
+                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+                    .type_checker
+                    .type_table
+                    .global_type_definitions
+                    .get(type_name)
                 {
                     if let Some((idx, _)) = enum_def
                         .variants
@@ -153,8 +156,11 @@ fn compute_pattern_discriminants(
         Pattern::EnumVariant(parent_pattern, _bindings) => {
             if let Pattern::Member(type_pattern, variant_name) = parent_pattern.as_ref() {
                 if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                    if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                        ctx.type_checker.global_type_definitions.get(type_name)
+                    if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+                        .type_checker
+                        .type_table
+                        .global_type_definitions
+                        .get(type_name)
                     {
                         if let Some((idx, _)) = enum_def
                             .variants
@@ -267,6 +273,7 @@ pub(crate) fn lower_match_expr(
     let switch_discr = if let TypeKind::Custom(type_name, _) = &subject_ty.kind {
         if ctx
             .type_checker
+            .type_table
             .global_type_definitions
             .get(type_name)
             .is_some_and(|td| matches!(td, crate::type_checker::context::TypeDefinition::Enum(_)))
