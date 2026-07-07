@@ -1,26 +1,30 @@
-.PHONY: build release test lint format clean audit gpu-browser-check
+.PHONY: build release test lint format clean audit gpu-browser-check runtimes
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
-build:
-	cargo build
+# Build every runtime static library in RELEASE. The compiler links
+# `src/runtime/<name>/target/release` in preference to `target/debug`
+# (see `runtime_library_dir` in src/pipeline.rs), so the release staticlib
+# is the artifact that actually gets linked. Rebuilding only debug leaves a
+# stale release `.a` in place — the compiler keeps linking old runtime code,
+# which silently masks intrinsic changes and produces non-reproducible test
+# failures. This target keeps the linked artifact fresh; `build` and `test`
+# depend on it so nothing links a stale runtime.
+runtimes:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
-			echo "Building $$rt"; \
-			cargo build --manifest-path "$$rt/Cargo.toml"; \
-		done; \
-	fi
-
-release:
-	cargo build --release
-	@if [ -n "$(RUNTIMES)" ]; then \
-		for rt in $(RUNTIMES); do \
-			echo "Building $$rt (release)"; \
+			echo "Building $$rt (release staticlib — the profile the compiler links)"; \
 			cargo build --release --manifest-path "$$rt/Cargo.toml"; \
 		done; \
 	fi
 
-test:
+build: runtimes
+	cargo build
+
+release: runtimes
+	cargo build --release
+
+test: runtimes
 	cargo test -- --test-threads=4
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \

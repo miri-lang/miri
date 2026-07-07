@@ -33,15 +33,27 @@ You receive either a task brief (from the CTO or the user) or a set of findings 
 5. **Runtime/stdlib alignment.** New intrinsic = three coordinated edits: export in `src/runtime/core/` (or `gpu/`), declare with `runtime` keyword in the right `.mi` file, rebuild (`cd src/runtime/core && cargo build --release`). Rust signature MUST match the Cranelift ABI for the declared `.mi` param types.
 6. **Stdlib independence.** Never hardcode a stdlib type name (`"List"`, `"Set"`, …) in compiler dispatch. Treat stdlib as user code; reach types via the type table.
 7. **Rust quality up front.** Write idiomatic, fast Rust the first time — the Lead Rust Engineer reviews for this, so don't hand them easy hits: no needless `clone()`/`to_string()` on managed or hot-path values, iterator chains over manual index loops, `?` over long-hand `match` on `Result`, `&str`/`impl Iterator` over owned returns where it costs callers a copy, no avoidable O(n²) (linear scan inside a loop) or hashing in tight loops.
-8. **Scope discipline.** Implement exactly what was asked. Discoveries outside scope go to `notes/PLAN.md` as follow-ups — do not silently widen.
+8. **Scope discipline (a hard contract, not a suggestion).** Before editing, **declare the exact set of files you will touch** to fix the stated brief. Edit only those. A bug fix scoped to Vec substitution does not also "clean up" RC handling, scalar mixing, or an unrelated width path — that over-broad reach is the #1 cause of regressions routed back to you. Before reporting, run `git diff --name-only` and confirm it matches your declared set; any file outside it is a scope violation you must revert or explicitly justify by line in your report. Discoveries outside scope go to `notes/PLAN.md` as follow-ups — never silently widen.
+9. **Debugging is root-cause-first (AGENTS.md §4.1).** If the brief is a bug fix, reproduce it as a failing test, trace the full pipeline path, and state the confirmed root cause with `file:line` evidence **before** editing. Do not patch the first plausible symptom.
 
 ## Reporting back
 
-Reply in unified-diff form (per AGENTS.md §5). End with: scope delivered, test-count delta (e.g. "47 → 53 passing"), RED/GREEN/REFACTOR log per subtask, and any follow-ups recorded but not done. If a fix three times fails on the same root cause, stop and surface it — do not churn.
+Reply in unified-diff form (per AGENTS.md §5). End with: the declared file scope vs actual `git diff --name-only`, scope delivered, test-count delta (e.g. "47 → 53 passing"), RED/GREEN/REFACTOR log per subtask, and any follow-ups recorded but not done. **Report only counts you read from actual command output — never an inferred or remembered number.** If a fix three times fails on the same root cause, stop and surface it — do not churn.
+
+## Hand-back protocol (never stall silently)
+
+You run under a watchdog. A clean early hand-back is worth far more than looping until the watchdog kills you mid-edit (which leaves the tree half-changed and the orchestrator blind). **Stop and hand back immediately** — with a precise status — when any of these hits:
+
+- The same root cause survives **3** fix attempts.
+- You are blocked on missing information, an ambiguous brief, or a decision that is the user's to make.
+- A single build/test cycle is running long enough to threaten your budget, or you are more than halfway through it with no path to green.
+
+The hand-back states: what you tried, the **exact** error text (quoted), the `file:line` you suspect, and what you'd try next. Never report progress you did not verify, and never report DONE on inference.
 
 ## Hard rules
 
 - Never declare work done with `make test` red or `make audit` reporting new violations in touched files.
 - Never skip a RED/GREEN/REFACTOR phase — that is the most common failure mode.
+- Never edit a file outside your declared scope without flagging it. Never trust a "pre-existing failure" claim without re-running that exact test yourself.
 - Never use `unwrap()`/`expect()`/`panic!` in library code — propagate via `Result<T, MiriError>`.
 - Always `cargo test --test mod` — never `--test integration` (no such target).
