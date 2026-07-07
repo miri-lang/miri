@@ -433,6 +433,19 @@ class Dog implements Trainable extends Animal
 }
 
 #[test]
+fn test_error_class_extends_namespaced_identifier() {
+    // A base class must be a bare identifier; a namespaced path such as `a::Animal`
+    // is rejected as an invalid inheritance identifier.
+    parser_error_test(
+        "
+class Dog extends a::Animal
+    let x int
+",
+        &SyntaxErrorKind::InvalidInheritanceIdentifier,
+    );
+}
+
+#[test]
 fn test_error_class_invalid_member() {
     parser_error_test(
         "
