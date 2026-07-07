@@ -25,7 +25,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::Type;
 use crate::ast::*;
 use crate::error::type_error::TypeError;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 pub mod builtins;
@@ -114,6 +114,17 @@ pub struct TypeChecker {
     /// specialized body per instantiation without re-walking the AST. Tuples are
     /// deduplicated by their type kinds (source spans are ignored).
     pub generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
+    /// Expression ids of integer literals that appear directly under a unary
+    /// negation. `i64::MIN` can only be written as `-9223372036854775808`, whose
+    /// bare operand (2^63) is one past `i64::MAX`; that magnitude is in range
+    /// only in this negated position, so its literal range check is relaxed.
+    pub(crate) negated_int_literals: HashSet<usize>,
+    /// Expression ids of integer literals declared with an explicit integer type
+    /// wider than `i64` (`i128`/`u64`/`u128`). Such literals are exempt from the
+    /// default-`int` (i64) range check; their value still fits `i128` (the parser
+    /// rejects anything larger). Runtime lowering of these wide literals is a
+    /// separate, pre-existing limitation, not enforced here.
+    pub(crate) wide_typed_int_literals: HashSet<usize>,
 }
 
 impl Default for TypeChecker {
@@ -141,6 +152,8 @@ impl TypeChecker {
             entry_source_path: None,
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
+            negated_int_literals: HashSet::new(),
+            wide_typed_int_literals: HashSet::new(),
         }
     }
 

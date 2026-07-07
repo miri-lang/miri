@@ -93,6 +93,12 @@ impl TypeChecker {
             name_expr,
         );
 
+        // Structs are data types: the only method they may define is `drop`.
+        // Any other method has no type-checked body or call dispatch (that is a
+        // class feature), so reject it here with a clear error instead of
+        // letting it reach codegen as an internal compiler error.
+        self.reject_non_drop_struct_methods(&name, methods);
+
         let has_drop = methods.iter().any(is_drop_method);
         let struct_def = StructDefinition {
             fields: fields_vec,
@@ -107,6 +113,27 @@ impl TypeChecker {
         };
 
         self.register_struct_definition(&name, struct_def, visibility, context);
+    }
+
+    /// Reports an error for every struct method other than `drop`. Structs are
+    /// data types; behavior belongs on a class, a trait, or a free function.
+    fn reject_non_drop_struct_methods(&mut self, struct_name: &str, methods: &[Statement]) {
+        for method in methods {
+            if is_drop_method(method) {
+                continue;
+            }
+            let StatementKind::FunctionDeclaration(decl) = &method.node else {
+                continue;
+            };
+            self.report_error(
+                format!(
+                    "Struct '{}' cannot define methods other than 'drop' (found '{}'). \
+                     Use a class for methods, or a free function that takes the struct.",
+                    struct_name, decl.name
+                ),
+                method.span,
+            );
+        }
     }
 
     fn extract_struct_name(&mut self, name_expr: &Expression) -> Option<String> {

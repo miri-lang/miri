@@ -4,6 +4,22 @@
 use super::utils::*;
 
 #[test]
+fn test_hex_bit_pattern_literals() {
+    // Hex/binary/octal literals are bit patterns: a value with the high bit set
+    // is the corresponding signed `int` (i64), not an out-of-range error. This
+    // is the conventional all-ones / sign-bit idiom.
+    assert_runs_with_output("println(f'{0xFFFFFFFFFFFFFFFF}')", "-1");
+    assert_runs_with_output("println(f'{0x8000000000000000}')", "-9223372036854775808");
+    // A hex value that still fits the signed range is unchanged.
+    assert_runs_with_output("println(f'{0xFF}')", "255");
+    // Binary all-ones is likewise -1.
+    assert_runs_with_output(
+        "println(f'{0b1111111111111111111111111111111111111111111111111111111111111111}')",
+        "-1",
+    );
+}
+
+#[test]
 fn test_integer_types_signed() {
     assert_runs("let x i8 = 127");
     assert_runs("let x i16 = 32767");

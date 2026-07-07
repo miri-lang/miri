@@ -57,6 +57,15 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
+        // A directly-negated integer literal may reach |i64::MIN| = i64::MAX + 1
+        // (i64::MIN is spelled `-9223372036854775808`). Mark it so its literal
+        // range check, run when the operand is visited below, is relaxed.
+        if matches!(op, UnaryOp::Negate) {
+            if let ExpressionKind::Literal(Literal::Integer(_)) = &operand.node {
+                self.negated_int_literals.insert(operand.id);
+            }
+        }
+
         // Check for double negation pattern (--x)
         if matches!(op, UnaryOp::Negate) {
             if let ExpressionKind::Unary(UnaryOp::Negate, _) = &operand.node {

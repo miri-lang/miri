@@ -14,6 +14,26 @@ use miri::pipeline::{BuildOptions, Pipeline};
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Run the whole command on a worker thread with a large stack. Compilation
+    // recurses on expression-nesting depth (type inference and MIR lowering both
+    // walk the expression tree), so a deep-but-valid input — e.g. a long
+    // left-associative `a + b + c + ...` chain the parser builds into a deep
+    // left-leaning AST — would otherwise overflow the fixed main-thread stack
+    // and abort the process. A generous stack raises that ceiling far beyond any
+    // realistic program while keeping the recursive passes simple.
+    const COMPILE_STACK_SIZE: usize = 512 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .stack_size(COMPILE_STACK_SIZE)
+        .spawn(move || run_command(cli))
+        .context("failed to spawn compiler worker thread")?;
+    match worker.join() {
+        Ok(result) => result,
+        // Propagate a panic from the worker as if it happened on this thread.
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn run_command(cli: Cli) -> Result<()> {
     match cli.command {
         Some(command) => match command {
             Commands::Run { path, program_args } => {

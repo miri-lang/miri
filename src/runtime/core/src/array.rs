@@ -534,9 +534,13 @@ pub mod ffi {
     /// SIGABRT spawns `ReportCrash` and serializes the test suite under load.
     /// `_exit` also skips atexit handlers, so the `MIRI_LEAK_CHECK` observer
     /// does not fire on intentional bounds-check exits.
+    ///
+    /// `index` is received as a signed `i64` — the width Miri indices are
+    /// computed at — so a negative index prints as its actual value (e.g. `-1`)
+    /// rather than the huge `usize` it becomes when reinterpreted as unsigned.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_array_panic_oob(index: usize, len: usize) {
+    pub unsafe extern "C" fn miri_rt_array_panic_oob(index: i64, len: usize) {
         use std::io::Write;
         eprintln!(
             "Runtime error: Array index out of bounds: the len is {} but the index is {}",

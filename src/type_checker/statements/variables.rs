@@ -376,6 +376,16 @@ impl TypeChecker {
         context: &mut Context,
         span: Span,
     ) -> Type {
+        // A wide integer annotation (`i128`/`u64`/`u128`) exempts its literal
+        // initializer from the default-`int` (i64) range check, which otherwise
+        // runs when the initializer is inferred below.
+        if let (Some(type_expr), Some(init)) = (&decl.typ, &decl.initializer) {
+            let declared = self.resolve_type_expression(type_expr, context);
+            if int_type_exceeds_i64(&declared.kind) {
+                self.mark_wide_typed_int_literal(init);
+            }
+        }
+
         let inferred_type = if let Some(init) = &decl.initializer {
             self.infer_expression(init, context)
         } else if let Some(type_expr) = &decl.typ {
@@ -442,4 +452,26 @@ impl TypeChecker {
 
         inferred_type
     }
+
+    /// Records an integer-literal initializer (bare or directly signed) as
+    /// wide-typed so it is exempt from the default-`int` (i64) range check.
+    fn mark_wide_typed_int_literal(&mut self, init: &Expression) {
+        match &init.node {
+            ExpressionKind::Literal(Literal::Integer(_)) => {
+                self.wide_typed_int_literals.insert(init.id);
+            }
+            ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
+                if let ExpressionKind::Literal(Literal::Integer(_)) = &operand.node {
+                    self.wide_typed_int_literals.insert(operand.id);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns `true` if `kind` is an integer type whose range exceeds `i64`
+/// (`i128`/`u64`/`u128`), for which a literal may legitimately exceed `i64::MAX`.
+fn int_type_exceeds_i64(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::I128 | TypeKind::U64 | TypeKind::U128)
 }

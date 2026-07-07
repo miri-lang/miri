@@ -46,10 +46,50 @@ use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
+    /// Rejects an integer literal whose value does not fit the default `int`
+    /// type (`i64`), which would otherwise be silently truncated to a garbage
+    /// value during MIR lowering and codegen.
+    ///
+    /// A literal directly under a unary negation may reach `|i64::MIN|`
+    /// (`i64::MAX + 1`), since `i64::MIN` can only be spelled
+    /// `-9223372036854775808`; a bare positive literal may reach only `i64::MAX`.
+    pub(crate) fn check_integer_literal_range(
+        &mut self,
+        lit: &Literal,
+        expr_id: usize,
+        span: Span,
+    ) {
+        let Literal::Integer(int_lit) = lit else {
+            return;
+        };
+        // A literal explicitly declared with a wider integer type keeps its full
+        // i128-representable range (the parser already rejects anything larger).
+        if self.wide_typed_int_literals.contains(&expr_id) {
+            return;
+        }
+        let value = int_lit.to_i128();
+        let max = if self.negated_int_literals.contains(&expr_id) {
+            i64::MAX as i128 + 1
+        } else {
+            i64::MAX as i128
+        };
+        if value > max {
+            self.report_error(
+                format!(
+                    "Integer literal '{}' is out of range for the default int type (i64, max {})",
+                    value,
+                    i64::MAX
+                ),
+                span,
+            );
+        }
+    }
+
     pub(crate) fn infer_literal(&self, lit: &Literal) -> Type {
         match lit {
             Literal::Integer(_) => ast_factory::make_type(TypeKind::Int),

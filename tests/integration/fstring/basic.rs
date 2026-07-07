@@ -37,6 +37,30 @@ print(f"just a plain string")
 }
 
 #[test]
+fn test_fstring_escaped_braces() {
+    // A backslash-escaped brace inside an f-string is a literal brace, not an
+    // interpolation delimiter, and the backslash must be stripped from the
+    // output. Escaped braces coexist with real interpolations.
+    assert_runs_with_output(
+        r#"
+let x = 5
+print(f"\{x is {x}\}")
+"#,
+        "{x is 5}",
+    );
+}
+
+#[test]
+fn test_fstring_escaped_braces_only() {
+    assert_runs_with_output(
+        r#"
+print(f"\{literal\}")
+"#,
+        "{literal}",
+    );
+}
+
+#[test]
 fn test_fstring_same_variable_twice() {
     assert_runs_with_output(
         r#"
