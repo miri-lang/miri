@@ -232,3 +232,108 @@ fn main()
         "30",
     );
 }
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn module_const_in_forall_body_computes_on_device() {
+    // A module-level `const` referenced inside a `gpu forall` body must carry its
+    // real value onto the device (inlined as a literal), not silently read 0.
+    // buf[3] = 64 + 3 = 67 proves the constant reached the kernel; a dropped
+    // capture would have yielded 3.
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+const W = 64
+
+fn main()
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i in 0..8
+        buf[i] = W + i
+    let host = buf
+    println(f\"{host.element_at(3)}\")
+",
+        "67",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn arithmetic_module_const_in_forall_body_computes_on_device() {
+    // An arithmetic module const (`64 * 64`) must const-fold and reach the kernel
+    // body. buf[5] = 4096 + 5 = 4101 proves the folded value 4096 is present.
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+const SIZE = 64 * 64
+
+fn main()
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i in 0..8
+        buf[i] = SIZE + i
+    let host = buf
+    println(f\"{host.element_at(5)}\")
+",
+        "4101",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn local_const_in_forall_body_computes_on_device() {
+    // A function-local `const` captured into a `gpu forall` body is uploaded as a
+    // uniform. buf[3] = 64 + 3 = 67 proves the uniform carried 64, not 0.
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    const W = 64
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i in 0..8
+        buf[i] = W + i
+    let host = buf
+    println(f\"{host.element_at(3)}\")
+",
+        "67",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn module_const_in_bare_forall_body_computes_on_device() {
+    // A bare `forall` over a gpu-resident buffer routes to GPU; a module const in
+    // its body must still carry its value. buf[3] = 64 + 3 = 67.
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+const W = 64
+
+fn main()
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0]
+    forall i in 0..8
+        buf[i] = W + i
+    let host = buf
+    println(f\"{host.element_at(3)}\")
+",
+        "67",
+    );
+}

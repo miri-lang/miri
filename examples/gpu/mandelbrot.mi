@@ -14,8 +14,10 @@ gpu var pixels = Array<f32, 64 * 64>()
 
 // Main computation: for each pixel (as a linear index), map to 2D coordinates,
 // then to complex plane, iterate z = z² + c until |z|² > 4 or reach iteration limit.
-// Host scalars cannot be captured into the kernel, so the viewport mapping is
-// computed device-side from idx.
+// The viewport mapping is computed device-side from idx using the literal 64.
+// TODO: a module `const` referenced in a kernel body now inlines correctly (see
+// tests/integration/gpu/scalar_capture.rs), so this repeated literal could be
+// replaced by a single named `const W = 64`.
 gpu forall idx in 0..SIZE
     // Convert linear index to (x, y) coordinates
     let y = idx / 64
