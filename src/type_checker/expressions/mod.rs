@@ -81,7 +81,10 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         match kind {
-            ExpressionKind::Literal(lit) => self.infer_literal(lit),
+            ExpressionKind::Literal(lit) => {
+                self.check_integer_literal_range(lit, expr_id, span);
+                self.infer_literal(lit)
+            }
             ExpressionKind::Binary(left, op, right) => {
                 self.infer_binary(left, op, right, span, context)
             }

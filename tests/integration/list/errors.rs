@@ -17,6 +17,23 @@ println(f\"{l[idx]}\")
 }
 
 #[test]
+fn list_negative_index_reports_signed_index() {
+    // A negative index is out of bounds, but the error must report its actual
+    // signed value (`-1`), not the huge wrapped `usize` (18446744073709551615)
+    // it becomes when reinterpreted as unsigned.
+    assert_runtime_error(
+        "
+use system.collections.list
+
+let l = List([1, 2, 3])
+let i = 0 - 1
+println(f\"{l[i]}\")
+",
+        "the index is -1",
+    );
+}
+
+#[test]
 fn list_out_of_bounds_remove_at() {
     assert_runtime_crash(
         "

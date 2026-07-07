@@ -166,13 +166,18 @@ fn lower_single_variable(
     }
     let (var_ty, init_expr_opt, pre_lowered_op) = resolve_decl_init(ctx, decl, span)?;
     let var_ty_kind = var_ty.kind.clone();
-    let local = ctx.push_local(decl.name.clone(), var_ty, *span);
+    // Allocate the local but defer binding its name: a shadowing initializer
+    // (`let x = x + 1`) must resolve `x` to the outer binding, not the local we
+    // are declaring. The name becomes resolvable only after the initializer is
+    // lowered.
+    let local = ctx.alloc_local(decl.name.clone(), var_ty, *span);
 
     apply_variable_residency(ctx, local, decl, span);
 
     if let Some(init_expr) = init_expr_opt {
         assign_variable_initializer(ctx, local, init_expr, pre_lowered_op, &var_ty_kind, span)?;
     }
+    ctx.bind_local_name(decl.name.clone(), local);
     Ok(())
 }
 

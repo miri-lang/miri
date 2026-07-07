@@ -3,6 +3,38 @@
 
 use crate::integration::utils::{assert_runs, assert_runs_many, assert_runs_with_output};
 
+/// A deeply nested but valid expression must compile and run, not overflow the
+/// compiler's native stack. A long left-associative chain builds a deep
+/// left-leaning AST that type inference and MIR lowering walk recursively; the
+/// compiler runs those passes on a large worker stack so depth is bounded by
+/// memory rather than a fixed stack.
+#[test]
+fn deep_binary_chain_compiles_and_runs() {
+    // ~5000 additions: comfortably past the ~3500-deep point that previously
+    // aborted the compiler with a stack overflow.
+    let chain: String = " + 1".repeat(5000);
+    assert_runs_with_output(&format!("println(f'{{1{}}}')", chain), "5001");
+}
+
+/// A shadowing `let` whose initializer references the shadowed name must read
+/// the *outer* binding, not the new one being declared (which is not yet in
+/// scope during its own initializer). `let x = x + 100` after `let x = 5` must
+/// evaluate to `105`, not `100`.
+#[test]
+fn shadowing_let_initializer_reads_outer_binding() {
+    assert_runs_with_output("let x = 5\nlet x = x + 100\nprintln(f'{x}')", "105");
+}
+
+/// The same rule inside a loop body: shadowing the loop variable with an
+/// initializer that uses it must read the loop value each iteration.
+#[test]
+fn shadowing_loop_variable_reads_loop_value() {
+    assert_runs_with_output(
+        "for i in 1..4:\n  let i = i + 100\n  println(f'{i}')",
+        "101\n102\n103",
+    );
+}
+
 #[test]
 fn empty_program() {
     assert_runs("");

@@ -335,6 +335,20 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {
+        let local = self.alloc_local(name.clone(), ty, span);
+        self.bind_local_name(name, local);
+        local
+    }
+
+    /// Allocate a user local and mark its storage live, but do **not** yet make
+    /// its name resolvable in `variable_map`. Name binding is deferred to
+    /// [`bind_local_name`] so that a shadowing declaration's initializer
+    /// (`let x = x + 1`) still resolves the name to the *outer* binding rather
+    /// than the not-yet-assigned local it introduces.
+    ///
+    /// Emits no name-dependent MIR beyond `StorageLive`, so the instruction
+    /// stream is identical to the combined [`push_local`].
+    pub fn alloc_local(&mut self, name: String, ty: Type, span: Span) -> Local {
         let mut decl = LocalDecl::new(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
@@ -345,11 +359,26 @@ impl<'a> LoweringContext<'a> {
         decl.is_user_variable = true;
         let local = self.body.new_local(decl);
 
-        // Track in current scope and update variable map (single hash lookup via entry API)
+        // Track in current scope so scope exit removes it (and restores any
+        // shadowed binding recorded later by `bind_local_name`).
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.introduced.push(name_rc.clone());
+            scope.introduced.push(name_rc);
         }
 
+        // Emit StorageLive for the new local
+        self.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageLive(Place::new(local)),
+            span,
+        });
+
+        local
+    }
+
+    /// Make `name` resolve to `local`, recording any binding it shadows so the
+    /// previous one is restored on scope exit. Deferred from [`alloc_local`];
+    /// emits no MIR.
+    pub fn bind_local_name(&mut self, name: String, local: Local) {
+        let name_rc: Rc<str> = Rc::from(name);
         match self.variable_map.entry(name_rc) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let old_local = *entry.get();
@@ -362,14 +391,6 @@ impl<'a> LoweringContext<'a> {
                 entry.insert(local);
             }
         }
-
-        // Emit StorageLive for the new local
-        self.push_statement(crate::mir::Statement {
-            kind: StatementKind::StorageLive(Place::new(local)),
-            span,
-        });
-
-        local
     }
 
     /// Register a function parameter (similar to push_local but no StorageLive)

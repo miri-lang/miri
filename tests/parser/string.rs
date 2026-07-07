@@ -138,10 +138,12 @@ fn test_f_string_with_map_literal() {
 
 #[test]
 fn test_f_string_with_escaped_braces_is_parsed_as_literal() {
+    // Escaped braces are literal text (not interpolation delimiters), and the
+    // escaping backslash is stripped so only the brace reaches the string.
     parser_test(
         r#"f"Literal braces \{ and \}""#,
         vec![expression_statement(f_string(vec![
-            string_literal_expression("Literal braces \\{ and \\}"),
+            string_literal_expression("Literal braces { and }"),
         ]))],
     );
 }

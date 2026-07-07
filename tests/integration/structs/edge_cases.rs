@@ -42,3 +42,38 @@ fn main()
         "true",
     );
 }
+
+#[test]
+fn test_struct_non_drop_method_is_rejected() {
+    // Structs are data types: they may define only `drop`. A standalone method
+    // is not supported and must be a clear compile error, not an internal
+    // compiler error (ICE) at code generation.
+    assert_compiler_error(
+        r#"
+struct P
+    v int
+    fn get() int
+        return self.v
+
+fn main()
+    let p = P(v: 42)
+"#,
+        "cannot define methods",
+    );
+}
+
+#[test]
+fn test_struct_drop_method_still_allowed() {
+    // `drop` remains a valid struct method.
+    assert_runs(
+        r#"
+struct Res
+    id int
+    fn drop(self)
+        println("dropped")
+
+fn main()
+    let r = Res(id: 1)
+"#,
+    );
+}

@@ -29,6 +29,11 @@ pub(crate) fn unescape_string(s: &str) -> Cow<'_, str> {
                 Some('0') => result.push('\0'),
                 Some('\'') => result.push('\''),
                 Some('"') => result.push('"'),
+                // `\{` / `\}` escape a literal brace in an f-string (the lexer
+                // treats an escaped brace as text, not an interpolation
+                // delimiter); strip the backslash so the brace reaches output.
+                Some('{') => result.push('{'),
+                Some('}') => result.push('}'),
                 Some(other) => {
                     result.push('\\');
                     result.push(other);
@@ -146,6 +151,21 @@ impl<'source> Parser<'source> {
                     span,
                 ));
             }
+        };
+
+        // Hex/binary/octal literals are bit patterns: a value that fits `u64`
+        // but has the high bit set (> i64::MAX) is reinterpreted as its signed
+        // i64 two's-complement value — e.g. `0xFFFF_FFFF_FFFF_FFFF` is `-1` — so
+        // a full-width mask is a valid `int` rather than an out-of-range error.
+        // Decimal literals keep their literal value and stay range-checked by
+        // the type checker.
+        let value = match token_type {
+            Token::BinaryNumber | Token::HexNumber | Token::OctalNumber
+                if value > i64::MAX as i128 && value <= u64::MAX as i128 =>
+            {
+                value as u64 as i64 as i128
+            }
+            _ => value,
         };
 
         Ok(ast::int_literal(value))
