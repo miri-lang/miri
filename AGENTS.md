@@ -126,6 +126,18 @@ Work is **not done** until each acceptance criterion has passed all three phases
 
 ---
 
+## 4.1 Root-Cause-First Debugging (MANDATORY for every bug fix)
+Fixing a bug is not the same as adding a feature. The most expensive failure mode in this repo is a **shallow first-pass fix**: you patch the first plausible symptom, the test goes green, and a deeper mismatch surfaces one or two rounds later. Front-load the analysis. Before you edit a single line to fix a reported bug:
+
+1. **Reproduce it as a failing test FIRST.** Write the smallest `.mi` snippet (or unit test) that fails with the exact reported symptom. This test *is* the RED phase of the fix. A bug you cannot reproduce is a bug you do not yet understand — do not fix it.
+2. **Trace the full pipeline path before hypothesizing.** Follow the failure across every stage it flows through (lexer → parser → type checker → MIR → codegen → runtime → stdlib) using the code graph (`get_affected_flows`, `query_graph` callers/callees). Identify the exact stage and `file:line` where observed behavior first diverges from intended behavior. Do not stop at the first stage that *looks* wrong.
+3. **State the confirmed root cause + evidence before touching code.** One sentence: "the bug is X at `file:line`, proven by Y." If more than one cause is plausible, rank them and disprove the losers — never fix the first plausible one on faith.
+4. **Fix at the correct layer, then prove the repro test now passes** and that no sibling test reddened. A fix that relocates the symptom (e.g. stripping a prefix on the client to hide a backend key mismatch) without addressing the traced cause is **not done** — it is a second bug in waiting.
+
+This is Red-Green-Refactor with the diagnosis made explicit. Skipping it is what turns one bug into three rounds.
+
+---
+
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 
