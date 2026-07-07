@@ -22,6 +22,11 @@
 
 use system.collections.array
 
+// Four input samples; the hidden layer has one cell per (sample, hidden unit)
+// pair (4 samples × 2 units = 8).
+const SAMPLES = 4
+const HIDDEN = 8
+
 // Four input samples, 2 features each (row-major: sample 0 = inputs[0..2], ...).
 gpu let inputs = [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
 
@@ -32,11 +37,11 @@ gpu let b1 = [0.0, -1.0]
 // Layer 2: weights (2), bias is 0 so it is omitted.
 gpu let w2 = [1.0, -2.0]
 
-gpu var hidden = Array<f32, 8>()
-gpu var output = Array<f32, 4>()
+gpu var hidden = Array<f32, HIDDEN>()
+gpu var output = Array<f32, SAMPLES>()
 
 // Hidden layer: one thread per (sample s, hidden unit j). idx = s * 2 + j.
-gpu forall idx in 0..8
+gpu forall idx in 0..HIDDEN
     let s = idx / 2
     let j = idx - s * 2
     var sum = b1[j]
@@ -47,7 +52,7 @@ gpu forall idx in 0..8
     hidden[idx] = sum if sum > 0.0 else 0.0
 
 // Output layer: one thread per sample, dot product over the 2 hidden units.
-gpu forall s in 0..4
+gpu forall s in 0..SAMPLES
     var sum = 0.0
     var j = 0
     while j < 2

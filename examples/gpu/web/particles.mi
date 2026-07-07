@@ -28,15 +28,19 @@ use system.io
 // Canvas: 192x192 intensity cells, RGBA paint output.
 // Particles: 384x384 = 147,456, four loose f32 components each
 // (px, py in [-1, 1]; age in seconds; seed in [0, 1)).
-gpu var pstate_a = Array<f32, 384 * 384 * 4>()
-gpu var pstate_b = Array<f32, 384 * 384 * 4>()
+const PSTATE = 384 * 384 * 4
+const GRID = 192 * 192
+const PAINT = 192 * 192 * 4
+
+gpu var pstate_a = Array<f32, PSTATE>()
+gpu var pstate_b = Array<f32, PSTATE>()
 
 // Persistent fixed-point intensity surface (ping-ponged for the decay pass).
-gpu var accum_a = Array<Atomic<u32>, 192 * 192>()
-gpu var accum_b = Array<Atomic<u32>, 192 * 192>()
+gpu var accum_a = Array<Atomic<u32>, GRID>()
+gpu var accum_b = Array<Atomic<u32>, GRID>()
 
 // Paint output (RGBA: 4 floats per pixel).
-gpu var paint = Array<f32, 192 * 192 * 4>()
+gpu var paint = Array<f32, PAINT>()
 
 // Integer hash to a unit float in [0, 1) — used to seed particles uniformly.
 // Integer mixing avoids the precision collapse of `sin`-based hashes at large

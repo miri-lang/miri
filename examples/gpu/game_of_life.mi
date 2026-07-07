@@ -14,8 +14,8 @@ use system.collections.array
 const SIZE = 64 * 64
 
 // 64×64 toroidal grids (4096 cells).
-gpu var grid_a = Array<int, 64 * 64>()
-gpu var grid_b = Array<int, 64 * 64>()
+gpu var grid_a = Array<int, SIZE>()
+gpu var grid_b = Array<int, SIZE>()
 
 // Seed: a deterministic hash lights a dense, non-uniform subset of cells —
 // the classic Life "soup" that keeps the simulation churning.
@@ -49,7 +49,7 @@ gpu frame idx in 0..SIZE
 let host = grid_b
 var alive = 0
 var k = 0
-while k < 4096
+while k < SIZE
     alive = alive + host[k]
     k = k + 1
 println(f"alive={alive}")

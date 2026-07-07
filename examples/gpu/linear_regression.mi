@@ -26,18 +26,21 @@
 
 use system.collections.array
 
+// Batch size: four training samples, one GPU thread each.
+const N = 4
+
 // Training data (features and targets), resident on the device.
 gpu let xs = [0.0, 1.0, 2.0, 3.0]
 gpu let ys = [1.0, 3.0, 5.0, 7.0]
 
 // Per-sample gradient contributions and squared errors.
-gpu var gw = Array<f32, 4>()
-gpu var gb = Array<f32, 4>()
-gpu var sq = Array<f32, 4>()
+gpu var gw = Array<f32, N>()
+gpu var gb = Array<f32, N>()
+gpu var sq = Array<f32, N>()
 
 // Parallel map: current params W = 0, B = 0 are inlined as kernel literals
 // (host scalars cannot be captured into the kernel).
-gpu forall i in 0..4
+gpu forall i in 0..N
     let pred = 0.0 * xs[i] + 0.0
     let err = pred - ys[i]
     gw[i] = 2.0 * err * xs[i]
@@ -53,7 +56,7 @@ var sum_gw = 0.0
 var sum_gb = 0.0
 var sum_sq = 0.0
 var i = 0
-while i < 4
+while i < N
     sum_gw = sum_gw + gwh[i]
     sum_gb = sum_gb + gbh[i]
     sum_sq = sum_sq + sqh[i]

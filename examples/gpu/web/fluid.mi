@@ -24,27 +24,31 @@ use system.collections.array
 use system.math
 use system.io
 
+// Single 96×96 grid (9216 cells); paint carries 4 RGBA floats per cell.
+const CELLS = 96 * 96
+const PAINT = 96 * 96 * 4
+
 // Velocity components (ping-ponged a -> b).
-gpu var vx_a = Array<f32, 96 * 96>()
-gpu var vx_b = Array<f32, 96 * 96>()
-gpu var vy_a = Array<f32, 96 * 96>()
-gpu var vy_b = Array<f32, 96 * 96>()
+gpu var vx_a = Array<f32, CELLS>()
+gpu var vx_b = Array<f32, CELLS>()
+gpu var vy_a = Array<f32, CELLS>()
+gpu var vy_b = Array<f32, CELLS>()
 
 // Dye color channels (ping-ponged a -> b).
-gpu var dr_a = Array<f32, 96 * 96>()
-gpu var dr_b = Array<f32, 96 * 96>()
-gpu var dg_a = Array<f32, 96 * 96>()
-gpu var dg_b = Array<f32, 96 * 96>()
-gpu var db_a = Array<f32, 96 * 96>()
-gpu var db_b = Array<f32, 96 * 96>()
+gpu var dr_a = Array<f32, CELLS>()
+gpu var dr_b = Array<f32, CELLS>()
+gpu var dg_a = Array<f32, CELLS>()
+gpu var dg_b = Array<f32, CELLS>()
+gpu var db_a = Array<f32, CELLS>()
+gpu var db_b = Array<f32, CELLS>()
 
 // Divergence and ping-ponged pressure.
-gpu var divg = Array<f32, 96 * 96>()
-gpu var p_a = Array<f32, 96 * 96>()
-gpu var p_b = Array<f32, 96 * 96>()
+gpu var divg = Array<f32, CELLS>()
+gpu var p_a = Array<f32, CELLS>()
+gpu var p_b = Array<f32, CELLS>()
 
 // Paint output (RGBA: 4 floats per pixel).
-gpu var paint = Array<f32, 96 * 96 * 4>()
+gpu var paint = Array<f32, PAINT>()
 
 // Seed all fields to zero (still, dark fluid).
 gpu forall i in 0..9216

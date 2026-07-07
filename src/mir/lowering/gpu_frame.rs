@@ -131,6 +131,9 @@ pub fn lower_gpu_frame_block(
             };
 
             let start_lit = forall_gpu::read_int_literal(start, *span)?;
+            // TODO: a named `const` bound is not treated as literal here, so it takes
+            // the runtime `_bound` uniform path and collides with the frame `_Inputs`
+            // binding (aborts the launch). See notes/PLAN.md for the folding fix.
             let is_literal_end = matches!(
                 &end.node,
                 ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))

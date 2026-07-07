@@ -131,6 +131,20 @@ println(f\"{a.length()}\")
 }
 
 #[test]
+fn test_array_sized_named_const_f32_buffer() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 64 * 64
+let pixels = Array<f32, SIZE>()
+println(f\"{pixels.length()}\")
+",
+        "4096",
+    );
+}
+
+#[test]
 fn test_array_sized_non_const_error() {
     assert_compiler_error(
         "

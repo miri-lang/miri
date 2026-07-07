@@ -19,13 +19,15 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 96×96 pixels (square, so the aspect factor is 1).
+// Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
+const PAINT = 96 * 96 * 4
+
 // Camera state: [yaw, pitch, idle_seconds, _pad] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
 gpu var cam_b = Array<f32, 4>()
 
 // Paint output (RGBA: 4 floats per pixel).
-gpu var paint = Array<f32, 96 * 96 * 4>()
+gpu var paint = Array<f32, PAINT>()
 
 // Smooth minimum: blends two distance fields over a radius k.
 fn smin(a f32, b f32, k f32) f32

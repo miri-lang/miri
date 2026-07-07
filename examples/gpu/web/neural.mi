@@ -28,19 +28,25 @@ use system.collections.array
 use system.math
 use system.io
 
+// Device-buffer sizes: 205 network parameters, a 220-point dataset (3 floats
+// each), and a 64×64 RGBA decision-field surface.
+const PARAMS = 205
+const DATA = 220 * 3
+const PAINT = 64 * 64 * 4
+
 // Weights and velocities (ping-ponged a -> b), and the per-parameter gradient.
-gpu var wa = Array<f32, 205>()
-gpu var wb = Array<f32, 205>()
-gpu var va = Array<f32, 205>()
-gpu var vb = Array<f32, 205>()
-gpu var grad = Array<f32, 205>()
+gpu var wa = Array<f32, PARAMS>()
+gpu var wb = Array<f32, PARAMS>()
+gpu var va = Array<f32, PARAMS>()
+gpu var vb = Array<f32, PARAMS>()
+gpu var grad = Array<f32, PARAMS>()
 
 // Dataset: 220 points, each (x, y, label in {-1, +1}).
-gpu var data = Array<f32, 220 * 3>()
+gpu var data = Array<f32, DATA>()
 
 // HUD stats: [loss, accuracy]. Decision-field paint output (64x64 RGBA).
 gpu var stats = Array<f32, 2>()
-gpu var paint = Array<f32, 64 * 64 * 4>()
+gpu var paint = Array<f32, PAINT>()
 
 fn rand_unit(key i32) f32
     let h = hash_u32(key as u32)
