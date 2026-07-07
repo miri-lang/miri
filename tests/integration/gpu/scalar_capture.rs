@@ -34,7 +34,9 @@ fn main()
 fn scalar_int_capture_value_is_correct() {
     // Verify that scalar int captures work: the captured scalar k=5
     // is passed to the kernel as a uniform and used in computation.
-    assert_runs(
+    // buf[2] = 2 * 5 = 10 after the kernel runs. Reading the value from
+    // host requires an explicit readback ('let host = buf').
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -44,9 +46,11 @@ fn main()
     let k = 5
     gpu forall i in 0..4
         buf[i] = i * k
-    let result = buf.element_at(2)
+    let host = buf
+    let result = host.element_at(2)
     println(f\"{result}\")
 ",
+        "10",
     );
 }
 
@@ -158,8 +162,9 @@ fn main()
 )]
 fn multiple_scalar_captures_value_check() {
     // Verify that multiple scalar int captures work together
-    // in the same kernel.
-    assert_runs(
+    // in the same kernel. buf[3] = 2 * 3 + 3 = 9 after the kernel runs.
+    // Reading the value from host requires an explicit readback.
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -170,9 +175,11 @@ fn main()
     let b = 3
     gpu forall i in 0..4
         buf[i] = a * i + b
-    let result = buf.element_at(3)
+    let host = buf
+    let result = host.element_at(3)
     println(f\"{result}\")
 ",
+        "9",
     );
 }
 
@@ -205,8 +212,9 @@ fn main()
 fn mixed_buffer_and_scalar_captures_value_check() {
     // Verify that both buffer and scalar captures work together:
     // the kernel accesses the gpu-resident data buffer and multiplies
-    // by the captured scalar multiplier.
-    assert_runs(
+    // by the captured scalar multiplier. result[2] = 3 * 10 = 30.
+    // Reading the value from host requires an explicit readback.
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -217,8 +225,10 @@ fn main()
     let multiplier = 10
     gpu forall i in 0..4
         result[i] = data[i] * multiplier
-    let r = result.element_at(2)
+    let host = result
+    let r = host.element_at(2)
     println(f\"{r}\")
 ",
+        "30",
     );
 }
