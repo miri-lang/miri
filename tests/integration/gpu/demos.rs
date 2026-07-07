@@ -170,7 +170,7 @@ fn demo_neural_net_mlp() {
 /// game_of_life_web: Multi-pass Conway's Game of Life with frame inputs and
 /// interactive event handling. A 64×64 toroidal grid with 5-pass frame loop:
 /// (1) CA step, (2) trail decay, (3) mouse splat, (4) reseed, (5) RGBA paint.
-/// Uses literal-sized buffers (Array<T, 64 * 64>) to avoid const-in-generic issues.
+/// Buffer sizes derive from named `const CELLS`/`PAINT` value-generic args.
 /// Deterministic native run counts alive cells after one seed+advance cycle (1993).
 #[test]
 #[cfg_attr(

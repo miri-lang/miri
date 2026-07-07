@@ -19,13 +19,15 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 128×128 pixels (square, so the aspect factor is 1).
+// Canvas: 128×128 pixels (square, so the aspect factor is 1); RGBA paint output.
+const PAINT = 128 * 128 * 4
+
 // View state: [center_x, center_y, scale, _pad] — ping-ponged across frames.
 gpu var view_a = Array<f32, 4>()
 gpu var view_b = Array<f32, 4>()
 
 // Paint output (RGBA: 4 floats per pixel).
-gpu var paint = Array<f32, 128 * 128 * 4>()
+gpu var paint = Array<f32, PAINT>()
 
 // Five-stop palette, evaluated per channel. Stops: navy, blue, cyan, yellow,
 // white — matching the reference shader's `palette(t)`.

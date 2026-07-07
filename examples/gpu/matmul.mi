@@ -24,12 +24,17 @@
 
 use system.collections.array
 
+// The output matrix has 2×2 = 4 cells, one GPU thread each. (The matrix
+// dimension 2 stays a kernel-body literal: host scalars cannot be captured
+// into a `forall`, so only the value-generic buffer size uses a named const.)
+const CELLS = 4
+
 gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
-gpu var c = Array<f32, 4>()
+gpu var c = Array<f32, CELLS>()
 
 // One thread per output cell: idx = row * 2 + col.
-gpu forall idx in 0..4
+gpu forall idx in 0..CELLS
     let row = idx / 2
     let col = idx - row * 2
 
