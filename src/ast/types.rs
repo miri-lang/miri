@@ -64,6 +64,22 @@ pub const OPTION_TYPE_NAME: &str = "Option";
 /// stdlib method-registry lookups.
 pub const STRING_TYPE_NAME: &str = "String";
 
+/// Canonical name for the built-in `Linear<T>` ownership wrapper type.
+///
+/// `TypeKind::Linear(t)` is created by `resolve_builtin_type_alias` when
+/// dispatching on the name "Linear". Centralized so type dispatch and
+/// ownership checking share one spelling instead of scattering `"Linear"`
+/// string literals across the compiler.
+pub const LINEAR_TYPE_NAME: &str = "Linear";
+
+/// Canonical name for the built-in `Range<T>` sequence type.
+///
+/// `TypeKind::Custom(RANGE_TYPE_NAME, [elem_type])` is created by
+/// `resolve_builtin_type_alias` when dispatching on the name "range"
+/// (lowercase alias) or "Range". Centralized so type dispatch shares one
+/// spelling instead of scattering `"Range"` string literals.
+pub const RANGE_TYPE_NAME: &str = "Range";
+
 /// Canonical class name for the compiler-builtin `Dim3` struct used in GPU
 /// kernel context fields.
 pub const DIM3_TYPE_NAME: &str = "Dim3";

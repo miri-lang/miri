@@ -434,7 +434,7 @@ impl Pipeline {
             .check(&ast)
             .map_err(|errors| CompilerError::TypeErrors {
                 errors,
-                warnings: type_checker.warnings.clone(),
+                warnings: type_checker.warnings().to_vec(),
             })?;
 
         Ok(PipelineResult { ast, type_checker })
@@ -457,10 +457,10 @@ impl Pipeline {
             .check(&ast)
             .map_err(|errors| CompilerError::TypeErrors {
                 errors,
-                warnings: type_checker.warnings.clone(),
+                warnings: type_checker.warnings().to_vec(),
             })?;
 
-        for warning in &type_checker.warnings {
+        for warning in type_checker.warnings() {
             eprintln!(
                 "{}",
                 crate::error::format::format_diagnostic(
@@ -1498,7 +1498,7 @@ impl Pipeline {
                         continue;
                     };
                     let is_abstract = matches!(
-                        result.type_checker.global_type_definitions.get(class_name),
+                        result.type_checker.type_definitions().get(class_name),
                         Some(TypeDefinition::Class(cd)) if cd.is_abstract
                     );
                     if !is_abstract {
@@ -1530,7 +1530,12 @@ impl Pipeline {
                     let Some(class_name) = Self::identifier_name(&class_data.name) else {
                         continue;
                     };
-                    let cd = match result.type_checker.global_type_definitions.get(class_name) {
+                    let cd = match result
+                        .type_checker
+                        .type_table
+                        .global_type_definitions
+                        .get(class_name)
+                    {
                         Some(TypeDefinition::Class(cd)) => cd,
                         _ => continue,
                     };
@@ -1544,11 +1549,15 @@ impl Pipeline {
                     // Walk up the inheritance chain; stop at the first non-abstract class.
                     let mut base_opt = cd.base_class.clone();
                     while let Some(ref base_name) = base_opt.clone() {
-                        let base_cd =
-                            match result.type_checker.global_type_definitions.get(base_name) {
-                                Some(TypeDefinition::Class(bcd)) => bcd,
-                                _ => break,
-                            };
+                        let base_cd = match result
+                            .type_checker
+                            .type_table
+                            .global_type_definitions
+                            .get(base_name)
+                        {
+                            Some(TypeDefinition::Class(bcd)) => bcd,
+                            _ => break,
+                        };
                         if !base_cd.is_abstract {
                             break;
                         }
@@ -1666,7 +1675,12 @@ impl Pipeline {
                 let Some(class_name) = Self::identifier_name(&class_data.name) else {
                     continue;
                 };
-                let cd = match result.type_checker.global_type_definitions.get(class_name) {
+                let cd = match result
+                    .type_checker
+                    .type_table
+                    .global_type_definitions
+                    .get(class_name)
+                {
                     Some(TypeDefinition::Class(cd)) => cd,
                     _ => continue,
                 };
@@ -1683,8 +1697,11 @@ impl Pipeline {
                 let mut visited_traits: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 let mut walk_class = class_name.to_string();
-                while let Some(TypeDefinition::Class(walk_cd)) =
-                    result.type_checker.global_type_definitions.get(&walk_class)
+                while let Some(TypeDefinition::Class(walk_cd)) = result
+                    .type_checker
+                    .type_table
+                    .global_type_definitions
+                    .get(&walk_class)
                 {
                     for t_name in &walk_cd.traits {
                         let mut to_check = vec![t_name.clone()];
@@ -1692,8 +1709,11 @@ impl Pipeline {
                             if !visited_traits.insert(t.clone()) {
                                 continue;
                             }
-                            if let Some(TypeDefinition::Trait(td)) =
-                                result.type_checker.global_type_definitions.get(&t)
+                            if let Some(TypeDefinition::Trait(td)) = result
+                                .type_checker
+                                .type_table
+                                .global_type_definitions
+                                .get(&t)
                             {
                                 to_check.extend(td.parent_traits.iter().cloned());
                             }
@@ -1717,8 +1737,11 @@ impl Pipeline {
                             let overridden = {
                                 let mut current = class_name.to_string();
                                 let mut found = false;
-                                while let Some(TypeDefinition::Class(c)) =
-                                    result.type_checker.global_type_definitions.get(&current)
+                                while let Some(TypeDefinition::Class(c)) = result
+                                    .type_checker
+                                    .type_table
+                                    .global_type_definitions
+                                    .get(&current)
                                 {
                                     if c.methods.contains_key(md.name.as_str()) {
                                         found = true;

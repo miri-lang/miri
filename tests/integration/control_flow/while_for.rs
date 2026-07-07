@@ -70,3 +70,19 @@ print(f"{count}")
         "1", // single element
     );
 }
+
+// ── Invalid number of loop variables ────────────────────────────────────
+
+#[test]
+fn test_for_loop_three_variables_over_iterable_is_error() {
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+let items = List([1, 2, 3])
+for i, j, k in items
+    println("x")
+    "#,
+        "Invalid number of loop variables",
+    );
+}

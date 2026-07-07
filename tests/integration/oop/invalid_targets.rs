@@ -178,3 +178,17 @@ trait Named extends Name
         "is not a trait",
     );
 }
+
+// ── Field type inference errors ─────────────────────────────────────────────
+
+#[test]
+fn test_class_field_no_type_no_init_is_error() {
+    assert_compiler_error(
+        r#"
+class User
+    let name
+    let age int
+    "#,
+        "Cannot infer type for field",
+    );
+}

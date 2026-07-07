@@ -121,7 +121,7 @@ fn check_file(path: PathBuf, _verbose: u8, verify_mir: bool) -> Result<()> {
     pipeline = pipeline.with_source_path(abs_path.display().to_string());
     match pipeline.frontend(&source) {
         Ok(result) => {
-            for warning in &result.type_checker.warnings {
+            for warning in result.type_checker.warnings() {
                 eprintln!(
                     "{}",
                     miri::error::format::format_diagnostic(
@@ -131,7 +131,7 @@ fn check_file(path: PathBuf, _verbose: u8, verify_mir: bool) -> Result<()> {
                     )
                 );
             }
-            let warning_count = result.type_checker.warnings.len();
+            let warning_count = result.type_checker.warnings().len();
             if warning_count > 0 {
                 println!(
                     "Check passed. No errors found. {} warning(s) emitted.",

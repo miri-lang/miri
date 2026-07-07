@@ -132,17 +132,22 @@ impl TypeChecker {
 
         // Store the function body for GPU callability analysis
         if let Some(body_stmt) = body {
-            self.function_bodies
+            self.fn_analysis
+                .function_bodies
                 .insert(name.to_string(), std::rc::Rc::new(body_stmt.clone()));
 
             // Compute residency verdict for this function
             let residency = self.compute_function_residency(params, body_stmt, context);
-            self.fn_residencies.insert(name.to_string(), residency);
+            self.fn_analysis
+                .fn_residencies
+                .insert(name.to_string(), residency);
         }
 
         // Store the out-param flags for each function (used in GPU kernel launch)
         let out_flags: Vec<bool> = params.iter().map(|p| p.is_out).collect();
-        self.function_out_params.insert(name.to_string(), out_flags);
+        self.fn_analysis
+            .function_out_params
+            .insert(name.to_string(), out_flags);
 
         let const_value =
             self.check_function_body(body, name, &return_type, infer_main_return, context);
@@ -192,11 +197,13 @@ impl TypeChecker {
                 false,
                 false,
                 properties.visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             );
             global_info.is_gpu_fn = properties.is_gpu;
-            self.global_scope.insert(name.to_string(), global_info);
+            self.type_table
+                .global_scope
+                .insert(name.to_string(), global_info);
         }
 
         if !context.in_class() {
@@ -205,7 +212,7 @@ impl TypeChecker {
                 false,
                 false,
                 properties.visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             );
             local_info.is_gpu_fn = properties.is_gpu;
@@ -249,7 +256,7 @@ impl TypeChecker {
                     param.is_out,
                     false,
                     MemberVisibility::Public,
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -314,7 +321,7 @@ impl TypeChecker {
 
         let kernel_return_type = make_type(TypeKind::Custom(KERNEL_TYPE_NAME.to_string(), None));
 
-        if let Some(info) = self.global_scope.get_mut(name) {
+        if let Some(info) = self.type_table.global_scope.get_mut(name) {
             if let TypeKind::Function(func) = &info.ty.kind {
                 info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
                     generics: func.generics.clone(),
@@ -376,7 +383,7 @@ impl TypeChecker {
                 false,
                 false,
                 MemberVisibility::Public,
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             )
         };
@@ -562,7 +569,7 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         if const_value.is_some() {
-            if let Some(info) = self.global_scope.get_mut(name) {
+            if let Some(info) = self.type_table.global_scope.get_mut(name) {
                 info.value = const_value.clone();
                 info.is_constant = true;
             }

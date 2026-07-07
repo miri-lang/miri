@@ -38,6 +38,7 @@ use crate::mir::{
     GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
     StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
+use crate::type_checker::utils::AcceleratorBindingKind;
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
@@ -409,6 +410,16 @@ fn push_kernel_params(
     UniformParams { bounds, starts }
 }
 
+/// Maps an [`AcceleratorBindingKind`] to the MIR storage class a kernel
+/// parameter of that binding is declared with.
+fn binding_kind_storage_class(kind: AcceleratorBindingKind) -> StorageClass {
+    match kind {
+        AcceleratorBindingKind::Storage => StorageClass::GpuGlobal,
+        AcceleratorBindingKind::Uniform => StorageClass::UniformBuffer,
+        AcceleratorBindingKind::PushConstant => StorageClass::GpuConstant,
+    }
+}
+
 /// Storage class a forall capture of `kind` binds with, sourced from the
 /// accelerator binding-kind registry ([`accelerable_binding_kind`]): a
 /// buffer-backed collection binds as a `Storage` global, a scalar as a
@@ -417,7 +428,7 @@ fn push_kernel_params(
 /// assignment total without a panic rather than guessing.
 fn capture_storage_class(kind: &TypeKind, default: StorageClass) -> StorageClass {
     crate::type_checker::utils::accelerable_binding_kind(kind)
-        .map(crate::type_checker::utils::binding_kind_storage_class)
+        .map(binding_kind_storage_class)
         .unwrap_or(default)
 }
 

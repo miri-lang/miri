@@ -13,7 +13,7 @@ use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
-use crate::ast::types::{FunctionTypeData, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
 use crate::ast::{Expression, ExpressionKind};
 use crate::error::syntax::Span;
 use std::collections::HashMap;
@@ -140,7 +140,7 @@ impl TypeChecker {
         mapping: &mut HashMap<String, Type>,
     ) {
         let normalized = make_type(TypeKind::Custom(
-            "List".to_string(),
+            BuiltinCollectionKind::List.name().to_string(),
             Some(vec![elem.clone()]),
         ));
         self.infer_generic_types(&normalized, arg_type, mapping);
@@ -154,7 +154,7 @@ impl TypeChecker {
         mapping: &mut HashMap<String, Type>,
     ) {
         let normalized = make_type(TypeKind::Custom(
-            "Map".to_string(),
+            BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![k.clone(), v.clone()]),
         ));
         self.infer_generic_types(&normalized, arg_type, mapping);
@@ -167,7 +167,7 @@ impl TypeChecker {
         mapping: &mut HashMap<String, Type>,
     ) {
         let normalized = make_type(TypeKind::Custom(
-            "Set".to_string(),
+            BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![elem.clone()]),
         ));
         self.infer_generic_types(&normalized, arg_type, mapping);
@@ -181,7 +181,7 @@ impl TypeChecker {
         mapping: &mut HashMap<String, Type>,
     ) {
         let normalized = make_type(TypeKind::Custom(
-            "Array".to_string(),
+            BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![elem.clone(), size.clone()]),
         ));
         self.infer_generic_types(&normalized, arg_type, mapping);
@@ -326,7 +326,7 @@ impl TypeChecker {
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
         make_type(TypeKind::Custom(
-            "List".to_string(),
+            BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(subst_elem)]),
         ))
     }
@@ -346,7 +346,7 @@ impl TypeChecker {
         let subst_k = self.substitute_type(&k, mapping);
         let subst_v = self.substitute_type(&v, mapping);
         make_type(TypeKind::Custom(
-            "Map".to_string(),
+            BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
                 self.create_type_expression(subst_k),
                 self.create_type_expression(subst_v),
@@ -360,7 +360,7 @@ impl TypeChecker {
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
         make_type(TypeKind::Custom(
-            "Set".to_string(),
+            BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(subst_elem)]),
         ))
     }
@@ -377,7 +377,7 @@ impl TypeChecker {
         let subst_elem = self.substitute_type(&elem, mapping);
         let subst_size = substitute_value_generic_in_expr(size_expr, mapping);
         make_type(TypeKind::Custom(
-            "Array".to_string(),
+            BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![self.create_type_expression(subst_elem), subst_size]),
         ))
     }

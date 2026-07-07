@@ -225,11 +225,11 @@ impl TypeChecker {
         let info_opt = context
             .resolve_info(name)
             .cloned()
-            .or_else(|| self.global_scope.get(name).cloned());
+            .or_else(|| self.type_table.global_scope.get(name).cloned());
 
         if let Some(info) = info_opt {
             if !self.check_visibility(&info.visibility, &info.module) {
-                let kind = if self.global_type_definitions.contains_key(name) {
+                let kind = if self.type_table.global_type_definitions.contains_key(name) {
                     "Type"
                 } else if matches!(info.ty.kind, TypeKind::Function(_)) {
                     "Function"
@@ -283,7 +283,7 @@ impl TypeChecker {
     }
 
     fn report_undefined_identifier_error(&mut self, name: &str, span: Span, context: &Context) {
-        let entity_kind = if self.global_type_definitions.contains_key(name)
+        let entity_kind = if self.type_table.global_type_definitions.contains_key(name)
             || name.starts_with(|c: char| c.is_uppercase())
         {
             "type"
@@ -299,14 +299,19 @@ impl TypeChecker {
         }
 
         let capacity = context.scopes.iter().map(|s| s.len()).sum::<usize>()
-            + self.global_scope.len()
-            + self.global_type_definitions.len();
+            + self.type_table.global_scope.len()
+            + self.type_table.global_type_definitions.len();
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.scopes {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
-        candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
-        candidates.extend(self.visible_type_names.iter().map(|s| s.as_str()));
+        candidates.extend(self.type_table.global_scope.keys().map(|s| s.as_str()));
+        candidates.extend(
+            self.type_table
+                .visible_type_names
+                .iter()
+                .map(|s| s.as_str()),
+        );
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
@@ -343,7 +348,7 @@ impl TypeChecker {
     ) -> Option<(&'static str, String)> {
         let mut current = class_name.to_string();
         loop {
-            let def = self.global_type_definitions.get(&current)?;
+            let def = self.type_table.global_type_definitions.get(&current)?;
             if let TypeDefinition::Class(class_def) = def {
                 if class_def.methods.contains_key(name) {
                     return Some(("method", format!("Did you mean 'self.{}()'?", name)));

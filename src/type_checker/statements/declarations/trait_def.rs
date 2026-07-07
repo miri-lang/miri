@@ -72,19 +72,19 @@ impl TypeChecker {
         };
 
         // Check for duplicate type definitions
-        if let Some(existing) = self.global_type_definitions.get(&name) {
+        if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
             let is_placeholder = match existing {
                 TypeDefinition::Trait(def) => def.methods.is_empty(),
                 _ => false,
             } || (matches!(existing, TypeDefinition::Trait(_))
-                && self.pre_registered_types.contains(&name));
+                && self.modules.pre_registered_types.contains(&name));
 
             if !is_placeholder {
                 self.report_error(format!("Type '{}' is already defined", name), span);
                 return;
             }
         }
-        self.pre_registered_types.remove(&name);
+        self.modules.pre_registered_types.remove(&name);
 
         // Enter trait scope and set up context
         context.enter_scope();
@@ -110,7 +110,7 @@ impl TypeChecker {
             parent_traits: parent_trait_names,
             parent_trait_args,
             methods,
-            module: self.current_module.clone(),
+            module: self.modules.current_module.clone(),
         };
         self.finalize_trait_definition(&name, &trait_type, trait_def, visibility, context);
 
@@ -148,7 +148,7 @@ impl TypeChecker {
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
-                } else if let Some(def) = self.global_type_definitions.get(trait_name) {
+                } else if let Some(def) = self.type_table.global_type_definitions.get(trait_name) {
                     if !matches!(def, TypeDefinition::Trait(_)) {
                         let kind = match def {
                             TypeDefinition::Class(_) => "a class",
@@ -259,14 +259,14 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         if context.scopes.len() == 2 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
                     false,
                     false,
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -279,7 +279,7 @@ impl TypeChecker {
                 false,
                 false,
                 visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );

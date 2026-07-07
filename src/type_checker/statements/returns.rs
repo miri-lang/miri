@@ -152,10 +152,12 @@ impl TypeChecker {
         }
 
         // Update global symbol as well
-        if let Some(info) = self.global_scope.get_mut(name) {
+        if let Some(info) = self.type_table.global_scope.get_mut(name) {
             if let TypeKind::Function(func_data) = &info.ty.kind {
                 let type_expr = crate::ast::factory::type_expr_non_null(expr_type.clone());
-                self.types.insert(type_expr.id, expr_type.clone());
+                self.type_table
+                    .types
+                    .insert(type_expr.id, expr_type.clone());
 
                 info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
                     generics: func_data.generics.clone(),

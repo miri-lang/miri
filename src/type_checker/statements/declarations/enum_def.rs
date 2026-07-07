@@ -33,7 +33,7 @@ impl TypeChecker {
         };
 
         // Check for duplicate type definitions
-        if let Some(existing) = self.global_type_definitions.get(&name) {
+        if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
             let is_placeholder = match existing {
                 TypeDefinition::Enum(def) => def.variants.is_empty(),
                 _ => false,
@@ -72,7 +72,7 @@ impl TypeChecker {
             variants: variant_map,
             generics: generic_defs_opt,
             methods: method_map,
-            module: self.current_module.clone(),
+            module: self.modules.current_module.clone(),
             must_use,
         };
 
@@ -195,14 +195,14 @@ impl TypeChecker {
         let enum_type_meta = make_type(TypeKind::Meta(Box::new(self_type.clone())));
 
         if context.scopes.len() == 2 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
                     enum_type_meta.clone(),
                     false,
                     false,
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -214,7 +214,7 @@ impl TypeChecker {
                 false,
                 false,
                 visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );

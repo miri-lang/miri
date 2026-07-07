@@ -284,6 +284,7 @@ pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
 
     let found = result
         .type_checker
+        .diagnostics
         .warnings
         .iter()
         .any(|w| w.message.contains(expected_warning));
@@ -291,6 +292,7 @@ pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
     if !found {
         let warning_messages: Vec<String> = result
             .type_checker
+            .diagnostics
             .warnings
             .iter()
             .map(|w| w.message.clone())
@@ -311,6 +313,7 @@ pub fn count_warnings_with_code(source: &str, code: &str) -> usize {
 
     result
         .type_checker
+        .diagnostics
         .warnings
         .iter()
         .filter(|w| w.code == Some(code))

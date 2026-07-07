@@ -101,7 +101,7 @@ impl TypeChecker {
                 self.report_error(
                     format!(
                         "'gpu forall' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
-                         Supported types are: int (i32, i64), bool, and f32 (not f64 or String)",
+                         Supported types are: int/i32, i16, i8, bool, and f32. Unsupported: i64, f64, String.",
                         name, ty
                     ),
                     span,

@@ -44,10 +44,10 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
+use crate::ast::math_intrinsic::MathIntrinsic;
 use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
-use crate::mir::MathIntrinsic;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::utils::{is_gpu_compatible, is_perceus_managed};
 use crate::type_checker::TypeChecker;
@@ -920,7 +920,7 @@ impl TypeChecker {
         // Analyze the function body for GPU compatibility (host-only calls, recursion).
         // This requires walking the body AST, which is stored in `function_bodies`.
         // Clone the body Rc to avoid borrow checker issues with `&mut self`.
-        let body_opt = self.function_bodies.get(func_name).cloned();
+        let body_opt = self.fn_analysis.function_bodies.get(func_name).cloned();
         if let Some(body) = body_opt {
             self.validate_gpu_function_body(func_name, &body);
         }
@@ -965,7 +965,7 @@ impl TypeChecker {
             return true;
         }
 
-        let Some(body) = self.function_bodies.get(func_name) else {
+        let Some(body) = self.fn_analysis.function_bodies.get(func_name) else {
             visited.remove(func_name);
             return false;
         };
@@ -1363,7 +1363,7 @@ impl TypeChecker {
         };
 
         let is_gpu_fn = callee_name
-            .and_then(|name| self.global_scope.get(name))
+            .and_then(|name| self.type_table.global_scope.get(name))
             .map(|info| info.is_gpu_fn)
             .unwrap_or(false);
 
@@ -1403,7 +1403,8 @@ impl TypeChecker {
         }
 
         // For user-defined functions, check the computed residency verdict
-        let callee_residency = callee_name.and_then(|name| self.fn_residencies.get(name).copied());
+        let callee_residency =
+            callee_name.and_then(|name| self.fn_analysis.fn_residencies.get(name).copied());
 
         let callee = match &func.node {
             ExpressionKind::Identifier(name, _) => name.clone(),
@@ -1889,7 +1890,7 @@ impl TypeChecker {
             if args.len() == 1 {
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 return Some(make_type(TypeKind::Custom(
-                    "List".to_string(),
+                    BuiltinCollectionKind::List.name().to_string(),
                     Some(vec![self.create_type_expression(elem_type)]),
                 )));
             } else {
@@ -1927,7 +1928,7 @@ impl TypeChecker {
                 }
             };
             return Some(make_type(TypeKind::Custom(
-                "List".to_string(),
+                BuiltinCollectionKind::List.name().to_string(),
                 Some(vec![self.create_type_expression(elem_type)]),
             )));
         }
@@ -1957,7 +1958,7 @@ impl TypeChecker {
                 let k_type = self.resolve_type_expression(&args[0], context);
                 let v_type = self.resolve_type_expression(&args[1], context);
                 return Some(make_type(TypeKind::Custom(
-                    "Map".to_string(),
+                    BuiltinCollectionKind::Map.name().to_string(),
                     Some(vec![
                         self.create_type_expression(k_type),
                         self.create_type_expression(v_type),
@@ -1989,7 +1990,7 @@ impl TypeChecker {
                     && cargs.len() == 2
                 {
                     return Some(make_type(TypeKind::Custom(
-                        "Map".to_string(),
+                        BuiltinCollectionKind::Map.name().to_string(),
                         Some(cargs.clone()),
                     )));
                 }
@@ -2020,7 +2021,7 @@ impl TypeChecker {
             if args.len() == 1 {
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 return Some(make_type(TypeKind::Custom(
-                    "Set".to_string(),
+                    BuiltinCollectionKind::Set.name().to_string(),
                     Some(vec![self.create_type_expression(elem_type)]),
                 )));
             } else {
@@ -2049,7 +2050,7 @@ impl TypeChecker {
                     && !cargs.is_empty()
                 {
                     return Some(make_type(TypeKind::Custom(
-                        "Set".to_string(),
+                        BuiltinCollectionKind::Set.name().to_string(),
                         Some(cargs.clone()),
                     )));
                 }
@@ -2113,7 +2114,7 @@ impl TypeChecker {
             let mut found = None;
             let mut base = def.base_class.clone();
             while let Some(bname) = base {
-                match self.global_type_definitions.get(&bname) {
+                match self.type_table.global_type_definitions.get(&bname) {
                     Some(TypeDefinition::Class(b)) => {
                         if let Some(m) = b.methods.get("init") {
                             found = Some(m.clone());
@@ -2162,7 +2163,7 @@ impl TypeChecker {
         let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> =
             crate::type_checker::context::collect_class_fields_all(
                 def,
-                &self.global_type_definitions,
+                &self.type_table.global_type_definitions,
             )
             .into_iter()
             .map(|(n, f)| (n.to_string(), f.clone()))
@@ -2416,7 +2417,7 @@ impl TypeChecker {
                 }
 
                 // Reject managed element types at type-check time
-                if is_perceus_managed(&elem_type.kind, &self.global_type_definitions) {
+                if is_perceus_managed(&elem_type.kind, &self.type_table.global_type_definitions) {
                     self.report_error(
                         format!(
                             "Array<T, N>() is not yet supported for managed element type '{}'; use an array literal",
@@ -2428,7 +2429,7 @@ impl TypeChecker {
                 }
 
                 return Some(make_type(TypeKind::Custom(
-                    "Array".to_string(),
+                    BuiltinCollectionKind::Array.name().to_string(),
                     Some(vec![self.create_type_expression(elem_type), size_expr]),
                 )));
             } else {

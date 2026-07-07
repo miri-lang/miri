@@ -140,7 +140,7 @@ fn residency_specialize_call(
         return Vec::new();
     };
     if !matches!(
-        ctx.type_checker.fn_residencies.get(func_name.as_str()),
+        ctx.type_checker.fn_residencies().get(func_name.as_str()),
         Some(crate::type_checker::FnResidency::GpuLaunchSafe)
     ) {
         return Vec::new();
@@ -416,6 +416,7 @@ fn try_lower_module_alias_call(
     };
     let Some(module_path) = ctx
         .type_checker
+        .modules
         .module_aliases
         .get(alias_name.as_str())
         .cloned()
@@ -563,7 +564,7 @@ fn process_gpu_buffer_args(
 > {
     let out_params = ctx
         .type_checker
-        .function_out_params
+        .function_out_params()
         .get(func_name)
         .cloned()
         .unwrap_or_default();
@@ -937,10 +938,13 @@ fn resolve_receiver_override(
 ) -> Option<Type> {
     if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
         let needs_override = matches!(
-            ctx.type_checker.global_type_definitions.get(name.as_str()),
+            ctx.type_checker.type_definitions().get(name.as_str()),
             Some(TypeDefinition::Class(cd)) if cd.is_abstract
         ) || matches!(
-            ctx.type_checker.global_type_definitions.get(name.as_str()),
+            ctx.type_checker
+                .type_table
+                .global_type_definitions
+                .get(name.as_str()),
             Some(TypeDefinition::Trait(_))
         );
         if needs_override {
@@ -998,7 +1002,7 @@ fn try_lower_method_call(
 
     // 2. Regular inherited method resolution and dispatch.
     let Some((defining_class, method_info)) = resolve_inherited_method(
-        &ctx.type_checker.global_type_definitions,
+        ctx.type_checker.type_definitions(),
         &class_name,
         &method_name,
     ) else {
@@ -1073,7 +1077,7 @@ fn emit_resolved_method_call(
         if let Some(slot) = vtable_slot_index(
             m.class_name,
             m.method_name,
-            &ctx.type_checker.global_type_definitions,
+            ctx.type_checker.type_definitions(),
         ) {
             return emit_virtual_method_call(
                 ctx,
@@ -1125,7 +1129,7 @@ fn resolve_generic_class_monomorph(
     let TypeKind::Custom(name, Some(arg_exprs)) = &obj_ty.kind else {
         return None;
     };
-    let defs = &ctx.type_checker.global_type_definitions;
+    let defs = &ctx.type_checker.type_definitions();
     let Some(TypeDefinition::Class(class_def)) = defs.get(name.as_str()) else {
         return None;
     };
@@ -1235,7 +1239,7 @@ fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_na
     if matches!(&obj.node, ExpressionKind::Super) {
         return false;
     }
-    let defs = &ctx.type_checker.global_type_definitions;
+    let defs = &ctx.type_checker.type_definitions();
     let abstract_with_vtable = class_needs_vtable(class_name, defs)
         && matches!(defs.get(class_name), Some(TypeDefinition::Class(cd)) if cd.is_abstract);
     let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
@@ -1778,8 +1782,11 @@ fn try_lower_constructor_call(
                 });
 
                 // Struct constructor.
-                if let Some(TypeDefinition::Struct(def)) =
-                    ctx.type_checker.global_type_definitions.get(type_name)
+                if let Some(TypeDefinition::Struct(def)) = ctx
+                    .type_checker
+                    .type_table
+                    .global_type_definitions
+                    .get(type_name)
                 {
                     return lower_struct_constructor(
                         ctx, span, type_name, def, args, type_args, dest,
@@ -1787,8 +1794,11 @@ fn try_lower_constructor_call(
                     .map(Some);
                 }
                 // Class constructor.
-                if let Some(TypeDefinition::Class(def)) =
-                    ctx.type_checker.global_type_definitions.get(type_name)
+                if let Some(TypeDefinition::Class(def)) = ctx
+                    .type_checker
+                    .type_table
+                    .global_type_definitions
+                    .get(type_name)
                 {
                     // Built-in collection constructors.
                     if let Some(kind) = BuiltinCollectionKind::from_name(type_name) {

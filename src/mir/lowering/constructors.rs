@@ -206,7 +206,7 @@ pub fn lower_class_constructor(
         if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
             Some(class_name.to_string())
         } else if let Some(base) = &def.base_class {
-            resolve_inherited_method(&ctx.type_checker.global_type_definitions, base, "init")
+            resolve_inherited_method(ctx.type_checker.type_definitions(), base, "init")
                 .filter(|(_, m)| !m.is_abstract)
                 .map(|(c, _)| c)
         } else {
@@ -215,7 +215,7 @@ pub fn lower_class_constructor(
     };
 
     let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> = {
-        collect_class_fields_all(def, &ctx.type_checker.global_type_definitions)
+        collect_class_fields_all(def, ctx.type_checker.type_definitions())
             .into_iter()
             .map(|(n, f)| {
                 let mut fi = f.clone();
@@ -913,7 +913,12 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
                 "String" => TypeKind::String,
                 _ => {
                     // Check if it's a user-defined type
-                    if ctx.type_checker.global_type_definitions.contains_key(name) {
+                    if ctx
+                        .type_checker
+                        .type_table
+                        .global_type_definitions
+                        .contains_key(name)
+                    {
                         TypeKind::Custom(name.clone(), None)
                     } else {
                         return None;

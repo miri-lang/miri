@@ -8,7 +8,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
 
@@ -397,12 +397,13 @@ impl TypeChecker {
     /// and returns `false` for primitive types.
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
         let class_name = match &ty.kind {
-            TypeKind::String => "String",
+            TypeKind::String => STRING_TYPE_NAME,
             TypeKind::Custom(name, _) => name.as_str(),
             _ => return false,
         };
 
-        if let Some(TypeDefinition::Class(class_def)) = self.global_type_definitions.get(class_name)
+        if let Some(TypeDefinition::Class(class_def)) =
+            self.type_table.global_type_definitions.get(class_name)
         {
             class_def.traits.iter().any(|t| t == trait_name)
         } else {

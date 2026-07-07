@@ -43,7 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -52,7 +52,7 @@ impl TypeChecker {
     pub(crate) fn infer_list(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
-                "List".to_string(),
+                BuiltinCollectionKind::List.name().to_string(),
                 Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
             ));
         }
@@ -76,7 +76,7 @@ impl TypeChecker {
         }
 
         make_type(TypeKind::Custom(
-            "List".to_string(),
+            BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(first_type)]),
         ))
     }
@@ -93,7 +93,7 @@ impl TypeChecker {
         if elements.is_empty() {
             let inner_type_expr = self.create_type_expression(make_type(TypeKind::Void));
             return make_type(TypeKind::Custom(
-                "Array".to_string(),
+                BuiltinCollectionKind::Array.name().to_string(),
                 Some(vec![inner_type_expr, size.clone()]),
             ));
         }
@@ -117,7 +117,7 @@ impl TypeChecker {
         }
 
         make_type(TypeKind::Custom(
-            "Array".to_string(),
+            BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![self.create_type_expression(first_type), size.clone()]),
         ))
     }
@@ -129,7 +129,7 @@ impl TypeChecker {
     ) -> Type {
         if entries.is_empty() {
             return make_type(TypeKind::Custom(
-                "Map".to_string(),
+                BuiltinCollectionKind::Map.name().to_string(),
                 Some(vec![
                     self.create_type_expression(make_type(TypeKind::Void)),
                     self.create_type_expression(make_type(TypeKind::Void)),
@@ -161,7 +161,7 @@ impl TypeChecker {
         }
 
         make_type(TypeKind::Custom(
-            "Map".to_string(),
+            BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
                 self.create_type_expression(key_type),
                 self.create_type_expression(val_type),
@@ -172,7 +172,7 @@ impl TypeChecker {
     pub(crate) fn infer_set(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
-                "Set".to_string(),
+                BuiltinCollectionKind::Set.name().to_string(),
                 Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
             ));
         }
@@ -203,7 +203,7 @@ impl TypeChecker {
         }
 
         make_type(TypeKind::Custom(
-            "Set".to_string(),
+            BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(first_type)]),
         ))
     }

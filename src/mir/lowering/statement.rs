@@ -224,7 +224,11 @@ fn lower_struct_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     let Some(name) = extract_identifier(name_expr) else {
         return;
     };
-    let Some(TypeDefinition::Struct(def)) = ctx.type_checker.global_type_definitions.get(name)
+    let Some(TypeDefinition::Struct(def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(name)
     else {
         return;
     };
@@ -253,7 +257,12 @@ fn lower_enum_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     let Some(name) = extract_identifier(name_expr) else {
         return;
     };
-    let Some(TypeDefinition::Enum(def)) = ctx.type_checker.global_type_definitions.get(name) else {
+    let Some(TypeDefinition::Enum(def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(name)
+    else {
         return;
     };
     let variants = def
@@ -271,7 +280,7 @@ fn lower_enum_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
         name: name.to_string(),
         variants,
         generics,
-        module: ctx.type_checker.current_module.clone(),
+        module: ctx.type_checker.current_module().to_string(),
     }));
 }
 
@@ -279,7 +288,11 @@ fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     let Some(name) = extract_identifier(name_expr) else {
         return;
     };
-    let Some(TypeDefinition::Class(def)) = ctx.type_checker.global_type_definitions.get(name)
+    let Some(TypeDefinition::Class(def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(name)
     else {
         return;
     };
@@ -330,7 +343,11 @@ fn lower_trait_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     let Some(name) = extract_identifier(name_expr) else {
         return;
     };
-    let Some(TypeDefinition::Trait(def)) = ctx.type_checker.global_type_definitions.get(name)
+    let Some(TypeDefinition::Trait(def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(name)
     else {
         return;
     };

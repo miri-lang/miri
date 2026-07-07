@@ -24,8 +24,6 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::Type;
 use crate::ast::*;
-use crate::error::diagnostic::Diagnostic;
-use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -33,16 +31,24 @@ use std::path::PathBuf;
 pub mod builtins;
 mod compatibility;
 pub mod context;
+pub(crate) mod diagnostics;
 pub mod escape_analysis;
 pub mod expressions;
+mod function_analysis;
 mod generics;
 mod gpu_buffer_init;
+pub(crate) mod module_loader;
 mod operators;
 pub mod statements;
+mod type_table;
 pub mod use_after_move;
 pub mod utils;
 
-use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
+use context::{Context, SymbolInfo, TypeDefinition};
+use diagnostics::DiagnosticCollector;
+use function_analysis::FunctionAnalysis;
+use module_loader::ModuleLoader;
+use type_table::TypeTable;
 
 pub use gpu_buffer_init::GpuBufferInit;
 
@@ -77,60 +83,20 @@ pub enum FnResidency {
 /// and assignments are performed on compatible types.
 #[derive(Debug)]
 pub struct TypeChecker {
-    /// Maps expression IDs to their inferred types.
-    pub(crate) types: HashMap<usize, Type>,
-    /// Collects all type errors encountered during checking.
-    pub(crate) errors: Vec<TypeError>,
-    /// Collects all type warnings encountered during checking.
-    pub warnings: Vec<Diagnostic>,
-    /// Stores type hierarchy relationships (extends, implements, includes)
-    pub(crate) hierarchy: HashMap<String, TypeRelation>,
-    /// Name of the current module/class being checked
-    pub(crate) current_module: String,
-    pub(crate) global_scope: HashMap<String, SymbolInfo>,
-    pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
-    /// Set of modules that have been fully loaded.
-    pub(crate) loaded_modules: std::collections::HashSet<String>,
-    /// For each fully-loaded module (keyed by module path), the type names its
-    /// load made user-visible — including transitive ones it pulled in. A repeat
-    /// `use` of an already-loaded module replays this set so a guarded re-import
-    /// exposes the same names a fresh load would have (e.g. `use
-    /// system.collections.list` re-exposing the transitive `Iterable`).
-    pub(crate) module_visibility: HashMap<String, Vec<String>>,
-    /// Module paths the implicit prelude preloaded for definitions only (the
-    /// collection-literal backings). Because the preload marks them loaded, a
-    /// user's later explicit `use` of one is a guarded re-import; replaying its
-    /// full visibility (transitive types included) is restricted to this set so
-    /// ordinary user re-imports keep their own-types-only visibility.
-    pub(crate) implicitly_preloaded_modules: std::collections::HashSet<String>,
-    /// Stack of modules currently being loaded (used to detect circular imports).
-    pub(crate) loading_stack: Vec<String>,
-    /// Tracks (message, span) pairs to deduplicate errors reported multiple times
-    /// for the same source location (e.g. when a type expression is resolved twice).
-    pub(crate) reported_errors: std::collections::HashSet<(String, Span)>,
+    /// Internal type-state management (types, definitions, hierarchy, visibility).
+    pub(crate) type_table: TypeTable,
+    /// Collects type errors, warnings, and deduplication state.
+    pub diagnostics: DiagnosticCollector,
+    /// Module loading state, visibility tracking, and metadata.
+    pub(crate) modules: ModuleLoader,
+    /// Function metadata: bodies, out-parameter flags, and residency analysis.
+    pub(crate) fn_analysis: FunctionAnalysis,
     /// AST statements collected from imported modules.
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
-    /// Directory of the source file being compiled, used to resolve `local.*` imports.
-    pub(crate) source_dir: Option<PathBuf>,
-    /// Maps module alias names to their full module paths.
-    /// e.g., `"M"` → `"system.math"` for `use system.math as M`.
-    pub(crate) module_aliases: HashMap<String, String>,
-    /// When set, errors are tagged with this (file_path, source_text) so that
-    /// the formatter can display the correct source context for imported files.
-    pub(crate) current_source_override: Option<(String, String)>,
-    /// Tracks which type names are visible to user code. Types in
-    /// `global_type_definitions` but NOT in this set are internal-only
-    /// (e.g. transitive trait dependencies kept for vtable generation).
-    pub(crate) visible_type_names: std::collections::HashSet<String>,
-    /// Names of classes/traits inserted by the cross-module pre-pass as
-    /// partial placeholders so forward references resolve during recursive
-    /// module loading. `check_class` / `check_trait` recognize members of
-    /// this set as overwritable and remove the name on full registration.
-    pub(crate) pre_registered_types: std::collections::HashSet<String>,
     /// Source text of the entry-point file, populated by the pipeline right
     /// before MIR lowering. Used by lowering passes (notably the testing
     /// intrinsic lowering) to convert byte spans into human-readable line
@@ -138,12 +104,6 @@ pub struct TypeChecker {
     pub entry_source: Option<std::rc::Rc<str>>,
     /// Source path of the entry-point file. See [`entry_source`].
     pub entry_source_path: Option<std::rc::Rc<str>>,
-    /// Maps user-defined function names to their Statement bodies for GPU callability analysis.
-    pub(crate) function_bodies: std::collections::HashMap<String, std::rc::Rc<Statement>>,
-    /// Maps function names to a Vec<bool> of their parameters' `is_out` flags.
-    /// Populated during function declaration checking; used in GPU kernel launch
-    /// to determine which buffers are writable.
-    pub(crate) function_out_params: std::collections::HashMap<String, Vec<bool>>,
     /// Initial host data for `gpu` buffers bound to compile-time constant
     /// literals, keyed by binding name. Populated at the end of [`check`] and
     /// consumed by the web-gpu bundle emitter.
@@ -154,10 +114,6 @@ pub struct TypeChecker {
     /// specialized body per instantiation without re-walking the AST. Tuples are
     /// deduplicated by their type kinds (source spans are ignored).
     pub generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
-    /// Computed residency verdict for each function (HostOnly or PolymorphicSafe).
-    /// Populated during function declaration checking; used at call sites to
-    /// determine if gpu-resident args are allowed.
-    pub(crate) fn_residencies: HashMap<String, FnResidency>,
 }
 
 impl Default for TypeChecker {
@@ -174,34 +130,17 @@ impl TypeChecker {
     /// - Built-in functions: `print<T>`
     pub fn new() -> Self {
         let (global_scope, global_type_definitions) = builtins::initialize_builtins();
-        let visible_type_names = global_type_definitions.keys().cloned().collect();
         Self {
-            types: HashMap::new(),
-            errors: Vec::new(),
-            warnings: Vec::new(),
-            hierarchy: HashMap::new(),
-            current_module: "Main".to_string(),
-            global_scope,
-            global_type_definitions,
-            loaded_modules: std::collections::HashSet::new(),
-            module_visibility: HashMap::new(),
-            implicitly_preloaded_modules: std::collections::HashSet::new(),
-            loading_stack: Vec::new(),
-            reported_errors: std::collections::HashSet::new(),
+            type_table: TypeTable::new(global_scope, global_type_definitions),
+            diagnostics: DiagnosticCollector::new(),
+            modules: ModuleLoader::new(),
+            fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
-            source_dir: None,
-            module_aliases: HashMap::new(),
-            current_source_override: None,
-            visible_type_names,
-            pre_registered_types: std::collections::HashSet::new(),
             entry_source: None,
             entry_source_path: None,
-            function_bodies: HashMap::new(),
-            function_out_params: HashMap::new(),
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
-            fn_residencies: HashMap::new(),
         }
     }
 
@@ -211,33 +150,37 @@ impl TypeChecker {
     /// the project root (i.e. the directory that contains the entry-point file).
     pub fn with_source_dir(source_dir: PathBuf) -> Self {
         let mut tc = Self::new();
-        tc.source_dir = Some(source_dir);
+        tc.modules.source_dir = Some(source_dir);
         tc
     }
 
     /// Sets the current module name for scoping declarations.
     pub fn set_current_module(&mut self, name: String) {
-        self.current_module = name;
+        self.modules.current_module = name;
     }
 
     /// Returns the inferred type for a given expression ID.
     pub fn get_type(&self, id: usize) -> Option<&Type> {
-        self.types.get(&id)
+        self.type_table.types.get(&id)
     }
 
     /// Returns the type of a global variable by name.
     pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
-        self.global_scope.get(name).map(|info| &info.ty)
+        self.type_table.global_scope.get(name).map(|info| &info.ty)
     }
 
     /// Returns the module name where the given variable/function is defined.
     pub fn get_variable_module(&self, name: &str) -> Option<&str> {
-        self.global_scope.get(name).map(|info| info.module.as_str())
+        self.type_table
+            .global_scope
+            .get(name)
+            .map(|info| info.module.as_str())
     }
 
     /// Returns whether a global variable is a constant.
     pub fn is_constant(&self, name: &str) -> bool {
-        self.global_scope
+        self.type_table
+            .global_scope
             .get(name)
             .map(|info| info.is_constant)
             .unwrap_or(false)
@@ -245,7 +188,8 @@ impl TypeChecker {
 
     /// Returns whether a global variable is an intrinsic.
     pub fn is_intrinsic(&self, name: &str) -> bool {
-        self.global_scope
+        self.type_table
+            .global_scope
             .get(name)
             .map(|info| info.is_intrinsic)
             .unwrap_or(false)
@@ -253,7 +197,32 @@ impl TypeChecker {
 
     /// Returns the global type definitions.
     pub fn type_definitions(&self) -> &HashMap<String, TypeDefinition> {
-        &self.global_type_definitions
+        &self.type_table.global_type_definitions
+    }
+
+    /// Returns the global scope (function/variable declarations).
+    pub fn global_scope(&self) -> &HashMap<String, SymbolInfo> {
+        &self.type_table.global_scope
+    }
+
+    /// Returns the current module name.
+    pub fn current_module(&self) -> &str {
+        &self.modules.current_module
+    }
+
+    /// Returns the function residency verdicts.
+    pub fn fn_residencies(&self) -> &HashMap<String, FnResidency> {
+        &self.fn_analysis.fn_residencies
+    }
+
+    /// Returns the function out-parameter flags.
+    pub fn function_out_params(&self) -> &HashMap<String, Vec<bool>> {
+        &self.fn_analysis.function_out_params
+    }
+
+    /// Returns the type-checking warnings.
+    pub fn warnings(&self) -> &[crate::error::diagnostic::Diagnostic] {
+        &self.diagnostics.warnings
     }
 
     /// Main entry point for type checking a program.
@@ -267,11 +236,11 @@ impl TypeChecker {
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
 
-        if self.errors.is_empty() {
+        if self.diagnostics.is_empty() {
             self.collect_gpu_buffer_initializers(program);
             Ok(())
         } else {
-            Err(self.errors.clone())
+            Err(self.diagnostics.clone_errors())
         }
     }
 
@@ -312,30 +281,30 @@ impl TypeChecker {
     }
 
     fn run_pass_escape_summaries(&mut self, program: &Program, context: &mut Context) {
-        if !self.errors.is_empty() {
+        if !self.diagnostics.is_empty() {
             return;
         }
         let ffi_summaries = std::mem::take(&mut context.escape_summaries);
         context.escape_summaries = escape_analysis::compute_escape_summaries(
             &program.body,
-            &self.types,
-            &self.global_type_definitions,
+            &self.type_table.types,
+            &self.type_table.global_type_definitions,
             ffi_summaries,
         );
     }
 
     fn run_pass_use_after_move(&mut self, program: &Program, context: &Context) {
-        if !self.errors.is_empty() {
+        if !self.diagnostics.is_empty() {
             return;
         }
         let (uam_errors, uam_warnings) = use_after_move::UseAfterMoveChecker::new(
-            &self.types,
-            &self.global_type_definitions,
+            &self.type_table.types,
+            &self.type_table.global_type_definitions,
             &context.escape_summaries,
         )
         .check_program(program);
-        self.errors.extend(uam_errors);
-        self.warnings.extend(uam_warnings);
+        self.diagnostics.extend_errors(uam_errors);
+        self.diagnostics.extend_warnings(uam_warnings);
     }
 
     /// Register class/trait/struct/enum names as empty shells. Runs before
@@ -368,7 +337,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(&class_data.name) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let name = name.to_string();
@@ -396,12 +365,12 @@ impl TypeChecker {
                 trait_args: HashMap::new(),
                 fields: Vec::new(),
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop: false,
             }),
         );
-        self.pre_registered_types.insert(name);
+        self.modules.pre_registered_types.insert(name);
     }
 
     fn shell_trait(
@@ -413,7 +382,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -426,10 +395,10 @@ impl TypeChecker {
                 parent_traits: vec![],
                 parent_trait_args: BTreeMap::new(),
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
             }),
         );
-        self.pre_registered_types.insert(name_str);
+        self.modules.pre_registered_types.insert(name_str);
     }
 
     fn shell_struct(
@@ -441,7 +410,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -452,7 +421,7 @@ impl TypeChecker {
                 generics,
                 traits: vec![],
                 has_drop: false,
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
             }),
         );
     }
@@ -466,7 +435,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -476,7 +445,7 @@ impl TypeChecker {
                 variants: BTreeMap::new(),
                 generics,
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
                 must_use: false,
             }),
         );
@@ -533,14 +502,14 @@ impl TypeChecker {
         })));
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 decl.name.clone(),
                 SymbolInfo::new(
                     func_type.clone(),
                     false,
                     false,
                     decl.properties.visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                     None,
                 ),
             );
@@ -553,7 +522,7 @@ impl TypeChecker {
                 false,
                 false,
                 decl.properties.visibility.clone(),
-                self.current_module.clone(),
+                self.modules.current_module.clone(),
                 None,
             ),
         );
@@ -575,19 +544,23 @@ impl TypeChecker {
         })));
 
         if context.scopes.len() == 1 {
-            self.global_scope.insert(
+            self.type_table.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new_intrinsic(
                     func_type.clone(),
                     visibility.clone(),
-                    self.current_module.clone(),
+                    self.modules.current_module.clone(),
                 ),
             );
         }
 
         context.define(
             name.to_string(),
-            SymbolInfo::new_intrinsic(func_type, visibility.clone(), self.current_module.clone()),
+            SymbolInfo::new_intrinsic(
+                func_type,
+                visibility.clone(),
+                self.modules.current_module.clone(),
+            ),
         );
     }
 
@@ -599,12 +572,12 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(&class_data.name) else {
             return;
         };
-        let is_pre_shell = self.pre_registered_types.contains(name)
+        let is_pre_shell = self.modules.pre_registered_types.contains(name)
             && matches!(
-                self.global_type_definitions.get(name),
+                self.type_table.global_type_definitions.get(name),
                 Some(TypeDefinition::Class(c)) if c.methods.is_empty()
             );
-        if self.global_type_definitions.contains_key(name) && !is_pre_shell {
+        if self.type_table.global_type_definitions.contains_key(name) && !is_pre_shell {
             return;
         }
         let name = name.to_string();
@@ -641,7 +614,7 @@ impl TypeChecker {
                 trait_args: HashMap::new(),
                 fields: Vec::new(),
                 methods,
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop,
             }),
@@ -667,12 +640,12 @@ impl TypeChecker {
                 trait_args: HashMap::new(),
                 fields: Vec::new(),
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop: false,
             }),
         );
-        self.pre_registered_types.insert(name.to_string());
+        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     fn scan_class_body(
@@ -768,7 +741,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -779,7 +752,7 @@ impl TypeChecker {
                 generics,
                 traits: vec![],
                 has_drop: false,
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
             }),
         );
     }
@@ -793,7 +766,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -803,7 +776,7 @@ impl TypeChecker {
                 variants: BTreeMap::new(),
                 generics,
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
                 must_use: false,
             }),
         );
@@ -818,7 +791,7 @@ impl TypeChecker {
         let Ok(name) = self.extract_type_name(name_expr) else {
             return;
         };
-        if self.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
@@ -831,9 +804,9 @@ impl TypeChecker {
                 parent_traits: vec![],
                 parent_trait_args: BTreeMap::new(),
                 methods: BTreeMap::new(),
-                module: self.current_module.clone(),
+                module: self.modules.current_module.clone(),
             }),
         );
-        self.pre_registered_types.insert(name_str);
+        self.modules.pre_registered_types.insert(name_str);
     }
 }

@@ -76,7 +76,7 @@ fn build_global_identifier_operand(
             literal: crate::ast::literal::Literal::Identifier(ident),
         }))
     };
-    let Some(info) = ctx.type_checker.global_scope.get(name) else {
+    let Some(info) = ctx.type_checker.global_scope().get(name) else {
         return identifier_const(name.to_string());
     };
     let emit_name = info.original_name.as_deref().unwrap_or(name).to_string();
