@@ -2407,14 +2407,23 @@ impl TypeChecker {
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 let size_expr = args[1].clone();
 
-                // Validate that the size expression is a compile-time constant
-                if TypeChecker::try_eval_const_int(&size_expr).is_none() {
+                // Validate that the size expression is a compile-time constant,
+                // resolving named `const`s (`Array<T, SIZE>()`) and arithmetic
+                // over them (`Array<T, W * W>()`). Fold it to a literal so the
+                // context-free const-eval in MIR lowering sees an integer.
+                let Some(size_value) =
+                    TypeChecker::try_eval_const_int_with_context(&size_expr, context)
+                else {
                     self.report_error(
                         "Array<T, N>() requires a compile-time constant size; use integer literals or simple arithmetic like '4 * 4'".to_string(),
                         size_expr.span,
                     );
                     return Some(make_type(TypeKind::Error));
-                }
+                };
+                let size_expr = ast_factory::literal_with_span(
+                    ast_factory::int_literal(size_value),
+                    size_expr.span,
+                );
 
                 // Reject managed element types at type-check time
                 if is_perceus_managed(&elem_type.kind, &self.type_table.global_type_definitions) {

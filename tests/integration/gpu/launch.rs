@@ -181,6 +181,29 @@ println(f'{host[0]}')
     assert_gpu_runs_with_output(source, "36");
 }
 
+/// A gpu-resident buffer whose size is an arithmetic product of named `const`s
+/// (`Array<int, W * W>()`) lays out and round-trips `W * W` elements through the
+/// device, proving the value-generic arithmetic slot folds for gpu residency.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn arithmetic_sized_gpu_buffer_round_trips_through_device() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+const W = 2
+gpu var dst = Array<int, W * W>()
+gpu forall i in 0..W * W
+    dst[i] = i * 10
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "0 10 20 30");
+}
+
 /// Inner while-loop accumulation: each GPU thread sums the first two
 /// elements of the array, accumulating into a local variable over
 /// loop iterations. Expected: 1+2 = 3 for all threads.

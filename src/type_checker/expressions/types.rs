@@ -433,31 +433,19 @@ impl TypeChecker {
         }
     }
 
-    /// Folds a named integer `const` used in a value-generic slot
-    /// (`Array<T, SIZE>`) to its literal value.
+    /// Folds a const-foldable integer value-generic slot (`Array<T, SIZE>`,
+    /// `Array<T, W * W>`) to its literal value so the downstream context-free
+    /// const-eval in MIR sees an integer literal.
     ///
     /// Returns `None` for type-position arguments, non-constant bindings, and
-    /// non-integer constants, so a `var` size still falls through to the
-    /// "compile-time constant" diagnostic at lowering.
+    /// non-integer expressions, so a genuine type argument (`Foo<Bar>`) and a
+    /// `var` size still fall through to their normal handling.
     fn fold_value_generic_const(&self, arg: &Expression, context: &Context) -> Option<Expression> {
-        let name = match &arg.node {
-            ExpressionKind::Identifier(name, _) => name.as_str(),
-            ExpressionKind::Type(t, false) => match &t.kind {
-                TypeKind::Custom(name, None) => name.as_str(),
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let info = context.resolve_info(name)?;
-        if !info.is_constant {
-            return None;
-        }
-        match &info.value {
-            Some(value @ Literal::Integer(_)) => {
-                Some(ast_factory::literal_with_span(value.clone(), arg.span))
-            }
-            _ => None,
-        }
+        let value = TypeChecker::try_eval_const_int_with_context(arg, context)?;
+        Some(ast_factory::literal_with_span(
+            ast_factory::int_literal(value),
+            arg.span,
+        ))
     }
 
     pub(crate) fn infer_statement_type(&mut self, stmt: &Statement, context: &mut Context) -> Type {

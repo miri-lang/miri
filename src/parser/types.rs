@@ -305,12 +305,54 @@ impl<'source> Parser<'source> {
 
     fn generic_argument(&mut self) -> Result<Expression, SyntaxError> {
         if let Some(type_expr) = self.type_expression()? {
+            // A bare-identifier type slot can be the head of a const-foldable
+            // value expression (`Array<f32, W * W>`): `type_expression` greedily
+            // reads `W` as a named type, so an arithmetic operator following it
+            // means the slot is really a value. Resume expression parsing with
+            // the identifier as the left operand. A literal-headed slot
+            // (`Array<f32, 8 * 8>`) never reaches here — `type_expression`
+            // returns `None` for a number and the fallback below parses it.
+            if self.lookahead_continues_value_generic() {
+                if let Some(operand) = value_operand_from_type(&type_expr) {
+                    return self.value_generic_tail(operand);
+                }
+            }
             return Ok(type_expr);
         }
         // Not a type — must be a value generic (e.g. integer literal for a
         // const-size slot). Fall back to a regular expression. The type
         // checker rejects values that flow into pure-type positions.
         self.additive_expression()
+    }
+
+    /// True when the next token is an arithmetic operator that would continue a
+    /// value-generic expression whose first operand was already consumed as a
+    /// type (`W * W`, `W + 1`). Mirrors `additive_expression` precedence, so
+    /// only multiplicative and additive operators count.
+    fn lookahead_continues_value_generic(&self) -> bool {
+        self.match_lookahead_type(super::utils::is_multiplicative_op)
+            || self.match_lookahead_type(super::utils::is_additive_op)
+    }
+
+    /// Continue parsing a const-foldable value-generic expression whose first
+    /// operand (`left`) was already consumed while probing for a type. Folds the
+    /// multiplicative tail first, then additive terms, matching
+    /// `additive_expression` precedence exactly (`W * W + 1` → `(W * W) + 1`).
+    fn value_generic_tail(&mut self, left: Expression) -> Result<Expression, SyntaxError> {
+        let product = self.binary_expression_tail(
+            left,
+            Self::unary_expression,
+            super::utils::is_multiplicative_op,
+            Self::eat_multiplicative_op,
+            ast::binary_with_span,
+        )?;
+        self.binary_expression_tail(
+            product,
+            Self::multiplicative_expression,
+            super::utils::is_additive_op,
+            Self::eat_additive_op,
+            ast::binary_with_span,
+        )
     }
 
     pub(crate) fn identifier_to_type_name(&mut self) -> Result<(String, Span), SyntaxError> {
@@ -417,6 +459,27 @@ fn unnamed_param(typ: Expression) -> Parameter {
         default_value: None,
         is_out: false,
         residency: None,
+    }
+}
+
+/// Convert a type expression parsed from a value-generic slot back into the
+/// identifier operand it really was. Only a bare single-segment custom name
+/// (`W`) with no generic arguments and no nullable suffix can head a
+/// const-foldable value expression; anything else (a nullable type, a generic
+/// instantiation, a collection literal) is returned as `None` so the caller
+/// keeps the original type and lets the unexpected operator surface as an error.
+fn value_operand_from_type(expr: &Expression) -> Option<Expression> {
+    let ExpressionKind::Type(ty, is_nullable) = &expr.node else {
+        return None;
+    };
+    if *is_nullable {
+        return None;
+    }
+    match &ty.kind {
+        TypeKind::Custom(name, None) if !name.contains("::") => {
+            Some(ast::identifier_with_span(name, expr.span))
+        }
+        _ => None,
     }
 }
 
