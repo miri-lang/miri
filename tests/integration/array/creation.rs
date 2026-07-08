@@ -145,6 +145,73 @@ println(f\"{pixels.length()}\")
 }
 
 #[test]
+fn test_array_sized_const_arithmetic_in_slot() {
+    // Arithmetic over named `const`s directly in the value-generic slot of a
+    // constructor call: the slot must accept a const-foldable expression, not
+    // only a single literal or single named const.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const W = 8
+let a = Array<int, W * W>()
+println(f\"{a.length()}\")
+",
+        "64",
+    );
+}
+
+#[test]
+fn test_array_sized_const_arithmetic_multi_factor_in_slot() {
+    // A three-factor product (`W * H * 4`, an RGBA paint-buffer size) folds in
+    // the constructor slot, exercising left-associative multiplicative chaining.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const W = 4
+const H = 3
+let a = Array<f32, W * H * 4>()
+println(f\"{a.length()}\")
+",
+        "48",
+    );
+}
+
+#[test]
+fn test_array_sized_const_arithmetic_mixed_precedence_in_slot() {
+    // Additive and multiplicative mix in the slot: `W * W + 1` must respect
+    // precedence (multiply binds tighter) → 8*8 + 1 = 65.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const W = 8
+let a = Array<int, W * W + 1>()
+println(f\"{a.length()}\")
+",
+        "65",
+    );
+}
+
+#[test]
+fn test_array_sized_const_arithmetic_type_position() {
+    // Type-position form of the same expression (`var a Array<..>`), pinned so
+    // the constructor and type-position parses stay in lockstep.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const W = 8
+var a Array<int, W * W>
+a = Array<int, W * W>()
+println(f\"{a.length()}\")
+",
+        "64",
+    );
+}
+
+#[test]
 fn test_array_sized_named_const_struct_field_type() {
     // Type-position form: a named `const` in a struct-field `Array<T, N>`
     // must fold to the same literal the constructor form uses, so the
@@ -254,6 +321,22 @@ use system.collections.array
 
 var n = 5
 let a = Array<int, n>()
+",
+        "compile-time constant",
+    );
+}
+
+#[test]
+fn test_array_sized_non_const_arithmetic_error() {
+    // Arithmetic over a non-`const` binding is still not a compile-time
+    // constant: the slot now parses `n * n` but the fold fails, so the size
+    // check reports the constant-size diagnostic instead of crashing.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+var n = 5
+let a = Array<int, n * n>()
 ",
         "compile-time constant",
     );

@@ -2222,20 +2222,32 @@ impl TypeChecker {
         Self::eval_const_int_inner(expr, Some(context))
     }
 
+    /// Resolves a named binding to its constant integer value, or `None` when
+    /// the name is unbound, non-constant, or non-integer. Shared by the bare
+    /// identifier and value-generic type-slot (`Array<T, SIZE>`) arms so both
+    /// fold a named `const` the same way.
+    fn resolve_const_int(name: &str, context: Option<&Context>) -> Option<i128> {
+        let info = context?.resolve_info(name)?;
+        if !info.is_constant {
+            return None;
+        }
+        match &info.value {
+            Some(Literal::Integer(val)) => Some(val.to_i128()),
+            _ => None,
+        }
+    }
+
     fn eval_const_int_inner(expr: &Expression, context: Option<&Context>) -> Option<i128> {
         match &expr.node {
             ExpressionKind::Literal(Literal::Integer(val)) => Some(val.to_i128()),
-            ExpressionKind::Identifier(name, _) => {
-                let ctx = context?;
-                let info = ctx.resolve_info(name)?;
-                if !info.is_constant {
-                    return None;
-                }
-                match &info.value {
-                    Some(Literal::Integer(val)) => Some(val.to_i128()),
-                    _ => None,
-                }
-            }
+            ExpressionKind::Identifier(name, _) => Self::resolve_const_int(name, context),
+            // A value-generic slot parses a bare named const as a type
+            // (`Array<T, SIZE>` → `Type(Custom("SIZE"))`); resolve it as a
+            // constant so it folds like the identifier form.
+            ExpressionKind::Type(ty, false) => match &ty.kind {
+                TypeKind::Custom(name, None) => Self::resolve_const_int(name, context),
+                _ => None,
+            },
             ExpressionKind::Unary(UnaryOp::Negate, inner) => {
                 Self::eval_const_int_inner(inner, context).map(|v| -v)
             }

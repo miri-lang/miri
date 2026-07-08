@@ -85,6 +85,28 @@ impl<'source> Parser<'source> {
         &mut self,
         mut create_branch: F,
         op_predicate: fn(&Token) -> bool,
+        eat_op: G,
+        create_expression: E,
+    ) -> Result<Expression, SyntaxError>
+    where
+        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, SyntaxError>,
+        E: FnMut(Expression, BinaryOp, Expression, Span) -> Expression,
+    {
+        let left = create_branch(self)?;
+        self.binary_expression_tail(left, create_branch, op_predicate, eat_op, create_expression)
+    }
+
+    /// Continue a left-associative binary parse from an already-parsed left
+    /// operand. Splitting the loop out of `binary_expression_precedence` lets a
+    /// caller that consumed the first operand by another route (for example a
+    /// value-generic slot whose head was probed as a type) resume at the exact
+    /// same precedence.
+    pub(crate) fn binary_expression_tail<F, G, E>(
+        &mut self,
+        mut left: Expression,
+        mut create_branch: F,
+        op_predicate: fn(&Token) -> bool,
         mut eat_op: G,
         mut create_expression: E,
     ) -> Result<Expression, SyntaxError>
@@ -93,8 +115,6 @@ impl<'source> Parser<'source> {
         G: FnMut(&mut Self) -> Result<BinaryOp, SyntaxError>,
         E: FnMut(Expression, BinaryOp, Expression, Span) -> Expression,
     {
-        let mut left = create_branch(self)?;
-
         while self.match_lookahead_type(op_predicate) {
             let op = eat_op(self)?;
             let right = create_branch(self)?;
