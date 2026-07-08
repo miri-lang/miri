@@ -949,7 +949,29 @@ impl<'a> FunctionTranslator<'a> {
                 intrinsic
             )));
         }
-        let ty = builder.func.dfg.value_type(arg_values[0]);
+        // Every per-intrinsic emitter assumes all float operands share the
+        // result width `ty` (taken from the first operand). Nested-intrinsic
+        // inference can hand us a mix of widths — e.g. `mix(mix(..), mix(..), t)`
+        // widens the endpoints to f64 while the interpolant `t` stays f32 — which
+        // would emit a type-mismatched `fsub`/`fmul` and fail Cranelift
+        // verification. When any operand is f64, compute at f64 (never silently
+        // drop precision) and promote the narrower operands to match.
+        let ty = if arg_values
+            .iter()
+            .any(|v| builder.func.dfg.value_type(*v) == cl_types::F64)
+        {
+            cl_types::F64
+        } else {
+            builder.func.dfg.value_type(arg_values[0])
+        };
+        if ty.is_float() {
+            for value in arg_values.iter_mut() {
+                let value_ty = builder.func.dfg.value_type(*value);
+                if value_ty.is_float() && value_ty != ty {
+                    *value = builder.ins().fpromote(ty, *value);
+                }
+            }
+        }
         let is_f32 = ty == cl_types::F32;
 
         match intrinsic {

@@ -1,0 +1,300 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Traversable Morris–Thorne wormhole: every pixel integrates a photon's null
+// geodesic through the throat profile r(ℓ) = √(K² + max(0, |ℓ| − A)²) using the
+// compact conserved-impact-parameter ODE  ℓ̈ = b²·r'(ℓ)/r³  (the same orbit-plane
+// reduction as the black hole). Rays that clear the throat (ℓ < 0) emerge in a
+// second, cooler universe; rays that graze it turn back into a lensed view of our
+// own warm sky, and light piling up at the throat paints the Einstein ring. A
+// faithful port of the reference fragment shader.
+//
+// A `gpu frame` block with two passes:
+// 1. Integrate: read cam_a + frame.* (drag orbits, scroll zooms, idle
+//    auto-rotates) → cam_b.
+// 2. Render: read cam_b + frame.time → integrate one geodesic per pixel and
+//    write paint RGBA.
+//
+// Camera state ping-pongs (cam_a → cam_b) so the integrator never reads the
+// buffer it writes; the host swaps a/b between frames. Vectors are carried as
+// loose scalar components and every math-intrinsic result is anchored to f32
+// (`as f32`) so the device path stays 32-bit (browser WGSL has no f64).
+
+use system.collections.array
+use system.math
+use system.io
+
+// Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
+const PAINT = 96 * 96 * 4
+
+// Camera state: [yaw, pitch, distance, idle_seconds] — ping-ponged across frames.
+gpu var cam_a = Array<f32, 4>()
+gpu var cam_b = Array<f32, 4>()
+
+// Paint output (RGBA: 4 floats per pixel).
+gpu var paint = Array<f32, PAINT>()
+
+// 2D value hash → [0,1); the base entropy source for the nebulae.
+fn hash21(px f32, py f32) f32
+    var qx = fract(px * 123.34) as f32
+    var qy = fract(py * 345.45) as f32
+    let d = qx * (qx + 34.345) + qy * (qy + 34.345)
+    qx = qx + d
+    qy = qy + d
+    return fract(qx * qy) as f32
+
+// 3D value hash → [0,1); seeds the volumetric starfield cells.
+fn hash31(px f32, py f32, pz f32) f32
+    let ax = fract(px * 0.3183099 + 0.1) as f32
+    let ay = fract(py * 0.3183099 + 0.1) as f32
+    let az = fract(pz * 0.3183099 + 0.1) as f32
+    let bx = ax * 17.0
+    let by = ay * 17.0
+    let bz = az * 17.0
+    return fract(bx * by * bz * (bx + by + bz)) as f32
+
+// Smooth 2D value noise (bilinear interpolation over four hashed corners).
+fn vnoise(px f32, py f32) f32
+    let ix = floor(px) as f32
+    let iy = floor(py) as f32
+    var fx = px - ix
+    var fy = py - iy
+    fx = fx * fx * (3.0 - 2.0 * fx)
+    fy = fy * fy * (3.0 - 2.0 * fy)
+    let a = hash21(ix, iy)
+    let b = hash21(ix + 1.0, iy)
+    let c = hash21(ix, iy + 1.0)
+    let d = hash21(ix + 1.0, iy + 1.0)
+    return mix(mix(a, b, fx) as f32, mix(c, d, fx) as f32, fy) as f32
+
+// Four-octave fractional Brownian motion over the value noise.
+fn nebula_fbm(px f32, py f32) f32
+    var s = 0.0
+    var a = 0.5
+    var qx = px
+    var qy = py
+    var i = 0
+    while i < 4
+        s = s + a * vnoise(qx, qy)
+        qx = qx * 2.02
+        qy = qy * 2.02
+        a = a * 0.5
+        i = i + 1
+    return s as f32
+
+// One octave of the volumetric starfield: sparse bright points per grid cell.
+fn star_layer(dx f32, dy f32, dz f32, scale f32, thr f32) f32
+    let px = dx * scale
+    let py = dy * scale
+    let pz = dz * scale
+    let idx = floor(px) as f32
+    let idy = floor(py) as f32
+    let idz = floor(pz) as f32
+    let fx = (px - idx) - 0.5
+    let fy = (py - idy) - 0.5
+    let fz = (pz - idz) - 0.5
+    let h = hash31(idx, idy, idz)
+    let offx = hash31(idx + 1.3, idy + 1.3, idz + 1.3) - 0.5
+    let offy = hash31(idx + 2.7, idy + 2.7, idz + 2.7) - 0.5
+    let offz = hash31(idx + 4.1, idy + 4.1, idz + 4.1) - 0.5
+    let sx = fx - offx * 0.7
+    let sy = fy - offy * 0.7
+    let sz = fz - offz * 0.7
+    let len = sqrt(sx * sx + sy * sy + sz * sz) as f32
+    let star = smoothstep(0.5, 0.0, len) as f32
+    let on = step(1.0 - thr, h) as f32
+    return star * star * on * (0.4 + 0.6 * (fract(h * 91.7) as f32))
+
+// Seed: starting pose looking into the throat, idle past the auto-rotate
+// threshold so the camera drifts until the pointer takes over.
+gpu forall i in 0..4
+    cam_a[0] = 1.15
+    cam_a[1] = 0.25
+    cam_a[2] = 6.5
+    cam_a[3] = 99.0
+
+gpu frame
+    // Pass 1: integrate orbit angles, zoom distance, and idle timer from input.
+    gpu forall i in 0..4
+        let yaw = cam_a[0]
+        let pitch = cam_a[1]
+        let dist = cam_a[2]
+        let idle = cam_a[3]
+        let dragging = 1.0 if frame.mouse_down else 0.0
+        let next_idle = 0.0 if dragging > 0.5 else idle + frame.dt
+        // After a brief idle the camera auto-orbits; drag always steers it.
+        let auto = frame.dt * 0.09 if next_idle > 0.1 else 0.0
+        cam_b[0] = yaw + frame.drag_dx * 0.008 + auto
+        cam_b[1] = clamp(pitch + frame.drag_dy * 0.006, -1.45, 1.45) as f32
+        cam_b[2] = clamp(dist * (exp(frame.wheel * 0.0012) as f32), 3.5, 22.0) as f32
+        cam_b[3] = next_idle
+
+    // Pass 2: trace one photon geodesic per pixel through the throat.
+    gpu forall idx in 0..9216
+        let px = idx % 96
+        let py = idx / 96
+        let uvx = (px as f32) / 96.0 - 0.5
+        let uvy = 0.5 - (py as f32) / 96.0
+
+        // Camera orbiting the throat on a sphere of radius `dist`.
+        let ya = cam_b[0]
+        let pa = clamp(cam_b[1], -1.45, 1.45) as f32
+        let dist = cam_b[2]
+        let cpa = cos(pa) as f32
+        let rox = (cos(ya) as f32) * cpa * dist
+        let roy = (sin(pa) as f32) * dist
+        let roz = (sin(ya) as f32) * cpa * dist
+        // Forward / right / up basis (right = cross(fw, up0), up = cross(rt, fw)).
+        let flen = sqrt(rox * rox + roy * roy + roz * roz) as f32
+        let fwx = (0.0 - rox) / flen
+        let fwy = (0.0 - roy) / flen
+        let fwz = (0.0 - roz) / flen
+        let rl = sqrt(fwz * fwz + fwx * fwx) as f32
+        let rtx = (0.0 - fwz) / rl
+        let rtz = fwx / rl
+        let upx = 0.0 - rtz * fwy
+        let upy = rtz * fwx - rtx * fwz
+        let upz = rtx * fwy
+        let rdx0 = fwx * 1.7 + rtx * uvx + upx * uvy
+        let rdy0 = fwy * 1.7 + upy * uvy
+        let rdz0 = fwz * 1.7 + rtz * uvx + upz * uvy
+        let rdl = sqrt(rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0) as f32
+        let rdx = rdx0 / rdl
+        let rdy = rdy0 / rdl
+        let rdz = rdz0 / rdl
+
+        // Photon orbital plane {e1 = radial, e2 = forward-tangent}.
+        let r0 = flen
+        let e1x = rox / r0
+        let e1y = roy / r0
+        let e1z = roz / r0
+        let nrmx0 = e1y * rdz - e1z * rdy
+        let nrmy0 = e1z * rdx - e1x * rdz
+        let nrmz0 = e1x * rdy - e1y * rdx
+        let nl = sqrt(nrmx0 * nrmx0 + nrmy0 * nrmy0 + nrmz0 * nrmz0) as f32
+        let usey = 1.0 if nl < 0.0001 else 0.0
+        let nrmx = 0.0 if usey > 0.5 else nrmx0 / nl
+        let nrmy = 1.0 if usey > 0.5 else nrmy0 / nl
+        let nrmz = 0.0 if usey > 0.5 else nrmz0 / nl
+        let e2x0 = nrmy * e1z - nrmz * e1y
+        let e2y0 = nrmz * e1x - nrmx * e1z
+        let e2z0 = nrmx * e1y - nrmy * e1x
+        let e2l = sqrt(e2x0 * e2x0 + e2y0 * e2y0 + e2z0 * e2z0) as f32
+        var e2x = e2x0 / e2l
+        var e2y = e2y0 / e2l
+        var e2z = e2z0 / e2l
+        let de2 = rdx * e2x + rdy * e2y + rdz * e2z
+        let flip = -1.0 if de2 < 0.0 else 1.0
+        e2x = e2x * flip
+        e2y = e2y * flip
+        e2z = e2z * flip
+
+        // Proper radial coordinate ℓ on our side (K = 1, A = 0.9): the impact
+        // parameter b = r0·v_t and the inward velocity ℓ̇ are both conserved.
+        var l = 0.9 + (sqrt(max(r0 * r0 - 1.0, 0.0) as f32) as f32)
+        let vt = rdx * e2x + rdy * e2y + rdz * e2z
+        let b = r0 * vt
+        var ldot = rdx * e1x + rdy * e1y + rdz * e1z
+
+        var phi = 0.0
+        var r = r0
+        var min_r = r0
+
+        var i = 0
+        while i < 220
+            let abs_l = abs(l) as f32
+            let m0 = max(0.0, abs_l - 0.9) as f32
+            let rr0 = sqrt(1.0 + m0 * m0) as f32
+            let rp0 = (sign(l) as f32) * m0 / rr0 if abs_l > 0.9 else 0.0
+            let dl = mix(0.03, 0.18, clamp((rr0 - 2.0) / 12.0, 0.0, 1.0)) as f32
+            // Symplectic step of  ℓ̈ = b²·r'/r³.
+            ldot = ldot + (b * b * rp0 / (rr0 * rr0 * rr0)) * dl
+            l = l + ldot * dl
+            phi = phi + (b / (rr0 * rr0)) * dl
+            let abs_l2 = abs(l) as f32
+            let m1 = max(0.0, abs_l2 - 0.9) as f32
+            r = sqrt(1.0 + m1 * m1) as f32
+            min_r = min(min_r, r) as f32
+            if r > 16.0
+                i = 220
+            i = i + 1
+
+        // Analytic exit velocity  v = ℓ̇·r'·ê_r + (b/r)·ê_t, then the sampled sky.
+        let abs_lf = abs(l) as f32
+        let mf = max(0.0, abs_lf - 0.9) as f32
+        let rf = sqrt(1.0 + mf * mf) as f32
+        let rpf = (sign(l) as f32) * mf / rf if abs_lf > 0.9 else 0.0
+        let cph = cos(phi) as f32
+        let sph = sin(phi) as f32
+        let erx = cph * e1x + sph * e2x
+        let ery = cph * e1y + sph * e2y
+        let erz = cph * e1z + sph * e2z
+        let etx = (0.0 - sph) * e1x + cph * e2x
+        let ety = (0.0 - sph) * e1y + cph * e2y
+        let etz = (0.0 - sph) * e1z + cph * e2z
+        let velx = rpf * ldot * erx + (b / rf) * etx
+        let vely = rpf * ldot * ery + (b / rf) * ety
+        let velz = rpf * ldot * erz + (b / rf) * etz
+        let vlen = sqrt(velx * velx + vely * vely + velz * velz) as f32
+        let near_zero = 1.0 if vlen < 0.00001 else 0.0
+        let dirx = erx if near_zero > 0.5 else velx / vlen
+        let diry = ery if near_zero > 0.5 else vely / vlen
+        let dirz = erz if near_zero > 0.5 else velz / vlen
+
+        var col_r = 0.0
+        var col_g = 0.0
+        var col_b = 0.0
+        if l < 0.0
+            // The far universe seen through the throat: cool, luminous.
+            let s1 = star_layer(dirx, diry, dirz, 17.0, 0.06)
+            let s2 = star_layer(dirx, diry, dirz, 36.0, 0.04)
+            let s3 = star_layer(dirx, diry, dirz, 70.0, 0.025)
+            let g = nebula_fbm((dirx * 1.6 - diry) * 1.2 + 3.0, (dirz * 1.6 + diry) * 1.2 + 3.0)
+            let glow = 0.35 + 0.9 * g * g
+            col_r = 0.8 * s1 + 0.85 * s2 * 0.85 + 0.9 * s3 * 0.55 + 0.12 * glow + 0.06
+            col_g = 0.92 * s1 + 0.95 * s2 * 0.85 + 0.97 * s3 * 0.55 + 0.28 * glow + 0.15
+            col_b = 1.0 * s1 + 1.0 * s2 * 0.85 + 1.0 * s3 * 0.55 + 0.55 * glow + 0.34
+        else
+            // Our universe: warm, quiet.
+            let s1 = star_layer(dirx, diry, dirz, 15.0, 0.05)
+            let s2 = star_layer(dirx, diry, dirz, 32.0, 0.035)
+            let s3 = star_layer(dirx, diry, dirz, 64.0, 0.02)
+            let n = nebula_fbm((dirx * 2.0 + dirz) * 1.4 + 11.0, (diry * 2.0 - dirz) * 1.4 + 11.0)
+            col_r = 1.0 * s1 + 1.0 * s2 * 0.8 + 0.9 * s3 * 0.5 + 0.08 * n * n + 0.0072
+            col_g = 0.93 * s1 + 0.86 * s2 * 0.8 + 0.8 * s3 * 0.5 + 0.05 * n * n + 0.008
+            col_b = 0.82 * s1 + 0.7 * s2 * 0.8 + 0.7 * s3 * 0.5 + 0.03 * n * n + 0.012
+
+        // Einstein ring: light grazing the throat (min_r → K) piles into a rim.
+        let dm = min_r - 1.0
+        let ring = (exp(-12.0 * dm * dm) as f32) * (smoothstep(0.0, 0.6, dm) as f32)
+        col_r = col_r + 1.0 * ring * 1.3
+        col_g = col_g + 0.7 * ring * 1.3
+        col_b = col_b + 0.4 * ring * 1.3
+        // Soft blue bloom bleeding out of the mouth.
+        let mouth = exp(-2.2 * (max(0.0, dm) as f32)) as f32
+        col_r = col_r + 0.15 * mouth * 0.35
+        col_g = col_g + 0.32 * mouth * 0.35
+        col_b = col_b + 0.6 * mouth * 0.35
+
+        // Tone map (Reinhard + gamma), then write opaque RGBA.
+        col_r = col_r / (col_r + 0.85)
+        col_g = col_g / (col_g + 0.85)
+        col_b = col_b / (col_b + 0.85)
+        let base = idx * 4
+        paint[base] = pow(max(col_r, 0.0) as f32, 0.82) as f32
+        paint[base + 1] = pow(max(col_g, 0.0) as f32, 0.82) as f32
+        paint[base + 2] = pow(max(col_b, 0.0) as f32, 0.82) as f32
+        paint[base + 3] = 1.0
+
+// Native smoke: sum the tone-mapped red channel over the whole frame — a
+// deterministic, order-independent total that exercises the throat integration,
+// the near/far sky selection, and the Einstein-ring rim in one number (the same
+// whole-field reduction as the fluid demo; finite => no NaN blow-up).
+let host = paint
+var total = 0.0
+var k = 0
+while k < 9216
+    total = total + host[k * 4]
+    k = k + 1
+let scaled = (total * 1000.0) as i32
+println(f"red_sum_milli={scaled}")
