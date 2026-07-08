@@ -78,17 +78,32 @@ pub(crate) fn try_lower_gpu_reduce(
         captures: Vec::new(),
     });
 
-    // Emit the GpuLaunch terminator. Returns an operand reading the readback
-    // result (the reduced scalar) out of the 1-element output buffer, plus the
+    // Emit the GpuLaunch terminator. Returns an operand reading the result
+    // (the reduced scalar) out of the 1-element output buffer, plus the
     // local backing that buffer (so it can be freed below).
-    let (output_op, output_local) =
-        emit_gpu_reduce_launch(ctx, &kernel_name, receiver_local, init_op, *span)?;
+    // If dest is gpu-resident, skip the readback (buffer stays on GPU).
+    let dest_is_gpu_resident = match &dest {
+        Some(d) => ctx.body.local_decls[d.local.0].residency == BindingResidency::Gpu,
+        None => false,
+    };
+    let (output_op, output_local, handle_id) = emit_gpu_reduce_launch(
+        ctx,
+        &kernel_name,
+        receiver_local,
+        init_op,
+        *span,
+        dest_is_gpu_resident,
+    )?;
 
     // Honor the caller's destination: the call lowering passes `dest` for
     // `let sum = a.reduce(...)` and expects the intrinsic to write it. Mirror
     // the `element_at` intrinsic — write the result into `dest` (or a temp) and
     // return a Copy of it. Without this the binding never receives the value.
     let elem_ty = extract_element_type(obj_ty)?;
+
+    // Save the destination local before moving dest (for handle transfer below)
+    let dest_local_opt = dest.as_ref().map(|d| d.local);
+
     let (destination, result_op) = match dest {
         Some(d) => (d.clone(), Operand::Copy(d)),
         None => {
@@ -102,14 +117,26 @@ pub(crate) fn try_lower_gpu_reduce(
         span: *span,
     });
 
-    // Free the 1-element output array now that its element has been copied into
-    // the destination. `_reduce_out` is a managed heap array created without a
-    // `StorageLive`, so Perceus only `DecRef`s it at this explicit `StorageDead`;
-    // omitting it leaks the buffer on every reduce call.
-    ctx.push_statement(MirStatement {
-        kind: MirStatementKind::StorageDead(Place::new(output_local)),
-        span: *span,
-    });
+    // For gpu-resident results, transfer the persistent device buffer's
+    // handle from output_local to the destination binding. The destination local
+    // already has a device_handle allocated (in apply_variable_residency), but
+    // for reduce results, we want it to reference the 1-element output buffer
+    // instead. This ensures cross-residency assignment (`let h = gpu_sum`) uses
+    // the correct device buffer for readback.
+    if dest_is_gpu_resident {
+        if let Some(dest_local) = dest_local_opt {
+            ctx.body.local_decls[dest_local.0].device_handle = Some(handle_id);
+        }
+    } else {
+        // For host-resident results, emit StorageDead to free the temporary 1-element
+        // array after the element has been copied. `_reduce_out` is a managed heap
+        // array created without a `StorageLive`, so Perceus only `DecRef`s it at this
+        // explicit `StorageDead`; omitting it would leak the buffer on every reduce call.
+        ctx.push_statement(MirStatement {
+            kind: MirStatementKind::StorageDead(Place::new(output_local)),
+            span: *span,
+        });
+    }
 
     Ok(Some(result_op))
 }
@@ -818,18 +845,24 @@ fn emit_workgroup_barrier(ctx: &mut LoweringContext, span: Span) {
 }
 
 /// Emit the GpuLaunch terminator for the reduction kernel.
-/// Returns the operand that reads the reduced result, and the local backing the
-/// 1-element output array. The caller must emit `StorageDead` for that local
-/// after consuming the operand so Perceus frees the host buffer (it is created
-/// with `push_local`, which emits no `StorageLive`, so without an explicit
-/// `StorageDead` Perceus would never `DecRef` it — a per-call leak).
+/// Returns (reduced_result_operand, output_local_backing_1element_buffer, device_handle_id).
+/// The caller must emit `StorageDead` for the output_local (for host-resident
+/// destinations) or transfer its device handle to the destination binding
+/// (for gpu-resident destinations) to avoid leaks or handle mismatches.
+///
+/// Gpu-resident reduce: if `dest_is_gpu_resident` is true, the 1-element
+/// output buffer remains gpu-resident and is NOT eagerly read back to the host.
+/// The buffer persists with its device handle, allowing the result to remain
+/// on-GPU for subsequent operations. Cross-residency assignment (`let h = gpu_s`)
+/// will trigger the readback then.
 fn emit_gpu_reduce_launch(
     ctx: &mut LoweringContext,
     kernel_name: &str,
     receiver_local: Local,
     init_op: Operand,
     span: Span,
-) -> Result<(Operand, Local), LoweringError> {
+    dest_is_gpu_resident: bool,
+) -> Result<(Operand, Local, crate::mir::body::DeviceHandleId), LoweringError> {
     let receiver_ty = ctx.body.local_decls[receiver_local.0].ty.clone();
     let elem_ty = extract_element_type(&receiver_ty)?;
 
@@ -963,22 +996,31 @@ fn emit_gpu_reduce_launch(
     ));
     ctx.set_current_block(after_bb);
 
-    // MILESTONE 2 FIX: Emit readback to fence device work and copy result to host array.
-    // After GpuLaunch, the device buffer contains the result, but the host array is
-    // not yet updated. The readback call synchronizes the host array with the device buffer.
-    emit_void_runtime_call(
-        ctx,
-        READBACK_FN,
-        vec![
-            handle_operand(handle_id, span),
-            Operand::Copy(Place::new(output_local)),
-        ],
-        span,
-    );
+    // Conditional readback based on destination residency.
+    // If the destination binding is gpu-resident, the 1-element output buffer
+    // stays on GPU and is NOT read back here. The buffer is persistent with its
+    // device handle; cross-residency assignment will trigger readback when needed.
+    // If the destination is host-resident (or None), emit the readback now so the
+    // host array synchronizes with the device buffer result.
+    if !dest_is_gpu_resident {
+        emit_void_runtime_call(
+            ctx,
+            READBACK_FN,
+            vec![
+                handle_operand(handle_id, span),
+                Operand::Copy(Place::new(output_local)),
+            ],
+            span,
+        );
+    }
 
     // Return an operand that reads from the output buffer's first element.
-    // After the readback fence, the host array `_reduce_out` is synchronized with
-    // the device buffer, so `output[0]` holds the reduced result.
+    // For host-resident destinations (and readback happened above):
+    //   After the readback fence, the host array `_reduce_out` is synchronized with
+    //   the device buffer, so `output[0]` holds the reduced result.
+    // For gpu-resident destinations (no readback yet):
+    //   This operand reads from the 1-element gpu buffer, which is valid as long
+    //   as we stay on GPU or perform an explicit cross-residency assignment.
     // `PlaceElem::Index` indexes by a *local holding the index value*, so the
     // constant 0 must be materialized into a bare local (using `Local(0)` would
     // index by the return slot's contents, not by zero).
@@ -988,5 +1030,5 @@ fn emit_gpu_reduce_launch(
     output_elem_place
         .projection
         .push(crate::mir::PlaceElem::Index(zero_idx));
-    Ok((Operand::Copy(output_elem_place), output_local))
+    Ok((Operand::Copy(output_elem_place), output_local, handle_id))
 }
