@@ -16,7 +16,7 @@
 //! kernel building logic is a future cleanup task.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::statement::{AcceleratorTarget, Statement, StatementKind, VariableDeclaration};
+use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
 use crate::ast::types::{frame_input_param_key, Type, TypeKind, FRAME_INPUT_FIELDS};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -908,10 +908,10 @@ pub(crate) fn flatten_frame_passes(stmts: &[Statement]) -> Result<Vec<&Statement
     let mut passes: Vec<&Statement> = Vec::new();
     for stmt in stmts {
         match &stmt.node {
-            StatementKind::Forall {
-                device: AcceleratorTarget::Gpu,
-                ..
-            } => passes.push(stmt),
+            // Both `gpu forall` and a bare `forall` are accepted here; residency
+            // routing (a bare pass over host data belongs on the CPU, not in a
+            // frame) is enforced by the type checker before lowering runs.
+            StatementKind::Forall { .. } => passes.push(stmt),
             StatementKind::For(_, iterable, body) => {
                 expand_frame_repeat(iterable, body, &mut passes)?;
             }
@@ -942,13 +942,9 @@ fn expand_frame_repeat<'a>(
         ));
     };
     for s in inner {
-        if !matches!(
-            &s.node,
-            StatementKind::Forall {
-                device: AcceleratorTarget::Gpu,
-                ..
-            }
-        ) {
+        // A repeat body holds `gpu forall` or bare `forall` passes; the type
+        // checker rejects any bare pass that resolves to the CPU by residency.
+        if !matches!(&s.node, StatementKind::Forall { .. }) {
             return Err((
                 "'gpu frame' repeat body may only contain 'gpu forall' passes".to_string(),
                 s.span,
