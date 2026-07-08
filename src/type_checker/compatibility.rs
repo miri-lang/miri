@@ -296,9 +296,12 @@ impl TypeChecker {
         if !self.check_inner_type_compatible(inner1, inner2, context) {
             return Some(false);
         }
+        // Fold each size with the constant context so a named `const` in a
+        // type-position `Array<T, SIZE>` (struct field, parameter, return)
+        // compares equal to the literal the constructor form produces.
         match (
-            Self::try_eval_const_int(size1),
-            Self::try_eval_const_int(size2),
+            Self::try_eval_const_int_with_context(size1, context),
+            Self::try_eval_const_int_with_context(size2, context),
         ) {
             (Some(s1), Some(s2)) => Some(s1 == s2),
             _ => Some(size1 == size2),

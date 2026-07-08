@@ -784,7 +784,12 @@ pub(crate) fn lower_array_constructor(
         }
     };
 
-    // Const-evaluate the size expression
+    // Const-evaluate the size expression. The size is a literal here at module
+    // scope because the type checker folds a named `const` in the type
+    // (`instantiate_generic_type`) before MIR sees it. TODO: a `const`-sized
+    // constructor inside a function body still fails because top-level bindings
+    // are not visible in a nested scope at type-check time (see notes/PLAN.md,
+    // "module bindings invisible inside function bodies").
     let size_value =
         crate::type_checker::TypeChecker::try_eval_const_int(&size_expr).ok_or_else(|| {
             LoweringError::unsupported_expression(
