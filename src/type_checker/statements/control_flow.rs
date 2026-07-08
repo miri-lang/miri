@@ -907,12 +907,27 @@ impl TypeChecker {
         // Type-check each pass and apply per-pass buffer read/write disjointness validation.
         for pass in passes {
             if let StatementKind::Forall {
+                device,
                 vars: decls,
                 iterable,
                 body,
-                ..
             } = &pass.node
             {
+                // Route by residency: a bare `forall` whose captured data is
+                // host-resident resolves to the CPU and does not belong in a
+                // gpu frame. `gpu forall` stays the explicit guard; an explicit
+                // pass with no gpu buffer falls through to the buffer check
+                // below for its more precise diagnostic.
+                if matches!(
+                    resolve_forall_device(body, *device, decls, context),
+                    ForallTarget::Cpu
+                ) {
+                    self.report_error(
+                        "'gpu frame' block may only contain 'gpu forall' passes or a literal-count 'for _ in 0..k' repeat around them".to_string(),
+                        pass.span,
+                    );
+                    continue;
+                }
                 // Apply per-pass semantic buffer validation.
                 self.check_gpu_frame_buffers(decls, body, context, pass.span);
                 // Then type-check the pass.

@@ -876,3 +876,108 @@ gpu frame
 "#;
     assert_compiler_error(code, "gpu forall");
 }
+
+// DPB6: a bare `forall` inside a `gpu frame` block routes to GPU by residency,
+// unifying the surface so a frame pass need not spell out `gpu forall`.
+
+#[test]
+fn test_gpu_frame_block_bare_forall_gpu_resident_wgsl_valid() {
+    // DPB6 RED: a bare `forall` over gpu-resident buffers inside a frame block
+    // compiles to naga-valid WGSL, identical to the `gpu forall` spelling.
+    use crate::integration::gpu::helpers::assert_gpu_wgsl_valid;
+    let code = r#"use system.io
+use system.gpu
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var b = [0, 0, 0, 0]
+    gpu frame
+        forall i in 0..4:
+            b[i] = a[i] + 1
+    println("ok")
+"#;
+    assert_gpu_wgsl_valid(code);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_block_bare_forall_matches_gpu_forall() {
+    // DPB6 RED: a bare `forall` pass produces the same result as `gpu forall`.
+    // Two passes ping-pong a->b->c adding 1 each; sum verifies GPU execution.
+    use crate::integration::utils::assert_runs_with_output;
+    let code = r#"use system.io
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let grid_a = [1, 2, 3, 4]
+    gpu var grid_b = [0, 0, 0, 0]
+    gpu var grid_c = [0, 0, 0, 0]
+    gpu frame
+        forall i in 0..4:
+            grid_b[i] = grid_a[i] + 1
+        forall i in 0..4:
+            grid_c[i] = grid_b[i] + 1
+
+    let host_c = grid_c
+    var sum_c = 0
+    var i = 0
+    while i < 4
+        sum_c = sum_c + host_c[i]
+        i = i + 1
+    println(f"sum={sum_c}")
+"#;
+    // Same arithmetic as test_gpu_frame_block_two_passes: sum = 3+4+5+6 = 18.
+    assert_runs_with_output(code, "sum=18");
+}
+
+#[test]
+fn test_gpu_frame_block_bare_forall_host_resident_rejected() {
+    // DPB6 RED: a bare `forall` whose data is host-resident routes to the CPU,
+    // so it does not belong in a gpu frame; the "may only contain" guard fires.
+    let code = r#"use system.gpu
+use system.collections.array
+
+fn main()
+    let host = [1, 2, 3, 4]
+    gpu var b = [0, 0, 0, 0]
+    gpu frame
+        forall i in 0..4:
+            let x = host[i]
+"#;
+    assert_compiler_error(code, "may only contain");
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_block_bare_forall_repeat_body_unrolls() {
+    // DPB6 RED: bare `forall` passes are legal inside a repeat body and unroll
+    // to `k` copies, identical to the `gpu forall` spelling. Ping-pong a<->b
+    // adds 1 each over 3 iterations (6 increments): a starts 1.0, ends 7.0.
+    let code = r#"use system.collections.array
+
+gpu var a = Array<f32, 16>()
+gpu var b = Array<f32, 16>()
+
+gpu forall i in 0..16
+    a[i] = 1.0
+    b[i] = 0.0
+
+gpu frame
+    for _ in 0..3
+        forall i in 0..16
+            b[i] = a[i] + 1.0
+        forall i in 0..16
+            a[i] = b[i] + 1.0
+
+let h = a
+println(f"a0={h[0]}")
+"#;
+    crate::integration::utils::assert_runs_with_output(code, "a0=7");
+}
