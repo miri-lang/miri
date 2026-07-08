@@ -57,6 +57,27 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
     )
 }
 
+/// Returns true for a `Variable` statement whose bindings are all `const`.
+///
+/// A module-level `const` is a compile-time value with no initialization order,
+/// so in script mode it stays at the top level rather than being demoted into
+/// the synthetic `main` body. That keeps it visible to sibling functions — a
+/// `const` used as an `Array<T, SIZE>()` size or referenced from a function body
+/// declared elsewhere in the file. Mutable/immutable (`var`/`let`) bindings are
+/// runtime globals and remain wrapped, preserving their execution order.
+fn is_top_level_const_stmt(stmt: &Statement) -> bool {
+    let StatementKind::Variable(decls, _) = &stmt.node else {
+        return false;
+    };
+    !decls.is_empty()
+        && decls.iter().all(|d| {
+            matches!(
+                d.declaration_type,
+                crate::ast::statement::VariableDeclarationType::Constant
+            )
+        })
+}
+
 /// Returns true if the statement should stay at the top level (not wrapped in main).
 fn is_top_level_stmt(stmt: &Statement) -> bool {
     matches!(
@@ -279,7 +300,7 @@ fn wrap_script_in_main(program: &mut Program) {
 
     let old_body = std::mem::take(&mut program.body);
     for stmt in old_body {
-        if is_top_level_stmt(&stmt) {
+        if is_top_level_stmt(&stmt) || is_top_level_const_stmt(&stmt) {
             top_level.push(stmt);
         } else if is_wrappable_stmt(&stmt) {
             body_stmts.push(stmt);

@@ -24,6 +24,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::Type;
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -125,6 +126,20 @@ pub struct TypeChecker {
     /// rejects anything larger). Runtime lowering of these wide literals is a
     /// separate, pre-existing limitation, not enforced here.
     pub(crate) wide_typed_int_literals: HashSet<usize>,
+    /// Names of top-level (`module scope`) `const`/`let`/`var` bindings already
+    /// registered by the declaration-collection pass. Function bodies checked
+    /// earlier in source order resolve these through the shared context, so a
+    /// forward reference (`fn f(): return G` before `const G = ...`) type-checks.
+    /// A binding in this set is re-registered without a fresh shadow check when
+    /// the body pass revisits its declaration, since that is the same binding,
+    /// not a redeclaration.
+    pub(crate) hoisted_top_level: HashSet<String>,
+    /// When true, [`report_error`](Self::report_error) and its siblings drop the
+    /// diagnostic instead of recording it. Set only while the declaration-collection
+    /// pass hoists a top-level binding, whose initializer is fully re-checked (and
+    /// its diagnostics emitted) later in the body pass; suppressing here avoids
+    /// duplicate or premature errors from that speculative first inference.
+    pub(crate) suppress_diagnostics: bool,
 }
 
 impl Default for TypeChecker {
@@ -154,6 +169,8 @@ impl TypeChecker {
             generic_class_instantiations: HashMap::new(),
             negated_int_literals: HashSet::new(),
             wide_typed_int_literals: HashSet::new(),
+            hoisted_top_level: HashSet::new(),
+            suppress_diagnostics: false,
         }
     }
 
@@ -499,7 +516,48 @@ impl TypeChecker {
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);
             }
+            StatementKind::Variable(decls, visibility) => {
+                self.collect_variable_decl(decls, visibility, context, statement.span);
+            }
             _ => {}
+        }
+    }
+
+    /// Hoists top-level `const`/`let`/`var` bindings so a function body checked
+    /// earlier in source order can resolve them (e.g. `Array<T, SIZE>()` or a
+    /// bare `return G` referencing a const declared further down the module).
+    ///
+    /// The shadow diagnostics run here, in source order, against any pre-existing
+    /// binding (prelude, imports, or an earlier top-level declaration). The first
+    /// occurrence of each name is then registered with diagnostics suppressed —
+    /// its initializer is fully re-checked in the body pass, which owns the real
+    /// error reporting. A repeated name is left registered under its first
+    /// declaration; the body pass skips its shadow check via [`hoisted_top_level`].
+    fn collect_variable_decl(
+        &mut self,
+        decls: &[crate::ast::statement::VariableDeclaration],
+        visibility: &MemberVisibility,
+        context: &mut Context,
+        span: Span,
+    ) {
+        for decl in decls {
+            let is_mutable = matches!(
+                decl.declaration_type,
+                crate::ast::statement::VariableDeclarationType::Mutable
+            );
+            let is_constant = matches!(
+                decl.declaration_type,
+                crate::ast::statement::VariableDeclarationType::Constant
+            );
+            let first_occurrence = self.hoisted_top_level.insert(decl.name.clone());
+            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
+            if !first_occurrence {
+                continue;
+            }
+            let prev = self.suppress_diagnostics;
+            self.suppress_diagnostics = true;
+            self.register_variable_decl(decl, visibility, context, span);
+            self.suppress_diagnostics = prev;
         }
     }
 
