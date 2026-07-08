@@ -449,8 +449,10 @@ fn build_manifest(
         buffers
     };
 
-    // Convert to BufferSpec list
-    let buffers: Vec<BufferSpec> = all_buffers
+    // Convert to BufferSpec list. `all_buffers` is a HashMap, so its iteration
+    // order is nondeterministic; sort by the unique buffer name below so the
+    // emitted manifest is reproducible (identical source → identical bundle).
+    let mut buffers: Vec<BufferSpec> = all_buffers
         .iter()
         .map(
             |(name, (elem_type, length, initial_data, is_zero_filled))| {
@@ -483,6 +485,7 @@ fn build_manifest(
             },
         )
         .collect();
+    buffers.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Compute canvas dimensions from paint buffer
     let paint_buffer = artifacts

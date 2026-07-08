@@ -220,6 +220,44 @@ fn demo_raymarch_web() {
     );
 }
 
+/// blackhole_web: a Schwarzschild black hole rendered by integrating one photon
+/// null geodesic per pixel through the orbit-plane ODE d²u/dφ² = -u + 1.5·u², so
+/// the light bends around the hole, the accretion disk wraps over the top, and
+/// the Einstein ring forms. Device-side `fn` helpers (hash/noise/fbm/star_layer/
+/// disk_opacity) are bundled into each kernel's WGSL; the disk emission and the
+/// lensed starfield background are inlined into the render kernel. The native run
+/// uses zero pointer input, so the seeded camera is fixed; the smoke value is the
+/// shaded center pixel's exact RGB — the full geodesic + disk + background chain,
+/// value-verified like raymarch.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_blackhole_web() {
+    let source = include_str!("../../../examples/gpu/web/blackhole.mi");
+    assert_gpu_runs_with_output(source, "red_sum_milli=284309");
+}
+
+/// wormhole_web: a traversable Morris–Thorne wormhole rendered by integrating one
+/// photon null geodesic per pixel through the throat profile r(ℓ) = √(K²+max(0,
+/// |ℓ|−A)²) with the conserved-impact-parameter ODE ℓ̈ = b²·r'/r³. Rays clearing
+/// the throat (ℓ < 0) sample the far universe's cool sky, grazing rays bend back
+/// into the warm home sky, and light piling at the throat forms the Einstein
+/// ring. Device-side `fn` helpers (hash/noise/nebula_fbm/star_layer) are bundled
+/// into each kernel's WGSL; the two skies are inlined into the render kernel. The
+/// native run uses zero pointer input; the smoke value is the whole-frame red
+/// channel sum — the full throat + sky-select + ring chain, value-verified.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_wormhole_web() {
+    let source = include_str!("../../../examples/gpu/web/wormhole.mi");
+    assert_gpu_runs_with_output(source, "red_sum_milli=1468354");
+}
+
 /// particles_web: 147,456 particles advected through a two-octave curl-noise
 /// flow field, scattered with additive GPU atomics into a fixed-point intensity
 /// surface, tone-mapped to a white/blue field. A `gpu frame` block runs four

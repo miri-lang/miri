@@ -50,6 +50,24 @@ fn test_math_functions_trig() {
 }
 
 #[test]
+fn nested_mix_with_f32_interpolant_runs() {
+    // Regression: `mix(mix(...), mix(...), t)` where the interpolant `t` is f32
+    // while the endpoints widen to f64 used to emit a type-mismatched `fsub`
+    // (f64, f32) and fail Cranelift verification ("Failed to define function").
+    // Every float operand of a math intrinsic is now normalized to one width.
+    let source = r#"
+use system.math.{mix}
+use system.io
+
+fn blend(t f32) f32
+    return mix(mix(1.0, 3.0, t), mix(5.0, 9.0, t), t)
+
+println(f"{blend(0.5)}")
+"#;
+    assert_runs_with_output(source, "4.5");
+}
+
+#[test]
 fn test_math_functions_rounding() {
     assert_runs_with_output(
         r#"

@@ -55,3 +55,4 @@ pub mod variable_bound_gpu_for;
 pub mod vectors;
 pub mod warp;
 pub mod wgsl;
+pub mod wgsl_identity;
