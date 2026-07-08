@@ -145,6 +145,87 @@ println(f\"{pixels.length()}\")
 }
 
 #[test]
+fn test_array_sized_named_const_struct_field_type() {
+    // Type-position form: a named `const` in a struct-field `Array<T, N>`
+    // must fold to the same literal the constructor form uses, so the
+    // field type and the constructed value agree.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 4
+
+struct Buffer
+    data Array<f32, SIZE>
+
+let b = Buffer(data: Array<f32, SIZE>())
+println(f\"{b.data.length()}\")
+",
+        "4",
+    );
+}
+
+#[test]
+fn test_array_sized_named_const_param_type() {
+    // Type-position form in a function parameter type.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 3
+
+fn total(xs Array<int, SIZE>) int
+    xs.length()
+
+let a = Array<int, SIZE>()
+println(f\"{total(a)}\")
+",
+        "3",
+    );
+}
+
+#[test]
+fn test_array_sized_named_const_param_and_return_type() {
+    // Type-position form in both a parameter and a return type: a const-sized
+    // array flows through a passthrough function unchanged.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 5
+
+fn passthrough(xs Array<int, SIZE>) Array<int, SIZE>
+    xs
+
+let a = Array<int, SIZE>()
+let b = passthrough(a)
+println(f\"{b.length()}\")
+",
+        "5",
+    );
+}
+
+#[test]
+fn test_array_sized_named_const_mismatch_error() {
+    // Folding the const in the size slot must not make every array compatible:
+    // a field typed `Array<f32, A>` still rejects an `Array<f32, B>` value.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+const A = 4
+const B = 8
+
+struct Buffer
+    data Array<f32, A>
+
+let b = Buffer(data: Array<f32, B>())
+",
+        "Type mismatch for field 'data'",
+    );
+}
+
+#[test]
 fn test_array_sized_non_const_error() {
     assert_compiler_error(
         "
