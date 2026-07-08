@@ -206,6 +206,27 @@ println(f\"{b.length()}\")
 }
 
 #[test]
+fn test_array_sized_named_const_inside_function_body() {
+    // `Array<T, SIZE>()` constructed inside a function body where the const is
+    // declared later in source order. Top-level bindings are hoisted, so the
+    // value-generic size folds even though the function is checked first.
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+fn make() int
+    let a = Array<int, SIZE>()
+    a.length()
+
+const SIZE = 4
+
+println(f\"{make()}\")
+",
+        "4",
+    );
+}
+
+#[test]
 fn test_array_sized_named_const_mismatch_error() {
     // Folding the const in the size slot must not make every array compatible:
     // a field typed `Array<f32, A>` still rejects an `Array<f32, B>` value.

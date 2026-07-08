@@ -107,7 +107,7 @@ impl TypeChecker {
         }
     }
 
-    fn register_variable_decl(
+    pub(crate) fn register_variable_decl(
         &mut self,
         decl: &VariableDeclaration,
         visibility: &MemberVisibility,
@@ -130,7 +130,15 @@ impl TypeChecker {
             None
         };
 
-        self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
+        // A top-level binding is shadow-checked once, in the declaration-collection
+        // pass. When the body pass revisits the same declaration it is a
+        // re-registration of that hoisted binding, not a redeclaration, so the
+        // shadow check is skipped to avoid a spurious "cannot shadow" against itself.
+        let is_hoisted_top_level =
+            context.scopes.len() == 1 && self.hoisted_top_level.contains(&decl.name);
+        if !is_hoisted_top_level {
+            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
+        }
 
         let mut info = SymbolInfo::new(
             inferred_type,

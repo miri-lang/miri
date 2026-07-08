@@ -51,6 +51,25 @@ print(f"{x + y}")
 }
 
 #[test]
+fn const_visible_in_function_declared_before_it() {
+    // A module `const` used inside a function body that appears earlier in
+    // source order than the declaration. Top-level bindings are hoisted, so
+    // the forward reference resolves.
+    assert_runs_with_output(
+        r#"
+fn get() int:
+    return G
+
+const G = 42
+
+fn main():
+    print(f"{get()}")
+"#,
+        "42",
+    );
+}
+
+#[test]
 fn const_reassignment_is_error() {
     assert_compiler_error(
         "

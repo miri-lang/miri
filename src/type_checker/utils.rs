@@ -2339,6 +2339,9 @@ impl TypeChecker {
     }
 
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
+        if self.suppress_diagnostics {
+            return;
+        }
         let key = (message.clone(), span);
         if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::custom(message, span, None);
@@ -2349,6 +2352,9 @@ impl TypeChecker {
 
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
+        if self.suppress_diagnostics {
+            return;
+        }
         let key = (message.clone(), span);
         if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::custom(message, span, Some(help));
@@ -2366,6 +2372,9 @@ impl TypeChecker {
         span: Span,
         help: Option<String>,
     ) {
+        if self.suppress_diagnostics {
+            return;
+        }
         use crate::error::diagnostic::{Diagnostic, Severity};
         self.diagnostics.push_warning(Diagnostic {
             severity: Severity::Warning,
