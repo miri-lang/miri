@@ -16,8 +16,15 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
+      # Always test the current tip of `main`, not the commit that triggered the
+      # run. Re-running a past scheduled job otherwise re-checks-out that job's
+      # original (now stale) commit, so a fix already merged to `main` would keep
+      # showing as failing until the next nightly cron fired. Pinning `ref: main`
+      # makes both the nightly and any manual re-run reflect the latest `main`.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
