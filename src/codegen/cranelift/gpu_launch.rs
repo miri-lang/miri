@@ -298,7 +298,7 @@ pub(crate) fn translate(
     ] {
         let value = if let Some(op) = op {
             present |= bit;
-            read_operand_value(builder, op, locals, type_ctx)?
+            read_bound_operand(builder, op, locals, type_ctx)?
         } else {
             zero_i64
         };
@@ -680,6 +680,32 @@ fn data_pointer(
 ) -> Value {
     let global = module.declare_data_in_func(data, builder.func);
     builder.ins().symbol_value(ptr_ty, global)
+}
+
+/// Reads a launch loop-bound / range-start operand as an `i64` value.
+///
+/// Unlike a captured buffer pointer, a bound may be a compile-time constant —
+/// e.g. `forall i in 0..SIZE` where `const SIZE = 64 * 64` folds to a literal.
+/// Such a constant is materialized directly; a runtime bound falls back to the
+/// projection-free-local read shared with buffer operands.
+fn read_bound_operand(
+    builder: &mut FunctionBuilder,
+    op: &Operand,
+    locals: &HashMap<Local, cranelift_frontend::Variable>,
+    type_ctx: &TypeCtx,
+) -> Result<Value, CodegenError> {
+    if let Operand::Constant(c) = op {
+        return match &c.literal {
+            Literal::Integer(value) => {
+                Ok(builder.ins().iconst(cl_types::I64, value.to_i128() as i64))
+            }
+            other => Err(CodegenError::Internal(format!(
+                "GpuLaunch loop bound must be an integer constant, got {:?}",
+                other
+            ))),
+        };
+    }
+    read_operand_value(builder, op, locals, type_ctx)
 }
 
 fn read_operand_value(

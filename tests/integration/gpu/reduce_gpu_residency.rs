@@ -5,10 +5,13 @@
 // The 1-element output buffer persists with gpu residency; cross-residency
 // assignment (`let h = s`) fences and reads back the scalar when moving to host.
 
-use super::helpers::*;
 use super::utils::*;
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_let_reduce_captures_result_as_gpu_resident() {
     assert_runs(
         "
@@ -38,9 +41,34 @@ fn main()
     gpu var data = [1, 2, 3, 4]
     gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
     let host_sum = sum
-    println(host_sum)
+    println(f'{host_sum}')
 ",
         "10",
+    );
+}
+
+/// A gpu-resident `f32` scalar reads back with its float width preserved: the
+/// temporary readback array's element must be laid out as `f32`, not widened,
+/// or the copied-back value is corrupted.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_resident_float_scalar_readback_preserves_width() {
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu var data = [1.5, 2.5, 3.0, 4.0]
+    gpu let total = data.reduce(0.0, fn(a f32, b f32) f32: a + b)
+    let host_total = total
+    println(f'{host_total}')
+",
+        "11",
     );
 }
 
@@ -61,7 +89,7 @@ use system.collections.array
 fn main()
     gpu var data = [1, 2, 3, 4]
     let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
-    println(sum)
+    println(f'{sum}')
 ",
         "10",
     );

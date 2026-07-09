@@ -4,8 +4,27 @@
 use assert_cmd::{pkg_name, Command};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tempfile::NamedTempFile;
+
+/// Serializes execution of GPU programs across concurrently-running tests.
+///
+/// Each executed GPU program spawns its own process that creates, uses, and
+/// tears down a real GPU device. When many such processes run at once (the
+/// integration suite is multi-threaded), the platform GPU driver intermittently
+/// crashes one child with `SIGSEGV`/`SIGTRAP` during device teardown — the
+/// program prints the correct result, then dies while releasing the device.
+/// Holding this lock around a GPU program's run ensures only one device is being
+/// created/torn down at a time, which removes the driver contention. Only the
+/// execution step is serialized; compilation of every other test stays parallel.
+static GPU_RUN_SERIAL: Mutex<()> = Mutex::new(());
+
+/// True when `input` compiles to a program that drives the GPU at runtime, and
+/// the GPU value suite is active. Such runs must be serialized (see
+/// [`GPU_RUN_SERIAL`]); all other work stays parallel.
+fn needs_gpu_serialization(command: &str, input: &str) -> bool {
+    cfg!(feature = "gpu_hardware") && command == "run" && input.contains("system.gpu")
+}
 
 pub const BINARY_NAME: &str = pkg_name!();
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -40,25 +59,50 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
         .join("src")
         .join("stdlib");
 
-    let mut cmd = miri_cmd();
-    let output = cmd
-        .env("RUST_BACKTRACE", "1")
-        .env("MIRI_LEAK_CHECK", "1")
-        .env("MIRI_VERIFY_MIR", "1")
-        .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
-        // Prevent linker-override env vars from leaking in from concurrent tests.
-        .env_remove("MIRI_CC")
-        .env_remove("CC")
-        .arg(command)
-        .arg(&path)
-        .output()
-        .unwrap();
+    let gpu_run = needs_gpu_serialization(command, input);
+    // A GPU program that crashes only intermittently is retried a few times: the
+    // platform driver occasionally kills a child with a signal while it tears the
+    // device down, *after* it has already produced the correct result. `miri run`
+    // surfaces a signal-killed child as exit code 255 (its `unwrap_or(-1)` for a
+    // `None` exit code), so that specific code — and only for a GPU run — marks a
+    // transient teardown crash worth retrying. A genuine error exits with its own
+    // code and is returned immediately.
+    let max_attempts = if gpu_run { 3 } else { 1 };
+    const SIGNAL_KILLED_CHILD_CODE: i32 = 255;
 
-    CompilerResult {
-        success: output.status.success(),
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
+    let mut result = None;
+    for attempt in 1..=max_attempts {
+        let mut cmd = miri_cmd();
+        cmd.env("RUST_BACKTRACE", "1")
+            .env("MIRI_LEAK_CHECK", "1")
+            .env("MIRI_VERIFY_MIR", "1")
+            .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
+            // Prevent linker-override env vars from leaking in from concurrent tests.
+            .env_remove("MIRI_CC")
+            .env_remove("CC")
+            .arg(command)
+            .arg(&path);
+
+        // Serialize GPU program runs so only one process creates/tears down a
+        // device at a time; a poisoned lock is irrelevant (it guards no state).
+        let output = {
+            let _gpu_guard =
+                gpu_run.then(|| GPU_RUN_SERIAL.lock().unwrap_or_else(|e| e.into_inner()));
+            cmd.output().unwrap()
+        };
+
+        let transient_crash =
+            gpu_run && output.status.code() == Some(SIGNAL_KILLED_CHILD_CODE);
+        result = Some(CompilerResult {
+            success: output.status.success(),
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+        });
+        if !transient_crash || attempt == max_attempts {
+            break;
+        }
     }
+    result.expect("at least one attempt runs")
 }
 
 /// Run Miri binary with 'check' command (type-checking only)
