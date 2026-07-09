@@ -91,8 +91,7 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
             cmd.output().unwrap()
         };
 
-        let transient_crash =
-            gpu_run && output.status.code() == Some(SIGNAL_KILLED_CHILD_CODE);
+        let transient_crash = gpu_run && output.status.code() == Some(SIGNAL_KILLED_CHILD_CODE);
         result = Some(CompilerResult {
             success: output.status.success(),
             stdout: String::from_utf8(output.stdout).unwrap(),
