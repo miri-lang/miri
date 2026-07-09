@@ -2,15 +2,15 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::{IntegerLiteral, Literal};
+use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::statement::{BindingResidency as AstResidency, VariableDeclaration};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::{BindingResidency as MirResidency, DeviceHandleId};
 use crate::mir::types::MirType;
 use crate::mir::{
-    Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass, Terminator,
-    TerminatorKind,
+    Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass,
+    Terminator, TerminatorKind,
 };
 
 use super::{helpers::coerce_rvalue, lower_expression, resolve_type, LoweringContext};
@@ -40,6 +40,9 @@ const RELEASE_FN: &str = "miri_gpu_release";
 ///
 /// Shared with `g.slice(range)` lowering, which fences the same way before
 /// copying a sub-range of the device buffer back to host.
+///
+/// For gpu-resident scalars (e.g., a reduce result), creates a temporary
+/// 1-element array wrapper, reads into it, then copies the scalar back.
 pub(crate) fn emit_cross_residency_readback(
     ctx: &mut LoweringContext,
     initializer: Option<&Expression>,
@@ -59,13 +62,121 @@ pub(crate) fn emit_cross_residency_readback(
         return;
     };
 
-    let array_op = Operand::Copy(Place::new(src_local));
+    let src_ty = ctx.body.local_decls[src_local.0].ty.clone();
+    let is_array = matches!(src_ty.kind, TypeKind::Array(_, _))
+        || matches!(src_ty.kind, TypeKind::Custom(ref n, _)
+            if crate::ast::types::BuiltinCollectionKind::from_name(n)
+                == Some(crate::ast::types::BuiltinCollectionKind::Array));
+
+    if is_array {
+        // Standard array readback: pass the array directly
+        let array_op = Operand::Copy(Place::new(src_local));
+        emit_void_runtime_call(
+            ctx,
+            READBACK_FN,
+            vec![handle_operand(handle, span), array_op],
+            span,
+        );
+    } else {
+        emit_scalar_readback(ctx, handle, src_local, &src_ty, span);
+    }
+}
+
+/// Reads a gpu-resident scalar (e.g. a `gpu let` reduce result) back to host.
+///
+/// The readback runtime entry copies a device buffer into a host *array*, so a
+/// lone scalar has no destination. Wrap it in a temporary 1-element
+/// `Array<T, 1>`, read the device buffer into that array, then copy element 0
+/// into the scalar local. The wrapper is dropped immediately afterwards.
+fn emit_scalar_readback(
+    ctx: &mut LoweringContext,
+    handle: DeviceHandleId,
+    src_local: Local,
+    src_ty: &Type,
+    span: Span,
+) {
+    use crate::ast::expression::ExpressionKind as AstExprKind;
+    use crate::ast::types::BuiltinCollectionKind;
+    use crate::mir::{AggregateKind, PlaceElem, Statement};
+
+    let type_arg = |node| Expression { id: 0, node, span };
+    let array_ty = Type::new(
+        TypeKind::Custom(
+            BuiltinCollectionKind::Array.name().to_string(),
+            Some(vec![
+                type_arg(AstExprKind::Type(Box::new(src_ty.clone()), false)),
+                type_arg(AstExprKind::Literal(Literal::Integer(IntegerLiteral::I64(
+                    1,
+                )))),
+            ]),
+        ),
+        span,
+    );
+
+    let temp_array = ctx.push_temp(array_ty, span);
+    ctx.push_statement(Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(temp_array),
+            Rvalue::Aggregate(AggregateKind::Array, vec![zero_operand(src_ty, span)]),
+        ),
+        span,
+    });
+
     emit_void_runtime_call(
         ctx,
         READBACK_FN,
-        vec![handle_operand(handle, span), array_op],
+        vec![
+            handle_operand(handle, span),
+            Operand::Copy(Place::new(temp_array)),
+        ],
         span,
     );
+
+    let zero_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
+    ctx.push_statement(Statement {
+        kind: MirStatementKind::Assign(Place::new(zero_idx), Rvalue::Use(int_constant(0, span))),
+        span,
+    });
+    let mut elem_place = Place::new(temp_array);
+    elem_place.projection.push(PlaceElem::Index(zero_idx));
+
+    ctx.push_statement(Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(src_local),
+            Rvalue::Use(Operand::Copy(elem_place)),
+        ),
+        span,
+    });
+    ctx.push_statement(Statement {
+        kind: MirStatementKind::StorageDead(Place::new(temp_array)),
+        span,
+    });
+}
+
+/// A width-matched zero constant of `ty`. Only the type/width matters — the
+/// readback overwrites the value — but a narrower/wider zero would lay the
+/// temporary array element out differently from the device buffer and corrupt
+/// the copy, so the float widths are matched exactly.
+fn zero_operand(ty: &Type, span: Span) -> Operand {
+    let literal = match ty.kind {
+        TypeKind::F32 => Literal::Float(FloatLiteral::F32(0u32)),
+        TypeKind::F64 | TypeKind::Float => Literal::Float(FloatLiteral::F64(0u64)),
+        _ => Literal::Integer(IntegerLiteral::I64(0)),
+    };
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: ty.clone(),
+        literal,
+    }))
+}
+
+/// An `int`-typed integer constant operand.
+fn int_constant(value: i64, span: Span) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Int, span),
+        literal: Literal::Integer(IntegerLiteral::I64(value)),
+    }))
 }
 
 /// Releases any device buffer left over from a prior runtime lifetime of this

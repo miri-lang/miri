@@ -326,10 +326,14 @@ impl TypeChecker {
         }
     }
 
-    /// Returns the mixed-residency diagnostic when `left` and `right`
-    /// reference identifiers whose binding residencies differ. Returns
-    /// `None` otherwise (including when either operand is a non-identifier
-    /// expression — those carry no recorded residency yet).
+    /// Returns the mixed-residency diagnostic when exactly one operand of an
+    /// arithmetic expression is a gpu-resident identifier and the other is not.
+    ///
+    /// A gpu-resident scalar (e.g. a `gpu let` reduce result) lives in a device
+    /// buffer; combining it with a host value — a literal, a host binding, or
+    /// any non-gpu-resident expression — requires an explicit readback first.
+    /// When both sides are gpu-resident, or neither is, the operation is
+    /// well-formed and `None` is returned.
     fn detect_residency_mismatch(
         &self,
         left: &Expression,
@@ -337,24 +341,37 @@ impl TypeChecker {
         right: &Expression,
         context: &Context,
     ) -> Option<String> {
-        let (left_name, left_residency) = identifier_residency(left, context)?;
-        let (right_name, right_residency) = identifier_residency(right, context)?;
-        if left_residency == right_residency {
+        let action = binary_op_action(op)?;
+        let left_gpu = gpu_resident_identifier(left, context);
+        let right_gpu = gpu_resident_identifier(right, context);
+        // Both gpu-resident or neither: no mismatch to diagnose.
+        if left_gpu.is_some() == right_gpu.is_some() {
             return None;
         }
-        let action = binary_op_action(op)?;
-        let (gpu_name, host_name) = match (left_residency, right_residency) {
-            (BindingResidency::Gpu, BindingResidency::Host) => (left_name, right_name),
-            (BindingResidency::Host, BindingResidency::Gpu) => (right_name, left_name),
-            // Two equal residencies were filtered above; both arms are the only
-            // remaining mixed combinations.
-            (BindingResidency::Host, BindingResidency::Host)
-            | (BindingResidency::Gpu, BindingResidency::Gpu) => return None,
+        let (gpu_name, host_operand) = match (left_gpu, right_gpu) {
+            (Some(name), None) => (name, right),
+            (None, Some(name)) => (name, left),
+            // Filtered above: exactly one side is gpu-resident here.
+            _ => return None,
+        };
+        let host_desc = match &host_operand.node {
+            ExpressionKind::Identifier(name, None) => format!("host-resident '{name}'"),
+            _ => "a host value".to_string(),
         };
         Some(format!(
-            "cannot {action} gpu-resident '{gpu_name}' and host-resident '{host_name}'; \
+            "cannot {action} gpu-resident '{gpu_name}' and {host_desc}; \
              bring both to the same residency first."
         ))
+    }
+}
+
+/// Returns the identifier name when `expr` is a bare reference to a
+/// gpu-resident binding (`gpu let` / `gpu var`), and `None` otherwise.
+fn gpu_resident_identifier<'a>(expr: &'a Expression, context: &Context) -> Option<&'a str> {
+    let (name, residency) = identifier_residency(expr, context)?;
+    match residency {
+        BindingResidency::Gpu => Some(name),
+        BindingResidency::Host => None,
     }
 }
 
