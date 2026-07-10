@@ -55,6 +55,9 @@ pub(crate) struct BufferBinding {
 struct KernelArtifact {
     entry_point: String,
     grid_size: Option<[u32; 3]>,
+    /// Unrounded logical iteration extent (a 2-D/3-D `forall`'s loop lengths);
+    /// lets a paint-writing kernel declare a rectangular canvas.
+    logical_extent: Option<[u32; 3]>,
     wgsl_source: String,
     bindings: Vec<BufferBinding>,
     is_frame_step: bool,
@@ -124,7 +127,13 @@ pub fn emit_bundle(
     // JSON fetch are blocked under file://). The separate `<name>.json` +
     // `miri-gpu.js` files above are the artifacts for website integration.
     let index_path = bundle_dir.join(INDEX_HTML_FILENAME);
-    let html_text = generate_index_html(&program_name, source, MIRI_GPU_JS, &manifest_json);
+    let html_text = generate_index_html(
+        &program_name,
+        MIRI_GPU_JS,
+        &manifest_json,
+        manifest.canvas.width,
+        manifest.canvas.height,
+    );
     fs::write(&index_path, html_text)?;
 
     Ok(bundle_dir)
@@ -175,11 +184,13 @@ fn compile_kernels(
         let bindings = extract_buffer_bindings(body, gpu_buffer_inits);
         let is_frame_step = is_frame_step_kernel(body);
         let grid_size = resolve_grid_size(body);
+        let logical_extent = resolve_logical_extent(body);
         let source_map = build_source_map(&module.source_map, source);
 
         artifacts.push(KernelArtifact {
             entry_point: name.clone(),
             grid_size,
+            logical_extent,
             wgsl_source: module.wgsl,
             bindings,
             is_frame_step,
@@ -219,6 +230,13 @@ fn miri_line_of_offset(source: &str, offset: usize) -> u32 {
 fn resolve_grid_size(body: &Body) -> Option<[u32; 3]> {
     match &body.backend_metadata {
         Some(BackendMetadata::Gpu(gpu)) => gpu.grid_size,
+        None => None,
+    }
+}
+
+fn resolve_logical_extent(body: &Body) -> Option<[u32; 3]> {
+    match &body.backend_metadata {
+        Some(BackendMetadata::Gpu(gpu)) => gpu.logical_extent,
         None => None,
     }
 }
@@ -487,19 +505,22 @@ fn build_manifest(
         .collect();
     buffers.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Compute canvas dimensions from paint buffer
+    // Compute canvas dimensions from paint buffer. The display target is a
+    // writable buffer of the last relevant kernel — preferring an `f32` one, so
+    // an atomic scratch buffer (bound read_write for accumulation, e.g. a
+    // particle density surface) never shadows the real RGBA paint output.
     let paint_buffer = artifacts
         .iter()
         .rev()
         .find(|a| a.is_frame_step)
-        .and_then(|a| a.bindings.iter().find(|b| !b.read_only))
+        .and_then(|a| paint_binding(a.bindings.iter()))
         .map(|b| b.name.clone())
         .or_else(|| {
             // Static demo: paint the output of the LAST kernel in the pipeline
             // (e.g. box-blur's `dst`, not the seed kernel's `src`).
             artifacts
                 .last()
-                .and_then(|a| a.bindings.iter().rev().find(|b| !b.read_only))
+                .and_then(|a| paint_binding(a.bindings.iter().rev()))
                 .map(|b| b.name.clone())
         })
         .unwrap_or_else(|| "output".to_string());
@@ -525,7 +546,13 @@ fn build_manifest(
         })
         .unwrap_or_else(|| ("colormap".to_string(), paint_length));
 
-    let (canvas_width, canvas_height) = compute_canvas_dimensions(effective_paint_length);
+    // Prefer an explicit rectangular canvas: a 2-D `forall` that writes the
+    // paint buffer declares its exact (width, height). Frame paint passes are
+    // 1-D, so a demo conveys a non-square canvas via a 2-D kernel writing paint
+    // (e.g. a seed that clears it). Fall back to the square inference from the
+    // paint pixel count when no such kernel exists (the common square demo).
+    let (canvas_width, canvas_height) = paint_canvas_extent(artifacts, &paint_buffer)
+        .unwrap_or_else(|| compute_canvas_dimensions(effective_paint_length));
 
     let paint_mode = if paint_mode == "rgba" {
         Some(paint_mode)
@@ -634,6 +661,44 @@ fn build_frame_inputs() -> Vec<InputFieldSpec> {
         .collect()
 }
 
+/// The paint (display) binding among a kernel's bindings: the first writable
+/// `f32` buffer (the RGBA/scalar display target), or — if none is `f32` — the
+/// first writable buffer. Preferring `f32` keeps an atomic `u32`/`i32` scratch
+/// buffer (bound read_write for accumulation) from being mistaken for paint.
+fn paint_binding<'a>(
+    bindings: impl Iterator<Item = &'a BufferBinding>,
+) -> Option<&'a BufferBinding> {
+    let mut first_writable = None;
+    for b in bindings {
+        if b.read_only {
+            continue;
+        }
+        if b.element_type == "f32" {
+            return Some(b);
+        }
+        first_writable.get_or_insert(b);
+    }
+    first_writable
+}
+
+/// The rectangular canvas declared by a 2-D (or 3-D) `forall` that writes the
+/// paint buffer: its unrounded logical (width, height). `None` when no such
+/// kernel exists, or when the only paint writer is 1-D (height == 1) — those
+/// fall back to the square inference from pixel count.
+fn paint_canvas_extent(artifacts: &[KernelArtifact], paint_buffer: &str) -> Option<(u32, u32)> {
+    artifacts
+        .iter()
+        .filter(|a| {
+            a.bindings
+                .iter()
+                .any(|b| b.name == paint_buffer && !b.read_only)
+        })
+        .find_map(|a| match a.logical_extent {
+            Some([w, h, _]) if h > 1 => Some((w, h)),
+            _ => None,
+        })
+}
+
 fn compute_canvas_dimensions(length: usize) -> (u32, u32) {
     let sqrt = (length as f64).sqrt().floor() as u32;
     if sqrt * sqrt == length as u32 {
@@ -645,123 +710,123 @@ fn compute_canvas_dimensions(length: usize) -> (u32, u32) {
 
 fn generate_index_html(
     program_name: &str,
-    source: Option<&str>,
     runtime_js: &str,
     manifest_json: &str,
+    canvas_width: u32,
+    canvas_height: u32,
 ) -> String {
     // Escape `</` so an embedded WGSL/JSON string can never close the <script>.
     let manifest_inline = manifest_json.replace("</", "<\\/");
     let runtime_inline = runtime_js.replace("</", "<\\/");
-    let source_panel = source
-        .map(|src| {
-            let escaped = escape_html(src);
-            format!(
-                r#"<div id="sourcePanel" style="margin-top: 2rem; padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px;">
-    <h2 style="margin-top: 0;">Source Code</h2>
-    <pre style="background: #fff; padding: 0.75rem; border: 1px solid #e0e0e0; border-radius: 3px; overflow-x: auto; font-size: 0.85rem;">{}</pre>
-</div>"#,
-                escaped
-            )
-        })
-        .unwrap_or_default();
+    // The display frame matches the compute grid's aspect so a non-square demo
+    // (e.g. a 16:9 grid) is not letterboxed or stretched.
+    let aspect_w = canvas_width.max(1);
+    let aspect_h = canvas_height.max(1);
 
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>{} - Miri GPU</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{name} — Miri GPU</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
-        body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 64rem; margin: 2rem auto; padding: 0 1rem; }}
-        h1 {{ margin-bottom: 0.25rem; }}
-        #layout {{ display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }}
-        #renderPanel {{ }}
-        #sourcePanel {{ background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 1rem; }}
-        canvas {{ display: block; margin: 1rem 0; background: #111; image-rendering: pixelated; width: 256px; height: 256px; }}
-        pre {{ background: #fff; padding: 0.75rem; border: 1px solid #e0e0e0; border-radius: 3px; overflow-x: auto; font-size: 0.85rem; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }}
-        #log {{ font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.85rem; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; padding: 0.75rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }}
-        .pass {{ color: #0a7d28; font-weight: 600; }}
-        .fail {{ color: #b00020; font-weight: 600; }}
-        @media (max-width: 900px) {{
-            #layout {{ grid-template-columns: 1fr; }}
+        :root {{
+            --bg: #04070f; --panel: #0a1326; --line: rgba(110, 142, 255, 0.13);
+            --text: #e9eefb; --muted: #93a3c9; --dim: #5b6b95;
+            --yellow: #ffd83d; --blue: #5b8cff; --radius-lg: 16px;
+            --font-display: "Space Grotesk", system-ui, sans-serif;
+            --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
         }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            background: var(--bg); color: var(--text); font-family: var(--font-display);
+            font-size: 17px; line-height: 1.6; margin: 0; padding: 3rem 1.5rem;
+            -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; align-items: center;
+        }}
+        .wrap {{ width: 100%; max-width: min(96vw, 960px); }}
+        h1 {{ font-weight: 700; font-size: 2rem; margin: 0 0 0.35rem; letter-spacing: -0.02em; }}
+        p.lead {{ color: var(--muted); margin: 0 0 1.75rem; }}
+        .stage {{
+            border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden;
+            background: var(--panel); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        }}
+        .frame {{
+            position: relative; background: #02040a; width: 100%; aspect-ratio: {aspect_w} / {aspect_h};
+        }}
+        .frame canvas {{
+            position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+            image-rendering: auto; touch-action: none; cursor: grab;
+        }}
+        .frame canvas:active {{ cursor: grabbing; }}
+        .controls {{
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+            gap: 10px 16px; padding: 12px 18px; border-top: 1px solid var(--line);
+            font-family: var(--font-mono); font-size: 12px; color: var(--dim);
+            background: rgba(7, 13, 29, 0.7);
+        }}
+        .hint {{ color: var(--muted); }}
+        .hint::before {{ content: "✦ "; color: var(--yellow); }}
+        #fps b {{ color: var(--text); font-weight: 500; }}
+        #fps.fail {{ color: #ff6b6b; }}
     </style>
 </head>
 <body>
-    <h1>{} Demo</h1>
-    <p>GPU-accelerated computation rendered from a manifest. Open in a WebGPU-capable browser.</p>
-    <div id="layout">
-        <div id="renderPanel">
-            <label>Colormap:
-                <select id="colormap">
-                    <option value="grayscale">grayscale</option>
-                    <option value="spectrum">spectrum</option>
-                    <option value="fire">fire</option>
-                </select>
-            </label>
-            <canvas id="output" width="64" height="64" aria-label="Compute output pixel grid"></canvas>
-            <div id="status">Loading manifest...</div>
-            <pre id="log"></pre>
-        </div>
-        <div>
-            {}
+    <div class="wrap">
+        <h1>{name}</h1>
+        <p class="lead">GPU-accelerated computation, compiled from Miri to WebGPU.</p>
+        <div class="stage">
+            <div class="frame">
+                <canvas id="output" width="64" height="64" aria-label="Compute output"></canvas>
+            </div>
+            <div class="controls">
+                <span class="hint">drag to pan · scroll to zoom</span>
+                <span id="fps">fps <b>—</b></span>
+            </div>
         </div>
     </div>
 
     <script type="module">
 // --- inlined miri-gpu.js runtime (self-contained for file:// preview) ---
-{}
+{runtime}
 // --- end runtime ---
 
-        const status = document.getElementById("status");
-        const log = document.getElementById("log");
         const canvas = document.getElementById("output");
-        const colormapSelect = document.getElementById("colormap");
-        const MANIFEST = {};
-        let handle = null;
+        const fpsEl = document.getElementById("fps");
+        const MANIFEST = {manifest};
 
-        function logLine(msg) {{
-            log.textContent += msg + "\n";
-            log.scrollTop = log.scrollHeight;
-        }}
-
-        async function runDemo() {{
-            try {{
-                if (handle) handle.stop();
-                handle = await mount(canvas, MANIFEST, {{
-                    powerPreference: "high-performance",
-                    colormap: colormapSelect.value,
-                }});
-                status.textContent = "Running...";
-                status.className = "pass";
-            }} catch (err) {{
-                logLine(`Error: ${{err.message ?? err}}`);
-                status.textContent = "Failed";
-                status.className = "fail";
+        // Rolling FPS: count painted frames and refresh the readout ~2x/second.
+        let frames = 0;
+        let windowStart = performance.now();
+        function onFrame() {{
+            frames++;
+            const now = performance.now();
+            const elapsed = now - windowStart;
+            if (elapsed >= 500) {{
+                const fps = Math.round((frames * 1000) / elapsed);
+                fpsEl.innerHTML = `fps <b>${{fps}}</b>`;
+                frames = 0;
+                windowStart = now;
             }}
         }}
 
-        colormapSelect.addEventListener("change", runDemo);
-        runDemo();
+        (async () => {{
+            try {{
+                await mount(canvas, MANIFEST, {{ powerPreference: "high-performance", onFrame }});
+            }} catch (err) {{
+                fpsEl.textContent = `error: ${{err.message ?? err}}`;
+                fpsEl.className = "fail";
+            }}
+        }})();
     </script>
 </body>
 </html>
 "##,
-        program_name, program_name, source_panel, runtime_inline, manifest_inline
+        name = program_name,
+        runtime = runtime_inline,
+        manifest = manifest_inline,
     )
-}
-
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
 }

@@ -482,6 +482,147 @@ gpu frame idx in 0..16
 }
 
 #[test]
+fn manifest_canvas_is_rectangular_from_2d_paint_kernel() {
+    // A 2-D `forall` that writes the paint buffer declares a rectangular canvas
+    // by its exact loop extent. Without it the flat paint length (921600) would
+    // read as a 960×960 square; the 2-D writer must yield 1280×720 instead.
+    const RECT_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var paint = Array<f32, 1280 * 720 * 4>()
+
+gpu forall px, py in 0..1280, 0..720
+    let base = (py * 1280 + px) * 4
+    paint[base] = 1.0
+    paint[base + 1] = 0.5
+    paint[base + 2] = 0.25
+    paint[base + 3] = 1.0
+"#;
+
+    let source = write_source(RECT_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("bundle.json")).expect("read manifest"),
+    )
+    .expect("parse manifest JSON");
+
+    assert_eq!(manifest["canvas"]["width"].as_u64().unwrap(), 1280);
+    assert_eq!(manifest["canvas"]["height"].as_u64().unwrap(), 720);
+}
+
+#[test]
+fn manifest_canvas_stays_square_for_1d_paint_kernel() {
+    // A 1-D paint pass carries no width, so the canvas falls back to the square
+    // inference from pixel count (16 f32 = 4 RGBA px = 2×2).
+    const SQUARE_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var paint = Array<f32, 16>()
+
+gpu forall i in 0..4
+    paint[i * 4] = 1.0
+    paint[i * 4 + 1] = 0.5
+    paint[i * 4 + 2] = 0.25
+    paint[i * 4 + 3] = 1.0
+"#;
+
+    let source = write_source(SQUARE_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle_dir.join("bundle.json")).expect("read manifest"),
+    )
+    .expect("parse manifest JSON");
+
+    assert_eq!(manifest["canvas"]["width"].as_u64().unwrap(), 2);
+    assert_eq!(manifest["canvas"]["height"].as_u64().unwrap(), 2);
+}
+
+#[test]
+fn manifest_resolves_named_const_array_size() {
+    // A sized `Array<T, N>()` whose size is a named top-level `const` (itself a
+    // constant arithmetic expression) must resolve to a concrete buffer length.
+    // Regression: a named const fell through const-size evaluation to `None`,
+    // emitting a zero-length paint buffer and a 0x0 canvas (black, unpaintable).
+    const NAMED_CONST_SIZE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+const PIXELS = 8 * 8
+const PAINT = PIXELS * 4
+
+gpu var paint = Array<f32, PAINT>()
+
+gpu forall i in 0..64
+    paint[i * 4 + 0] = 1.0
+    paint[i * 4 + 1] = 0.5
+    paint[i * 4 + 2] = 0.25
+    paint[i * 4 + 3] = 1.0
+"#;
+
+    let source = write_source(NAMED_CONST_SIZE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    let paint = manifest["buffers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["name"] == "paint")
+        .expect("paint buffer present");
+    assert_eq!(
+        paint["length"].as_u64().unwrap(),
+        256,
+        "Array<f32, PAINT> with const PAINT = 8*8*4 must have length 256"
+    );
+
+    // Canvas dimensions derive from the paint buffer length; a resolved length
+    // yields a non-zero, paintable canvas (256 f32 RGBA = 64 px = 8x8).
+    assert_eq!(manifest["canvas"]["width"].as_u64().unwrap(), 8);
+    assert_eq!(manifest["canvas"]["height"].as_u64().unwrap(), 8);
+}
+
+#[test]
 fn non_frame_kernel_no_inputs_field() {
     // Verify non-frame kernels omit the inputs field entirely
     let source = write_source(GPU_FOR_SOURCE);

@@ -396,6 +396,7 @@ fn build_gpu_reduce_kernel(
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([workgroup_size, 1, 1]),
         grid_size: Some([1, 1, 1]),
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));

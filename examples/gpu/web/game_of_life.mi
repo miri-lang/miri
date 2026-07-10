@@ -1,109 +1,123 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright (c) Viacheslav Shynkarenko
-
-// Multi-pass Game of Life: Conway's B3/S23 cellular automaton.
-//
-// A `gpu frame` block with 5 passes:
-// 1. CA step: read grid_a → write grid_b (compute next generation).
-// 2. Trail decay: read grid_b + trail_a → write trail_b (integrate trail).
-// 3. Splat (event-gated): read frame.mouse → write grid_b cells.
-// 4. Reseed (event-gated): read frame.double_clicked → reseed grid_b.
-// 5. Paint: read grid_b + trail_b → write paint RGBA.
-//
-// This demonstrates multi-pass frame loops with frame input access
-// and deterministic state integration.
-
 use system.collections.array
+use system.math
 use system.io
 
-// 64×64 toroidal grid (4096 cells); paint carries 4 RGBA floats per cell.
-const CELLS = 64 * 64
-const PAINT = 64 * 64 * 4
+// Conway's Game of Life on a 320×180 toroidal grid, rendered to a 1280×720
+// (16:9) RGBA canvas — 4×4 display pixels per cell. A single f32 state buffer
+// per cell folds two things the reference shader keeps in separate channels:
+//   state == 1.0  → alive
+//   state <  1.0  → the decaying "trail" left where a cell recently died
+// Folding them lets the whole simulation ride one ping-pong pair (the runtime
+// double-buffers exactly one state pair; `paint` is a separate terminal output).
 
-// Grids: ping-pong for CA step
-gpu var grid_a = Array<int, CELLS>()
-gpu var grid_b = Array<int, CELLS>()
+// Grid state: ping-ponged across frames.
+gpu var state_a = Array<f32, 320 * 180>()
+gpu var state_b = Array<f32, 320 * 180>()
 
-// Trail buffers: ping-pong for decay
-gpu var trail_a = Array<f32, CELLS>()
-gpu var trail_b = Array<f32, CELLS>()
+// Paint output (RGBA: 4 floats per display pixel).
+gpu var paint = Array<f32, 1280 * 720 * 4>()
 
-// Paint output (RGBA: 4 floats per pixel)
-gpu var paint = Array<f32, PAINT>()
+// Seed the grid: a deterministic ~18%-density soup.
+gpu forall idx in 0..57600
+    let x = idx % 320
+    let y = idx / 320
+    let hash = (x * x * 3 + y * y * 5 + x * y * 7 + x * 13 + y * 17) % 100
+    state_a[idx] = 1.0 if hash < 18 else 0.0
 
-// Seed kernel: fill grid_a with a deterministic "soup"
-gpu forall idx in 0..4096
-    let x = idx % 64
-    let y = idx / 64
-    let hash = (x * 37 + y * 71 + x * y * 7) % 13
-    grid_a[idx] = 1 if hash < 5 else 0
-    trail_a[idx] = 0.0
+// Clear the canvas to the background color. This 2-D pass over the exact
+// display extent also tells the web-gpu backend the canvas is 1280×720 (a flat
+// paint buffer otherwise reads as square).
+gpu forall px, py in 0..1280, 0..720
+    let base = (py * 1280 + px) * 4
+    paint[base] = 0.012
+    paint[base + 1] = 0.02
+    paint[base + 2] = 0.046
+    paint[base + 3] = 1.0
 
-// Multi-pass frame loop (buffer-level disjoint passes)
 gpu frame
-    // Pass 1: CA step — compute next generation
-    gpu forall idx in 0..4096
-        let y = idx / 64
-        let x = idx % 64
-        let ym = (y - 1 + 64) % 64
-        let yp = (y + 1) % 64
-        let xm = (x - 1 + 64) % 64
-        let xp = (x + 1) % 64
-        let n = grid_a[ym*64+xm] + grid_a[ym*64+x] + grid_a[ym*64+xp] + grid_a[y*64+xm] + grid_a[y*64+xp] + grid_a[yp*64+xm] + grid_a[yp*64+x] + grid_a[yp*64+xp]
-        var next = 0
-        if n == 3
-            next = 1
-        if grid_a[idx] == 1 and n == 2
-            next = 1
-        grid_b[idx] = next
+    // Pass 1: one Life step. A cell is alive iff its state is exactly 1.0; a
+    // dead cell keeps its trail decaying at 0.94×/frame, which never re-reads as
+    // alive (0.94 < the 0.99 alive threshold).
+    gpu forall idx in 0..57600
+        let y = idx / 320
+        let x = idx % 320
+        let ym = (y - 1 + 180) % 180
+        let yp = (y + 1) % 180
+        let xm = (x - 1 + 320) % 320
+        let xp = (x + 1) % 320
+        let n1 = 1 if state_a[ym * 320 + xm] > 0.99 else 0
+        let n2 = 1 if state_a[ym * 320 + x] > 0.99 else 0
+        let n3 = 1 if state_a[ym * 320 + xp] > 0.99 else 0
+        let n4 = 1 if state_a[y * 320 + xm] > 0.99 else 0
+        let n5 = 1 if state_a[y * 320 + xp] > 0.99 else 0
+        let n6 = 1 if state_a[yp * 320 + xm] > 0.99 else 0
+        let n7 = 1 if state_a[yp * 320 + x] > 0.99 else 0
+        let n8 = 1 if state_a[yp * 320 + xp] > 0.99 else 0
+        let n = n1 + n2 + n3 + n4 + n5 + n6 + n7 + n8
+        let self_alive = state_a[idx] > 0.99
+        var alive_next = false
+        if self_alive
+            alive_next = n == 2 or n == 3
+        else
+            alive_next = n == 3
+        state_b[idx] = 1.0 if alive_next else state_a[idx] * 0.94
 
-    // Pass 2: Trail decay and update
-    gpu forall idx in 0..4096
-        let decay = trail_a[idx] * 0.92
-        let new_trail = 1.0 if grid_b[idx] == 1 else decay
-        trail_b[idx] = new_trail
-
-    // Pass 3: Mouse splat (event-gated)
-    // Write to grid_b cells near pointer if mouse is pressed
-    gpu forall idx in 0..4096
+    // Pass 2: paint held pointer as live cells (click / drag to seed).
+    gpu forall idx in 0..57600
         if frame.mouse_down
-            let y = idx / 64
-            let x = idx % 64
-            let mx = frame.mouse_x as int
-            let my = frame.mouse_y as int
-            let dx = (x - mx) as f32
-            let dy = (y - my) as f32
-            let dist2 = dx * dx + dy * dy
-            if dist2 < 25.0
-                grid_b[idx] = 1
+            let x = idx % 320
+            let y = idx / 320
+            let mx = frame.mouse_x / 4.0
+            let my = frame.mouse_y / 4.0
+            let dx = (x as f32) - mx
+            let dy = (y as f32) - my
+            if dx * dx + dy * dy < 36.0
+                state_b[idx] = 1.0
 
-    // Pass 4: Reseed on double-click
-    gpu forall idx in 0..4096
+    // Pass 3: reseed a fresh soup on double-click.
+    gpu forall idx in 0..57600
         if frame.double_clicked
-            let x = idx % 64
-            let y = idx / 64
-            let hash = (x * 37 + y * 71 + x * y * 7) % 13
-            grid_b[idx] = 1 if hash < 5 else 0
+            let x = idx % 320
+            let y = idx / 320
+            let hash = (x * x * 3 + y * y * 5 + x * y * 7 + x * 13 + y * 17) % 100
+            state_b[idx] = 1.0 if hash < 18 else 0.0
 
-    // Pass 5: Paint RGBA output
-    gpu forall idx in 0..4096
-        let alive = grid_b[idx]
-        let trail = trail_b[idx]
-        let r = 1.0 if alive == 1 else trail
-        let g = 1.0 if alive == 1 else 0.0
-        let b = trail
-        let a = 1.0
-        let base = idx * 4
-        paint[base] = r
-        paint[base + 1] = g
-        paint[base + 2] = b
-        paint[base + 3] = a
+    // Pass 4: shade each display pixel. Cells are drawn as rounded dots (an
+    // `inner` factor that falls off toward the cell edge) over a dark-blue
+    // background; live cells glow yellow, fading trails glow blue.
+    gpu forall pidx in 0..921600
+        let ppx = pidx % 1280
+        let ppy = pidx / 1280
+        let cell = (ppy / 4) * 320 + (ppx / 4)
 
-// Native smoke test: verify alive count is deterministic and non-zero
-let host_grid = grid_b
-var alive = 0
+        // Sub-cell position → distance to the cell edge → dot falloff.
+        let fx = (ppx % 4) as f32
+        let fy = (ppy % 4) as f32
+        var ex = (fx + 0.5) / 4.0 - 0.5
+        ex = ex if ex >= 0.0 else 0.0 - ex
+        var ey = (fy + 0.5) / 4.0 - 0.5
+        ey = ey if ey >= 0.0 else 0.0 - ey
+        let inner = 1.0 - smoothstep(0.32, 0.46, max(ex, ey)) as f32
+
+        let st = state_b[cell]
+        let alive = 1.0 if st > 0.99 else 0.0
+        let trail = st * (1.0 - alive)
+        let blue_w = trail * trail * (0.25 + 0.75 * inner)
+        let yellow_w = alive * (0.22 + 0.95 * inner)
+
+        let base = pidx * 4
+        paint[base] = 0.012 + 0.18 * blue_w + 1.0 * yellow_w
+        paint[base + 1] = 0.02 + 0.32 * blue_w + 0.84 * yellow_w
+        paint[base + 2] = 0.046 + 0.8 * blue_w + 0.24 * yellow_w
+        paint[base + 3] = 1.0
+
+// Native smoke: sum the paint red channel across the frame — a deterministic,
+// order-independent total exercising the Life step, trail decay, and palette.
+let host = paint
+var total = 0.0
 var k = 0
-while k < 4096
-    alive = alive + host_grid[k]
+while k < 921600
+    total = total + host[k * 4]
     k = k + 1
-println(f"alive={alive}")
+let scaled = (total * 1000.0) as i32
+println(f"red_sum_milli={scaled}")

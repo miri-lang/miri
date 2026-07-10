@@ -281,6 +281,12 @@ pub struct GpuBodyMetadata {
     /// For runtime-bound loops, this may be None (grid computed at runtime).
     /// Format: [x, y, z]
     pub grid_size: Option<[u32; 3]>,
+    /// Logical per-axis iteration extent (the loop lengths themselves, NOT the
+    /// block-rounded dispatch grid). Set for a `forall` with literal bounds; used
+    /// by the web-gpu backend to recover a rectangular canvas from a 2-D paint
+    /// kernel (grid_size alone is block-rounded and loses the exact extent).
+    /// Format: [x, y, z].
+    pub logical_extent: Option<[u32; 3]>,
     /// Required GPU capabilities for this kernel.
     pub required_capabilities: Vec<GpuCapability>,
     /// True if this kernel is a frame-step animation kernel.

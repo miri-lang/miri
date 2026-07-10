@@ -772,6 +772,7 @@ fn build_frame_kernel_literal(
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some(block_size),
         grid_size: Some([grid_x, 1, 1]),
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: true,
     }));
@@ -834,6 +835,7 @@ fn build_frame_kernel_runtime(
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some(block_size),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: true,
     }));

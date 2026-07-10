@@ -56,6 +56,7 @@ fn build_copy_kernel() -> Body {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([64, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
@@ -246,6 +247,7 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
@@ -329,6 +331,7 @@ fn block_dim_intrinsic_substitutes_workgroup_size_literal() {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([128, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
@@ -417,6 +420,7 @@ fn single_buffer_kernel() -> Body {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
@@ -793,6 +797,7 @@ fn non_buffer_kernel_param_is_rejected() {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
@@ -856,6 +861,7 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
+        logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
