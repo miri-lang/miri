@@ -24,8 +24,8 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
-const PAINT = 96 * 96 * 4
+// Canvas: 384×216 pixels (16:9); RGBA paint output.
+const PAINT = 384 * 216 * 4
 
 // Camera state: [yaw, pitch, distance, idle_seconds] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
@@ -119,6 +119,15 @@ gpu forall i in 0..4
     cam_a[2] = 19.5
     cam_a[3] = 99.0
 
+// Clear the canvas. This 2-D pass over the exact display extent also tells the
+// web-gpu backend the canvas is 384×216 (a flat paint buffer reads as square).
+gpu forall px, py in 0..384, 0..216
+    let base = (py * 384 + px) * 4
+    paint[base] = 0.0
+    paint[base + 1] = 0.0
+    paint[base + 2] = 0.0
+    paint[base + 3] = 1.0
+
 gpu frame
     // Pass 1: integrate orbit angles, zoom distance, and idle timer from input.
     gpu forall i in 0..4
@@ -136,12 +145,14 @@ gpu frame
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel and composite the result.
-    gpu forall idx in 0..9216
-        let px = idx % 96
-        let py = idx / 96
+    gpu forall idx in 0..82944
+        let px = idx % 384
+        let py = idx / 384
         let tm = frame.time
-        let uvx = (px as f32) / 96.0 - 0.5
-        let uvy = 0.5 - (py as f32) / 96.0
+        // Aspect-corrected screen coords: widen x for the 16:9 frame (matches the
+        // reference shader's `uv.x *= res.x / res.y`).
+        let uvx = ((px as f32) / 384.0 - 0.5) * (384.0 / 216.0)
+        let uvy = 0.5 - (py as f32) / 216.0
 
         // Camera orbiting the hole on a sphere of radius `dist`.
         let ya = cam_b[0]
@@ -330,7 +341,7 @@ gpu frame
 let host = paint
 var total = 0.0
 var k = 0
-while k < 9216
+while k < 82944
     total = total + host[k * 4]
     k = k + 1
 let scaled = (total * 1000.0) as i32

@@ -20,7 +20,7 @@ use system.math
 use system.io
 
 // Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
-const PAINT = 96 * 96 * 4
+const PAINT = 384 * 216 * 4
 
 // Camera state: [yaw, pitch, idle_seconds, _pad] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
@@ -97,6 +97,15 @@ gpu forall i in 0..4
     cam_a[2] = 99.0
     cam_a[3] = 0.0
 
+// Clear the canvas. This 2-D pass over the exact display extent also tells the
+// web-gpu backend the canvas is 384×216 (a flat paint buffer reads as square).
+gpu forall px, py in 0..384, 0..216
+    let base = (py * 384 + px) * 4
+    paint[base] = 0.0
+    paint[base + 1] = 0.0
+    paint[base + 2] = 0.0
+    paint[base + 3] = 1.0
+
 gpu frame
     // Pass 1: integrate orbit angles and idle timer from pointer state.
     gpu forall i in 0..4
@@ -113,12 +122,12 @@ gpu frame
         cam_b[3] = 0.0
 
     // Pass 2: ray-march and shade the scene from the current camera.
-    gpu forall idx in 0..9216
-        let px = idx % 96
-        let py = idx / 96
+    gpu forall idx in 0..82944
+        let px = idx % 384
+        let py = idx / 384
         let tm = frame.time
-        let uvx = (px as f32) / 96.0 - 0.5
-        let uvy = 0.5 - (py as f32) / 96.0
+        let uvx = ((px as f32) / 384.0 - 0.5) * (384.0 / 216.0)
+        let uvy = 0.5 - (py as f32) / 216.0
 
         // Orbit camera: eye on a sphere around the blob, looking at (0, 0.75, 0).
         let ya = cam_b[0]
@@ -250,5 +259,5 @@ gpu frame
 // pose, value-verifying the full march + normal + shadow + lighting chain
 // (the same exact-float discipline as the box_blur demo).
 let host = paint
-let c = (48 * 96 + 48) * 4
+let c = (108 * 384 + 192) * 4
 println(f"center={host[c]} {host[c + 1]} {host[c + 2]}")

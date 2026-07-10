@@ -280,6 +280,29 @@ fn compute_kernel_grid_size(
     Ok(Some(grid))
 }
 
+/// The unrounded logical per-axis iteration extent for a literal-bound `forall`
+/// (each axis's loop length), or `None` when any bound is runtime. Unlike the
+/// dispatch grid this is not rounded up to the block size, so it recovers the
+/// exact canvas dimensions of a 2-D paint kernel.
+fn compute_kernel_logical_extent(
+    axes: &[AxisSpec],
+    runtime: bool,
+    span: Span,
+) -> Result<Option<[u32; 3]>, LoweringError> {
+    if runtime {
+        return Ok(None);
+    }
+    let mut extent = [1u32; 3];
+    for (i, axis) in axes.iter().enumerate() {
+        if let AxisBound::Literal(end, range_type) = &axis.bound {
+            let length =
+                compute_range_length(axis.start_literal(span)?, *end, range_type.clone(), span)?;
+            extent[i] = u32::try_from(length.max(0)).unwrap_or(u32::MAX);
+        }
+    }
+    Ok(Some(extent))
+}
+
 /// The kernel-side start offset for an axis: a compile-time constant for a
 /// literal start, or the (i64-cast) start uniform for a runtime start.
 ///
@@ -472,10 +495,12 @@ fn build_kernel_body_nd(
 
     let block = config.block_size(rank);
     let grid_size = compute_kernel_grid_size(axes, block, runtime, span)?;
+    let logical_extent = compute_kernel_logical_extent(axes, runtime, span)?;
 
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some(block),
         grid_size,
+        logical_extent,
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
