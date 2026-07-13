@@ -64,9 +64,9 @@ fn test_min_float_still_works() {
         use system.math.{min}
 
         let result = min(7.5, 2.3)
-        println(f'{result}')
+        println(f'[{result}]')
         "#,
-        "2.299999952316284",
+        "[2.3]",
     );
 }
 
@@ -77,9 +77,9 @@ fn test_max_float_still_works() {
         use system.math.{max}
 
         let result = max(2.1, 9.9)
-        println(f'{result}')
+        println(f'[{result}]')
         "#,
-        "9.899999618530273",
+        "[9.9]",
     );
 }
 

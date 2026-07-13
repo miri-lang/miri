@@ -173,10 +173,18 @@ pub mod rt {
     // ── String conversion ────────────────────────────────────────────────────
     /// Compiler-internal: used by the codegen for int → String coercions.
     pub const BOOL_TO_STRING: &str = "miri_rt_bool_to_string";
-    /// Compiler-internal: used by the codegen for float → String coercions.
+    /// Compiler-internal: used by the codegen for f64 → String coercions.
     pub const FLOAT_TO_STRING: &str = "miri_rt_float_to_string";
-    /// Compiler-internal: used by the codegen for int → String coercions.
+    /// Compiler-internal: used by the codegen for f32 → String coercions, so an
+    /// f32 formats with its own shortest representation instead of the extra
+    /// digits an f64 promotion would expose.
+    pub const F32_TO_STRING: &str = "miri_rt_f32_to_string";
+    /// Compiler-internal: used by the codegen for signed int → String coercions.
     pub const INT_TO_STRING: &str = "miri_rt_int_to_string";
+    /// Compiler-internal: used by the codegen for unsigned int → String
+    /// coercions, so a value >= 2^63 formats as its unsigned magnitude rather
+    /// than a negative `i64`.
+    pub const UINT_TO_STRING: &str = "miri_rt_uint_to_string";
 
     // ── Time ─────────────────────────────────────────────────────────────────
     pub const NANOTIME: &str = "miri_rt_nanotime";
@@ -297,7 +305,9 @@ pub mod rt {
         // String conversion (compiler-internal)
         BOOL_TO_STRING,
         FLOAT_TO_STRING,
+        F32_TO_STRING,
         INT_TO_STRING,
+        UINT_TO_STRING,
         // Time
         NANOTIME,
     ];
