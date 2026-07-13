@@ -118,6 +118,24 @@ fn demo_matmul() {
     assert_gpu_runs_with_output(source, "19.0 22.0 43.0 50.0");
 }
 
+/// tiled_matmul: 4×4 GEMM through the explicit `gpu fn` launch surface — a 2×2
+/// grid of 2×2 blocks, each block cooperatively staging tiles of A and B into
+/// `shared` workgroup memory with `kernel.barrier()` between load and
+/// accumulate. B is the identity, so C = A verifies both tile loads and both
+/// K-iterations end-to-end.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_tiled_matmul() {
+    let source = include_str!("../../../examples/gpu/tiled_matmul.mi");
+    assert_gpu_runs_with_output(
+        source,
+        "1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0 11.0 12.0 13.0 14.0 15.0 16.0",
+    );
+}
+
 /// linear_regression: one batch gradient-descent step. The kernel computes
 /// per-sample MSE gradient contributions in parallel; the host reduces them to
 /// the batch gradient and takes one step. On y = 2x + 1 from (W, B) = (0, 0)

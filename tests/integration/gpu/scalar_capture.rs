@@ -337,3 +337,63 @@ fn main()
         "67",
     );
 }
+
+/// A named `const` forall bound and a captured host scalar coexist: the const
+/// bound lowers to a runtime loop-bound uniform, and the scalar `2.5` must reach
+/// the kernel as its own uniform rather than reading the bound's value. Both
+/// buffer slots must read back `2.5`. Regresses the binding-order clash where the
+/// scalar `_Inputs` uniform and the loop-bound uniform were assigned mismatched
+/// binding indices between the WGSL emitter and the runtime host driver.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn scalar_float_capture_with_const_bound_value_check() {
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+const N = 2
+
+fn main()
+    gpu var dst = [0.0, 0.0]
+    let a = 2.5
+    gpu forall i in 0..N
+        dst[i] = a
+    let host = dst
+    println(f\"{host.element_at(0)} {host.element_at(1)}\")
+",
+        "2.5 2.5",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn scalar_capture_with_variable_bound_value_check() {
+    // A runtime (variable) forall bound and a captured scalar share the kernel:
+    // the bound `n` lowers to a loop-bound uniform, the scalar `k` to the pooled
+    // scalar `_Inputs` uniform. buf[3] = 3 * 4 = 12 proves the scalar carried 4,
+    // not the bound value. Guards the WGSL/runtime binding-order agreement for a
+    // genuinely runtime bound, not only a const-folded one.
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var buf = [0, 0, 0, 0]
+    let n = 4
+    let k = 4
+    gpu forall i in 0..n
+        buf[i] = i * k
+    let host = buf
+    println(f\"{host.element_at(3)}\")
+",
+        "12",
+    );
+}
