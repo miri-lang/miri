@@ -113,8 +113,9 @@ pub fn lower_expression(
 /// Emits MIR to convert an operand to its String representation.
 ///
 /// Handles `String` (identity), `Boolean` (cast to int → `miri_rt_bool_to_string`),
-/// `Float`/`F64`/`F32` (promote to f64 → `miri_rt_float_to_string`), and all
-/// integer types (`miri_rt_int_to_string`). Returns an error for unsupported types.
+/// `F32` (`miri_rt_f32_to_string`), `Float`/`F64` (`miri_rt_float_to_string`),
+/// signed integers (`miri_rt_int_to_string`), and unsigned integers
+/// (`miri_rt_uint_to_string`). Returns an error for unsupported types.
 pub(super) fn emit_to_string(
     ctx: &mut LoweringContext,
     operand: Operand,
@@ -153,23 +154,15 @@ pub(super) fn emit_to_string(
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
             emit_runtime_to_string(ctx, rt::BOOL_TO_STRING, call_args, span)
         }
-        TypeKind::Float | TypeKind::F64 | TypeKind::F32 => {
-            // miri_rt_float_to_string expects f64. Promote F32 if needed.
-            let float_op = if matches!(type_kind, TypeKind::F32) {
-                let f64_ty = Type::new(TypeKind::Float, *span);
-                let f64_temp = ctx.push_temp(f64_ty.clone(), *span);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(
-                        Place::new(f64_temp),
-                        Rvalue::Cast(Box::new(operand), f64_ty),
-                    ),
-                    span: *span,
-                });
-                Operand::Copy(Place::new(f64_temp))
-            } else {
-                operand
-            };
-            let call_args = vec![float_op];
+        TypeKind::F32 => {
+            // Format the f32 directly. Promoting to f64 first would surface the
+            // f32→f64 representation error (`0.1f32` → `0.10000000149011612`),
+            // so the f32 keeps its own shortest round-trip rendering.
+            let call_args = vec![operand];
+            emit_runtime_to_string(ctx, rt::F32_TO_STRING, call_args, span)
+        }
+        TypeKind::Float | TypeKind::F64 => {
+            let call_args = vec![operand];
             emit_runtime_to_string(ctx, rt::FLOAT_TO_STRING, call_args, span)
         }
         TypeKind::Int
@@ -184,6 +177,15 @@ pub(super) fn emit_to_string(
         | TypeKind::I128
         | TypeKind::U128
         | TypeKind::Error => {
+            // Widen to the 64-bit int slot the runtime formatters expect. The
+            // cast is signedness-aware, so unsigned types zero-extend and keep
+            // their magnitude. Unsigned types then format via the unsigned
+            // helper so a value >= 2^63 renders as its magnitude rather than a
+            // negative `i64`; signed types keep the signed helper.
+            let is_unsigned = matches!(
+                type_kind,
+                TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+            );
             let int_ty = Type::new(TypeKind::Int, *span);
             let int_temp = ctx.push_temp(int_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
@@ -194,7 +196,12 @@ pub(super) fn emit_to_string(
                 span: *span,
             });
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
-            emit_runtime_to_string(ctx, rt::INT_TO_STRING, call_args, span)
+            let runtime_fn = if is_unsigned {
+                rt::UINT_TO_STRING
+            } else {
+                rt::INT_TO_STRING
+            };
+            emit_runtime_to_string(ctx, runtime_fn, call_args, span)
         }
         other => Err(LoweringError::unsupported_expression(
             format!(
