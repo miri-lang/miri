@@ -375,12 +375,17 @@ struct UniformParams {
     starts: Vec<Option<Local>>,
 }
 
-/// Pushes kernel parameters: buffer globals, scalar uniforms, the per-axis loop
-/// bound uniforms, and the runtime-start uniforms.
+/// Pushes kernel parameters: buffer globals, the per-axis loop bound uniforms,
+/// the runtime-start uniforms, then the scalar-capture uniforms.
 ///
-/// Parameter order is buffers, scalars, all bound uniforms, then the start
-/// uniforms. The start uniforms follow the bounds so the WGSL emitter and the
-/// runtime assign their binding indices in the same order (bounds, then starts).
+/// Parameter order is buffers, all bound uniforms, the start uniforms, then the
+/// scalar captures. Binding indices are assigned by both the WGSL emitter (which
+/// walks kernel params in this order) and the runtime host driver, which builds
+/// its bind group as storage buffers, then the per-axis bound/start uniforms,
+/// then the pooled scalar-capture `_Inputs` uniform. The two must agree: pushing
+/// bounds and starts ahead of the scalars keeps the scalar `_Inputs` binding
+/// last on both sides, so a scalar capture is never bound to a loop-bound buffer
+/// (which would make the scalar read the bound's value).
 fn push_kernel_params(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
@@ -393,12 +398,6 @@ fn push_kernel_params(
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
         ctx.body.local_decls[local.0].storage_class =
             capture_storage_class(&cap.ty.kind, StorageClass::GpuGlobal);
-    }
-
-    for cap in scalar_captures {
-        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
-        ctx.body.local_decls[local.0].storage_class =
-            capture_storage_class(&cap.ty.kind, StorageClass::UniformBuffer);
     }
 
     let mut bounds = Vec::new();
@@ -430,6 +429,13 @@ fn push_kernel_params(
             starts[i] = Some(local);
         }
     }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class =
+            capture_storage_class(&cap.ty.kind, StorageClass::UniformBuffer);
+    }
+
     UniformParams { bounds, starts }
 }
 
@@ -505,9 +511,12 @@ fn build_kernel_body_nd(
         is_frame_step: false,
     }));
 
+    // Mirrors the param push order in `push_kernel_params`: buffers, then the
+    // bound/start uniforms, then the scalar captures. Only buffers can be
+    // written; every uniform is read-only.
     let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
-    out_params.extend(scalar_captures.iter().map(|_| false));
     out_params.extend(std::iter::repeat_n(false, bound_count + start_count));
+    out_params.extend(scalar_captures.iter().map(|_| false));
     kernel.out_params = out_params;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);

@@ -135,12 +135,11 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// SAXPY: single-precision a*x plus y.
 ///
 /// Demonstrates:
-///   * Scalar literals (e.g., 2.0) inlined directly in the kernel body
-///   * Note: host variables CANNOT be captured into `forall` blocks, so scalars must
-///     be written as literals or computed from array indices
+///   * Host scalar capture: a plain host scalar (`let a = 2.0`) is captured into
+///     the kernel as a read-only uniform — no `gpu` keyword needed for scalars
 ///   * Fused multiply-add pattern commonly used in linear algebra
 ///
-/// Computation: dst[i] = 2.0 * x[i] + y[i]
+/// Computation: dst[i] = a * x[i] + y[i] with a = 2.0
 /// Expected: [2*1+5, 2*2+6, 2*3+7, 2*4+8] = [7, 10, 13, 16]
 #[test]
 #[cfg_attr(
@@ -152,14 +151,13 @@ fn doc_saxpy() {
         "
 use system.gpu
 
-const N = 4
-
 gpu let x = [1.0, 2.0, 3.0, 4.0]
 gpu let y = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu forall i in 0..N
-    dst[i] = 2.0 * x[i] + y[i]
+let a = 2.0
+gpu forall i in 0..4
+    dst[i] = a * x[i] + y[i]
 
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
