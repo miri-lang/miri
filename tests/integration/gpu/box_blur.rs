@@ -64,10 +64,7 @@ println(f"center={host[2 * 5 + 2]} adjacent={host[3 * 5 + 2]} far={host[0]}")
 "#;
 
     // center = 1/9, adjacent = 1/9, far = 0
-    assert_gpu_runs_with_output(
-        source,
-        "center=0.1111111119389534 adjacent=0.1111111119389534 far=0.0",
-    );
+    assert_gpu_runs_with_output(source, "center=0.11111111 adjacent=0.11111111 far=0.0");
 }
 
 /// Test 3×3 box blur with a 3×3 block of white pixels.
@@ -128,10 +125,7 @@ println(f"interior={host[2 * 5 + 2]} edge={host[2 * 5 + 1]} corner={host[1 * 5 +
 "#;
 
     // interior = 9/9, edge = 6/9, corner = 4/9
-    assert_gpu_runs_with_output(
-        source,
-        "interior=1.0 edge=0.6666666865348816 corner=0.4444444477558136",
-    );
+    assert_gpu_runs_with_output(source, "interior=1.0 edge=0.6666667 corner=0.44444445");
 }
 
 /// Test zero-padding behavior at boundary pixels.
@@ -184,8 +178,5 @@ println(f"interior={host[4]} edge={host[1]} corner={host[0]}")
 "#;
 
     // interior = 9/9 = 1.0, edge = 6/9, corner = 4/9
-    assert_gpu_runs_with_output(
-        source,
-        "interior=1.0 edge=0.6666666865348816 corner=0.4444444477558136",
-    );
+    assert_gpu_runs_with_output(source, "interior=1.0 edge=0.6666667 corner=0.44444445");
 }

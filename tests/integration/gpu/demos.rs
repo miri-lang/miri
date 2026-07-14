@@ -99,10 +99,7 @@ fn demo_game_of_life() {
 )]
 fn demo_box_blur() {
     let source = include_str!("../../../examples/gpu/box_blur.mi");
-    assert_gpu_runs_with_output(
-        source,
-        "interior=1.0 corner=0.4444444477558136 edge=0.6666666865348816",
-    );
+    assert_gpu_runs_with_output(source, "interior=1.0 corner=0.44444445 edge=0.6666667");
 }
 
 /// matmul: 2×2 matrix multiply C = A×B, one GPU thread per output cell, each
@@ -148,10 +145,7 @@ fn demo_tiled_matmul() {
 )]
 fn demo_linear_regression() {
     let source = include_str!("../../../examples/gpu/linear_regression.mi");
-    assert_gpu_runs_with_output(
-        source,
-        "W: 0 -> 1.7000000476837158  B: 0 -> 0.800000011920929  MSE: 21.0",
-    );
+    assert_gpu_runs_with_output(source, "W: 0 -> 1.7  B: 0 -> 0.8  MSE: 21.0");
 }
 
 /// neural_net: a single dense layer (2 → 3) with ReLU, one thread per neuron.
@@ -189,7 +183,9 @@ fn demo_neural_net_mlp() {
 /// interactive event handling. A 64×64 toroidal grid with 5-pass frame loop:
 /// (1) CA step, (2) trail decay, (3) mouse splat, (4) reseed, (5) RGBA paint.
 /// Buffer sizes derive from named `const CELLS`/`PAINT` value-generic args.
-/// Deterministic native run counts alive cells after one seed+advance cycle (1993).
+/// Deterministic native run sums the paint red channel across the frame after
+/// one seed+advance cycle — an order-independent total over the Life step,
+/// trail decay, and palette.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -197,7 +193,7 @@ fn demo_neural_net_mlp() {
 )]
 fn demo_game_of_life_web() {
     let source = include_str!("../../../examples/gpu/web/game_of_life.mi");
-    assert_gpu_runs_with_output(source, "alive=1993");
+    assert_gpu_runs_with_output(source, "red_sum_milli=188982976");
 }
 
 /// mandelbrot_web: interactive pan/zoom Mandelbrot, a faithful port of the
@@ -205,8 +201,9 @@ fn demo_game_of_life_web() {
 /// five-stop navy→blue→cyan→yellow→white palette). A `gpu frame` block
 /// integrates the view state (ping-ponged view_a → view_b, driven by frame.*)
 /// then renders into an RGBA surface. The native run uses zero pointer input,
-/// so the seeded viewport is fixed; the smoke value counts interior (near-black)
-/// pixels — a deterministic integer robust to palette float rounding.
+/// so the seeded viewport is fixed; the smoke value sums the tone-mapped red
+/// channel across the frame — a deterministic, order-independent total over the
+/// escape-time iteration and the smooth palette.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -214,7 +211,7 @@ fn demo_game_of_life_web() {
 )]
 fn demo_mandelbrot_web() {
     let source = include_str!("../../../examples/gpu/web/mandelbrot.mi");
-    assert_gpu_runs_with_output(source, "interior=2792");
+    assert_gpu_runs_with_output(source, "red_sum_milli=414656800");
 }
 
 /// raymarch_web: interactive ray marcher, a faithful port of the reference
@@ -232,10 +229,7 @@ fn demo_mandelbrot_web() {
 )]
 fn demo_raymarch_web() {
     let source = include_str!("../../../examples/gpu/web/raymarch.mi");
-    assert_gpu_runs_with_output(
-        source,
-        "center=0.06467816978693008 0.08995301276445389 0.13298241794109344",
-    );
+    assert_gpu_runs_with_output(source, "center=0.06467817 0.08995301 0.13298242");
 }
 
 /// blackhole_web: a Schwarzschild black hole rendered by integrating one photon
@@ -254,7 +248,7 @@ fn demo_raymarch_web() {
 )]
 fn demo_blackhole_web() {
     let source = include_str!("../../../examples/gpu/web/blackhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=284309");
+    assert_gpu_runs_with_output(source, "red_sum_milli=1440788");
 }
 
 /// wormhole_web: a traversable Morris–Thorne wormhole rendered by integrating one
@@ -273,7 +267,7 @@ fn demo_blackhole_web() {
 )]
 fn demo_wormhole_web() {
     let source = include_str!("../../../examples/gpu/web/wormhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=1468354");
+    assert_gpu_runs_with_output(source, "red_sum_milli=9613551");
 }
 
 /// particles_web: 147,456 particles advected through a two-octave curl-noise
