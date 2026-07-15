@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// Test Slice 2 of F12: per-residency device-handle Call-ABI.
+// Tests for per-residency device-handle Call-ABI.
 // Functions containing `forall` bodies that index params can accept gpu-resident args
 // if the buffer access only occurs inside the forall (device-side context).
 
@@ -59,7 +59,7 @@ fn main()
 #[test]
 fn host_access_on_gpu_param_still_rejected() {
     // CRITICAL: Host-context buffer access on a gpu param must still be rejected.
-    // This ensures we don't regress the D22 fix (no per-element host readback).
+    // This prevents per-element host readback of device buffers.
     // A function with `a[0]` at host scope is HostOnly and rejects gpu args.
     assert_compiler_error(
         "

@@ -3,8 +3,8 @@
 
 // Slice readback (`g.slice(0..N)`) on a gpu-resident binding:
 //   * triggers a partial readback — a host `List<T>` of the sliced range.
-//   * the element-cross-read prohibition (D22) still holds: `g[0]` from host
-//     is rejected, but `g.slice(...)` is the sanctioned bulk peek.
+//   * per-element readback is forbidden: `g[0]` from host is rejected, but
+//     `g.slice(...)` is the sanctioned bulk peek.
 //   * the readback is a copy — the gpu binding survives and may be sliced or
 //     read back again.
 

@@ -86,7 +86,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_multiple_write_buffers() {
-    // F35 REFACTOR: multiple disjoint writes are now LEGAL (semantic instead of structural).
+    // Multiple disjoint writes are now legal (semantic instead of structural).
     let code = r#"use system.io
 use system.gpu
 
@@ -144,7 +144,7 @@ fn main()
     assert_runs_with_output(code, "ok");
 }
 
-// DP2 Part 1: frame input field tests
+// Frame input field tests
 
 #[test]
 #[cfg_attr(
@@ -325,7 +325,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_frame_with_scalar_capture() {
-    // D2: test frame fields are ordered before scalar captures.
+    // Test frame fields are ordered before scalar captures.
     // This test captures both frame fields and an ordinary scalar.
     // The frame params (f0..f10) are pushed first, then scalar captures.
     let code = r#"use system.io
@@ -488,7 +488,7 @@ fn main()
     assert_compiler_error(code, "frame");
 }
 
-// DP3: Multi-pass gpu frame block tests
+// Multi-pass gpu frame block tests
 
 #[test]
 #[cfg_attr(
@@ -496,7 +496,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_two_passes() {
-    // DP3 acceptance: `gpu frame { gpu forall ..., gpu forall ... }` block form parses and runs.
+    // `gpu frame { gpu forall ..., gpu forall ... }` block form parses and runs.
     // Two disjoint passes: first reads grid_a, writes grid_b; second reads grid_b, writes grid_c.
     // Verifies pass 2 reads the committed output from pass 1 (not stale/zero data).
     use crate::integration::utils::assert_runs_with_output;
@@ -539,7 +539,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_with_frame_inputs() {
-    // DP3 acceptance: gpu frame block supports multiple passes.
+    // gpu frame block supports multiple passes.
     // Note: frame field access deferred to later; test uses basic variable capture.
     let code = r#"use system.io
 use system.gpu
@@ -561,8 +561,8 @@ fn main()
     assert_runs(code);
 }
 
-// NOTE: F35 per-pass buffer validation is deferred; tests removed.
-// These validations will be added when F35 buffer-level disjointness is implemented.
+// NOTE: Per-pass buffer validation is deferred; tests removed.
+// These validations will be added when buffer-level disjointness is implemented.
 
 #[test]
 #[cfg_attr(
@@ -570,7 +570,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_disjoint_writes_are_legal() {
-    // DP3 F35 strengthening: multiple disjoint writes in the SAME pass are now legal
+    // Multiple disjoint writes in the SAME pass are now legal
     // (only buffer-level disjointness with reads is required, not just one write).
     let code = r#"use system.gpu
 
@@ -598,7 +598,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_single_pass_unchanged() {
-    // DP3 backward compatibility: single-pass `gpu frame i in 0..4: body` still works.
+    // Single-pass `gpu frame i in 0..4: body` still works.
     let code = r#"use system.io
 use system.gpu
 
@@ -613,7 +613,7 @@ fn main()
     assert_runs_with_output(code, "ok");
 }
 
-// F35 per-pass semantic validation (buffer-level disjointness)
+// Per-pass semantic validation (buffer-level disjointness)
 
 #[test]
 #[cfg_attr(
@@ -621,7 +621,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_pass_multiple_disjoint_writes() {
-    // F35 RED: multiple disjoint writes in a single pass should be LEGAL.
+    // Multiple disjoint writes in a single pass should be legal.
     // This differs from the old single-pass frame rule.
     let code = r#"use system.gpu
 
@@ -640,7 +640,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_block_pass_same_buffer_read_write_race() {
-    // F35 RED: same buffer read and written in one pass is a race, must reject.
+    // Same buffer read and written in one pass is a race, must reject.
     let code = r#"use system.gpu
 
 fn main()
@@ -654,7 +654,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_block_pass_no_write() {
-    // F35 RED: a pass with no write is invalid.
+    // A pass with no write is invalid.
     let code = r#"use system.gpu
 
 fn main()
@@ -672,7 +672,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_pass_frame_readable() {
-    // F35 RED: frame.* fields readable in a block pass.
+    // frame.* fields are readable in a block pass.
     let code = r#"use system.io
 use system.gpu
 
@@ -690,7 +690,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_block_pass_frame_wgsl_valid() {
-    // F35 RED: frame.* in block pass produces naga-valid WGSL.
+    // frame.* in block pass produces naga-valid WGSL.
     use crate::integration::gpu::helpers::assert_gpu_wgsl_valid;
     let code = r#"use system.io
 use system.gpu
@@ -735,7 +735,7 @@ fn main()
     );
 }
 
-// Item 5: GPU-resident state pattern test
+// GPU-resident state pattern test
 
 #[test]
 #[cfg_attr(
@@ -743,7 +743,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_state_integration_pattern() {
-    // Item 5: a gpu frame block whose first pass integrates a frame.* field into a state buffer,
+    // A gpu frame block whose first pass integrates a frame.* field into a state buffer,
     // then a second render pass reads the state. This demonstrates the GPU-resident state pattern.
     // Uses ping-pong state buffers to avoid races. Verifies pass 2 reads committed output from pass 1.
     use crate::integration::utils::assert_runs_with_output;
@@ -779,7 +779,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_state_wgsl_valid() {
-    // Item 5 WGSL validation: ensure the state pattern compiles to naga-valid WGSL.
+    // WGSL validation: ensure the state pattern compiles to naga-valid WGSL.
     use crate::integration::gpu::helpers::assert_gpu_wgsl_valid;
     let code = r#"use system.io
 use system.gpu
@@ -825,7 +825,7 @@ println(f"{h[0]}")
     assert_runs_with_output(code, "2");
 }
 
-// NOTE: F35+ integration tests for frame pass structure validation are deferred.
+// NOTE: Integration tests for frame pass structure validation are deferred.
 // The manifest inspection requires additional infrastructure to count kernels
 // generated from gpu frame block statements. For now, we verify the demo:
 // (1) Compiles without error
@@ -877,12 +877,12 @@ gpu frame
     assert_compiler_error(code, "gpu forall");
 }
 
-// DPB6: a bare `forall` inside a `gpu frame` block routes to GPU by residency,
+// A bare `forall` inside a `gpu frame` block routes to GPU by residency,
 // unifying the surface so a frame pass need not spell out `gpu forall`.
 
 #[test]
 fn test_gpu_frame_block_bare_forall_gpu_resident_wgsl_valid() {
-    // DPB6 RED: a bare `forall` over gpu-resident buffers inside a frame block
+    // A bare `forall` over gpu-resident buffers inside a frame block
     // compiles to naga-valid WGSL, identical to the `gpu forall` spelling.
     use crate::integration::gpu::helpers::assert_gpu_wgsl_valid;
     let code = r#"use system.io
@@ -905,7 +905,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_bare_forall_matches_gpu_forall() {
-    // DPB6 RED: a bare `forall` pass produces the same result as `gpu forall`.
+    // A bare `forall` pass produces the same result as `gpu forall`.
     // Two passes ping-pong a->b->c adding 1 each; sum verifies GPU execution.
     use crate::integration::utils::assert_runs_with_output;
     let code = r#"use system.io
@@ -936,7 +936,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_block_bare_forall_host_resident_rejected() {
-    // DPB6 RED: a bare `forall` whose data is host-resident routes to the CPU,
+    // A bare `forall` whose data is host-resident routes to the CPU,
     // so it does not belong in a gpu frame; the "may only contain" guard fires.
     let code = r#"use system.gpu
 use system.collections.array
@@ -957,7 +957,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_frame_block_bare_forall_repeat_body_unrolls() {
-    // DPB6 RED: bare `forall` passes are legal inside a repeat body and unroll
+    // Bare `forall` passes are legal inside a repeat body and unroll
     // to `k` copies, identical to the `gpu forall` spelling. Ping-pong a<->b
     // adds 1 each over 3 iterations (6 increments): a starts 1.0, ends 7.0.
     let code = r#"use system.collections.array

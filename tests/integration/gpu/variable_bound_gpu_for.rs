@@ -202,7 +202,7 @@ fn main()
     );
 }
 
-/// F30 A3: Bound value exceeding u32::MAX triggers GridTooLarge error and aborts.
+/// Bound value exceeding u32::MAX triggers GridTooLarge error and aborts.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -226,7 +226,7 @@ fn main()
     assert_runtime_crash(source);
 }
 
-/// F30 A2: Negative bound should write 0 and result in empty dispatch (no error).
+/// Negative bound should write 0 and result in empty dispatch (no error).
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -252,7 +252,7 @@ fn main()
     assert_gpu_runs_with_output(source, "999 999 999 999");
 }
 
-/// F30 A1: Bound value of 2³¹ (2147483648) exceeds device max_compute_workgroups_per_dimension
+/// Bound value of 2³¹ (2147483648) exceeds device max_compute_workgroups_per_dimension
 /// (~8M on most devices) and must trigger GridTooLarge error. This bound fits in u32, but the
 /// resulting grid (~8.4M) exceeds the device limit, not the u32 range.
 #[test]

@@ -442,7 +442,7 @@ fn generic_bounded_by_trait_is_not_resource() {
     assert!(!is_resource(&g, &defs));
 }
 
-// GPU type-predicate coherence (F25).
+// GPU type-predicate coherence.
 //
 // `gpu_scalar_class` is the single source of truth for scalar-leaf device
 // eligibility; the three GPU type predicates (`is_gpu_compatible`,
@@ -610,7 +610,7 @@ fn scalar_predicates_are_coherent_for_every_scalar_leaf() {
 
 #[test]
 fn boolean_is_kernel_only_not_bindable() {
-    // The original F25 incoherence: `Boolean` was accelerable (accepted at the
+    // `Boolean` was once accelerable (accepted at the
     // binding) yet not a buffer element (rejected at capture). It must now be
     // kernel-local only — usable inside a kernel, never a device buffer leaf.
     let defs: HashMap<String, TypeDefinition> = HashMap::new();

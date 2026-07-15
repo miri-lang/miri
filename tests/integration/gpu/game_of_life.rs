@@ -376,10 +376,10 @@ println(f"{census}")
     assert_gpu_runs_with_output(source, "5");
 }
 
-// Multi-pass Game of Life tests (F35 + Item 6)
+// Multi-pass Game of Life tests
 
 /// Test the full multi-pass demo manifest.
-/// Item 6: Verifies the manifest has 5 framePasses.
+/// Verifies the manifest has 5 framePasses.
 #[test]
 fn test_multipass_game_of_life_manifest() {
     use super::helpers::compile_to_manifest;

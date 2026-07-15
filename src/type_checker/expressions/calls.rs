@@ -1252,7 +1252,7 @@ impl TypeChecker {
     /// Recognizes `g.slice(range)` on a gpu-resident array binding and types it
     /// as a partial readback: a host `List<T>` holding the `range`-selected
     /// elements. The gpu binding is not consumed (a slice is a copy, like a full
-    /// `let h = g` readback). Per-element cross-reads stay forbidden (D22); slice
+    /// `let h = g` readback). Per-element cross-reads are forbidden; slice
     /// is the sanctioned bulk peek.
     ///
     /// Returns `Some(result_type)` when the call is a gpu slice (including the
