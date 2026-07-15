@@ -376,7 +376,7 @@ gpu forall i in 0..16
 
 #[test]
 fn frame_kernel_inputs_manifest_field() {
-    // D4: verify frame kernels have inputs field in manifest with correct offsets
+    // Verify frame kernels have inputs field in manifest with correct offsets
     const FRAME_WITH_FIELDS_SOURCE: &str = r#"use system.io
 use system.gpu
 use system.collections.array

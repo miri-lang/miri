@@ -324,9 +324,9 @@ fn apply_variable_residency(
 }
 
 /// Device handle of a gpu-to-gpu move source: a bare identifier initializer
-/// bound to a gpu-resident local with a live device handle. Mirrors the type
-/// checker's D24 move rule (target gpu-resident, source a gpu binding), so the
-/// moved binding inherits the source buffer instead of allocating a fresh one.
+/// bound to a gpu-resident local with a live device handle. When target is
+/// gpu-resident and source is a gpu binding, the moved binding inherits the
+/// source buffer instead of allocating a fresh one.
 fn gpu_move_source_handle(
     ctx: &LoweringContext,
     decl: &VariableDeclaration,

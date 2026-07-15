@@ -1203,7 +1203,7 @@ fn main()
         );
     }
 
-    /// Generalized F23 width-narrowing: ternary clamp into f32 buffer.
+    /// Generalized width-narrowing: ternary clamp into f32 buffer.
     #[test]
     fn clamp_f32_width_generalized() {
         assert_gpu_wgsl_valid(

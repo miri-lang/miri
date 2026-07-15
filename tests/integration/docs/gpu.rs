@@ -36,7 +36,7 @@ gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu forall i in 0..N
+forall i in 0..N
     dst[i] = a[i] + b[i]
 
 let host = dst
@@ -54,7 +54,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///   * GPU cost telemetry: `gpu_reset_telemetry()`, `gpu_uploads()`, `gpu_launches()`, etc.
 ///   * Expected cost-class behavior:
 ///     - 1 upload (when data is first declared)
-///     - 2 launches (one per gpu forall block)
+///     - 2 launches (one per forall block)
 ///     - 1 readback (when host = data)
 ///     - 1 fence (synchronization point for the readback)
 ///
@@ -76,10 +76,10 @@ const N = 8
 gpu_reset_telemetry()
 gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu forall i in 0..N
+forall i in 0..N
     data[i] = i + 8
 
-gpu forall i in 0..N
+forall i in 0..N
     data[i] = data[i] + 8
 
 let host = data
@@ -115,7 +115,7 @@ gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var c = Array<f32, 4>()
 
-gpu forall idx in 0..4
+forall idx in 0..4
     let row = idx / 2
     let col = idx - row * 2
     var sum = 0.0
@@ -156,7 +156,7 @@ gpu let y = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
 let a = 2.0
-gpu forall i in 0..4
+forall i in 0..4
     dst[i] = a * x[i] + y[i]
 
 let host = dst
@@ -166,7 +166,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     );
 }
 
-/// On-device parallel reduction (`#cb-reduction`).
+/// On-device parallel reduction.
 ///
 /// Demonstrates:
 ///   * `.reduce(init, fold)` on a gpu-resident array lowers to a tree reduction
@@ -216,7 +216,7 @@ use system.gpu
 
 gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu forall i in 0..8
+forall i in 0..8
     arr[i] = i * i
 
 let h = arr
@@ -249,7 +249,7 @@ use system.gpu
 
 fn main()
     gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
-    gpu forall i in 0..8
+    forall i in 0..8
         arr[i] = i * i
     let v = arr[0]
 ",

@@ -305,9 +305,9 @@ gpu forall i in 0..4096
     }
 }
 
-/// F31 verification: Two gpu forall loops produce distinct kernel entries.
+/// Two gpu forall loops produce distinct kernel entries.
 /// Ground truth: AST statement IDs are globally unique (not per-function),
-/// so kernel names are already distinct. This test verifies the fix.
+/// so kernel names are already distinct.
 #[test]
 fn two_gpu_for_loops_produce_distinct_kernels() {
     let source = r#"
@@ -391,7 +391,7 @@ fn kernel_entry_names(source: &str) -> Vec<String> {
     names
 }
 
-/// F31a: kernel entry names are per-compilation deterministic. Compiling the
+/// Kernel entry names are per-compilation deterministic. Compiling the
 /// same source twice in one process (as a long-lived REPL/daemon host would)
 /// must yield identical kernel entry names, even though the process-global AST
 /// id counter keeps advancing between the two compilations. Names are derived
