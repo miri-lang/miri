@@ -12,8 +12,7 @@
 //!
 //! The frame input fields (time, dt, index, mouse_x, mouse_y, mouse_down, drag_dx,
 //! drag_dy, wheel, clicked, double_clicked) are lowered as UniformBuffer parameters
-//! and accessed by name-based lookup in member_expr. Deduplication with forall_gpu
-//! kernel building logic is a future cleanup task.
+//! and accessed by name-based lookup in member_expr.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
@@ -131,9 +130,9 @@ pub fn lower_gpu_frame_block(
             };
 
             let start_lit = forall_gpu::read_int_literal(start, *span)?;
-            // TODO: a named `const` bound is not treated as literal here, so it takes
-            // the runtime `_bound` uniform path and collides with the frame `_Inputs`
-            // binding (aborts the launch). See notes/PLAN.md for the folding fix.
+            // A named `const` bound is not folded to a literal at this stage, so it
+            // takes the runtime `_bound` uniform path, which collides with the frame
+            // `_Inputs` binding and aborts the launch. Only numeric literal bounds work.
             let is_literal_end = matches!(
                 &end.node,
                 ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
