@@ -59,6 +59,15 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.inst_results(call)[0])
     }
 
+    /// Check that an offset fits into i32 for memory operations. Returns error if the
+    /// offset exceeds i32::MAX, preventing silent truncation of large aggregate layouts
+    /// (>2 GiB).
+    fn store_offset_i32(offset: i64) -> Result<i32, CodegenError> {
+        i32::try_from(offset).map_err(|_| {
+            CodegenError::Internal("aggregate layout exceeds 2 GiB addressable space".to_string())
+        })
+    }
+
     /// Translate a MIR rvalue to a Cranelift value.
     pub(crate) fn translate_rvalue(
         builder: &mut FunctionBuilder,
@@ -447,24 +456,22 @@ impl<'a> FunctionTranslator<'a> {
                     Some((_, dim, comp_ty)) => {
                         let comp_bytes = comp_ty.bytes() as i64;
                         for k in 0..dim as i64 {
-                            let comp = builder.ins().load(
-                                comp_ty,
-                                MemFlags::new(),
-                                *val,
-                                (k * comp_bytes) as i32,
-                            );
-                            builder.ins().store(
-                                MemFlags::new(),
-                                comp,
-                                data_ptr,
-                                (offset + k * comp_bytes) as i32,
-                            );
+                            let comp_offset = Self::store_offset_i32(k * comp_bytes)?;
+                            let comp =
+                                builder
+                                    .ins()
+                                    .load(comp_ty, MemFlags::new(), *val, comp_offset);
+                            let store_offset = Self::store_offset_i32(offset + k * comp_bytes)?;
+                            builder
+                                .ins()
+                                .store(MemFlags::new(), comp, data_ptr, store_offset);
                         }
                     }
                     None => {
+                        let store_offset = Self::store_offset_i32(offset)?;
                         builder
                             .ins()
-                            .store(MemFlags::new(), *val, data_ptr, offset as i32);
+                            .store(MemFlags::new(), *val, data_ptr, store_offset);
                     }
                 }
             }
@@ -748,7 +755,7 @@ impl<'a> FunctionTranslator<'a> {
             is_tuple,
             matches!(kind, AggregateKind::Enum(_, _)),
             ptr_size as u32,
-        );
+        )?;
 
         let payload_ptr =
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
@@ -760,9 +767,10 @@ impl<'a> FunctionTranslator<'a> {
             Self::store_vtable_pointer(builder, ctx, &class_name, payload_ptr, ptr_type)?;
         }
         for (i, val) in translated.into_iter().enumerate() {
+            let store_offset = Self::store_offset_i32(field_offsets[i] as i64)?;
             builder
                 .ins()
-                .store(MemFlags::new(), val, payload_ptr, field_offsets[i] as i32);
+                .store(MemFlags::new(), val, payload_ptr, store_offset);
         }
         Ok(payload_ptr)
     }
@@ -785,6 +793,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Compute per-field offsets and total payload size for a struct-like aggregate.
+    /// Uses u64 internally to prevent silent wraparound, then checks final size fits in u32.
     fn compute_aggregate_layout(
         builder: &FunctionBuilder,
         translated: &[Value],
@@ -792,8 +801,8 @@ impl<'a> FunctionTranslator<'a> {
         is_tuple: bool,
         is_enum: bool,
         ptr_size: u32,
-    ) -> (Vec<u32>, u32) {
-        let mut current_offset: u32 = header_size;
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        let mut current_offset: u64 = header_size as u64;
         let mut field_offsets = Vec::with_capacity(translated.len());
         let mut max_align: u32 = if is_tuple { ptr_size } else { 1 };
 
@@ -802,12 +811,25 @@ impl<'a> FunctionTranslator<'a> {
             let align = if is_enum { ptr_size } else { ty.bytes() };
             max_align = max_align.max(align);
 
-            current_offset = (current_offset + align - 1) & !(align - 1);
-            field_offsets.push(current_offset);
-            current_offset += if is_enum { ptr_size } else { ty.bytes() };
+            let align_u64 = align as u64;
+            current_offset = (current_offset + align_u64 - 1) & !(align_u64 - 1);
+            let offset_u32 = u32::try_from(current_offset).map_err(|_| {
+                CodegenError::Internal(
+                    "aggregate layout exceeds 2 GiB addressable space".to_string(),
+                )
+            })?;
+            field_offsets.push(offset_u32);
+            current_offset += if is_enum {
+                ptr_size as u64
+            } else {
+                ty.bytes() as u64
+            };
         }
-        let total_size = (current_offset + max_align - 1) & !(max_align - 1);
-        (field_offsets, total_size)
+        let total_size_u64 = (current_offset + max_align as u64 - 1) & !(max_align as u64 - 1);
+        let total_size = u32::try_from(total_size_u64).map_err(|_| {
+            CodegenError::Internal("aggregate layout exceeds 2 GiB addressable space".to_string())
+        })?;
+        Ok((field_offsets, total_size))
     }
 
     /// Heap-allocate `[malloc_ptr][RC][payload]` for an aggregate, traps on OOM,
@@ -1490,17 +1512,15 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
         let ptr_size = ptr_type.bytes() as i32;
-        let next_idx = ctx.string_literals.len();
-        let symbol_name = ctx
-            .string_literals
-            .entry(s.to_string())
-            .or_insert_with(|| {
-                use std::fmt::Write;
-                let mut s = String::with_capacity(20);
-                let _ = write!(s, ".miri_str_{}", next_idx);
-                s
-            })
-            .clone();
+        let symbol_name = match ctx.string_literals.get(s) {
+            Some(name) => name.clone(),
+            None => {
+                let next_idx = ctx.string_literals.len();
+                let name = format!(".miri_str_{}", next_idx);
+                ctx.string_literals.insert(s.to_string(), name.clone());
+                name
+            }
+        };
 
         let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
         struct_symbol.push_str(&symbol_name);
