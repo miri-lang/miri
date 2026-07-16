@@ -16,7 +16,9 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
-use crate::ast::types::{frame_input_param_key, Type, TypeKind, FRAME_INPUT_FIELDS};
+use crate::ast::types::{
+    frame_input_param_key, FrameFieldKind, Type, TypeKind, FRAME_INPUT_FIELDS,
+};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
@@ -576,19 +578,17 @@ fn emit_gpu_frame_launch_runtime(
 }
 
 fn create_frame_input_zeros(ctx: &mut LoweringContext, span: Span) -> Vec<Operand> {
-    vec![
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::Int, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
-        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
-    ]
+    FRAME_INPUT_FIELDS
+        .iter()
+        .map(|field| {
+            let kind = match field.kind {
+                FrameFieldKind::F32 => TypeKind::F32,
+                FrameFieldKind::Int => TypeKind::Int,
+                FrameFieldKind::Bool => TypeKind::Boolean,
+            };
+            create_zero_local(ctx, Type::new(kind, span), span)
+        })
+        .collect()
 }
 
 fn create_zero_local(ctx: &mut LoweringContext, ty: Type, span: Span) -> Operand {
@@ -812,6 +812,45 @@ fn build_frame_kernel_literal(
     Ok(ctx.body)
 }
 
+/// Register frame and runtime parameters for the kernel.
+fn register_frame_runtime_params(
+    ctx: &mut LoweringContext,
+    buffer_captures: &[&forall_gpu::CaptureInfo],
+    scalar_captures: &[&forall_gpu::CaptureInfo],
+    uses_frame: bool,
+    span: Span,
+) -> crate::mir::Local {
+    for cap in buffer_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    if uses_frame {
+        for (idx, field_def) in FRAME_INPUT_FIELDS.iter().enumerate() {
+            let ty = match field_def.kind {
+                crate::ast::types::FrameFieldKind::F32 => Type::new(TypeKind::F32, span),
+                crate::ast::types::FrameFieldKind::Int => Type::new(TypeKind::Int, span),
+                crate::ast::types::FrameFieldKind::Bool => Type::new(TypeKind::Boolean, span),
+            };
+            let field_local = ctx.push_param(format!("f{}", idx), ty, span);
+            ctx.body.local_decls[field_local.0].storage_class = StorageClass::UniformBuffer;
+            ctx.variable_map
+                .insert(frame_input_param_key(idx).into(), field_local);
+        }
+    }
+
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let uniform_param = ctx.push_param("_uniform_bound".to_string(), i64_ty, span);
+    ctx.body.local_decls[uniform_param.0].storage_class = StorageClass::UniformBuffer;
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+    }
+
+    uniform_param
+}
+
 fn build_frame_kernel_runtime(
     parent: &mut LoweringContext,
     captures: &[forall_gpu::CaptureInfo],
@@ -821,7 +860,7 @@ fn build_frame_kernel_runtime(
     span: Span,
     uses_frame: bool,
 ) -> Result<Body, LoweringError> {
-    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+    let (buffer_captures, scalar_captures): (Vec<&_>, Vec<&_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
     let frame_param_count = frame_uniform_param_count(uses_frame);
@@ -847,38 +886,18 @@ fn build_frame_kernel_runtime(
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
-    for cap in buffer_captures {
-        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
-        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
-    }
-
-    if uses_frame {
-        for (idx, field_def) in FRAME_INPUT_FIELDS.iter().enumerate() {
-            let ty = match field_def.kind {
-                crate::ast::types::FrameFieldKind::F32 => Type::new(TypeKind::F32, span),
-                crate::ast::types::FrameFieldKind::Int => Type::new(TypeKind::Int, span),
-                crate::ast::types::FrameFieldKind::Bool => Type::new(TypeKind::Boolean, span),
-            };
-            let field_local = ctx.push_param(format!("f{}", idx), ty, span);
-            ctx.body.local_decls[field_local.0].storage_class = StorageClass::UniformBuffer;
-            // Register under reserved key to prevent user-variable shadowing
-            ctx.variable_map
-                .insert(frame_input_param_key(idx).into(), field_local);
-        }
-    }
+    let uniform_param = register_frame_runtime_params(
+        &mut ctx,
+        &buffer_captures,
+        &scalar_captures,
+        uses_frame,
+        span,
+    );
 
     let i64_ty = Type::new(TypeKind::Int, span);
-    let uniform_param = ctx.push_param("_uniform_bound".to_string(), i64_ty.clone(), span);
-    ctx.body.local_decls[uniform_param.0].storage_class = StorageClass::UniformBuffer;
-
-    for cap in scalar_captures {
-        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
-        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
-    }
-
     let thread_int = forall_gpu::compute_thread_index(&mut ctx, Dimension::X, span);
 
-    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty.clone(), span);
+    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty, span);
     forall_gpu::push_assign(
         &mut ctx,
         loop_local,

@@ -68,22 +68,21 @@ fn collect_goto_only_blocks(body: &Body) -> HashMap<BasicBlock, BasicBlock> {
     replacements
 }
 
-/// Iteratively resolve `A -> B, B -> C` chains into `A -> C`.
+/// Resolve `A -> B, B -> C` chains into `A -> C` by walking each chain once
+/// to its final target. A visited set guards against goto cycles: a key whose
+/// chain revisits a block keeps its original one-step mapping.
 fn resolve_replacement_chains(replacements: &mut HashMap<BasicBlock, BasicBlock>) {
-    loop {
-        let mut progress = false;
-        for key in replacements.keys().copied().collect::<Vec<_>>() {
-            let target = replacements[&key];
-            if let Some(&next) = replacements.get(&target) {
-                if next != target {
-                    replacements.insert(key, next);
-                    progress = true;
-                }
+    let keys: Vec<BasicBlock> = replacements.keys().copied().collect();
+    for key in keys {
+        let mut target = replacements[&key];
+        let mut visited = HashSet::from([key, target]);
+        while let Some(&next) = replacements.get(&target) {
+            if next == target || !visited.insert(next) {
+                break;
             }
+            target = next;
         }
-        if !progress {
-            break;
-        }
+        replacements.insert(key, target);
     }
 }
 
