@@ -1,357 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Method dispatch lowering — name mangling, inheritance resolution, `lower_call`.
+//! Call lowering dispatcher, collection intrinsics, and constructor/direct-call fallbacks.
 
 use crate::ast::expression::Expression;
-use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
-    GpuLaunchArgs, Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator,
-    TerminatorKind,
+    Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{cow_fn, rt};
-use crate::type_checker::context::{
-    class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
-};
-use crate::type_checker::TypeChecker;
+use crate::runtime_fns::rt;
+use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{coerce_rvalue, gpu_math_return_type};
-use super::{apply_generic_sub, is_monomorphizable_scalar, lower_expression, LoweringContext};
+use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
 /// Context for lowering a collection intrinsic method (push/get/index).
-struct CollectionIntrinsicCall<'a> {
-    span: &'a Span,
-    call_expr_id: usize,
-    obj: &'a Expression,
-    obj_ty: &'a Type,
-    method_name: &'a str,
-    args: &'a [Expression],
+pub(super) struct CollectionIntrinsicCall<'a> {
+    pub(super) span: &'a Span,
+    pub(super) call_expr_id: usize,
+    pub(super) obj: &'a Expression,
+    pub(super) obj_ty: &'a Type,
+    pub(super) method_name: &'a str,
+    pub(super) args: &'a [Expression],
 }
 
-/// Aggregated result of analyzing GPU function arguments for a kernel launch.
-struct ThreadedGpuFnArgs {
-    kernel_op: Operand,
-    kernel_name: String,
-    buffer_args: Vec<Operand>,
-    arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>>,
-    arg_read_only: Vec<bool>,
-    arg_int_narrow: Vec<bool>,
-    scalar_args: Vec<Operand>,
-}
+// Re-export method dispatch functions from the specialized module.
+pub(crate) use super::method_dispatch::{
+    extend_subs_with_trait_params, mangle_generic_name, resolve_inherited_method,
+};
 
-/// Produce a mangled function name for a generic instantiation.
-///
-/// Example: `identity` with `[("T", int)]` → `identity__int`
-pub(crate) fn mangle_generic_name(
-    base: &str,
-    type_args: &[(String, crate::ast::types::Type)],
-) -> String {
-    if type_args.is_empty() {
-        return base.to_string();
-    }
+// Re-export kernel launch functions from the specialized module.
+pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
-    // Convert all types to strings first so we can compute the exact capacity needed.
-    // We avoid building an intermediate `Vec<String>` and calling `.join("__")`
-    // which requires an extra pass and format! macro overhead.
-    let mut total_len = base.len();
-    let mangled_types: Vec<String> = type_args
-        .iter()
-        .map(|(_, ty)| {
-            let s = type_kind_to_mangle_str(&ty.kind);
-            total_len += 2 + s.len(); // "__" + type string length
-            s
-        })
-        .collect();
-
-    let mut path = String::with_capacity(total_len);
-    path.push_str(base);
-    for s in &mangled_types {
-        path.push_str("__");
-        path.push_str(s);
-    }
-    path
-}
-
-/// Residency-mangled name for a call that passes gpu-resident buffers into a
-/// `GpuLaunchSafe` callee. Each gpu-resident argument contributes its argument
-/// position and device handle, so distinct buffers monomorphize to distinct
-/// bodies (and the same buffer reused across calls maps to one). The `__gpu`
-/// segment can never appear in a user identifier, so the name cannot collide
-/// with a user function or a generic instantiation. The original name is
-/// recoverable as the substring before the first `__`.
-pub(crate) fn residency_mangled_name(
-    base: &str,
-    handles: &[(usize, crate::mir::body::DeviceHandleId)],
-) -> String {
-    let mut name = String::from(base);
-    name.push_str("__gpu");
-    for (idx, handle) in handles {
-        name.push_str(&format!("_p{}h{}", idx, handle.0));
-    }
-    name
-}
-
-/// Positional arguments that are gpu-resident bindings carrying a device handle.
-/// Only bare identifier arguments bound to a `Gpu`-residency local qualify — the
-/// buffer must reach the callee as the persistent device buffer, not a temp.
-fn gpu_resident_call_args(
-    ctx: &LoweringContext,
-    args: &[Expression],
-) -> Vec<(usize, crate::mir::body::DeviceHandleId)> {
-    let mut out = Vec::new();
-    for (idx, arg) in args.iter().enumerate() {
-        let ExpressionKind::Identifier(name, _) = &arg.node else {
-            continue;
-        };
-        let Some(local) = ctx.variable_map.get(name.as_str()) else {
-            continue;
-        };
-        let decl = &ctx.body.local_decls[local.0];
-        if matches!(decl.residency, crate::mir::body::BindingResidency::Gpu) {
-            if let Some(handle) = decl.device_handle {
-                out.push((idx, handle));
-            }
-        }
-    }
-    out
-}
-
-/// If a direct call passes gpu-resident buffers into a `GpuLaunchSafe` callee,
-/// retarget `func_op` to the residency-specialized body and return the per-arg
-/// device handles (positional, sized to `arg_ops`). Otherwise leaves `func_op`
-/// untouched and returns an empty vector (an ordinary host call).
-///
-/// Only a `GpuLaunchSafe` callee is specialized: its buffer touches occur solely
-/// inside `forall` (device) context, so the passed buffer is never read on the
-/// host — the very property the type checker's residency gate enforces.
-fn residency_specialize_call(
-    ctx: &LoweringContext,
-    func: &Expression,
-    args: &[Expression],
-    func_op: &mut Operand,
-    arg_ops: &[Operand],
-) -> Vec<Option<crate::mir::body::DeviceHandleId>> {
-    let ExpressionKind::Identifier(func_name, _) = &func.node else {
-        return Vec::new();
-    };
-    if !matches!(
-        ctx.type_checker.fn_residencies().get(func_name.as_str()),
-        Some(crate::type_checker::FnResidency::GpuLaunchSafe)
-    ) {
-        return Vec::new();
-    }
-    let gpu_args = gpu_resident_call_args(ctx, args);
-    if gpu_args.is_empty() {
-        return Vec::new();
-    }
-
-    if let Operand::Constant(constant) = &*func_op {
-        if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
-            let mangled = residency_mangled_name(base, &gpu_args);
-            *func_op = runtime_fn_operand(&mangled, func.span);
-        }
-    }
-
-    let mut handles = vec![None; arg_ops.len()];
-    for (idx, handle) in gpu_args {
-        if idx < handles.len() {
-            handles[idx] = Some(handle);
-        }
-    }
-    handles
-}
-
-fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
-    match kind {
-        TypeKind::Int => "int".to_string(),
-        TypeKind::Float | TypeKind::F64 => "float".to_string(),
-        TypeKind::F32 => "f32".to_string(),
-        TypeKind::Boolean => "bool".to_string(),
-        TypeKind::String => STRING_TYPE_NAME.to_string(),
-        TypeKind::Void => "void".to_string(),
-        TypeKind::Custom(name, None) => name.clone(),
-        TypeKind::Custom(name, Some(_)) => name.clone(),
-        // Canonical collection variants are normalized to Custom before this point.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        TypeKind::Option(_) => "option".to_string(),
-        TypeKind::I8 => "i8".to_string(),
-        TypeKind::I16 => "i16".to_string(),
-        TypeKind::I32 => "i32".to_string(),
-        TypeKind::I64 => "i64".to_string(),
-        TypeKind::U8 => "u8".to_string(),
-        TypeKind::U16 => "u16".to_string(),
-        TypeKind::U32 => "u32".to_string(),
-        TypeKind::U64 => "u64".to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
-/// Walk the inheritance chain starting at `class_name` to find the first class
-/// or trait that directly declares `method_name`. Returns the defining class/trait
-/// name and a clone of its [`MethodInfo`] so the caller can mangle the symbol correctly.
-///
-/// This is the core of inherited method resolution: if `Dog extends Animal` and
-/// only `Animal` defines `speak`, the returned defining class is `"Animal"` and
-/// the call is mangled to `Animal_speak`.
-///
-/// **Concrete caller / abstract definer rule**: when the original `class_name` is a
-/// *concrete* class and the method is found in an *abstract* ancestor, the caller's
-/// name is returned instead of the ancestor's name.  This ensures static dispatch
-/// goes to the per-concrete-class compiled version (e.g. `Array_is_empty`) rather
-/// than the abstract-class version (`Collection_is_empty`), which would use virtual
-/// dispatch internally and crash for objects that have no vtable pointer (Array, List).
-///
-/// Also handles:
-/// - Trait-typed receivers: walks the trait hierarchy to find the method.
-/// - Default trait methods: if the class doesn't define the method, checks all
-///   implemented traits (and their parent traits) for a default (non-abstract) impl.
-pub(crate) fn resolve_inherited_method(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    class_name: &str,
-    method_name: &str,
-) -> Option<(String, MethodInfo)> {
-    // Handle trait-typed receiver (polymorphic trait dispatch).
-    if matches!(type_defs.get(class_name), Some(TypeDefinition::Trait(_))) {
-        return resolve_in_trait_hierarchy(type_defs, class_name, method_name);
-    }
-
-    // Handle enum-typed receiver: look up the method directly on the enum definition.
-    if let Some(TypeDefinition::Enum(enum_def)) = type_defs.get(class_name) {
-        if let Some(method_info) = enum_def.methods.get(method_name) {
-            return Some((class_name.to_string(), method_info.clone()));
-        }
-        return None;
-    }
-
-    // Is the original caller itself abstract?  If it is, the "concrete caller" rule
-    // does not apply — we use the normal defining-class name.
-    let caller_is_abstract = matches!(
-        type_defs.get(class_name),
-        Some(TypeDefinition::Class(cd)) if cd.is_abstract
-    );
-    resolve_via_class_chain(type_defs, class_name, method_name, caller_is_abstract)
-}
-
-/// Walk the class's inheritance chain (and each class's traits) for `method_name`.
-fn resolve_via_class_chain(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    class_name: &str,
-    method_name: &str,
-    caller_is_abstract: bool,
-) -> Option<(String, MethodInfo)> {
-    let mut current = class_name.to_string();
-    loop {
-        let (base, traits) = match type_defs.get(&current) {
-            Some(TypeDefinition::Class(class_def)) => {
-                if let Some(method_info) = class_def.methods.get(method_name) {
-                    // A concrete caller finding the method in an abstract ancestor
-                    // uses the caller's name so dispatch lands on the per-concrete copy.
-                    let defining = if class_def.is_abstract && !caller_is_abstract {
-                        class_name.to_string()
-                    } else {
-                        current.clone()
-                    };
-                    return Some((defining, method_info.clone()));
-                }
-                (class_def.base_class.clone(), class_def.traits.clone())
-            }
-            _ => return None,
-        };
-        if let Some(found) = resolve_via_class_traits(
-            type_defs,
-            &traits,
-            method_name,
-            class_name,
-            caller_is_abstract,
-        ) {
-            return Some(found);
-        }
-        match base {
-            Some(b) => current = b,
-            None => return None,
-        }
-    }
-}
-
-/// Scan a class's directly-implemented traits for a default `method_name`. The
-/// concrete-caller / abstract-definer rule mirrors the class-chain case.
-fn resolve_via_class_traits(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    traits: &[String],
-    method_name: &str,
-    class_name: &str,
-    caller_is_abstract: bool,
-) -> Option<(String, MethodInfo)> {
-    for trait_name in traits {
-        if let Some((defining_trait, info)) =
-            resolve_trait_default_method(type_defs, trait_name, method_name)
-        {
-            let defining = if caller_is_abstract {
-                defining_trait
-            } else {
-                class_name.to_string()
-            };
-            return Some((defining, info));
-        }
-    }
-    None
-}
-
-/// Walk the trait hierarchy to find `method_name`. Returns the defining trait
-/// name and method info (abstract or concrete).
-fn resolve_in_trait_hierarchy(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    trait_name: &str,
-    method_name: &str,
-) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            if let Some(method_info) = td.methods.get(method_name) {
-                return Some((t_name.to_string(), method_info.clone()));
-            }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-        }
-    }
-    None
-}
-
-/// Walk the trait hierarchy (starting from `trait_name`) to find a non-abstract
-/// (default) implementation of `method_name`. Returns None if only abstract
-/// declarations exist or the method is not found.
-fn resolve_trait_default_method(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    trait_name: &str,
-    method_name: &str,
-) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            if let Some(method_info) = td.methods.get(method_name) {
-                if !method_info.is_abstract {
-                    return Some((t_name.to_string(), method_info.clone()));
-                }
-            }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-        }
-    }
-    None
-}
+// Import private helpers from specialized modules.
+use super::method_dispatch::{emit_cow_check, residency_specialize_call};
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
@@ -361,16 +47,14 @@ pub fn lower_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // 1. Try Module Alias Call: `M.foo(args)` where `M` is a module alias.
     if let ExpressionKind::Member(obj, method) = &func.node {
         if let Some(op) =
-            try_lower_module_alias_call(ctx, span, call_expr_id, obj, method, args, dest.clone())?
+            try_lower_module_alias_call(ctx, span, call_expr_id, obj, method, args, dest.as_ref())?
         {
             return Ok(op);
         }
     }
 
-    // 2. Try GPU Kernel Launch: `kernel_handle.launch(grid, block)`.
     if let ExpressionKind::Member(obj, prop) = &func.node {
         if let Some(op) =
             try_lower_kernel_launch(ctx, span, call_expr_id, obj, prop, args, dest.clone())?
@@ -379,22 +63,26 @@ pub fn lower_call(
         }
     }
 
-    // 3. Try Method Call (including optimized collection intrinsics).
     if let ExpressionKind::Member(obj, method) = &func.node {
-        if let Some(op) =
-            try_lower_method_call(ctx, span, call_expr_id, obj, method, args, dest.clone())?
-        {
+        if let Some(op) = super::method_dispatch::try_lower_method_call(
+            ctx,
+            span,
+            call_expr_id,
+            obj,
+            method,
+            args,
+            dest.as_ref().cloned(),
+        )? {
             return Ok(op);
         }
     }
 
-    // 4. Try Constructor Call (Struct or Class).
-    if let Some(op) = try_lower_constructor_call(ctx, span, call_expr_id, func, args, dest.clone())?
+    if let Some(op) =
+        try_lower_constructor_call(ctx, span, call_expr_id, func, args, dest.as_ref())?
     {
         return Ok(op);
     }
 
-    // 5. Fallback: Direct Function Call.
     lower_direct_call(ctx, span, call_expr_id, func, args, dest)
 }
 
@@ -406,7 +94,7 @@ fn try_lower_module_alias_call(
     obj_expr: &Expression,
     method_expr: &Expression,
     args: &[Expression],
-    dest: Option<Place>,
+    dest: Option<&Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node else {
         return Ok(None);
@@ -426,11 +114,18 @@ fn try_lower_module_alias_call(
 
     if module_path == "system.math" {
         if let Some(intrinsic) = MathIntrinsic::from_name(func_name.as_str()) {
-            return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest)
-                .map(Some);
+            return lower_math_intrinsic_call(
+                ctx,
+                span,
+                call_expr_id,
+                intrinsic,
+                args,
+                dest.cloned(),
+            )
+            .map(Some);
         }
     }
-    lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest)
+    lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest.cloned())
 }
 
 /// Lower a `system.math` intrinsic call to a `MathIntrinsic` rvalue.
@@ -518,741 +213,15 @@ fn push_allocator_arg(ctx: &LoweringContext, arg_ops: &mut Vec<Operand>) {
     }
 }
 
-/// Thread GPU fn call arguments into the GpuLaunch terminator.
-/// Resolve kernel operand and name from a gpu fn callee expression.
-fn resolve_kernel_operand(
-    ctx: &LoweringContext,
-    callee: &Expression,
-    span: Span,
-) -> Result<(Operand, String), LoweringError> {
-    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
-        return Err(LoweringError::unsupported_expression(
-            "gpu fn must be called by name".to_string(),
-            span,
-        ));
-    };
-
-    let kernel_name = match ctx.type_checker.call_generic_mappings.get(&callee.id) {
-        Some(generic_args) => mangle_generic_name(func_name, generic_args),
-        None => func_name.clone(),
-    };
-
-    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(kernel_name.clone()),
-    }));
-
-    Ok((kernel_op, kernel_name))
-}
-
-/// Process buffer arguments and metadata for a GPU function call.
-#[allow(clippy::type_complexity)]
-fn process_gpu_buffer_args(
-    ctx: &mut LoweringContext,
-    func_name: &str,
-    call_args: &[Expression],
-    span: Span,
-) -> Result<
-    (
-        Vec<Operand>,
-        Vec<Option<crate::mir::body::DeviceHandleId>>,
-        Vec<bool>,
-        Vec<bool>,
-    ),
-    LoweringError,
-> {
-    let out_params = ctx
-        .type_checker
-        .function_out_params()
-        .get(func_name)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut buffer_args = Vec::new();
-    let mut arg_handles = Vec::new();
-    let mut arg_read_only = Vec::new();
-    let mut arg_int_narrow = Vec::new();
-
-    for (arg_idx, arg) in call_args.iter().enumerate() {
-        let arg_ty = ctx
-            .type_checker
-            .get_type(arg.id)
-            .cloned()
-            .unwrap_or_else(|| Type::new(TypeKind::Void, span));
-        let arg_op = lower_expression(ctx, arg, None)?;
-
-        if is_gpu_buffer_type(&arg_ty.kind) {
-            if let Operand::Copy(place) | Operand::Move(place) = &arg_op {
-                let local_decl = &ctx.body.local_decls[place.local.0];
-
-                // Enforce that buffer arguments to gpu fn are gpu-resident.
-                // Bare gpu fn calls are deferred handles (no dispatch yet), so this only
-                // applies when the kernel is actually launched.
-                if !matches!(
-                    local_decl.residency,
-                    crate::mir::body::BindingResidency::Gpu
-                ) {
-                    let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
-                    return Err(LoweringError::custom(
-                        format!("cannot pass host-resident array '{}' to gpu function", buffer_name),
-                        span,
-                        Some(format!(
-                            "mark the binding as gpu-resident: 'gpu let {} = ...' or 'gpu var {} = ...'",
-                            buffer_name, buffer_name
-                        )),
-                    ));
-                }
-
-                let handle = local_decl.device_handle;
-                arg_handles.push(handle);
-                buffer_args.push(arg_op.clone());
-
-                // GPU buffers are read-only unless the parameter is marked as `out`.
-                // Out parameters have write access (read_write in WGSL).
-                arg_read_only.push(!out_params.get(arg_idx).copied().unwrap_or(false));
-                arg_int_narrow.push(needs_int_narrowing(&arg_ty));
-            } else {
-                return Err(LoweringError::unsupported_expression(
-                    "gpu fn buffer args must be places".to_string(),
-                    span,
-                ));
-            }
-        }
-    }
-
-    Ok((buffer_args, arg_handles, arg_read_only, arg_int_narrow))
-}
-
-/// Analyze GPU function arguments for a kernel launch, producing operands and metadata.
-fn thread_gpu_fn_args(
-    ctx: &mut LoweringContext,
-    callee: &Expression,
-    call_args: &[Expression],
-    span: Span,
-) -> Result<ThreadedGpuFnArgs, LoweringError> {
-    let (kernel_op, kernel_name) = resolve_kernel_operand(ctx, callee, span)?;
-
-    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
-        return Err(LoweringError::unsupported_expression(
-            "gpu fn must be called by name".to_string(),
-            span,
-        ));
-    };
-
-    let (buffer_args, arg_handles, arg_read_only, arg_int_narrow) =
-        process_gpu_buffer_args(ctx, func_name, call_args, span)?;
-
-    Ok(ThreadedGpuFnArgs {
-        kernel_op,
-        kernel_name,
-        buffer_args,
-        arg_handles,
-        arg_read_only,
-        arg_int_narrow,
-        scalar_args: Vec::new(),
-    })
-}
-
-fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
-    match kind {
-        TypeKind::Array(_, _) | TypeKind::List(_) => true,
-        TypeKind::Custom(n, _) => is_collection_type(n),
-        _ => false,
-    }
-}
-
-fn is_collection_type(name: &str) -> bool {
+pub(super) fn is_collection_type(name: &str) -> bool {
     matches!(
         BuiltinCollectionKind::from_name(name),
         Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
     )
 }
 
-fn needs_int_narrowing(ty: &Type) -> bool {
-    use super::forall_gpu::needs_int_narrowing as check_narrowing;
-    check_narrowing(ty)
-}
-
-/// Try to extract Dim3(x, y, z) as [x, y, z] from a compile-time literal.
-/// Returns None if the expression is not a Dim3 literal or is not compile-time constant.
-fn try_extract_dim3_literal(expr: &Expression) -> Option<[u32; 3]> {
-    use crate::ast::expression::ExpressionKind;
-
-    match &expr.node {
-        ExpressionKind::Call(func, args) => {
-            if let ExpressionKind::Identifier(name, _) = &func.node {
-                if name == "Dim3" && args.len() == 3 {
-                    let x = extract_u32_literal(&args[0])?;
-                    let y = extract_u32_literal(&args[1])?;
-                    let z = extract_u32_literal(&args[2])?;
-                    return Some([x, y, z]);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn extract_u32_literal(expr: &Expression) -> Option<u32> {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::literal::Literal;
-
-    match &expr.node {
-        ExpressionKind::Literal(Literal::Integer(int_lit)) => {
-            use crate::ast::literal::IntegerLiteral;
-            match int_lit {
-                IntegerLiteral::I8(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I16(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I32(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I64(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::U8(v) => Some(*v as u32),
-                IntegerLiteral::U16(v) => Some(*v as u32),
-                IntegerLiteral::U32(v) => Some(*v),
-                IntegerLiteral::U64(v) if *v <= u32::MAX as u64 => Some(*v as u32),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Lower a GPU kernel launch: `kernel_handle.launch(grid, block)`.
-fn try_lower_kernel_launch(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    call_expr_id: usize,
-    obj: &Expression,
-    prop: &Expression,
-    args: &[Expression],
-    dest: Option<Place>,
-) -> Result<Option<Operand>, LoweringError> {
-    let ExpressionKind::Identifier(name, _) = &prop.node else {
-        return Ok(None);
-    };
-    if name != "launch" || !receiver_is_kernel(ctx, obj) {
-        return Ok(None);
-    }
-
-    if args.len() != 2 {
-        return Err(LoweringError::invalid_gpu_launch_args(2, args.len(), *span));
-    }
-    let grid_op = lower_expression(ctx, &args[0], None)?;
-    let block_op = lower_expression(ctx, &args[1], None)?;
-
-    let return_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
-        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-    let (destination, op) = call_destination(ctx, return_ty, dest, *span);
-    let target_bb = ctx.new_basic_block();
-
-    let (
-        kernel_op,
-        kernel_name,
-        call_args,
-        arg_handles,
-        arg_read_only,
-        arg_int_narrow,
-        scalar_args,
-    ) = if let ExpressionKind::Call(callee, call_args) = &obj.node {
-        let gpu_args = thread_gpu_fn_args(ctx, callee, call_args, *span)?;
-        (
-            gpu_args.kernel_op,
-            Some(gpu_args.kernel_name),
-            gpu_args.buffer_args,
-            gpu_args.arg_handles,
-            gpu_args.arg_read_only,
-            gpu_args.arg_int_narrow,
-            gpu_args.scalar_args,
-        )
-    } else {
-        (
-            lower_expression(ctx, obj, None)?,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )
-    };
-
-    if let Some(ref kernel_name) = kernel_name {
-        let workgroup_size = try_extract_dim3_literal(&args[1]).ok_or_else(|| {
-            LoweringError::custom(
-                "gpu fn launch block size must be a compile-time literal Dim3".to_string(),
-                *span,
-                Some("use a compile-time literal, e.g., block: Dim3(16, 16, 1)".to_string()),
-            )
-        })?;
-
-        // Validate that all dimensions are > 0.
-        if workgroup_size.contains(&0) {
-            return Err(LoweringError::custom(
-                "gpu fn launch block dimensions must all be >0".to_string(),
-                *span,
-                Some("each dimension must be at least 1".to_string()),
-            ));
-        }
-
-        ctx.body
-            .kernel_workgroups
-            .push((kernel_name.clone(), workgroup_size));
-    }
-
-    let launch_args = GpuLaunchArgs::new(call_args, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), *span, None))?;
-
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::GpuLaunch {
-            kernel: kernel_op,
-            grid: grid_op,
-            block: block_op,
-            launch_args,
-            scalar_args,
-            uniform_bound_x: None,
-            uniform_bound_y: None,
-            uniform_bound_z: None,
-            uniform_start_x: None,
-            uniform_start_y: None,
-            uniform_start_z: None,
-            destination,
-            target: Some(target_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(target_bb);
-    Ok(Some(op))
-}
-
-/// True when `obj` has the GPU `Kernel` type.
-fn receiver_is_kernel(ctx: &LoweringContext, obj: &Expression) -> bool {
-    ctx.type_checker
-        .get_type(obj.id)
-        .map(|ty| matches!(&ty.kind, TypeKind::Custom(n, _) if n == "Kernel"))
-        .unwrap_or(false)
-}
-
-/// Emit a virtual method call through a vtable slot.
-#[allow(clippy::too_many_arguments)]
-fn emit_virtual_method_call(
-    ctx: &mut LoweringContext,
-    vtable_slot: usize,
-    self_op: Operand,
-    user_args: &[Expression],
-    method_info: &MethodInfo,
-    destination: &Place,
-    op: &Operand,
-    obj_temp_local: Option<Local>,
-    obj_watermark: usize,
-    span: Span,
-) -> Result<Option<Operand>, LoweringError> {
-    let mut call_args = vec![self_op];
-    let arg_watermark = ctx.body.local_decls.len();
-    for arg in user_args {
-        call_args.push(lower_expression(ctx, arg, None)?);
-    }
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        call_args.push(Operand::Copy(Place::new(alloc_local)));
-    }
-
-    let out_args = build_method_out_args(method_info, user_args.len(), call_args.len());
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::VirtualCall {
-            vtable_slot,
-            args: call_args.clone(),
-            out_args,
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
-        span,
-    ));
-    ctx.set_current_block(target_bb);
-    if let Some(local) = obj_temp_local {
-        ctx.emit_temp_drop(local, obj_watermark, span);
-    }
-    emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
-    Ok(Some(op.clone()))
-}
-
-/// Emit a static method call (direct function call).
-#[allow(clippy::too_many_arguments)]
-fn emit_static_method_call(
-    ctx: &mut LoweringContext,
-    symbol: &str,
-    self_op: Operand,
-    user_args: &[Expression],
-    method_info: &MethodInfo,
-    destination: &Place,
-    op: &Operand,
-    obj_temp_local: Option<Local>,
-    obj_watermark: usize,
-    span: Span,
-) -> Result<Option<Operand>, LoweringError> {
-    let mangled_name = symbol.to_string();
-    let mut call_args = vec![self_op];
-    let arg_watermark = ctx.body.local_decls.len();
-    for arg in user_args {
-        call_args.push(lower_expression(ctx, arg, None)?);
-    }
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        call_args.push(Operand::Copy(Place::new(alloc_local)));
-    }
-
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(mangled_name),
-    }));
-
-    let out_args = build_method_out_args(method_info, user_args.len(), call_args.len());
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: call_args.clone(),
-            out_args,
-            arg_handles: Vec::new(),
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
-        span,
-    ));
-    ctx.set_current_block(target_bb);
-    if let Some(local) = obj_temp_local {
-        ctx.emit_temp_drop(local, obj_watermark, span);
-    }
-    emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
-    Ok(Some(op.clone()))
-}
-
-/// Resolve the receiver type override for inherited methods in abstract classes.
-fn resolve_receiver_override(
-    ctx: &LoweringContext,
-    raw_obj_ty: &Type,
-    obj: &Expression,
-) -> Option<Type> {
-    if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
-        let needs_override = matches!(
-            ctx.type_checker.type_definitions().get(name.as_str()),
-            Some(TypeDefinition::Class(cd)) if cd.is_abstract
-        ) || matches!(
-            ctx.type_checker
-                .type_table
-                .global_type_definitions
-                .get(name.as_str()),
-            Some(TypeDefinition::Trait(_))
-        );
-        if needs_override {
-            if let ExpressionKind::Identifier(var_name, _) = &obj.node {
-                if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
-                    return Some(ctx.body.local_decls[local.0].ty.clone());
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Extract the class name from a type, handling builtins and custom types.
-fn extract_class_name(obj_ty: &Type) -> Option<String> {
-    match &obj_ty.kind {
-        TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
-        TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
-        TypeKind::Custom(name, _) => Some(name.clone()),
-        k => k.as_builtin_collection().map(|b| b.name().to_string()),
-    }
-}
-
-/// Lower a method call on a class or trait object.
-///
-/// This handles inheritance resolution, virtual vs static dispatch, and specialized
-/// collection intrinsics (`push`, `get`, etc.).
-fn try_lower_method_call(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    call_expr_id: usize,
-    obj: &Expression,
-    method_expr: &Expression,
-    args: &[Expression],
-    dest: Option<Place>,
-) -> Result<Option<Operand>, LoweringError> {
-    let Some((obj_ty, class_name, method_name)) = resolve_method_receiver(ctx, obj, method_expr)
-    else {
-        return Ok(None);
-    };
-
-    // 1. Try specialized collection optimizations (direct index-reads / runtime
-    // intrinsic calls) to avoid monomorphization conflicts and aid RC analysis.
-    let call = CollectionIntrinsicCall {
-        span,
-        call_expr_id,
-        obj,
-        obj_ty: &obj_ty,
-        method_name: &method_name,
-        args,
-    };
-    if let Some(op) = try_lower_collection_intrinsic(ctx, call, dest.clone())? {
-        return Ok(Some(op));
-    }
-
-    // 2. Regular inherited method resolution and dispatch.
-    let Some((defining_class, method_info)) = resolve_inherited_method(
-        ctx.type_checker.type_definitions(),
-        &class_name,
-        &method_name,
-    ) else {
-        return Ok(None);
-    };
-
-    emit_resolved_method_call(
-        ctx,
-        ResolvedMethod {
-            span,
-            obj,
-            obj_ty: &obj_ty,
-            class_name: &class_name,
-            method_name: &method_name,
-            defining_class: &defining_class,
-            method_info: &method_info,
-            args,
-        },
-        dest,
-    )
-}
-
-/// Resolve a method call's receiver type (applying abstract/trait overrides),
-/// class name, and method name. Returns owned values to avoid borrowing `ctx`.
-fn resolve_method_receiver(
-    ctx: &LoweringContext,
-    obj: &Expression,
-    method_expr: &Expression,
-) -> Option<(Type, String, String)> {
-    let raw_obj_ty = ctx.type_checker.get_type(obj.id)?.clone();
-    let obj_ty = resolve_receiver_override(ctx, &raw_obj_ty, obj).unwrap_or(raw_obj_ty);
-    let class_name = extract_class_name(&obj_ty)?;
-    let method_name = match &method_expr.node {
-        ExpressionKind::Identifier(name, _) => name.clone(),
-        _ => return None,
-    };
-    Some((obj_ty, class_name, method_name))
-}
-
-/// A method call whose receiver type and target method have been resolved.
-struct ResolvedMethod<'a> {
-    span: &'a Span,
-    obj: &'a Expression,
-    obj_ty: &'a Type,
-    class_name: &'a str,
-    method_name: &'a str,
-    defining_class: &'a str,
-    method_info: &'a MethodInfo,
-    args: &'a [Expression],
-}
-
-/// Emit a resolved user-method call via virtual (vtable) or static dispatch.
-fn emit_resolved_method_call(
-    ctx: &mut LoweringContext,
-    m: ResolvedMethod,
-    dest: Option<Place>,
-) -> Result<Option<Operand>, LoweringError> {
-    // A concrete instantiation of a generic class dispatches to a monomorphized
-    // method body (`Box_get__int`) and types its result as the concrete type.
-    // Everything else keeps the plain `Class_method` symbol and generic return.
-    let mono = resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info);
-    let return_ty = match &mono {
-        Some((_, concrete_return)) => concrete_return.clone(),
-        None => m.method_info.return_type.clone(),
-    };
-    let obj_watermark = ctx.body.local_decls.len();
-    let (self_op, obj_temp_local) =
-        prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
-    let (destination, op) = call_destination(ctx, return_ty, dest, *m.span);
-
-    if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
-        if let Some(slot) = vtable_slot_index(
-            m.class_name,
-            m.method_name,
-            ctx.type_checker.type_definitions(),
-        ) {
-            return emit_virtual_method_call(
-                ctx,
-                slot,
-                self_op,
-                m.args,
-                m.method_info,
-                &destination,
-                &op,
-                obj_temp_local,
-                obj_watermark,
-                *m.span,
-            );
-        }
-    }
-    let symbol = match mono {
-        Some((mangled, _)) => mangled,
-        None => format!("{}_{}", m.defining_class, m.method_name),
-    };
-    emit_static_method_call(
-        ctx,
-        &symbol,
-        self_op,
-        m.args,
-        m.method_info,
-        &destination,
-        &op,
-        obj_temp_local,
-        obj_watermark,
-        *m.span,
-    )
-}
-
-/// Resolve a generic-class method call to its per-instantiation monomorphized
-/// symbol and concrete return type, or `None` when the plain generic body applies.
-///
-/// Returns `Some` only when the receiver is a concrete instantiation of a
-/// generic class whose every type argument is a pointer-width integer — the slice
-/// that monomorphizes end-to-end today (see [`is_monomorphizable_scalar`]). A
-/// value-generic slot, a non-pointer-width argument, or a non-generic receiver
-/// falls back to the plain `Class_method` symbol. The mangled symbol matches the
-/// name the pipeline emits for the same instantiation, byte-for-byte.
-fn resolve_generic_class_monomorph(
-    ctx: &LoweringContext,
-    obj_ty: &Type,
-    method_name: &str,
-    method_info: &MethodInfo,
-) -> Option<(String, Type)> {
-    let TypeKind::Custom(name, Some(arg_exprs)) = &obj_ty.kind else {
-        return None;
-    };
-    let defs = &ctx.type_checker.type_definitions();
-    let Some(TypeDefinition::Class(class_def)) = defs.get(name.as_str()) else {
-        return None;
-    };
-    let gens = class_def.generics.as_ref()?;
-    let resolved: Vec<Type> = arg_exprs
-        .iter()
-        .map(|e| ctx.type_checker.extract_type_from_expression(e))
-        .collect::<Result<_, _>>()
-        .ok()?;
-    if resolved.len() != gens.len() || !resolved.iter().all(|t| is_monomorphizable_scalar(&t.kind))
-    {
-        return None;
-    }
-    // Only dispatch to a monomorphized symbol the pipeline actually emitted: the
-    // instantiation must be one the type checker recorded. Builtin collections
-    // (`List<int>`, …) resolve through their own constructor path and are never
-    // recorded, so they keep the plain `List_length` symbol here.
-    let recorded = ctx
-        .type_checker
-        .generic_class_instantiations
-        .get(name.as_str())?;
-    let is_recorded = recorded.iter().any(|tuple| {
-        tuple.len() == resolved.len() && tuple.iter().zip(&resolved).all(|(a, b)| a.kind == b.kind)
-    });
-    if !is_recorded {
-        return None;
-    }
-    let mut subs = HashMap::new();
-    let type_args: Vec<(String, Type)> = gens
-        .iter()
-        .zip(&resolved)
-        .map(|(g, t)| {
-            subs.insert(g.name.clone(), t.clone());
-            (g.name.clone(), t.clone())
-        })
-        .collect();
-    let mangled = mangle_generic_name(&format!("{name}_{method_name}"), &type_args);
-    // A trait-default method's return type is written in the trait's own
-    // parameters (`U`); extend the class-param substitution with the trait's
-    // `implements Trait<T>` binding so the call site types the result at the
-    // same concrete width the monomorphized body returns.
-    extend_subs_with_trait_params(ctx.type_checker, name, &mut subs);
-    let return_ty = apply_generic_sub(&method_info.return_type, &subs);
-    Some((mangled, return_ty))
-}
-
-/// Add `trait-param → concrete` entries to a class-instantiation substitution,
-/// resolving each directly-implemented trait's `implements Trait<args>` binding
-/// through the existing class-param map. See
-/// [`TypeChecker::class_trait_param_bindings`] for the binding source.
-pub(crate) fn extend_subs_with_trait_params(
-    tc: &TypeChecker,
-    class_name: &str,
-    subs: &mut HashMap<String, Type>,
-) {
-    let bindings = tc.class_trait_param_bindings(class_name);
-    for (trait_param, class_arg) in bindings {
-        let concrete = apply_generic_sub(&class_arg, subs);
-        subs.insert(trait_param, concrete);
-    }
-}
-
-/// Lower the receiver, apply a CoW check for mutating collection methods, and
-/// return the self operand plus the receiver temp local (for Perceus drops).
-fn prepare_method_self(
-    ctx: &mut LoweringContext,
-    obj: &Expression,
-    obj_ty: &Type,
-    method_name: &str,
-    span: Span,
-) -> Result<(Operand, Option<Local>), LoweringError> {
-    let self_op = lower_method_receiver(ctx, obj)?;
-    let self_op = match obj_ty
-        .kind
-        .as_builtin_collection()
-        .filter(|k| k.mutates_method(method_name))
-        .and_then(cow_fn)
-    {
-        Some(cow) => emit_cow_check(ctx, self_op, obj_ty, cow, span),
-        None => self_op,
-    };
-    let obj_temp_local = if let Operand::Copy(ref p) = self_op {
-        Some(p.local)
-    } else {
-        None
-    };
-    Ok((self_op, obj_temp_local))
-}
-
-/// Lower a method receiver, resolving `super` to the `self` binding.
-fn lower_method_receiver(
-    ctx: &mut LoweringContext,
-    obj: &Expression,
-) -> Result<Operand, LoweringError> {
-    if matches!(&obj.node, ExpressionKind::Super) {
-        if let Some(&self_local) = ctx.variable_map.get("self") {
-            return Ok(Operand::Copy(Place::new(self_local)));
-        }
-    }
-    lower_expression(ctx, obj, None)
-}
-
-/// True when the receiver's static type requires vtable (virtual) dispatch:
-/// an abstract class with a vtable, or a trait-typed receiver. `super` calls
-/// always dispatch statically.
-fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_name: &str) -> bool {
-    if matches!(&obj.node, ExpressionKind::Super) {
-        return false;
-    }
-    let defs = &ctx.type_checker.type_definitions();
-    let abstract_with_vtable = class_needs_vtable(class_name, defs)
-        && matches!(defs.get(class_name), Some(TypeDefinition::Class(cd)) if cd.is_abstract);
-    let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
-    abstract_with_vtable || is_trait
-}
-
 /// Build the `out_args` flag list for a method call's argument vector.
-///
-/// Method dispatch builds args as `[self, ...user_args, alloc?]`. The receiver
-/// and the implicit allocator are never `out`; positional user args map 1:1
-/// to `method_info.is_param_out(i)`. Length always matches `total_call_args`
-/// so downstream code can rely on `out_args.len() == args.len()`.
-fn build_method_out_args(
+pub(super) fn build_method_out_args(
     method_info: &MethodInfo,
     user_arg_count: usize,
     total_call_args: usize,
@@ -1267,11 +236,7 @@ fn build_method_out_args(
 }
 
 /// Release temporary closure arguments after a method call.
-///
-/// Closures passed as arguments are borrowed by the callee (called but not stored).
-/// The caller is responsible for freeing them after the call completes.
-/// Only locals created above `watermark` and with a `Function` type are released.
-fn emit_closure_arg_drops(
+pub(super) fn emit_closure_arg_drops(
     ctx: &mut LoweringContext,
     args: &[Operand],
     watermark: usize,
@@ -1289,57 +254,6 @@ fn emit_closure_arg_drops(
             }
         }
     }
-}
-
-/// Emit a Copy-on-Write check before a mutation operation on a collection local.
-///
-/// If the receiver is a simple local variable (`Move` with no projection), emits a call to
-/// `cow_fn_name` that returns either the same pointer (RC ≤ 1 → no copy) or a fresh exclusive
-/// clone (RC > 1 → clone + decrement old RC). The result is stored back into the receiver local
-/// so the subsequent mutation operates on an exclusively-owned collection.
-///
-/// `Assign` (not `Reassign`) is used for the write-back so Perceus does not DecRef the old
-/// value; `Move` is used for the cow_result so Perceus does not IncRef it. No `StorageDead` is
-/// emitted for the cow_result temp — its ownership is transferred to self_local.
-fn emit_cow_check(
-    ctx: &mut LoweringContext,
-    obj_op: Operand,
-    obj_ty: &Type,
-    cow_fn_name: &str,
-    span: Span,
-) -> Operand {
-    let self_local = match &obj_op {
-        Operand::Move(p) if p.projection.is_empty() => p.local,
-        _ => return obj_op,
-    };
-    let cow_result = ctx.push_temp(obj_ty.clone(), span);
-    let cow_fn = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(cow_fn_name.to_string()),
-    }));
-    let cow_target = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: cow_fn,
-            args: vec![Operand::Move(Place::new(self_local))],
-            out_args: Vec::new(),
-            arg_handles: Vec::new(),
-            destination: Place::new(cow_result),
-            target: Some(cow_target),
-        },
-        span,
-    ));
-    ctx.set_current_block(cow_target);
-    // Write the (possibly-new) pointer back into the receiver local.
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(
-            Place::new(self_local),
-            Rvalue::Use(Operand::Move(Place::new(cow_result))),
-        ),
-        span,
-    });
-    Operand::Move(Place::new(self_local))
 }
 
 /// Lower element_at/get on List, Array, or Tuple.
@@ -1436,7 +350,7 @@ fn materialize_index_local(ctx: &mut LoweringContext, index_op: Operand, span: S
 }
 
 /// Resolve a call's destination place + return operand, using `dest` when given.
-fn call_destination(
+pub(super) fn call_destination(
     ctx: &mut LoweringContext,
     return_ty: Type,
     dest: Option<Place>,
@@ -1450,6 +364,42 @@ fn call_destination(
             (p.clone(), Operand::Copy(p))
         }
     }
+}
+
+/// Build a runtime-function callee constant for `name`.
+pub(super) fn runtime_fn_operand(name: &str, span: Span) -> Operand {
+    Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
+    }))
+}
+
+/// Resolve a kernel operand and name from a gpu fn callee expression.
+pub(super) fn resolve_kernel_operand(
+    ctx: &LoweringContext,
+    callee: &Expression,
+    span: Span,
+) -> Result<(Operand, String), LoweringError> {
+    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+        return Err(LoweringError::unsupported_expression(
+            "gpu fn must be called by name".to_string(),
+            span,
+        ));
+    };
+
+    let kernel_name = match ctx.type_checker.call_generic_mappings.get(&callee.id) {
+        Some(generic_args) => mangle_generic_name(func_name, generic_args),
+        None => func_name.clone(),
+    };
+
+    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(kernel_name.clone()),
+    }));
+
+    Ok((kernel_op, kernel_name))
 }
 
 /// Lower list.push(item) to miri_rt_list_push.
@@ -1477,15 +427,6 @@ fn store_operand_temp(ctx: &mut LoweringContext, op: Operand, ty: Type, span: Sp
         span,
     });
     local
-}
-
-/// Build a runtime-function callee constant for `name`.
-fn runtime_fn_operand(name: &str, span: Span) -> Operand {
-    Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
-    }))
 }
 
 fn lower_list_push(
@@ -1622,7 +563,7 @@ fn void_none_operand(span: Span) -> Operand {
 /// This prevents monomorphization conflicts when multiple instantiations (e.g., List<int>, List<bool>)
 /// try to define the same method, and enables more precise RC analysis by keeping the concrete
 /// element type visible at the call site.
-fn try_lower_collection_intrinsic(
+pub(super) fn try_lower_collection_intrinsic(
     ctx: &mut LoweringContext,
     call: CollectionIntrinsicCall,
     dest: Option<Place>,
@@ -1766,7 +707,7 @@ fn try_lower_constructor_call(
     call_expr_id: usize,
     func: &Expression,
     args: &[Expression],
-    dest: Option<Place>,
+    dest: Option<&Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     if let Some(func_ty) = ctx.type_checker.get_type(func.id) {
         if let TypeKind::Meta(inner) = &func_ty.kind {
@@ -1781,35 +722,37 @@ fn try_lower_constructor_call(
                     }
                 });
 
-                // Struct constructor.
-                if let Some(TypeDefinition::Struct(def)) = ctx
-                    .type_checker
-                    .type_table
-                    .global_type_definitions
-                    .get(type_name)
-                {
+                let defs = &ctx.type_checker.type_table.global_type_definitions;
+                if let Some(TypeDefinition::Struct(def)) = defs.get(type_name) {
                     return lower_struct_constructor(
-                        ctx, span, type_name, def, args, type_args, dest,
+                        ctx,
+                        span,
+                        type_name,
+                        def,
+                        args,
+                        type_args,
+                        dest.cloned(),
                     )
                     .map(Some);
                 }
-                // Class constructor.
-                if let Some(TypeDefinition::Class(def)) = ctx
-                    .type_checker
-                    .type_table
-                    .global_type_definitions
-                    .get(type_name)
-                {
-                    // Built-in collection constructors.
+                if let Some(TypeDefinition::Class(def)) = defs.get(type_name) {
                     if let Some(kind) = BuiltinCollectionKind::from_name(type_name) {
                         if let Some((_, ctor_fn)) =
                             COLLECTION_CTORS.iter().find(|(k, _)| *k == kind)
                         {
-                            return ctor_fn(ctx, span, call_expr_id, args, dest).map(Some);
+                            return ctor_fn(ctx, span, call_expr_id, args, dest.cloned()).map(Some);
                         }
                     }
-                    return lower_class_constructor(ctx, span, type_name, def, args, call_ty, dest)
-                        .map(Some);
+                    return lower_class_constructor(
+                        ctx,
+                        span,
+                        type_name,
+                        def,
+                        args,
+                        call_ty,
+                        dest.cloned(),
+                    )
+                    .map(Some);
                 }
             }
         }

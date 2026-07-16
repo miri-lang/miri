@@ -55,11 +55,15 @@ pub struct RcElision;
 
 impl OptimizationPass for RcElision {
     fn run(&mut self, body: &mut Body) -> bool {
-        let has_drop_types = &body.has_drop_types.clone();
-        let local_decls = &body.local_decls.clone();
+        let Body {
+            basic_blocks,
+            has_drop_types,
+            local_decls,
+            ..
+        } = body;
 
         let mut any_changed = false;
-        for block in &mut body.basic_blocks {
+        for block in basic_blocks.iter_mut() {
             if elide_block(block, has_drop_types, local_decls) {
                 any_changed = true;
             }

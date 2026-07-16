@@ -897,11 +897,8 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
             Some((**inner_ty).clone())
         }
         ExpressionKind::Identifier(name, _) => {
-            // Simple identifier like `List`, `int`, `f32`, etc.
+            // Simple identifier like a primitive keyword or a type-table name.
             let kind = match name.as_str() {
-                "List" => TypeKind::Custom("List".to_string(), None),
-                "Map" => TypeKind::Custom("Map".to_string(), None),
-                "Set" => TypeKind::Custom("Set".to_string(), None),
                 "int" => TypeKind::Int,
                 "i32" => TypeKind::I32,
                 "i64" => TypeKind::I64,
@@ -915,9 +912,10 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
                 "f64" => TypeKind::F64,
                 "float" => TypeKind::Float,
                 "bool" => TypeKind::Boolean,
-                "String" => TypeKind::String,
+                n if n == types::STRING_TYPE_NAME => TypeKind::String,
                 _ => {
-                    // Check if it's a user-defined type
+                    // Any other name (stdlib collections included) resolves
+                    // through the type table, never by string special-case.
                     if ctx
                         .type_checker
                         .type_table
@@ -933,54 +931,26 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
             Some(Type::new(kind, arg.span))
         }
         ExpressionKind::TypeDeclaration(base_expr, Some(generics), _, _) => {
-            // Generic type like `List<int>` or `Map<int, string>`
+            // Generic type application like `List<int>` or `Map<int, string>`.
+            // The base name resolves through the type table — no stdlib
+            // special-casing — and every generic argument must itself infer.
             if let ExpressionKind::Identifier(name, _) = &base_expr.node {
-                match name.as_str() {
-                    "List" if !generics.is_empty() => {
-                        if infer_type_from_generic_arg(&generics[0], ctx).is_some() {
-                            // Need to convert Type back to Expression for TypeKind::Custom args
-                            Some(Type::new(
-                                TypeKind::Custom(
-                                    "List".to_string(),
-                                    Some(vec![generics[0].clone()]),
-                                ),
-                                arg.span,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    "Map" if generics.len() >= 2 => {
-                        if let (Some(_key_ty), Some(_val_ty)) = (
-                            infer_type_from_generic_arg(&generics[0], ctx),
-                            infer_type_from_generic_arg(&generics[1], ctx),
-                        ) {
-                            Some(Type::new(
-                                TypeKind::Custom(
-                                    "Map".to_string(),
-                                    Some(vec![generics[0].clone(), generics[1].clone()]),
-                                ),
-                                arg.span,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    "Set" if !generics.is_empty() => {
-                        if infer_type_from_generic_arg(&generics[0], ctx).is_some() {
-                            Some(Type::new(
-                                TypeKind::Custom(
-                                    "Set".to_string(),
-                                    Some(vec![generics[0].clone()]),
-                                ),
-                                arg.span,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
+                if generics.is_empty()
+                    || !ctx
+                        .type_checker
+                        .type_table
+                        .global_type_definitions
+                        .contains_key(name)
+                    || !generics
+                        .iter()
+                        .all(|g| infer_type_from_generic_arg(g, ctx).is_some())
+                {
+                    return None;
                 }
+                Some(Type::new(
+                    TypeKind::Custom(name.clone(), Some(generics.clone())),
+                    arg.span,
+                ))
             } else {
                 None
             }

@@ -25,12 +25,16 @@ use crate::mir::{
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
-use super::forall_gpu::{compute_thread_index, needs_int_narrowing};
-use crate::mir::backend::BackendConfig;
+use super::forall_gpu::{compute_thread_index, int_constant, needs_int_narrowing, push_assign};
 
 /// Runtime entry that fences outstanding device writes and copies a
 /// `gpu`-resident buffer back to its host array.
 const READBACK_FN: &str = "miri_gpu_readback";
+
+/// Block size for GPU reduction kernels (1D workgroups, 256 threads).
+/// This value is coordinated with `GPU_REDUCE_BLOCK_SIZE`
+/// and must match the `@workgroup_size` directive in the generated WGSL.
+const GPU_REDUCE_BLOCK_SIZE: u32 = 256;
 
 /// Try to lower a `.reduce()` call on a gpu-resident array to a GPU tree-reduction kernel.
 ///
@@ -311,23 +315,6 @@ fn identity_for_op(op: BinOp, elem_ty: &Type) -> Operand {
     }
 }
 
-/// Helper to create an integer constant operand.
-fn int_constant(value: i64, span: Span) -> Operand {
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Int, span),
-        literal: Literal::Integer(crate::ast::literal::IntegerLiteral::I64(value)),
-    }))
-}
-
-/// Helper to assign a value to a local.
-fn push_assign(ctx: &mut LoweringContext, local: Local, rvalue: Rvalue, span: Span) {
-    ctx.push_statement(MirStatement {
-        kind: MirStatementKind::Assign(Place::new(local), rvalue),
-        span,
-    });
-}
-
 /// Helper to assign a value to a place.
 fn push_assign_place(ctx: &mut LoweringContext, place: Place, rvalue: Rvalue, span: Span) {
     ctx.push_statement(MirStatement {
@@ -374,39 +361,13 @@ fn handle_operand(handle: crate::mir::body::DeviceHandleId, span: Span) -> Opera
     }))
 }
 
-/// Build a GPU tree-reduction kernel body.
-#[allow(clippy::too_many_arguments)]
-fn build_gpu_reduce_kernel(
-    parent: &mut LoweringContext,
+/// Setup kernel parameters and shared memory for reduction.
+fn setup_reduce_kernel_params(
+    ctx: &mut LoweringContext,
     obj_ty: &Type,
-    array_length: i64,
-    fold_op: BinOp,
     span: Span,
-) -> Result<Body, LoweringError> {
-    let workgroup_size = BackendConfig::WEB_GPU.block_size(1)[0];
-    // 3 params: input array, init scalar, output array (1-element, read_write)
-    let arg_count = 3;
-
-    let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
-    kernel
-        .local_decls
-        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
-
-    // Grid is 1x1x1 for reduction (single workgroup).
-    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([workgroup_size, 1, 1]),
-        grid_size: Some([1, 1, 1]),
-        logical_extent: None,
-        required_capabilities: Vec::new(),
-        is_frame_step: false,
-    }));
-
-    // out_params: input and init are read-only; output is read_write
-    kernel.out_params = vec![false, false, true];
-
-    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
-
-    // Add parameters: input array (read-only), init scalar (uniform), output array (read_write).
+) -> Result<(Local, Local, Local, Local, Local, u32), LoweringError> {
+    let workgroup_size = GPU_REDUCE_BLOCK_SIZE;
     let input_local = ctx.push_param("input".to_string(), obj_ty.clone(), span);
     ctx.body.local_decls[input_local.0].storage_class = StorageClass::GpuGlobal;
 
@@ -414,20 +375,16 @@ fn build_gpu_reduce_kernel(
     let init_local = ctx.push_param("init".to_string(), elem_ty.clone(), span);
     ctx.body.local_decls[init_local.0].storage_class = StorageClass::UniformBuffer;
 
-    // Output: 1-element array to hold the reduced result (read_write).
     let output_local = ctx.push_param("output".to_string(), obj_ty.clone(), span);
     ctx.body.local_decls[output_local.0].storage_class = StorageClass::GpuGlobal;
 
-    // Create workgroup-shared array sized to BLOCK_SIZE (not input length).
-    // The shared array holds one slot per thread in the workgroup (256 threads).
-    // Build Array<T, 256> type manually using Custom with type_args.
     let sdata_array_ty = Type::new(
         TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
                 crate::ast::expression::Expression {
                     id: 0,
-                    node: ExpressionKind::Type(Box::new(elem_ty.clone()), false),
+                    node: ExpressionKind::Type(Box::new(elem_ty), false),
                     span,
                 },
                 crate::ast::expression::Expression {
@@ -445,17 +402,33 @@ fn build_gpu_reduce_kernel(
     let sdata_local = ctx.push_local("_sdata".to_string(), sdata_array_ty, span);
     ctx.body.local_decls[sdata_local.0].storage_class = StorageClass::GpuShared;
 
-    // Get thread index.
-    let thread_idx = compute_thread_index(&mut ctx, Dimension::X, span);
+    let thread_idx = compute_thread_index(ctx, Dimension::X, span);
 
-    // Accumulator: lane 0 gets init, others get identity.
-    let identity_literal = identity_for_op(fold_op, &elem_ty);
+    Ok((
+        input_local,
+        init_local,
+        output_local,
+        sdata_local,
+        thread_idx,
+        workgroup_size,
+    ))
+}
+
+/// Initialize accumulator with lane-0 getting init value, others getting identity.
+fn emit_acc_init(
+    ctx: &mut LoweringContext,
+    init_local: Local,
+    thread_idx: Local,
+    fold_op: BinOp,
+    elem_ty: &Type,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    let identity_literal = identity_for_op(fold_op, elem_ty);
     let acc_local = ctx.push_local("acc".to_string(), elem_ty.clone(), span);
     let is_lane_zero = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
 
-    // is_lane_zero = (thread_idx == 0)
     push_assign(
-        &mut ctx,
+        ctx,
         is_lane_zero,
         Rvalue::BinaryOp(
             BinOp::Eq,
@@ -465,7 +438,6 @@ fn build_gpu_reduce_kernel(
         span,
     );
 
-    // acc = is_lane_zero ? init : IDENTITY
     let then_bb = ctx.new_basic_block();
     let else_bb = ctx.new_basic_block();
     let merge_bb = ctx.new_basic_block();
@@ -479,10 +451,9 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Then branch: acc = init
     ctx.set_current_block(then_bb);
     push_assign(
-        &mut ctx,
+        ctx,
         acc_local,
         Rvalue::Use(Operand::Copy(Place::new(init_local))),
         span,
@@ -492,21 +463,31 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Else branch: acc = identity
     ctx.set_current_block(else_bb);
-    push_assign(&mut ctx, acc_local, Rvalue::Use(identity_literal), span);
+    push_assign(ctx, acc_local, Rvalue::Use(identity_literal), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: merge_bb },
         span,
     ));
 
-    // Merge: Continue with grid-stride loop.
     ctx.set_current_block(merge_bb);
+    Ok(acc_local)
+}
 
-    // Grid-stride loop: accumulate over input.
+/// Setup loop variable and branch to grid-stride loop.
+fn setup_grid_stride_loop(
+    ctx: &mut LoweringContext,
+    thread_idx: Local,
+    span: Span,
+) -> (
+    Local,
+    crate::mir::BasicBlock,
+    crate::mir::BasicBlock,
+    crate::mir::BasicBlock,
+) {
     let loop_idx = ctx.push_local("i".to_string(), Type::new(TypeKind::Int, span), span);
     push_assign(
-        &mut ctx,
+        ctx,
         loop_idx,
         Rvalue::Use(Operand::Copy(Place::new(thread_idx))),
         span,
@@ -523,11 +504,28 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Loop condition: i < array_length
+    (loop_idx, loop_start_bb, loop_body_bb, loop_exit_bb)
+}
+
+/// Emit condition check and loop body for grid-stride accumulation.
+#[allow(clippy::too_many_arguments)]
+fn emit_grid_stride_body(
+    ctx: &mut LoweringContext,
+    loop_idx: Local,
+    loop_start_bb: crate::mir::BasicBlock,
+    loop_body_bb: crate::mir::BasicBlock,
+    loop_exit_bb: crate::mir::BasicBlock,
+    input_local: Local,
+    acc_local: Local,
+    array_length: i64,
+    fold_op: BinOp,
+    workgroup_size: u32,
+    span: Span,
+) {
     ctx.set_current_block(loop_start_bb);
     let loop_cond = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     push_assign(
-        &mut ctx,
+        ctx,
         loop_cond,
         Rvalue::BinaryOp(
             BinOp::Lt,
@@ -546,7 +544,6 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Loop body: acc = acc OP input[i]
     ctx.set_current_block(loop_body_bb);
     let mut elem_place = Place::new(input_local);
     elem_place
@@ -555,7 +552,7 @@ fn build_gpu_reduce_kernel(
     let elem_op = Operand::Copy(elem_place);
 
     push_assign(
-        &mut ctx,
+        ctx,
         acc_local,
         Rvalue::BinaryOp(
             fold_op,
@@ -565,9 +562,8 @@ fn build_gpu_reduce_kernel(
         span,
     );
 
-    // Increment loop index: i += workgroup_size
     push_assign(
-        &mut ctx,
+        ctx,
         loop_idx,
         Rvalue::BinaryOp(
             BinOp::Add,
@@ -584,27 +580,75 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Loop exit: write accumulated value to sdata[local_id.x]
     ctx.set_current_block(loop_exit_bb);
+}
 
-    // BUG FIX 2: Store acc to sdata[thread_idx], not a no-op self-assign.
+/// Grid-stride accumulation loop over input array.
+#[allow(clippy::too_many_arguments)]
+fn emit_grid_stride_loop(
+    ctx: &mut LoweringContext,
+    input_local: Local,
+    acc_local: Local,
+    thread_idx: Local,
+    array_length: i64,
+    fold_op: BinOp,
+    workgroup_size: u32,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    let (loop_idx, loop_start_bb, loop_body_bb, loop_exit_bb) =
+        setup_grid_stride_loop(ctx, thread_idx, span);
+
+    emit_grid_stride_body(
+        ctx,
+        loop_idx,
+        loop_start_bb,
+        loop_body_bb,
+        loop_exit_bb,
+        input_local,
+        acc_local,
+        array_length,
+        fold_op,
+        workgroup_size,
+        span,
+    );
+
+    Ok(loop_idx)
+}
+
+/// Store accumulated value to shared memory and barrier.
+fn emit_sdata_store_and_barrier(
+    ctx: &mut LoweringContext,
+    sdata_local: Local,
+    acc_local: Local,
+    thread_idx: Local,
+    span: Span,
+) {
     let mut sdata_store_place = Place::new(sdata_local);
     sdata_store_place
         .projection
         .push(crate::mir::PlaceElem::Index(thread_idx));
     push_assign_place(
-        &mut ctx,
+        ctx,
         sdata_store_place,
         Rvalue::Use(Operand::Copy(Place::new(acc_local))),
         span,
     );
 
-    // Write barrier.
-    emit_workgroup_barrier(&mut ctx, span);
+    emit_workgroup_barrier(ctx, span);
+}
 
-    // Tree reduction loop.
+/// Setup stride and branch to tree-reduction loop.
+fn setup_tree_loop(
+    ctx: &mut LoweringContext,
+    span: Span,
+) -> (
+    Local,
+    crate::mir::BasicBlock,
+    crate::mir::BasicBlock,
+    crate::mir::BasicBlock,
+) {
     let stride = ctx.push_local("s".to_string(), Type::new(TypeKind::Int, span), span);
-    push_assign(&mut ctx, stride, Rvalue::Use(int_constant(128, span)), span); // workgroup_size / 2
+    push_assign(ctx, stride, Rvalue::Use(int_constant(128, span)), span);
 
     let tree_loop_start = ctx.new_basic_block();
     let tree_loop_body = ctx.new_basic_block();
@@ -617,34 +661,86 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Tree loop condition: s > 0
-    ctx.set_current_block(tree_loop_start);
-    let stride_cond = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    (stride, tree_loop_start, tree_loop_body, tree_loop_exit)
+}
+
+/// Compute sdata[thread_idx] = sdata[thread_idx] OP sdata[thread_idx + stride].
+fn compute_tree_reduction_result(
+    ctx: &mut LoweringContext,
+    sdata_local: Local,
+    thread_idx: Local,
+    stride: Local,
+    elem_ty: &Type,
+    fold_op: BinOp,
+    span: Span,
+) {
+    let other_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
     push_assign(
-        &mut ctx,
-        stride_cond,
+        ctx,
+        other_idx,
         Rvalue::BinaryOp(
-            BinOp::Gt,
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_idx))),
             Box::new(Operand::Copy(Place::new(stride))),
-            Box::new(int_constant(0, span)),
         ),
         span,
     );
 
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: Operand::Copy(Place::new(stride_cond)),
-            targets: vec![(Discriminant::bool_true(), tree_loop_body)],
-            otherwise: tree_loop_exit,
-        },
+    let other_val = ctx.push_temp(elem_ty.clone(), span);
+    let mut other_sdata_place = Place::new(sdata_local);
+    other_sdata_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(other_idx));
+    push_assign(
+        ctx,
+        other_val,
+        Rvalue::Use(Operand::Copy(other_sdata_place)),
         span,
-    ));
+    );
 
-    // Tree loop body: if (thread_idx < s) sdata[lid] = sdata[lid] OP sdata[lid + s]
-    ctx.set_current_block(tree_loop_body);
+    let mut my_indexed_place = Place::new(sdata_local);
+    my_indexed_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(thread_idx));
+
+    let result_val = ctx.push_temp(elem_ty.clone(), span);
+    push_assign(
+        ctx,
+        result_val,
+        Rvalue::BinaryOp(
+            fold_op,
+            Box::new(Operand::Copy(my_indexed_place)),
+            Box::new(Operand::Copy(Place::new(other_val))),
+        ),
+        span,
+    );
+
+    let mut result_place = Place::new(sdata_local);
+    result_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(thread_idx));
+    push_assign_place(
+        ctx,
+        result_place,
+        Rvalue::Use(Operand::Copy(Place::new(result_val))),
+        span,
+    );
+}
+
+/// Emit tree-reduction iteration body (one halving step).
+#[allow(clippy::too_many_arguments)]
+fn emit_tree_step(
+    ctx: &mut LoweringContext,
+    sdata_local: Local,
+    thread_idx: Local,
+    stride: Local,
+    elem_ty: &Type,
+    fold_op: BinOp,
+    span: Span,
+) -> crate::mir::BasicBlock {
     let in_range = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     push_assign(
-        &mut ctx,
+        ctx,
         in_range,
         Rvalue::BinaryOp(
             BinOp::Lt,
@@ -666,72 +762,57 @@ fn build_gpu_reduce_kernel(
     ));
 
     ctx.set_current_block(then_bb);
-    let other_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
-    push_assign(
-        &mut ctx,
-        other_idx,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(thread_idx))),
-            Box::new(Operand::Copy(Place::new(stride))),
-        ),
-        span,
-    );
-
-    let other_val = ctx.push_temp(elem_ty.clone(), span);
-    let mut other_sdata_place = Place::new(sdata_local);
-    other_sdata_place
-        .projection
-        .push(crate::mir::PlaceElem::Index(other_idx));
-    push_assign(
-        &mut ctx,
-        other_val,
-        Rvalue::Use(Operand::Copy(other_sdata_place)),
-        span,
-    );
-
-    let mut my_indexed_place = Place::new(sdata_local);
-    my_indexed_place
-        .projection
-        .push(crate::mir::PlaceElem::Index(thread_idx));
-
-    let result_val = ctx.push_temp(elem_ty, span);
-    push_assign(
-        &mut ctx,
-        result_val,
-        Rvalue::BinaryOp(
-            fold_op,
-            Box::new(Operand::Copy(my_indexed_place)),
-            Box::new(Operand::Copy(Place::new(other_val))),
-        ),
-        span,
-    );
-
-    // Assign the result to sdata[thread_idx]
-    let mut result_place = Place::new(sdata_local);
-    result_place
-        .projection
-        .push(crate::mir::PlaceElem::Index(thread_idx));
-    push_assign_place(
-        &mut ctx,
-        result_place,
-        Rvalue::Use(Operand::Copy(Place::new(result_val))),
-        span,
-    );
+    compute_tree_reduction_result(ctx, sdata_local, thread_idx, stride, elem_ty, fold_op, span);
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: then_exit },
         span,
     ));
 
-    ctx.set_current_block(then_exit);
+    then_exit
+}
 
-    // Barrier.
-    emit_workgroup_barrier(&mut ctx, span);
+/// Tree-reduction loop reducing sdata across workgroup.
+fn emit_tree_reduction_loop(
+    ctx: &mut LoweringContext,
+    sdata_local: Local,
+    thread_idx: Local,
+    elem_ty: &Type,
+    fold_op: BinOp,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    let (stride, tree_loop_start, tree_loop_body, tree_loop_exit) = setup_tree_loop(ctx, span);
 
-    // Stride >>= 1
+    ctx.set_current_block(tree_loop_start);
+    let stride_cond = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     push_assign(
-        &mut ctx,
+        ctx,
+        stride_cond,
+        Rvalue::BinaryOp(
+            BinOp::Gt,
+            Box::new(Operand::Copy(Place::new(stride))),
+            Box::new(int_constant(0, span)),
+        ),
+        span,
+    );
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(stride_cond)),
+            targets: vec![(Discriminant::bool_true(), tree_loop_body)],
+            otherwise: tree_loop_exit,
+        },
+        span,
+    ));
+
+    ctx.set_current_block(tree_loop_body);
+    let then_exit = emit_tree_step(ctx, sdata_local, thread_idx, stride, elem_ty, fold_op, span);
+
+    ctx.set_current_block(then_exit);
+    emit_workgroup_barrier(ctx, span);
+
+    push_assign(
+        ctx,
         stride,
         Rvalue::BinaryOp(
             BinOp::Shr,
@@ -748,13 +829,21 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Tree loop exit: lane 0 writes the result to output[0].
     ctx.set_current_block(tree_loop_exit);
+    Ok(stride)
+}
 
-    // BUG FIX 3+4: Emit output buffer write from lane 0.
+/// Lane-0 writes reduced result to output buffer.
+fn emit_lane_zero_output_write(
+    ctx: &mut LoweringContext,
+    output_local: Local,
+    sdata_local: Local,
+    thread_idx: Local,
+    span: Span,
+) {
     let is_lane_zero_out = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     push_assign(
-        &mut ctx,
+        ctx,
         is_lane_zero_out,
         Rvalue::BinaryOp(
             BinOp::Eq,
@@ -776,12 +865,10 @@ fn build_gpu_reduce_kernel(
         span,
     ));
 
-    // Lane 0: output[0] = sdata[0]
     ctx.set_current_block(output_write_bb);
 
-    // Create a temporary local with value 0 for indexing.
     let zero_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
-    push_assign(&mut ctx, zero_idx, Rvalue::Use(int_constant(0, span)), span);
+    push_assign(ctx, zero_idx, Rvalue::Use(int_constant(0, span)), span);
 
     let mut sdata_result_place = Place::new(sdata_local);
     sdata_result_place
@@ -794,7 +881,7 @@ fn build_gpu_reduce_kernel(
         .push(crate::mir::PlaceElem::Index(zero_idx));
 
     push_assign_place(
-        &mut ctx,
+        ctx,
         output_place,
         Rvalue::Use(Operand::Copy(sdata_result_place)),
         span,
@@ -808,9 +895,60 @@ fn build_gpu_reduce_kernel(
     ));
 
     ctx.set_current_block(output_done_bb);
+}
 
-    // Emit StorageDead for all locals that have StorageLive before return.
-    // These are: sdata_local, acc_local, loop_idx, stride.
+/// Build a GPU tree-reduction kernel body.
+fn build_gpu_reduce_kernel(
+    parent: &mut LoweringContext,
+    obj_ty: &Type,
+    array_length: i64,
+    fold_op: BinOp,
+    span: Span,
+) -> Result<Body, LoweringError> {
+    let workgroup_size = GPU_REDUCE_BLOCK_SIZE;
+    let arg_count = 3;
+
+    let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
+    kernel
+        .local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([workgroup_size, 1, 1]),
+        grid_size: Some([1, 1, 1]),
+        logical_extent: None,
+        required_capabilities: Vec::new(),
+        is_frame_step: false,
+    }));
+
+    kernel.out_params = vec![false, false, true];
+
+    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+
+    let (input_local, init_local, output_local, sdata_local, thread_idx, ws) =
+        setup_reduce_kernel_params(&mut ctx, obj_ty, span)?;
+
+    let elem_ty = extract_element_type(obj_ty)?;
+    let acc_local = emit_acc_init(&mut ctx, init_local, thread_idx, fold_op, &elem_ty, span)?;
+
+    let loop_idx = emit_grid_stride_loop(
+        &mut ctx,
+        input_local,
+        acc_local,
+        thread_idx,
+        array_length,
+        fold_op,
+        ws,
+        span,
+    )?;
+
+    emit_sdata_store_and_barrier(&mut ctx, sdata_local, acc_local, thread_idx, span);
+
+    let stride =
+        emit_tree_reduction_loop(&mut ctx, sdata_local, thread_idx, &elem_ty, fold_op, span)?;
+
+    emit_lane_zero_output_write(&mut ctx, output_local, sdata_local, thread_idx, span);
+
     ctx.push_statement(MirStatement {
         kind: MirStatementKind::StorageDead(Place::new(stride)),
         span,
@@ -845,30 +983,12 @@ fn emit_workgroup_barrier(ctx: &mut LoweringContext, span: Span) {
     });
 }
 
-/// Emit the GpuLaunch terminator for the reduction kernel.
-/// Returns (reduced_result_operand, output_local_backing_1element_buffer, device_handle_id).
-/// The caller must emit `StorageDead` for the output_local (for host-resident
-/// destinations) or transfer its device handle to the destination binding
-/// (for gpu-resident destinations) to avoid leaks or handle mismatches.
-///
-/// Gpu-resident reduce: if `dest_is_gpu_resident` is true, the 1-element
-/// output buffer remains gpu-resident and is NOT eagerly read back to the host.
-/// The buffer persists with its device handle, allowing the result to remain
-/// on-GPU for subsequent operations. Cross-residency assignment (`let h = gpu_s`)
-/// will trigger the readback then.
-fn emit_gpu_reduce_launch(
+/// Setup 1-element output buffer and return the handle.
+fn setup_reduce_output_buffer(
     ctx: &mut LoweringContext,
-    kernel_name: &str,
-    receiver_local: Local,
-    init_op: Operand,
+    elem_ty: &Type,
     span: Span,
-    dest_is_gpu_resident: bool,
-) -> Result<(Operand, Local, crate::mir::body::DeviceHandleId), LoweringError> {
-    let receiver_ty = ctx.body.local_decls[receiver_local.0].ty.clone();
-    let elem_ty = extract_element_type(&receiver_ty)?;
-
-    // Create a 1-element output buffer on GPU to hold the reduced result.
-    // BUG FIX 3+4: Wire output buffer into kernel.
+) -> Result<(Local, crate::mir::body::DeviceHandleId), LoweringError> {
     let output_array_ty = Type::new(
         TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
@@ -892,16 +1012,10 @@ fn emit_gpu_reduce_launch(
 
     let output_local = ctx.push_local("_reduce_out".to_string(), output_array_ty, span);
     ctx.body.local_decls[output_local.0].residency = BindingResidency::Gpu;
-    // Allocate a fresh DeviceHandleId for the output buffer.
     let handle_id = crate::mir::body::DeviceHandleId::fresh();
     ctx.body.local_decls[output_local.0].device_handle = Some(handle_id);
 
-    // Materialize a real 1-element array backing for the output. Without an
-    // initializer the local's MiriArrayHeader is null, so building the launch
-    // buffer descriptor (and the readback) dereferences a null pointer and
-    // segfaults. A zero-seeded single element gives the buffer valid
-    // data/len bytes; the kernel overwrites element 0 with the reduced result.
-    let zero_elem = identity_for_op(BinOp::Add, &elem_ty);
+    let zero_elem = identity_for_op(BinOp::Add, elem_ty);
     push_assign(
         ctx,
         output_local,
@@ -909,6 +1023,59 @@ fn emit_gpu_reduce_launch(
         span,
     );
 
+    Ok((output_local, handle_id))
+}
+
+/// Assemble GpuLaunchArgs from input/output buffers and init scalar.
+#[allow(clippy::too_many_arguments)]
+fn assemble_reduce_launch_args(
+    ctx: &mut LoweringContext,
+    receiver_local: Local,
+    output_local: Local,
+    init_op: Operand,
+    handle_id: crate::mir::body::DeviceHandleId,
+    receiver_ty: &Type,
+    elem_ty: &Type,
+    span: Span,
+) -> Result<(Vec<Operand>, GpuLaunchArgs), LoweringError> {
+    let buffer_ops = vec![
+        Operand::Copy(Place::new(receiver_local)),
+        Operand::Copy(Place::new(output_local)),
+    ];
+
+    let init_local = ctx.push_temp(elem_ty.clone(), span);
+    push_assign(ctx, init_local, Rvalue::Use(init_op), span);
+    let scalar_ops = vec![Operand::Copy(Place::new(init_local))];
+
+    let arg_handles = vec![
+        ctx.body.local_decls[receiver_local.0].device_handle,
+        Some(handle_id),
+    ];
+    let output_ty = ctx.body.local_decls[output_local.0].ty.clone();
+    let arg_int_narrow = vec![
+        needs_int_narrowing(receiver_ty),
+        needs_int_narrowing(&output_ty),
+    ];
+
+    let arg_read_only = vec![true, false];
+    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
+        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+
+    Ok((scalar_ops, launch_args))
+}
+
+/// Emit GpuLaunch terminator and conditional readback.
+#[allow(clippy::too_many_arguments)]
+fn emit_reduce_gpu_launch(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    scalar_ops: Vec<Operand>,
+    launch_args: GpuLaunchArgs,
+    output_local: Local,
+    handle_id: crate::mir::body::DeviceHandleId,
+    dest_is_gpu_resident: bool,
+    span: Span,
+) {
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
     let void_ty = Type::new(TypeKind::Void, span);
     let one_op = int_constant(1, span);
@@ -924,7 +1091,7 @@ fn emit_gpu_reduce_launch(
         span,
     );
 
-    let block_size = BackendConfig::WEB_GPU.block_size(1)[0];
+    let block_size = GPU_REDUCE_BLOCK_SIZE;
     let block_size_i64 = i64::from(block_size);
     let block_local = ctx.push_temp(dim3_ty.clone(), span);
     push_assign(
@@ -942,37 +1109,6 @@ fn emit_gpu_reduce_launch(
         ty: Type::new(TypeKind::Identifier, span),
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
-
-    // Args: input (read-only), output (read_write)
-    let buffer_ops = vec![
-        Operand::Copy(Place::new(receiver_local)),
-        Operand::Copy(Place::new(output_local)),
-    ];
-
-    // FIX 1: Materialize init_op into a fresh local to satisfy Cranelift's requirement
-    // that all GpuLaunch operands must be Copy/Move of projection-free locals.
-    let init_local = ctx.push_temp(elem_ty, span);
-    push_assign(ctx, init_local, Rvalue::Use(init_op), span);
-    let scalar_ops = vec![Operand::Copy(Place::new(init_local))];
-
-    let arg_handles = vec![
-        ctx.body.local_decls[receiver_local.0].device_handle,
-        Some(handle_id),
-    ];
-    // Int (i64) arrays are narrowed to i32 on upload and widened back on
-    // readback — the kernel operates on `array<i32>`. Mirror the forall path so
-    // the host i64 element width matches the device i32 width; without this the
-    // kernel reads the i64 host bytes as i32 and computes garbage.
-    let output_ty = ctx.body.local_decls[output_local.0].ty.clone();
-    let arg_int_narrow = vec![
-        needs_int_narrowing(&receiver_ty),
-        needs_int_narrowing(&output_ty),
-    ];
-
-    // input is read-only, output is read_write.
-    let arg_read_only = vec![true, false];
-    let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
 
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
@@ -997,12 +1133,6 @@ fn emit_gpu_reduce_launch(
     ));
     ctx.set_current_block(after_bb);
 
-    // Conditional readback based on destination residency.
-    // If the destination binding is gpu-resident, the 1-element output buffer
-    // stays on GPU and is NOT read back here. The buffer is persistent with its
-    // device handle; cross-residency assignment will trigger readback when needed.
-    // If the destination is host-resident (or None), emit the readback now so the
-    // host array synchronizes with the device buffer result.
     if !dest_is_gpu_resident {
         emit_void_runtime_call(
             ctx,
@@ -1014,22 +1144,65 @@ fn emit_gpu_reduce_launch(
             span,
         );
     }
+}
 
-    // Return an operand that reads from the output buffer's first element.
-    // For host-resident destinations (and readback happened above):
-    //   After the readback fence, the host array `_reduce_out` is synchronized with
-    //   the device buffer, so `output[0]` holds the reduced result.
-    // For gpu-resident destinations (no readback yet):
-    //   This operand reads from the 1-element gpu buffer, which is valid as long
-    //   as we stay on GPU or perform an explicit cross-residency assignment.
-    // `PlaceElem::Index` indexes by a *local holding the index value*, so the
-    // constant 0 must be materialized into a bare local (using `Local(0)` would
-    // index by the return slot's contents, not by zero).
+/// Extract the result operand from the output buffer.
+fn extract_reduce_result(ctx: &mut LoweringContext, output_local: Local, span: Span) -> Operand {
     let zero_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
     push_assign(ctx, zero_idx, Rvalue::Use(int_constant(0, span)), span);
     let mut output_elem_place = Place::new(output_local);
     output_elem_place
         .projection
         .push(crate::mir::PlaceElem::Index(zero_idx));
-    Ok((Operand::Copy(output_elem_place), output_local, handle_id))
+    Operand::Copy(output_elem_place)
+}
+
+/// Emit the GpuLaunch terminator for the reduction kernel.
+/// Returns (reduced_result_operand, output_local_backing_1element_buffer, device_handle_id).
+/// The caller must emit `StorageDead` for the output_local (for host-resident
+/// destinations) or transfer its device handle to the destination binding
+/// (for gpu-resident destinations) to avoid leaks or handle mismatches.
+///
+/// Gpu-resident reduce: if `dest_is_gpu_resident` is true, the 1-element
+/// output buffer remains gpu-resident and is NOT eagerly read back to the host.
+/// The buffer persists with its device handle, allowing the result to remain
+/// on-GPU for subsequent operations. Cross-residency assignment (`let h = gpu_s`)
+/// will trigger the readback then.
+fn emit_gpu_reduce_launch(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    receiver_local: Local,
+    init_op: Operand,
+    span: Span,
+    dest_is_gpu_resident: bool,
+) -> Result<(Operand, Local, crate::mir::body::DeviceHandleId), LoweringError> {
+    let receiver_ty = ctx.body.local_decls[receiver_local.0].ty.clone();
+    let elem_ty = extract_element_type(&receiver_ty)?;
+
+    let (output_local, handle_id) = setup_reduce_output_buffer(ctx, &elem_ty, span)?;
+
+    let (scalar_ops, launch_args) = assemble_reduce_launch_args(
+        ctx,
+        receiver_local,
+        output_local,
+        init_op,
+        handle_id,
+        &receiver_ty,
+        &elem_ty,
+        span,
+    )?;
+
+    emit_reduce_gpu_launch(
+        ctx,
+        kernel_name,
+        scalar_ops,
+        launch_args,
+        output_local,
+        handle_id,
+        dest_is_gpu_resident,
+        span,
+    );
+
+    let result_op = extract_reduce_result(ctx, output_local, span);
+    Ok((result_op, output_local, handle_id))
 }

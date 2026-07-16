@@ -225,7 +225,7 @@ These are repeat offenders. They are *not optional* even when the rest of the ch
 
 ### 5.1 Perceus reference counting
 
-- A `Copy` of a managed `Place` with an empty projection gets an `IncRef`. With a non-empty projection (`obj.field`), Perceus does **not** IncRef — the call-site code that lifts the field must guard `emit_temp_drop` with `projection.is_empty()`.
+- A `Copy` of a managed `Place` gets an `IncRef`, whether the projection is empty or not — `is_place_managed` (perceus.rs) walks `Field`/`Index` projections to resolve the projected type (Option, Tuple, custom struct/class fields, closure captures). Enum-variant fields cannot be resolved statically; for those Perceus falls back to checking whether the *destination* local is managed. The IncRef is balanced by the destination temp's `StorageDead` DecRef. Lowering-emitted temp drops in method intercepts must still guard `emit_temp_drop` with `projection.is_empty()` so an unmanaged field lift never gets a spurious DecRef.
 - A new temporary holding a managed value gets a `StorageDead` that translates to `DecRef`.
 - Method-dispatch intercepts in `src/mir/lowering/control_flow.rs` MUST follow the established pattern (`length`, `element_at`, `push`, `set`, `insert`).
 - Use-after-move checking is layered: resource types are consumed at *every* scope; managed (non-resource) types are consumed only at the top level. Do not collapse this distinction.

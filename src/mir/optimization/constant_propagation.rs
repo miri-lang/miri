@@ -44,7 +44,7 @@ fn collect_constants(body: &Body) -> HashMap<Local, Constant> {
         for stmt in &block.statements {
             if let StatementKind::Assign(place, Rvalue::Use(Operand::Constant(c))) = &stmt.kind {
                 if place.projection.is_empty() {
-                    known_consts.insert(place.local, *c.clone());
+                    known_consts.insert(place.local, c.as_ref().clone());
                 }
             }
         }

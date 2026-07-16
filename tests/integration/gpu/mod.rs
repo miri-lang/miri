@@ -27,6 +27,7 @@ pub mod cross_residency;
 pub mod demos;
 pub mod device;
 pub mod div_mod_range;
+pub mod error_paths;
 pub mod forall_const_bounds;
 pub mod forall_param_call;
 pub mod forall_routing;
