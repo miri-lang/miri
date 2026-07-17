@@ -976,8 +976,22 @@ fn collect_callees_from_stmt(
             collect_callees_from_expr(iter, types, known, out);
             collect_callees_from_stmt(body, types, known, out);
         }
-        StatementKind::FunctionDeclaration(_) => {}
-        _ => {}
+        StatementKind::GpuFrameBlock(body) => {
+            collect_callees_from_stmt(body, types, known, out);
+        }
+        StatementKind::FunctionDeclaration(_)
+        | StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Return(None)
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::Enum(..)
+        | StatementKind::Struct(..)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(..)
+        | StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => {}
     }
 }
 

@@ -29,6 +29,15 @@ use std::collections::HashMap;
 /// through every callsite of `substitute_type`.
 pub(crate) const VALUE_GENERIC_MARKER: &str = "__value_generic__";
 
+/// Upper bound on `substitute_type` recursion depth. Bounds stack usage when a
+/// deeply nested generic type (hostile or generated) flows through
+/// substitution; past this the descent stops and returns the input unchanged.
+const MAX_SUBSTITUTION_DEPTH: usize = 256;
+
+thread_local! {
+    static SUBSTITUTION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Wrap a value-generic argument expression as a sentinel `Type` so it can
 /// share the `HashMap<String, Type>` mapping used for type generics.
 pub(crate) fn value_generic_marker_type(expr: Expression) -> Type {
@@ -253,7 +262,22 @@ impl TypeChecker {
     /// parameter names to concrete types, returns a new type with
     /// all generic parameters replaced.
     pub(crate) fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
-        match &ty.kind {
+        // Every recursive descent (through the helpers below) re-enters here, so
+        // one guard at this choke point bounds total nesting. A hostile source
+        // type nested past the cap would otherwise exhaust the stack; on exceed
+        // we stop substituting and return the input verbatim (fail-safe — any
+        // resulting type mismatch surfaces through normal checking, never a
+        // panic).
+        let depth = SUBSTITUTION_DEPTH.with(|d| {
+            let current = d.get();
+            d.set(current + 1);
+            current
+        });
+        if depth >= MAX_SUBSTITUTION_DEPTH {
+            SUBSTITUTION_DEPTH.with(|d| d.set(d.get() - 1));
+            return ty.clone();
+        }
+        let result = match &ty.kind {
             TypeKind::Generic(name, _, _) => {
                 mapping.get(name).cloned().unwrap_or_else(|| ty.clone())
             }
@@ -271,7 +295,9 @@ impl TypeChecker {
             }
             TypeKind::Function(func) => self.substitute_function(func, mapping),
             _ => ty.clone(),
-        }
+        };
+        SUBSTITUTION_DEPTH.with(|d| d.set(d.get() - 1));
+        result
     }
 
     fn substitute_custom(
@@ -540,5 +566,29 @@ impl TypeChecker {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::type_checker::TypeChecker;
+
+    #[test]
+    fn substitute_type_bounds_recursion_on_deep_nesting() {
+        // Nest far past MAX_SUBSTITUTION_DEPTH so an unbounded implementation
+        // would blow the stack; the depth guard must return instead.
+        let mut ty = make_type(TypeKind::Int);
+        for _ in 0..(MAX_SUBSTITUTION_DEPTH * 8) {
+            ty = make_type(TypeKind::Option(Box::new(ty)));
+        }
+
+        let checker = TypeChecker::new();
+        let mapping = HashMap::new();
+        let result = checker.substitute_type(&ty, &mapping);
+
+        // Reaching here without a stack overflow is the assertion; the result
+        // is still an Option envelope (substitution stopped, did not corrupt).
+        assert!(matches!(result.kind, TypeKind::Option(_)));
     }
 }

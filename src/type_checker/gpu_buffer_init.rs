@@ -278,7 +278,7 @@ fn try_eval_const_size(expr: &Expression, consts: &HashMap<String, usize>) -> Op
             let r = try_eval_const_size(right, consts)?;
             match op {
                 BinaryOp::Add => l.checked_add(r),
-                BinaryOp::Sub => Some(l.saturating_sub(r)),
+                BinaryOp::Sub => l.checked_sub(r),
                 BinaryOp::Mul => l.checked_mul(r),
                 BinaryOp::Div if r > 0 => Some(l / r),
                 _ => None,

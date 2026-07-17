@@ -80,6 +80,14 @@ pub const LINEAR_TYPE_NAME: &str = "Linear";
 /// spelling instead of scattering `"Range"` string literals.
 pub const RANGE_TYPE_NAME: &str = "Range";
 
+/// Lowercase collection-type aliases accepted by `resolve_builtin_type_alias`
+/// alongside the capitalized canonical names. Centralized here so alias
+/// dispatch shares one spelling instead of scattering string literals through
+/// the type checker.
+pub const LIST_LOWERCASE_ALIAS: &str = "list";
+pub const SET_LOWERCASE_ALIAS: &str = "set";
+pub const RANGE_LOWERCASE_ALIAS: &str = "range";
+
 /// Canonical class name for the compiler-builtin `Dim3` struct used in GPU
 /// kernel context fields.
 pub const DIM3_TYPE_NAME: &str = "Dim3";

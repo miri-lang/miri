@@ -134,36 +134,66 @@ impl TypeChecker {
 
     /// Walk the body, tracking locals whose value derives from a non-injective
     /// source (a buffer read, or a nested-loop variable), and flag each
-    /// non-injective buffer write.
+    /// non-injective buffer write. Also track buffer aliases: locals initialized
+    /// to a buffer name become aliases that inherit write-checking obligations.
     fn walk_writes(
         &mut self,
         stmt: &Statement,
         buffers: &HashSet<String>,
         buffer_derived: &mut HashSet<String>,
     ) {
+        let mut buffer_aliases: HashSet<String> = HashSet::new();
+        self.walk_writes_with_aliases(stmt, buffers, buffer_derived, &mut buffer_aliases);
+    }
+
+    /// Inner walk with buffer-alias tracking. Aliases are locals initialized to
+    /// a buffer or another alias, so writes through them must be checked.
+    fn walk_writes_with_aliases(
+        &mut self,
+        stmt: &Statement,
+        buffers: &HashSet<String>,
+        buffer_derived: &mut HashSet<String>,
+        buffer_aliases: &mut HashSet<String>,
+    ) {
         match &stmt.node {
             StatementKind::Block(stmts) => {
                 for inner in stmts {
-                    self.walk_writes(inner, buffers, buffer_derived);
+                    self.walk_writes_with_aliases(inner, buffers, buffer_derived, buffer_aliases);
                 }
             }
             StatementKind::Variable(decls, _) => {
-                self.record_index_derivation(decls, buffer_derived);
+                self.record_index_derivation_and_aliases(
+                    decls,
+                    buffer_derived,
+                    buffers,
+                    buffer_aliases,
+                );
             }
             StatementKind::Expression(expr) => {
-                self.check_write_expression(expr, buffers, buffer_derived);
+                self.check_write_expression(expr, buffers, buffer_derived, buffer_aliases);
             }
             StatementKind::If(_, then_branch, else_branch, _) => {
-                self.walk_writes(then_branch, buffers, buffer_derived);
+                self.walk_writes_with_aliases(then_branch, buffers, buffer_derived, buffer_aliases);
                 if let Some(else_branch) = else_branch {
-                    self.walk_writes(else_branch, buffers, buffer_derived);
+                    self.walk_writes_with_aliases(
+                        else_branch,
+                        buffers,
+                        buffer_derived,
+                        buffer_aliases,
+                    );
                 }
             }
             StatementKind::While(_, loop_body, _) => {
-                self.walk_writes(loop_body, buffers, buffer_derived);
+                self.walk_writes_with_aliases(loop_body, buffers, buffer_derived, buffer_aliases);
             }
             StatementKind::For(decls, _, loop_body) => {
-                self.walk_nested_loop(decls, loop_body, buffers, buffer_derived);
+                self.walk_nested_loop_with_aliases(
+                    decls,
+                    loop_body,
+                    buffers,
+                    buffer_derived,
+                    buffer_aliases,
+                );
             }
             _ => {}
         }
@@ -172,19 +202,20 @@ impl TypeChecker {
     /// Walk a nested CPU loop. Its induction variables are the same across every
     /// `forall`/kernel thread, so writes indexed by them race; taint them as
     /// non-injective for the loop body, then restore the outer scope's taint.
-    fn walk_nested_loop(
+    fn walk_nested_loop_with_aliases(
         &mut self,
         decls: &[VariableDeclaration],
         loop_body: &Statement,
         buffers: &HashSet<String>,
         buffer_derived: &mut HashSet<String>,
+        buffer_aliases: &mut HashSet<String>,
     ) {
         let tainted: Vec<String> = decls
             .iter()
             .filter(|d| buffer_derived.insert(d.name.clone()))
             .map(|d| d.name.clone())
             .collect();
-        self.walk_writes(loop_body, buffers, buffer_derived);
+        self.walk_writes_with_aliases(loop_body, buffers, buffer_derived, buffer_aliases);
         for name in tainted {
             buffer_derived.remove(&name);
         }
@@ -192,14 +223,24 @@ impl TypeChecker {
 
     /// Record any declared local whose initializer is not a provably-injective
     /// index expression; such a local (e.g. bound to a buffer read) taints any
-    /// write it later subscripts.
-    fn record_index_derivation(
+    /// write it later subscripts. Also track buffer aliases: if a local is
+    /// initialized to a buffer name (or another alias), it becomes an alias and
+    /// must be checked as a buffer write target.
+    fn record_index_derivation_and_aliases(
         &self,
         decls: &[VariableDeclaration],
         buffer_derived: &mut HashSet<String>,
+        buffers: &HashSet<String>,
+        buffer_aliases: &mut HashSet<String>,
     ) {
         for decl in decls {
             if let Some(init) = &decl.initializer {
+                if let ExpressionKind::Identifier(source_name, _) = &init.node {
+                    if buffers.contains(source_name) || buffer_aliases.contains(source_name) {
+                        buffer_aliases.insert(decl.name.clone());
+                        continue;
+                    }
+                }
                 if !is_injective_index(init, buffer_derived) {
                     buffer_derived.insert(decl.name.clone());
                 }
@@ -215,22 +256,24 @@ impl TypeChecker {
         expr: &Expression,
         buffers: &HashSet<String>,
         buffer_derived: &mut HashSet<String>,
+        buffer_aliases: &mut HashSet<String>,
     ) {
         if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
-            self.check_subscript_write(lhs, buffers, buffer_derived, expr.span);
-            self.propagate_reassignment_taint(lhs, rhs, buffer_derived);
+            self.check_subscript_write(lhs, buffers, buffer_derived, buffer_aliases, expr.span);
+            self.propagate_reassignment_taint(lhs, rhs, buffer_derived, buffers, buffer_aliases);
             return;
         }
-        self.check_method_set_write(expr, buffers, buffer_derived);
+        self.check_method_set_write(expr, buffers, buffer_derived, buffer_aliases);
     }
 
     /// Flag a subscript write `buf[index] = e` when `buf` is a checkable buffer
-    /// and `index` is not provably unique per thread.
+    /// (or an alias of one) and `index` is not provably unique per thread.
     fn check_subscript_write(
         &mut self,
         lhs: &LeftHandSideExpression,
         buffers: &HashSet<String>,
         buffer_derived: &HashSet<String>,
+        buffer_aliases: &HashSet<String>,
         span: Span,
     ) {
         let LeftHandSideExpression::Index(index_expr) = lhs else {
@@ -240,20 +283,22 @@ impl TypeChecker {
             return;
         };
         if let ExpressionKind::Identifier(buf, _) = &base.node {
-            if buffers.contains(buf) && !is_injective_index(index, buffer_derived) {
+            let is_checkable = buffers.contains(buf) || buffer_aliases.contains(buf);
+            if is_checkable && !is_injective_index(index, buffer_derived) {
                 self.report_concurrent_write(buf, span);
             }
         }
     }
 
     /// Flag a method-form write `buf.set(index, value)` when `buf` is a checkable
-    /// buffer and `index` is not provably unique per thread. This mirrors the
-    /// subscript path for the collection index-write method.
+    /// buffer (or an alias of one) and `index` is not provably unique per thread.
+    /// This mirrors the subscript path for the collection index-write method.
     fn check_method_set_write(
         &mut self,
         expr: &Expression,
         buffers: &HashSet<String>,
         buffer_derived: &HashSet<String>,
+        buffer_aliases: &HashSet<String>,
     ) {
         let ExpressionKind::Call(callee, args) = &expr.node else {
             return;
@@ -265,7 +310,8 @@ impl TypeChecker {
             return;
         }
         if let ExpressionKind::Identifier(buf, _) = &receiver.node {
-            if buffers.contains(buf) && !is_injective_index(&args[0], buffer_derived) {
+            let is_checkable = buffers.contains(buf) || buffer_aliases.contains(buf);
+            if is_checkable && !is_injective_index(&args[0], buffer_derived) {
                 self.report_concurrent_write(buf, expr.span);
             }
         }
@@ -273,20 +319,32 @@ impl TypeChecker {
 
     /// Propagate index-derivation taint through a plain identifier reassignment
     /// (`name = rhs`): the local becomes tainted iff `rhs` is not injective.
+    /// Also propagate buffer-alias status: if `rhs` is a buffer or alias, the
+    /// reassigned local becomes an alias (fail-closed).
     fn propagate_reassignment_taint(
         &self,
         lhs: &LeftHandSideExpression,
         rhs: &Expression,
         buffer_derived: &mut HashSet<String>,
+        buffers: &HashSet<String>,
+        buffer_aliases: &mut HashSet<String>,
     ) {
         let LeftHandSideExpression::Identifier(name_expr) = lhs else {
             return;
         };
         if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+            if let ExpressionKind::Identifier(source, _) = &rhs.node {
+                if buffers.contains(source) || buffer_aliases.contains(source) {
+                    buffer_aliases.insert(name.clone());
+                    return;
+                }
+            }
             if is_injective_index(rhs, buffer_derived) {
                 buffer_derived.remove(name);
+                buffer_aliases.remove(name);
             } else {
                 buffer_derived.insert(name.clone());
+                buffer_aliases.remove(name);
             }
         }
     }
