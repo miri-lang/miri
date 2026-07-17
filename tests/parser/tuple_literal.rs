@@ -306,3 +306,25 @@ fn test_tuple_index_precedence() {
         ))],
     );
 }
+
+#[test]
+fn test_error_tuple_leading_comma() {
+    parser_error_test(
+        "let t = (, 1)",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an expression".to_string(),
+            found: ",".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_tuple_double_comma() {
+    parser_error_test(
+        "let t = (1,, 2)",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an expression".to_string(),
+            found: ",".to_string(),
+        },
+    );
+}

@@ -738,3 +738,36 @@ trait AsyncProcessor
         MemberVisibility::Public,
     );
 }
+
+#[test]
+fn test_error_trait_without_name() {
+    parser_error_test(
+        "trait",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_trait_with_numeric_name() {
+    parser_error_test(
+        "trait 42",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "int".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_trait_extends_without_base() {
+    parser_error_test(
+        "trait Movable extends",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}

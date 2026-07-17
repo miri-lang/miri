@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{parser_test, type_statement_test};
+use super::utils::{parser_error_test, parser_test, type_statement_test};
 use miri::ast::factory::{
     func, let_variable, parameter, type_expr_non_null, type_expr_option, type_int, type_rawptr,
     variable_statement,
 };
 use miri::ast::{opt_expr, MemberVisibility};
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_rawptr_as_variable_type() {
@@ -47,4 +48,21 @@ fn test_rawptr_as_function_return_type() {
             MemberVisibility::Public,
         )],
     );
+}
+
+#[test]
+fn test_error_rawptr_double_nullable() {
+    // `??` lexes as the null-coalescing operator, which then lacks an operand.
+    parser_error_test(
+        "let ptr RawPtr??",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an expression".to_string(),
+            found: "??".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_rawptr_unterminated_parameter_list() {
+    parser_error_test("fn alloc(size RawPtr", &SyntaxErrorKind::UnexpectedEOF);
 }

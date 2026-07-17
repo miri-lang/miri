@@ -209,10 +209,18 @@ impl<'source> Parser<'source> {
         let raw = &self.source[token.1.start..token.1.end];
 
         // Strings that come from f-string expressions arrive with escaped quotes.
+        // The lexer guarantees both quotes are present; guard the slice bounds so
+        // a malformed token surfaces as a syntax error instead of a panic.
         let inner = if raw.starts_with('\\') {
-            &raw[2..raw.len() - 1]
+            raw.get(2..raw.len().saturating_sub(1))
         } else {
-            &raw[1..raw.len() - 1]
+            raw.get(1..raw.len().saturating_sub(1))
+        };
+        let Some(inner) = inner else {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidStringLiteral,
+                token.1,
+            ));
         };
 
         Ok(ast::string_literal(&unescape_string(inner)))
