@@ -18,28 +18,57 @@ impl<'source> Parser<'source> {
                 break;
             }
 
-            let head = match self.lookahead.as_ref().map(|(t, _)| t.clone()) {
-                Some(token) => token,
-                None => break,
+            let should_continue = match &self.lookahead {
+                Some((Token::Dot, _)) => {
+                    expression = self.member_access(expression)?;
+                    true
+                }
+                Some((Token::LBracket, _)) => {
+                    expression = self.index_access(expression)?;
+                    true
+                }
+                Some((Token::LParen, _)) => {
+                    expression = self.call_access(expression)?;
+                    true
+                }
+                Some((Token::LessThan, lookahead_span)) => {
+                    if lookahead_span.start == expression.span.end {
+                        expression = self.generic_arg_access(expression)?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Some((Token::Float, _)) if self.is_tuple_field_access() => {
+                    expression = self.tuple_field_access(expression)?;
+                    true
+                }
+                Some((Token::As, _)) => {
+                    expression = self.cast_access(expression)?;
+                    true
+                }
+                _ => false,
             };
 
-            let next = match head {
-                Token::Dot => Some(self.member_access(expression.clone())?),
-                Token::LBracket => Some(self.index_access(expression.clone())?),
-                Token::LParen => Some(self.call_access(expression.clone())?),
-                Token::LessThan => self.generic_arg_access(expression.clone())?,
-                Token::Float => self.tuple_field_access(expression.clone())?,
-                Token::As => Some(self.cast_access(expression.clone())?),
-                _ => None,
-            };
-
-            match next {
-                Some(updated) => expression = updated,
-                None => break,
+            if !should_continue {
+                break;
             }
         }
 
         Ok(expression)
+    }
+
+    fn is_tuple_field_access(&self) -> bool {
+        if let Some((Token::Float, span)) = &self.lookahead {
+            let float_text = &self.source[span.start..span.end];
+            if let Some(int_part) = float_text.strip_prefix('.') {
+                int_part.chars().all(|c| c.is_ascii_digit() || c == '_')
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     fn member_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
@@ -68,50 +97,34 @@ impl<'source> Parser<'source> {
     }
 
     /// `foo<T>` vs `a < b`: whitespace between the expression and `<` means
-    /// comparison, no whitespace means a generic argument list.
-    fn generic_arg_access(
-        &mut self,
-        expression: Expression,
-    ) -> Result<Option<Expression>, SyntaxError> {
-        let prev_end = expression.span.end;
-        let Some((_, ref span)) = self.lookahead else {
-            return Ok(None);
-        };
-        if span.start > prev_end {
-            return Ok(None);
-        }
-
+    /// comparison, no whitespace means a generic argument list. The caller
+    /// checks the whitespace rule before dispatching here.
+    fn generic_arg_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
         let args = self.multiple_generic_arguments()?;
         let end = args
             .last()
             .map(|a| a.span.end)
             .unwrap_or(expression.span.end);
         let span = Span::new(expression.span.start, end);
-        Ok(Some(ast::type_declaration_expression_with_span(
+        Ok(ast::type_declaration_expression_with_span(
             expression,
             Some(args),
             TypeDeclarationKind::None,
             None,
             span,
-        )))
+        ))
     }
 
     /// Tuple access `t.0` tokenizes as `Identifier(t)` then `Float(.0)`.
     /// Floats starting with `.` followed by an integer are rewritten as
     /// member-access with an integer property.
-    fn tuple_field_access(
-        &mut self,
-        expression: Expression,
-    ) -> Result<Option<Expression>, SyntaxError> {
+    /// Caller must ensure the Float token is in tuple-field format.
+    fn tuple_field_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
         let span = self.current_token_span();
         let float_text = &self.source[span.start..span.end];
-
         let Some(int_part) = float_text.strip_prefix('.') else {
-            return Ok(None);
+            return Err(self.error_unexpected_token("tuple field access", "float literal"));
         };
-        if !int_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
-            return Ok(None);
-        }
 
         self.eat_token(&Token::Float)?;
 
@@ -124,9 +137,7 @@ impl<'source> Parser<'source> {
         let property = ast::literal_with_span(ast::int_literal(val), prop_span);
 
         let total_span = Span::new(expression.span.start, property.span.end);
-        Ok(Some(ast::member_with_span(
-            expression, property, total_span,
-        )))
+        Ok(ast::member_with_span(expression, property, total_span))
     }
 
     fn cast_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {

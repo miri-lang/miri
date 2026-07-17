@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::parser_test;
+use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
     binary, block, boolean_literal, call, expression_statement, func, identifier, if_conditional,
     int_literal_expression, let_variable, member, unary, variable_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, MemberVisibility, UnaryOp};
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_await_expression() {
@@ -115,4 +116,15 @@ fn test_await_in_conditional_expression() {
             Some(boolean_literal(false)),
         ))],
     );
+}
+
+#[test]
+fn test_error_await_without_operand() {
+    parser_error_test("await", &SyntaxErrorKind::UnexpectedEOF);
+}
+
+#[test]
+fn test_error_dangling_await_after_binary_operator() {
+    // `2 + await` leaves the await without an operand.
+    parser_error_test("2 + await", &SyntaxErrorKind::UnexpectedEOF);
 }

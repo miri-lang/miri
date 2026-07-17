@@ -4,7 +4,7 @@
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
     assign, binary, block, continue_statement, expression_statement, identifier, if_statement,
-    int_literal_expression, lhs_identifier, while_statement,
+    int_literal_expression, lhs_identifier, unless_statement, while_statement,
 };
 use miri::ast::{AssignmentOp, BinaryOp};
 use miri::error::syntax::SyntaxErrorKind;
@@ -72,4 +72,28 @@ fn test_error_continue_with_value() {
 #[test]
 fn test_parse_continue_outside_loop() {
     parser_test("continue", vec![continue_statement()]);
+}
+
+#[test]
+fn test_continue_with_postfix_if_guard_wraps_in_if_statement() {
+    parser_test(
+        "
+continue if skip
+",
+        vec![if_statement(identifier("skip"), continue_statement(), None)],
+    );
+}
+
+#[test]
+fn test_continue_with_postfix_unless_guard_wraps_in_unless_statement() {
+    parser_test(
+        "
+continue unless valid
+",
+        vec![unless_statement(
+            identifier("valid"),
+            continue_statement(),
+            None,
+        )],
+    );
 }

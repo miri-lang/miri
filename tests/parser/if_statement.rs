@@ -592,3 +592,13 @@ else
         )],
     );
 }
+
+#[test]
+fn test_error_if_without_condition() {
+    parser_error_test("if", &SyntaxErrorKind::UnexpectedEOF);
+}
+
+#[test]
+fn test_error_if_with_dangling_binary_condition() {
+    parser_error_test("if x >", &SyntaxErrorKind::UnexpectedEOF);
+}

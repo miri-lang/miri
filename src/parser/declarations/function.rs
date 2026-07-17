@@ -82,7 +82,14 @@ impl<'source> Parser<'source> {
         let runtime_kind = if self.match_lookahead_type(|t| matches!(t, Token::String)) {
             let token = self.eat_token(&Token::String)?;
             let raw = &self.source[token.1.start..token.1.end];
-            let name = &raw[1..raw.len() - 1];
+            // The lexer guarantees both quotes; guard the slice so a malformed
+            // token surfaces as a syntax error instead of a panic.
+            let Some(name) = raw.get(1..raw.len().saturating_sub(1)) else {
+                return Err(SyntaxError::new(
+                    SyntaxErrorKind::InvalidStringLiteral,
+                    token.1,
+                ));
+            };
             RuntimeKind::from_name(name).ok_or_else(|| {
                 SyntaxError::new(
                     SyntaxErrorKind::UnknownRuntime {

@@ -211,8 +211,7 @@ impl<'source> Parser<'source> {
         let mut seen = std::collections::HashSet::new();
         for branch in branches {
             for pattern in &branch.patterns {
-                let key = (pattern.clone(), branch.guard.clone());
-                if !seen.insert(key) {
+                if !seen.insert((pattern, &branch.guard)) {
                     return Err(self.error_duplicate_match_pattern());
                 }
             }

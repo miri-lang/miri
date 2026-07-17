@@ -1060,3 +1060,72 @@ abstract class Regular
         MemberVisibility::Public,
     );
 }
+
+#[test]
+fn test_error_class_without_name() {
+    parser_error_test(
+        "class",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_class_with_numeric_name() {
+    parser_error_test(
+        "class 123",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "int".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_class_unterminated_generics() {
+    parser_error_test(
+        "class Foo<",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_class_extends_without_base() {
+    parser_error_test(
+        "class Dog extends",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_class_implements_without_trait() {
+    parser_error_test(
+        "class Dog implements",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_class_extends_two_bases() {
+    parser_error_test(
+        "
+class Dog extends Animal Pet
+    let x int
+",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "end of expression".to_string(),
+            found: "identifier".to_string(),
+        },
+    );
+}

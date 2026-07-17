@@ -5,7 +5,7 @@ use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
     binary, block, break_statement, call, expression_statement, for_statement, forever_statement,
     identifier, if_statement, int_literal_expression, let_variable, range,
-    string_literal_expression,
+    string_literal_expression, unless_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, RangeExpressionType};
 use miri::error::syntax::SyntaxErrorKind;
@@ -101,4 +101,28 @@ fn test_error_break_with_value() {
 #[test]
 fn test_parse_break_outside_loop() {
     parser_test("break", vec![break_statement()]);
+}
+
+#[test]
+fn test_break_with_postfix_if_guard_wraps_in_if_statement() {
+    parser_test(
+        "
+break if done
+",
+        vec![if_statement(identifier("done"), break_statement(), None)],
+    );
+}
+
+#[test]
+fn test_break_with_postfix_unless_guard_wraps_in_unless_statement() {
+    parser_test(
+        "
+break unless ready
+",
+        vec![unless_statement(
+            identifier("ready"),
+            break_statement(),
+            None,
+        )],
+    );
 }
