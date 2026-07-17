@@ -8,7 +8,7 @@
 //   * the readback is a copy — the gpu binding survives and may be sliced or
 //     read back again.
 
-use super::device::gpu_int64_available;
+use super::device::require_gpu_int64;
 use super::utils::*;
 
 #[test]
@@ -128,10 +128,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn slice_reads_back_computed_values() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped slice_reads_back_computed_values: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     // arr[i] = i*i on the device; slice [2..5) peeks {4, 9, 16}.
     assert_runs_with_output(
         "
@@ -156,10 +153,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn slice_leaves_gpu_binding_readable() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped slice_leaves_gpu_binding_readable: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     // The binding survives the slice: a subsequent full readback still works.
     assert_runs_with_output(
         "

@@ -31,28 +31,6 @@ fn main()
 }
 
 #[test]
-fn polymorphic_length_with_output() {
-    // Verify that both calls actually work and produce correct output.
-    assert_runs_with_output(
-        "
-use system.gpu
-use system.collections.array
-
-fn len_of(a Array<int,4>) int
-    return a.length()
-
-fn main()
-    let h = [1, 2, 3, 4]
-    gpu var g = [1, 2, 3, 4]
-    let nh = len_of(h)
-    let ng = len_of(g)
-    println(f\"{nh},{ng}\")
-",
-        "4,4",
-    );
-}
-
-#[test]
 fn host_forcing_inference_println() {
     // Criterion 2: Host-forcing inference
     // A function with println(a[...]) on a param forces the param to host-only.

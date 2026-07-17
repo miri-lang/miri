@@ -184,8 +184,9 @@ use system.collections.array
 fn main()
     gpu var v = Vec3<f32>(1.0, 2.0, 3.0)
     let x = v.x
+    println(f'{x}')
 ";
-    assert_runs(source);
+    assert_runs_with_output(source, "1.0");
 }
 
 /// Vec2<i32> type-checks as GPU-compatible in a forall kernel.
@@ -198,8 +199,9 @@ use system.collections.array
 fn main()
     gpu var v = Vec2<i32>(1, 2)
     let x = v.x
+    println(f'{x}')
 ";
-    assert_runs(source);
+    assert_runs_with_output(source, "1");
 }
 
 /// Vec4<u32> type-checks as GPU-compatible in a forall kernel.
@@ -212,8 +214,9 @@ use system.collections.array
 fn main()
     gpu var v = Vec4<u32>(1, 2, 3, 4)
     let x = v.x
+    println(f'{x}')
 ";
-    assert_runs(source);
+    assert_runs_with_output(source, "1");
 }
 
 /// Vec3<f64> is NOT GPU-compatible (f64 has no WGSL vector support).

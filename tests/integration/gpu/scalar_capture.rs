@@ -11,26 +11,6 @@ use super::utils::*;
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn scalar_int_capture_in_gpu_for() {
-    assert_runs(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu var buf = [0, 0, 0, 0]
-    let k = 7
-    gpu forall i in 0..4
-        buf[i] = i * k
-",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
 fn scalar_int_capture_value_is_correct() {
     // Verify that scalar int captures work: the captured scalar k=5
     // is passed to the kernel as a uniform and used in computation.
@@ -60,7 +40,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn scalar_f32_capture_in_gpu_for() {
-    assert_runs(
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -70,7 +50,10 @@ fn main()
     let s = 2.0
     gpu forall i in 0..4
         buf[i] = s
+    let host = buf
+    println(f\"{host.element_at(0)}\")
 ",
+        "2.0",
     );
 }
 
@@ -80,7 +63,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn scalar_bool_capture_in_gpu_for() {
-    assert_runs(
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -93,7 +76,10 @@ fn main()
             buf[i] = 1
         else
             buf[i] = 0
+    let host = buf
+    println(f\"{host.element_at(0)}\")
 ",
+        "1",
     );
 }
 
@@ -139,27 +125,6 @@ fn main()
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn multiple_scalar_captures() {
-    assert_runs(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu var buf = [0, 0, 0, 0]
-    let a = 2
-    let b = 3
-    gpu forall i in 0..4
-        buf[i] = a * i + b
-",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
 fn multiple_scalar_captures_value_check() {
     // Verify that multiple scalar int captures work together
     // in the same kernel. buf[3] = 2 * 3 + 3 = 9 after the kernel runs.
@@ -180,27 +145,6 @@ fn main()
     println(f\"{result}\")
 ",
         "9",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn mixed_buffer_and_scalar_captures() {
-    assert_runs(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu var data = [1, 2, 3, 4]
-    gpu var result = [0, 0, 0, 0]
-    let multiplier = 10
-    gpu forall i in 0..4
-        result[i] = data[i] * multiplier
-",
     );
 }
 

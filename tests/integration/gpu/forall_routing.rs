@@ -6,7 +6,7 @@
 //! A bare (non-`gpu`) `forall` statement routes to GPU if any captured
 //! variable is gpu-resident, otherwise to CPU sequential backend.
 
-use super::device::gpu_int64_available;
+use super::device::require_gpu_int64;
 use super::utils::*;
 
 #[test]
@@ -15,10 +15,7 @@ use super::utils::*;
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn bare_forall_with_gpu_resident_capture_routes_to_gpu() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped bare_forall_with_gpu_resident_capture_routes_to_gpu: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu

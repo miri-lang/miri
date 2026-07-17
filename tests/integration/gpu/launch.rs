@@ -13,30 +13,6 @@
 use super::device::assert_gpu_runs_with_output;
 use super::utils::*;
 
-/// Smoke test verifying the infrastructure layer is wired end-to-end:
-/// compilation succeeds, the binary links against `libmiri_runtime_gpu.a`,
-/// and the dispatch call into `miri_gpu_launch_inline` returns.
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn gpu_for_dispatch_does_not_crash() {
-    assert_runs(
-        "
-use system.gpu
-use system.collections.array
-
-gpu let a = [1, 2, 3, 4]
-gpu let b = [10, 20, 30, 40]
-gpu var dst = [0, 0, 0, 0]
-gpu forall i in 0..4
-    dst[i] = a[i] + b[i]
-println(\"dispatched\")
-",
-    );
-}
-
 /// End-to-end test: `gpu let` / `gpu var` / `forall` / cross-residency
 /// readback compiles and dispatches with ZERO `use` lines. Verifies that
 /// implicit imports work on the GPU path — `println`, array literals, and

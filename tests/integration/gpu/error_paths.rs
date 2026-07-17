@@ -76,6 +76,6 @@ const B = 5
 fn main()
     gpu var buf = Array<f32, A - B>()
 ",
-        "error",
+        "non-negative",
     );
 }

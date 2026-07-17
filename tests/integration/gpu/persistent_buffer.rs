@@ -9,7 +9,7 @@
 // readback / fence / release budget end-to-end through native dispatch. A
 // binding's buffer is freed once, when the binding leaves scope.
 
-use super::device::gpu_int64_available;
+use super::device::require_gpu_int64;
 use super::utils::*;
 
 /// Persistent buffer test: the two-stage pipeline pays exactly one upload, two
@@ -20,10 +20,7 @@ use super::utils::*;
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn two_stage_pipeline_reuses_one_device_buffer() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped two_stage_pipeline_reuses_one_device_buffer: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -53,10 +50,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn third_capture_adds_launch_not_upload() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped third_capture_adds_launch_not_upload: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -91,12 +85,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn redeclared_binding_in_repeated_call_reuploads() {
-    if !gpu_int64_available() {
-        eprintln!(
-            "[gpu] skipped redeclared_binding_in_repeated_call_reuploads: no suitable adapter"
-        );
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -127,10 +116,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn two_readbacks_each_fence_and_survive() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped two_readbacks_each_fence_and_survive: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -158,10 +144,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn gpu_var_assignment_from_host_array_uploads() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped gpu_var_assignment_from_host_array_uploads: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -198,10 +181,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn gpu_to_gpu_move_transfers_device_buffer() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped gpu_to_gpu_move_transfers_device_buffer: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -233,12 +213,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn resident_buffer_released_when_binding_leaves_scope() {
-    if !gpu_int64_available() {
-        eprintln!(
-            "[gpu] skipped resident_buffer_released_when_binding_leaves_scope: no suitable adapter"
-        );
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -267,10 +242,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn gpu_var_assignment_uploads_count() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped gpu_var_assignment_uploads_count: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu

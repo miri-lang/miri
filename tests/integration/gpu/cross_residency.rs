@@ -9,7 +9,7 @@
 //   * passing a gpu-resident value to a host call (`println(gpu_g)`) is
 //     rejected.
 
-use super::device::gpu_int64_available;
+use super::device::require_gpu_int64;
 use super::utils::*;
 
 #[test]
@@ -264,62 +264,8 @@ fn main()
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn vector_add_demo_compiles_and_runs() {
-    // Compiles end-to-end on the residency surface: `gpu let` inputs, a
-    // `gpu var` output, and a readback (`let host = dst`). Value correctness
-    // is asserted by `vector_add_demo_value_correctness`.
-    assert_runs(
-        "
-use system.gpu
-
-fn main()
-    gpu let a = [1.0, 2.0, 3.0, 4.0]
-    gpu let b = [5.0, 6.0, 7.0, 8.0]
-    gpu var dst = [0.0, 0.0, 0.0, 0.0]
-
-    gpu forall i in 0..4
-        dst[i] = a[i] + b[i]
-
-    let host = dst
-    println(f\"{host[0]} {host[1]} {host[2]} {host[3]}\")
-",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn two_readbacks_compile() {
-    // Two independent host copies of the same gpu binding. The binding
-    // survives both readbacks.
-    assert_runs(
-        "
-use system.gpu
-
-fn main()
-    gpu var arr = [0, 0, 0, 0]
-    gpu forall i in 0..4
-        arr[i] = i * i
-
-    let h = arr
-    let h2 = arr
-    println(f\"{h[3]} {h2[3]}\")
-",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
 fn vector_add_demo_value_correctness() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped vector_add_demo_value_correctness: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -345,12 +291,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn two_readbacks_produce_independent_host_arrays() {
-    if !gpu_int64_available() {
-        eprintln!(
-            "[gpu] skipped two_readbacks_produce_independent_host_arrays: no suitable adapter"
-        );
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu

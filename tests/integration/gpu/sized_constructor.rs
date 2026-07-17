@@ -6,7 +6,7 @@
 //! with correct values for both scalar and wider element types.
 
 use super::device::assert_gpu_runs_with_output;
-use crate::integration::utils::assert_runs;
+use crate::integration::utils::assert_runs_with_output;
 
 #[test]
 #[cfg_attr(
@@ -89,7 +89,7 @@ fn test_gpu_sized_ctor_large_arithmetic_size() {
     // Regression test: verify that sized-array generics with large arithmetic
     // expressions work correctly. This tests that checked arithmetic is used
     // to prevent silent overflow when computing buffer sizes.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.gpu
 use system.collections.array
@@ -99,5 +99,6 @@ fn main()
     let len = buf.length()
     println(f"{len}")
 "#,
+        "10000",
     );
 }

@@ -12,24 +12,6 @@ use super::utils::*;
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn gpu_let_reduce_captures_result_as_gpu_resident() {
-    assert_runs(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu var data = [1, 2, 3, 4]
-    gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
-",
-    );
-}
-
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
 fn gpu_resident_scalar_readback_on_host_binding() {
     assert_runs_with_output(
         "
@@ -126,7 +108,7 @@ fn main()
 fn gpu_resident_scalar_can_be_captured_by_gpu_forall() {
     // A gpu-resident scalar (1-element buffer) can be captured by a gpu forall
     // if the mechanism exists; otherwise it is rejected with a diagnostic.
-    assert_runs(
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -137,7 +119,10 @@ fn main()
     gpu var result = [0, 0, 0, 0]
     gpu forall i in 0..4
         result[i] = i
+    let host = result
+    println(f\"{host.element_at(2)}\")
 ",
+        "2",
     );
 }
 
@@ -147,17 +132,21 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn telemetry_shows_no_readback_for_gpu_let_reduce() {
-    // gpu let reduce does NOT readback (buffer stays on GPU).
-    // let reduce DOES readback (eager readback for host scalar).
-    // This is a runtime/telemetry check, not a compile check.
-    assert_runs(
+    // gpu let reduce does NOT readback when the scalar stays gpu-resident.
+    // The buffer persists on GPU; only host bindings trigger readback.
+    // This test verifies that telemetry shows 0 readbacks after reduce
+    // when no host binding pulls data back.
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
+    gpu_reset_telemetry()
     gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    println(f'{gpu_readbacks()}')
 ",
+        "0",
     );
 }
