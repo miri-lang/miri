@@ -4,7 +4,7 @@
 // Tests for variable-bound `forall` loops.
 // The range end can be a runtime Int expression (not just a literal).
 
-use super::device::{assert_gpu_runs_with_output, gpu_int64_available};
+use super::device::{assert_gpu_runs_with_output, require_gpu_int64};
 use super::helpers::assert_gpu_wgsl_valid;
 use super::utils::{assert_runs_with_output, assert_runtime_crash};
 
@@ -174,12 +174,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn runtime_bound_uniform_is_not_counted_as_upload() {
-    if !gpu_int64_available() {
-        eprintln!(
-            "[gpu] skipped runtime_bound_uniform_is_not_counted_as_upload: no suitable adapter"
-        );
-        return;
-    }
+    require_gpu_int64();
     assert_runs_with_output(
         "
 use system.gpu
@@ -209,10 +204,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn bound_exceeds_u32_max_errors() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped bound_exceeds_u32_max_errors: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     let source = "
 use system.gpu
 use system.collections.array
@@ -233,10 +225,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn negative_bound_is_noop_no_error() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped negative_bound_is_noop_no_error: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     let source = "
 use system.gpu
 use system.collections.array
@@ -261,12 +250,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn bound_2_to_31_exceeds_device_grid_limit_errors() {
-    if !gpu_int64_available() {
-        eprintln!(
-            "[gpu] skipped bound_2_to_31_exceeds_device_grid_limit_errors: no suitable adapter"
-        );
-        return;
-    }
+    require_gpu_int64();
     let source = "
 use system.gpu
 use system.collections.array
@@ -292,10 +276,7 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn wraparound_runtime_range_is_noop() {
-    if !gpu_int64_available() {
-        eprintln!("[gpu] skipped wraparound_runtime_range_is_noop: no suitable adapter");
-        return;
-    }
+    require_gpu_int64();
     let source = "
 use system.gpu
 use system.collections.array

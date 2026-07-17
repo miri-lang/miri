@@ -97,6 +97,19 @@ println(f'{probe_host[0]} {probe_host[1]} {probe_host[2]} {probe_host[3]}')
     })
 }
 
+/// Require that a GPU adapter supporting `SHADER_INT64` is available.
+///
+/// Under the value suite (a `gpu_hardware` build) a missing int64-capable
+/// adapter is a harness break, not a skip: the hardware job guarantees a real
+/// GPU, so fail loudly instead of passing green.
+///
+/// Panics if `gpu_int64_available()` returns false.
+pub fn require_gpu_int64() {
+    if !gpu_int64_available() {
+        panic!("harness break: gpu_hardware build but no SHADER_INT64-capable GPU adapter");
+    }
+}
+
 /// Run a GPU availability probe and report whether the device produced the
 /// expected output.
 ///

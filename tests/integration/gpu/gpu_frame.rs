@@ -7,7 +7,7 @@
 //! and MIR lowering delegates to gpu_for lowering. Ping-pong buffer validation
 //! ensures exactly 1 read-only and 1 read-write buffer with no overlap.
 
-use crate::integration::utils::{assert_compiler_error, assert_runs};
+use crate::integration::utils::{assert_compiler_error, assert_runs_with_output};
 
 #[test]
 #[cfg_attr(
@@ -27,9 +27,10 @@ fn main()
     gpu var b = [0, 0, 0, 0]
     gpu frame i in 0..4:
         b[i] = a[i] + 1
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "2");
 }
 
 // Ping-pong buffer validation tests ensure correctness of dual-buffer tracking
@@ -50,9 +51,10 @@ fn main()
     gpu var b = [0, 0, 0, 0]
     gpu frame i in 0..4:
         b[i] = a[i] + 1
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "2");
 }
 
 #[test]
@@ -64,7 +66,7 @@ fn main()
     gpu frame i in 0..4:
         let x = 1
 "#;
-    assert_compiler_error(code, "gpu buffer");
+    assert_compiler_error(code, "must write at least one gpu buffer");
 }
 
 #[test]
@@ -97,9 +99,11 @@ fn main()
     gpu frame i in 0..4:
         b[i] = a[i]
         c[i] = a[i]
-    println("ok")
+    let host_b = b
+    let host_c = c
+    println(f"{host_b[0]} {host_c[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1 1");
 }
 
 #[test]
@@ -163,9 +167,10 @@ fn main()
         let t = frame.time
         let d = frame.dt
         b[i] = a[i] + t + d
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "0.0");
 }
 
 #[test]
@@ -184,9 +189,10 @@ fn main()
     gpu frame i in 0..4:
         let md = frame.mouse_down
         b[i] = a[i]
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1");
 }
 
 #[test]
@@ -205,9 +211,10 @@ fn main()
     gpu frame i in 0..4:
         let result = frame.time + 1.0
         b[i] = a[i] + result
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1.0");
 }
 
 #[test]
@@ -226,9 +233,10 @@ fn main()
     gpu frame i in 0..4:
         let cond_val = frame.index < 2
         b[i] = a[i]
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "0");
 }
 
 #[test]
@@ -247,9 +255,10 @@ fn main()
     gpu frame i in 0..4:
         let idx = frame.index
         b[i] = a[i]
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1");
 }
 
 #[test]
@@ -268,9 +277,10 @@ fn main()
     gpu frame i in 0..4:
         if frame.index < 2:
             b[i] = a[i]
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1");
 }
 
 #[test]
@@ -289,9 +299,10 @@ fn main()
     gpu frame i in 0..4:
         if frame.mouse_down:
             b[i] = a[i]
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "0");
 }
 
 #[test]
@@ -339,9 +350,10 @@ fn main()
         let t = frame.time
         let s = scalar_val
         b[i] = a[i] + t + s
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "6.0");
 }
 
 // FIX 1: Frame param shadowing tests
@@ -366,9 +378,10 @@ fn main()
         let t = frame.time
         let s = f0
         b[i] = a[i] + t + s
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "10.0");
 }
 
 #[test]
@@ -388,9 +401,10 @@ fn main()
     gpu frame i in 0..4:
         let md = frame.mouse_down
         b[i] = a[i] + f5
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "2");
 }
 
 // FIX 3: WGSL validity tests (naga-valid output)
@@ -556,9 +570,10 @@ fn main()
         gpu forall i in 0..4:
             grid_c[i] = grid_b[i] + scalar_val
 
-    println("ok")
+    let host = grid_c
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "3.0");
 }
 
 // NOTE: Per-pass buffer validation is deferred; tests removed.
@@ -633,9 +648,11 @@ fn main()
         gpu forall i in 0..4:
             b[i] = a[i]
             c[i] = a[i]
-    println("ok")
+    let host_b = b
+    let host_c = c
+    println(f"{host_b[0]} {host_c[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "1 1");
 }
 
 #[test]
@@ -683,9 +700,10 @@ fn main()
         gpu forall i in 0..4:
             let t = frame.time
             b[i] = a[i] + t
-    println("ok")
+    let host = b
+    println(f"{host[0]}")
 "#;
-    assert_runs(code);
+    assert_runs_with_output(code, "0.0");
 }
 
 #[test]

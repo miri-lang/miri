@@ -62,7 +62,8 @@ fn main()
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn gpu_resident_buffer_capture_compiles_and_runs() {
-    assert_runs(
+    use super::device::assert_gpu_runs_with_output;
+    assert_gpu_runs_with_output(
         "
 use system.gpu
 use system.collections.array
@@ -71,7 +72,10 @@ fn main()
     gpu var a = [0, 0, 0]
     gpu forall i in 0..3
         a[i] = i
+    let host = a
+    println(f\"{host.element_at(2)}\")
 ",
+        "2",
     );
 }
 

@@ -134,11 +134,10 @@ fn main()
     gpu forall i in 0..3
         dst[i] = clamp_tanh(src[i])
     let host = dst
-    println(f'{host[0]} {host[1]} {host[2]}')
+    println(f'{host[0]}')
 ";
-    // tanh(0.0) = 0.0, tanh(1.0) ≈ 0.7616, tanh(-1.0) ≈ -0.7616
-    // Print with tolerance check (approximate values)
-    assert_runs(source);
+    // tanh(0.0) = 0.0 exactly, deterministic value to assert
+    assert_gpu_runs_with_output(source, "0.0");
 }
 
 /// Integer-typed helper function (not just float).

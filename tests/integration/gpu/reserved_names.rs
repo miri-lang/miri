@@ -11,7 +11,7 @@
 //! a rename hint.
 
 use super::helpers::assert_gpu_wgsl_valid;
-use crate::integration::utils::{assert_compiler_error, assert_runs};
+use crate::integration::utils::{assert_compiler_error, assert_runs_with_output};
 
 /// A `gpu fn` whose name begins with the reserved `__` prefix is rejected at
 /// compile time (not at shader-launch time) with a clear diagnostic.
@@ -70,7 +70,7 @@ fn main()
 /// begins with `__` is a valid host identifier and must not be rejected.
 #[test]
 fn plain_fn_double_underscore_name_accepted() {
-    assert_runs(
+    assert_runs_with_output(
         "
 fn __helper(x int) int: x + 1
 
@@ -78,6 +78,7 @@ fn main()
     let y = __helper(41)
     println(f'{y}')
 ",
+        "42",
     );
 }
 
