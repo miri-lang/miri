@@ -39,5 +39,6 @@ pub mod structs;
 pub mod testing;
 pub mod tuple;
 pub mod type_alias;
+pub mod type_checking;
 pub mod utils;
 pub mod variable;

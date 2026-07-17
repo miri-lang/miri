@@ -59,3 +59,23 @@ fn main()
         "cannot pass host-resident array",
     );
 }
+
+/// A GPU buffer whose const size expression underflows (`A - B` with `A < B`)
+/// is rejected rather than silently folding to a zero-length buffer. The size
+/// folder uses checked subtraction, so the underflow leaves the size
+/// unresolved and the buffer fails to type-check.
+#[test]
+fn gpu_buffer_const_size_underflow_is_rejected() {
+    assert_build_error(
+        "
+use system.gpu
+
+const A = 2
+const B = 5
+
+fn main()
+    gpu var buf = Array<f32, A - B>()
+",
+        "error",
+    );
+}

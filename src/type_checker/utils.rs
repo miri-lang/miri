@@ -15,7 +15,8 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{
     vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
     FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
-    OPTION_TYPE_NAME, RANGE_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
+    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
+    SET_LOWERCASE_ALIAS, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -1880,11 +1881,10 @@ impl TypeChecker {
             };
         }
 
-        // Lowercase aliases for collections (legacy support)
-        // These are case-insensitive aliases and intentionally use string literals.
+        // Lowercase collection aliases (legacy support).
         match name {
-            "list" => return self.resolve_alias_list(args, context),
-            "set" => return self.resolve_alias_set(args, context),
+            n if n == LIST_LOWERCASE_ALIAS => return self.resolve_alias_list(args, context),
+            n if n == SET_LOWERCASE_ALIAS => return self.resolve_alias_set(args, context),
             _ => {}
         }
 
@@ -1892,8 +1892,9 @@ impl TypeChecker {
         match name {
             n if n == OPTION_TYPE_NAME => self.resolve_alias_option(args, context),
             n if n == LINEAR_TYPE_NAME => self.resolve_alias_linear(args, context),
-            n if n == RANGE_TYPE_NAME => self.resolve_alias_range(args, context),
-            "range" => self.resolve_alias_range(args, context), // lowercase aliases
+            n if n == RANGE_TYPE_NAME || n == RANGE_LOWERCASE_ALIAS => {
+                self.resolve_alias_range(args, context)
+            }
             _ => None,
         }
     }

@@ -292,3 +292,110 @@ gpu fn fold(dst out Array<int, 4>)
         "not provably unique per thread",
     );
 }
+
+/// TAINT GAP 5.a: Transitive taint — a local bound to a tainted value should
+/// also become tainted. Here, `j = buffer[i]` taints j, then `k = j` should taint k,
+/// so `out[k]` should be rejected as a non-injective write.
+#[test]
+fn write_indexed_by_transitive_taint_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu let src = [0, 0, 1, 1]
+    gpu var out = Array<int, 4>()
+    gpu forall i in 0..4
+        let j = src[i]
+        let k = j
+        out[k] = 1
+",
+        "not provably unique per thread",
+    );
+}
+
+/// TAINT GAP 5.b: Loop-scope taint loss — a buffer-derived local declared
+/// inside a nested CPU loop that is reused after the loop should still be
+/// tainted. This guards against the scenario where a for loop's taint is
+/// incorrectly erased at loop exit.
+#[test]
+fn write_indexed_by_loop_derived_local_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu let src = [0, 0, 1, 1]
+    gpu var out = Array<int, 4>()
+    gpu forall i in 0..4
+        var idx = 0
+        for j in 0..1:
+            idx = src[i]
+        out[idx] = 1
+",
+        "not provably unique per thread",
+    );
+}
+
+/// TAINT GAP 5.c: Aliased buffer write — a write through an alias of a buffer
+/// with a non-injective index should also be rejected. Currently, this bypasses
+/// the check because the alias is not in the buffers set.
+#[test]
+fn write_through_buffer_alias_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu let src = [0, 0, 1, 1]
+    gpu var buf = Array<int, 4>()
+    gpu forall i in 0..4
+        var alias = buf
+        let idx = src[i]
+        alias[idx] = 1
+",
+        "not provably unique per thread",
+    );
+}
+
+/// POSITIVE TEST 6.g: Write indexed by forall var nested inside inner for loop.
+/// The forall variable is thread-unique per thread even when used in nested loops,
+/// so this write is provably unique and should be accepted.
+#[test]
+fn write_indexed_by_forall_var_in_nested_loop_accepted() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+
+fn main()
+    gpu var dst = Array<int, 16>()
+    gpu forall x in 0..4
+        var acc = 0
+        for i in 0..4:
+            acc = acc + 1
+        dst[x] = acc
+",
+    );
+}
+
+/// TAINT GAP 5.d: Alias-of-alias buffer write — a transitive alias (local
+/// initialized to another alias of a buffer) should also be rejected when used
+/// with a non-injective index.
+#[test]
+fn write_through_transitive_alias_is_rejected() {
+    assert_compiler_error(
+        "
+use system.gpu
+
+fn main()
+    gpu let src = [0, 0, 1, 1]
+    gpu var buf = Array<int, 4>()
+    gpu forall i in 0..4
+        var alias = buf
+        var alias2 = alias
+        let idx = src[i]
+        alias2[idx] = 1
+",
+        "not provably unique per thread",
+    );
+}
