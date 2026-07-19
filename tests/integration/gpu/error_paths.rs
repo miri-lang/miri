@@ -79,3 +79,25 @@ fn main()
         "non-negative",
     );
 }
+
+/// A function-scope scratch array sized by a runtime value (non-constant `N`)
+/// is a compile-time error, not an internal codegen panic. WGSL function
+/// arrays must be fixed-size, so the size must const-evaluate.
+#[test]
+fn local_array_with_runtime_size_is_rejected() {
+    assert_build_error(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    var n = 4
+    gpu var out = Array<f32, 4>()
+    gpu forall t in 0..1
+        var h = Array<f32, n>()
+        h[0] = 1.0
+        out[0] = h[0] as f32
+",
+        "requires a compile-time constant size",
+    );
+}

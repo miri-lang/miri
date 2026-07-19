@@ -2112,3 +2112,76 @@ fn main()
         );
     }
 }
+
+/// A fixed-size `Array<T, N>` declared as a local inside a `gpu forall` body is
+/// emitted as a per-invocation `var<function> ...: array<...>;` — never as a
+/// synthesized storage buffer — and reads/writes lower to index projections.
+#[test]
+fn local_array_emits_function_scope_array() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var out = Array<f32, 4>()
+    gpu forall t in 0..1
+        var h = Array<f32, 4>()
+        var k = 0
+        while k < 4
+            h[k] = (k as f32) * 2.0
+            k = k + 1
+        out[0] = (h[0] + h[1] + h[2] + h[3]) as f32
+";
+    let wgsl = super::helpers::compile_to_wgsl(source);
+    // The scratch array is a function-scope `var<function>` of WGSL array type,
+    // with no `miri_rt_array_new` allocation call and no extra storage binding.
+    assert!(
+        wgsl.contains("var<function>") && wgsl.contains("array<f32, 4>"),
+        "expected a var<function> array<f32, 4> scratch local, got:\n{}",
+        wgsl
+    );
+    assert!(
+        !wgsl.contains("miri_rt_array_new"),
+        "constructor call must not survive into WGSL, got:\n{}",
+        wgsl
+    );
+    // Only the `out` storage buffer is bound; the scratch local synthesizes none.
+    assert_eq!(
+        wgsl.matches("@binding").count(),
+        1,
+        "scratch array must not synthesize a storage binding, got:\n{}",
+        wgsl
+    );
+    assert_gpu_wgsl_valid(source);
+}
+
+/// A local scratch array used inside a device function (a plain `fn` lowered as
+/// a GPU-callable helper) compiles and validates: the `var<function>` array
+/// lives in the helper body, addressed by index projections.
+#[test]
+fn device_fn_local_array_emits_naga_valid_wgsl() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn scratch_sum(base float) float
+    var h = Array<f32, 4>()
+    var k = 0
+    while k < 4
+        h[k] = base * (k as f32)
+        k = k + 1
+    return h[0] + h[1] + h[2] + h[3]
+
+fn main()
+    gpu var dst = Array<f32, 1>()
+    gpu forall i in 0..1
+        dst[i] = scratch_sum(2.0)
+";
+    let wgsl = super::helpers::compile_to_wgsl(source);
+    assert!(
+        wgsl.contains("var<function>") && wgsl.contains("array<f32, 4>"),
+        "expected a var<function> array local in the device fn body, got:\n{}",
+        wgsl
+    );
+    assert_gpu_wgsl_valid(source);
+}

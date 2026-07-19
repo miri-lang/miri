@@ -436,8 +436,8 @@ gpu frame idx in 0..16
     let inputs = frame["inputs"].as_array().unwrap();
     assert_eq!(
         inputs.len(),
-        11,
-        "frame pass inputs must have exactly 11 fields"
+        13,
+        "frame pass inputs must have exactly 13 fields"
     );
 
     // Verify canonical order and offsets
@@ -453,6 +453,8 @@ gpu frame idx in 0..16
         ("wheel", "f32", 32),
         ("clicked", "u32", 36),
         ("double_clicked", "u32", 40),
+        ("move_x", "f32", 44),
+        ("move_y", "f32", 48),
     ];
 
     for (i, (name, ty, offset)) in expected_fields.iter().enumerate() {

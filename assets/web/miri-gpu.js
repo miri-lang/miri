@@ -73,7 +73,23 @@ async function initGpu(opts) {
     if (!adapter) {
         throw new MiriGpuError("requestAdapter() returned null — no GPU available");
     }
-    const device = await adapter.requestDevice({ label: "miri-gpu-device" });
+    // Raise the storage-buffer limits to what the adapter actually supports.
+    // The default `maxStorageBuffersPerShaderStage` is only 8, but a single
+    // kernel can bind more (e.g. the fluid demo's splat pass touches 10
+    // ping-ponged fields); without this the pipeline silently fails to create
+    // and those passes never run. Every value is copied straight from the
+    // adapter, so none can exceed what the device allows.
+    const l = adapter.limits;
+    const requiredLimits = {
+        maxStorageBuffersPerShaderStage: l.maxStorageBuffersPerShaderStage,
+        maxStorageBufferBindingSize: l.maxStorageBufferBindingSize,
+        maxBufferSize: l.maxBufferSize,
+        maxBindGroups: l.maxBindGroups,
+    };
+    const device = await adapter.requestDevice({
+        label: "miri-gpu-device",
+        requiredLimits,
+    });
     device.lost.then((info) => {
         if (info && info.reason !== "destroyed") {
             console.error(`[miri-gpu] device lost (${info.reason}): ${info.message ?? ""}`);
@@ -154,6 +170,8 @@ function newInputState() {
         wheel: 0,
         clicked: 0,
         double_clicked: 0,
+        move_x: 0,
+        move_y: 0,
     };
 }
 
@@ -511,31 +529,72 @@ function runSeedKernels(device, manifest, bufferOf) {
     }
 }
 
-// The animation's ping-pong state pair: the buffer the first pass reads
-// (`source`) and the buffer it writes (`dest`). They are double-buffered — each
-// frame every pass reads `source` and writes `dest`, then the two physical
-// buffers swap so the next frame reads the value just produced. A terminal
-// output the passes only write (e.g. a distinct paint target in a multi-pass
-// pipeline) is never part of the pair and never swapped. Returns null when the
-// first pass has no distinct read/write pair to alternate.
-function statePair(framePasses) {
-    const source = framePasses[0].read ?? null;
-    const dest = framePasses[0].write ?? null;
-    return source && dest && source !== dest ? { source, dest } : null;
+// The animation's cross-frame ping-pong pairs. Buffers named `X_a`/`X_b` form a
+// double-buffered pair; a pair swaps between frames when the side read at frame
+// start (`source`) differs from the side written last (`dest`) — so the next
+// frame reads exactly the value just produced. This covers the two common shapes
+// at once:
+//   • a one-directional step (weights `wa`→`wb`, camera `cam_a`→`cam_b`): read
+//     side ≠ last-write side ⇒ swap.
+//   • an in-frame round trip (fluid dye `dr_a`→`dr_b`→`dr_a`): read side ==
+//     last-write side ⇒ no swap, the field already persists in place.
+// A demo can ping-pong several fields independently (e.g. weights AND velocities)
+// since every qualifying pair swaps. A name-paired buffer that is never written
+// (a read-only input) is not a pair, so an input is never swapped with a scratch.
+function statePairs(framePasses) {
+    const rec = new Map();
+    const get = (base) => {
+        let r = rec.get(base);
+        if (!r) {
+            r = { hasA: false, hasB: false, firstRead: null, lastWrite: null };
+            rec.set(base, r);
+        }
+        return r;
+    };
+    for (const pass of framePasses) {
+        for (const b of pass.bindings ?? []) {
+            const m = /^(.*)_(a|b)$/.exec(b.name);
+            if (m) (m[2] === "a" ? (get(m[1]).hasA = true) : (get(m[1]).hasB = true));
+        }
+    }
+    for (const pass of framePasses) {
+        for (const b of pass.bindings ?? []) {
+            const m = /^(.*)_(a|b)$/.exec(b.name);
+            if (!m) continue;
+            const r = rec.get(m[1]);
+            if (!r.hasA || !r.hasB) continue;
+            if (b.access === "read" && r.firstRead === null) r.firstRead = m[2];
+            if (b.access === "read_write") r.lastWrite = m[2];
+        }
+    }
+    const pairs = [];
+    for (const [base, r] of rec) {
+        if (!r.hasA || !r.hasB || r.firstRead === null || r.lastWrite === null) continue;
+        if (r.firstRead !== r.lastWrite) {
+            pairs.push({ source: `${base}_${r.firstRead}`, dest: `${base}_${r.lastWrite}` });
+        }
+    }
+    return pairs;
 }
 
-// Resolve a binding name to a physical buffer for the current frame. The state
-// pair's `source`/`dest` names map to the two swapping physical buffers; every
-// other name (including a terminal paint target) resolves to its own buffer.
-// Applied uniformly to all passes so a later pass reading the pair's `dest`
-// sees what an earlier pass wrote this frame.
-function stateResolver(pair, physSource, physDest, bufferOf) {
-    return (name) => {
-        if (pair) {
-            if (name === pair.source) return physSource;
-            if (name === pair.dest) return physDest;
-        }
-        return bufferOf(name).buffer;
+// Track each swap pair's two physical buffers: `resolve` maps a binding name to
+// its current-frame buffer (non-pair names resolve to themselves), and `swap`
+// exchanges every pair's buffers after a frame so the next reads what this wrote.
+function makeSwapState(pairs, bufferOf) {
+    const phys = new Map();
+    for (const p of pairs) {
+        phys.set(p.source, bufferOf(p.source).buffer);
+        phys.set(p.dest, bufferOf(p.dest).buffer);
+    }
+    return {
+        resolve: (name) => phys.get(name) ?? bufferOf(name).buffer,
+        swap: () => {
+            for (const p of pairs) {
+                const s = phys.get(p.source);
+                phys.set(p.source, phys.get(p.dest));
+                phys.set(p.dest, s);
+            }
+        },
     };
 }
 
@@ -565,23 +624,17 @@ export async function runHeadless(manifest, opts = {}) {
             // Headless has no pointer/wheel source: feed zeroed inputs so passes
             // that read `frame.*` still validate and dispatch deterministically.
             const state = newInputState();
-            const pair = statePair(framePasses);
-            let physSource = pair ? bufferOf(pair.source).buffer : null;
-            let physDest = pair ? bufferOf(pair.dest).buffer : null;
+            const swapState = makeSwapState(statePairs(framePasses), bufferOf);
+            const resolve = swapState.resolve;
             for (let f = 0; f < frames; f++) {
-                const resolve = stateResolver(pair, physSource, physDest, bufferOf);
                 for (let i = 0; i < framePasses.length; i++) {
                     if (passUniforms[i]) writeInputUniform(device, passUniforms[i], state);
                     dispatchKernel(device, compiledPasses[i], framePasses[i], resolve, passUniforms[i]);
                 }
                 // Read back whichever physical buffer holds this frame's paint
-                // output before the pair swaps for the next frame.
+                // output before the pairs swap for the next frame.
                 outputBuffer = resolve(manifest.paint);
-                if (pair) {
-                    const tmp = physSource;
-                    physSource = physDest;
-                    physDest = tmp;
-                }
+                swapState.swap();
             }
         }
 
@@ -639,9 +692,8 @@ export async function mount(canvas, manifest, opts = {}) {
     const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
     const passUniforms = framePasses.map((pass) => createInputUniform(device, pass));
 
-    const pair = statePair(framePasses);
-    let physSource = pair ? bufferOf(pair.source).buffer : null;
-    let physDest = pair ? bufferOf(pair.dest).buffer : null;
+    const swapState = makeSwapState(statePairs(framePasses), bufferOf);
+    const resolve = swapState.resolve;
 
     // Live pointer/wheel state feeding the `frame.*` uniforms. Only wired when a
     // pass actually reads inputs, so static and input-free demos add no listeners.
@@ -663,9 +715,8 @@ export async function mount(canvas, manifest, opts = {}) {
         state.dt = lastTime === null ? 0 : (t - lastTime) / 1000;
         lastTime = t;
 
-        // Dispatch all passes in order against a single per-frame resolver, so a
-        // later pass reading the state pair's `dest` sees this frame's write.
-        const resolve = stateResolver(pair, physSource, physDest, bufferOf);
+        // Dispatch all passes in order against the shared resolver, so a later
+        // pass reading a pair's `dest` sees this frame's write.
         for (let i = 0; i < framePasses.length; i++) {
             if (passUniforms[i]) writeInputUniform(device, passUniforms[i], state);
             dispatchKernel(device, compiledPasses[i], framePasses[i], resolve, passUniforms[i]);
@@ -673,6 +724,8 @@ export async function mount(canvas, manifest, opts = {}) {
         // Per-frame deltas are consumed by this frame; clear them for the next.
         state.drag_dx = 0;
         state.drag_dy = 0;
+        state.move_x = 0;
+        state.move_y = 0;
         state.wheel = 0;
         state.clicked = 0;
         state.double_clicked = 0;
@@ -684,12 +737,8 @@ export async function mount(canvas, manifest, opts = {}) {
         presentFrame(device, presenter, resolve(manifest.paint));
         // Report the just-submitted frame so callers can derive an FPS readout.
         if (typeof opts.onFrame === "function") opts.onFrame(state.dt);
-        // Swap the state pair: next frame reads what this frame produced.
-        if (pair) {
-            const tmp = physSource;
-            physSource = physDest;
-            physDest = tmp;
-        }
+        // Swap every ping-pong pair: next frame reads what this frame produced.
+        swapState.swap();
         rafId = requestAnimationFrame(step);
     };
 
@@ -704,33 +753,52 @@ export async function mount(canvas, manifest, opts = {}) {
     };
 }
 
-// Wire pointer, wheel, and click events on `canvas` into `state`, mapping the
-// pointer to the compute grid's pixel space so drag deltas are in grid units.
-// Deltas accumulate into `state` and are cleared by the caller each frame.
-// Returns a detach function that removes every listener.
+// Wire pointer, wheel, and click events on `canvas` into `state`. Absolute
+// pointer position (`mouse_x`/`mouse_y`) is reported in normalized [0,1] canvas
+// space so a demo reads it independent of its render resolution; drag deltas
+// (`drag_dx`/`drag_dy`) are reported in canvas pixels so pan/orbit sensitivity
+// stays in the units the camera demos are tuned for. Deltas accumulate into
+// `state` and are cleared by the caller each frame. Returns a detach function.
 function attachInputListeners(canvas, state) {
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
 
-    const toGrid = (event) => {
+    const toPixel = (event) => {
         const rect = canvas.getBoundingClientRect();
         const sx = rect.width > 0 ? canvas.width / rect.width : 1;
         const sy = rect.height > 0 ? canvas.height / rect.height : 1;
         return [(event.clientX - rect.left) * sx, (event.clientY - rect.top) * sy];
     };
+    const toNorm = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const nx = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+        const ny = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0;
+        return [nx, ny];
+    };
+
+    // Previous normalized pointer position, for the per-frame `move_*` delta
+    // (reported on hover, unlike the button-gated `drag_*`). null until the
+    // first event so the initial jump from the origin registers no motion.
+    let lastNX = null;
+    let lastNY = null;
 
     const onDown = (event) => {
         dragging = true;
         state.mouse_down = 1;
-        [lastX, lastY] = toGrid(event);
-        [state.mouse_x, state.mouse_y] = [lastX, lastY];
+        [lastX, lastY] = toPixel(event);
+        [state.mouse_x, state.mouse_y] = toNorm(event);
+        [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
     };
     const onMove = (event) => {
-        const [x, y] = toGrid(event);
-        state.mouse_x = x;
-        state.mouse_y = y;
+        [state.mouse_x, state.mouse_y] = toNorm(event);
+        if (lastNX !== null) {
+            state.move_x += state.mouse_x - lastNX;
+            state.move_y += state.mouse_y - lastNY;
+        }
+        [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
         if (dragging) {
+            const [x, y] = toPixel(event);
             // Grab-and-pan: the image follows the pointer. The axes differ in
             // sign because the paint buffer's first row is the top of the canvas,
             // which flips the vertical (imaginary) axis relative to the pointer

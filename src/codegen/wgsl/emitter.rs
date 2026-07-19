@@ -188,7 +188,7 @@ impl Emitter {
             }
             let var_name = shared_local_name(decl, Local(i));
             let element = buffer_element_typename(&decl.ty.kind)?;
-            let extent = shared_array_extent(&decl.ty.kind)?;
+            let extent = fixed_array_extent(&decl.ty.kind)?;
             writeln!(
                 self.output,
                 "var<workgroup> {}: array<{}, {}>;",
@@ -1003,6 +1003,23 @@ impl<'a> BodyEmitter<'a> {
             if decl.storage_class == StorageClass::GpuShared {
                 continue;
             }
+            // A fixed-size `Array<T, N>` local is per-invocation scratch: declare
+            // it as WGSL `var<function> _N: array<T, N>;` (zero-initialized by
+            // default) and let index projections address its elements. Its
+            // `Array<T, N>()` constructor call carries no allocation on the GPU —
+            // `emit_call` drops it (the declaration is the storage).
+            if is_fixed_array(&decl.ty.kind) {
+                let array_ty = fixed_array_typename(&decl.ty.kind)?;
+                self.write_indent()?;
+                writeln!(
+                    self.output,
+                    "var<function> {}: {};",
+                    local_name(Local(i)),
+                    array_ty
+                )
+                .map_err(emit_err)?;
+                continue;
+            }
             let ty_name = if let Some(vec_ty) = vector_type(&decl.ty.kind) {
                 vec_ty
             } else {
@@ -1410,6 +1427,14 @@ impl<'a> BodyEmitter<'a> {
         destination: &Place,
         _target: Option<&BasicBlock>,
     ) -> Result<(), CodegenError> {
+        // An `Array<T, N>()` constructor targeting a function-scope array local
+        // allocates nothing on the GPU: the `var<function>` declaration already
+        // provides zero-initialized per-invocation storage. Drop the call rather
+        // than emit a host-only `miri_rt_array_new(...)` that has no WGSL form.
+        if self.is_local_array_construction(destination) {
+            return Ok(());
+        }
+
         let func_name = match func {
             Operand::Constant(c) => match &c.literal {
                 crate::ast::literal::Literal::Identifier(name) => name.clone(),
@@ -1441,6 +1466,24 @@ impl<'a> BodyEmitter<'a> {
         writeln!(self.output, "{} = {}({});", dest_str, func_name, args_str).map_err(emit_err)?;
 
         Ok(())
+    }
+
+    /// True when `dest` names a whole function-scope fixed-size array local —
+    /// the destination of an `Array<T, N>()` constructor. Such a local is
+    /// declared as `var<function> ...: array<T, N>;`, so its allocating call is
+    /// dropped. Excludes storage-buffer bindings and `shared` workgroup arrays,
+    /// whose element writes flow through index projections instead.
+    fn is_local_array_construction(&self, dest: &Place) -> bool {
+        if !dest.projection.is_empty() {
+            return false;
+        }
+        if self.binding_name(dest.local).is_some() || self.shared_local_name(dest.local).is_some() {
+            return false;
+        }
+        self.body
+            .local_decls
+            .get(dest.local.0)
+            .is_some_and(|decl| is_fixed_array(&decl.ty.kind))
     }
 
     /// True when the operand reads the body's implicit `allocator` local, which
@@ -1881,10 +1924,11 @@ fn shared_local_name(decl: &crate::mir::LocalDecl, local: Local) -> String {
         .unwrap_or_else(|| format!("_shared{}", local.0))
 }
 
-/// Const-evaluate the fixed extent `N` of a `shared` array's `Array<T, N>` type.
-/// Workgroup arrays must be fixed-size, so a non-constant extent is a backend
-/// error (the type checker requires a compile-time size for shared arrays).
-fn shared_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
+/// Const-evaluate the fixed extent `N` of an `Array<T, N>` type. Both `shared`
+/// workgroup arrays and function-scope scratch arrays must be fixed-size, so a
+/// non-constant extent is a backend error (the type checker requires a
+/// compile-time size for these array locals).
+fn fixed_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
     use crate::ast::types::BuiltinCollectionKind;
     let size_expr = match kind {
         TypeKind::Array(_, size) => size.as_ref(),
@@ -1896,16 +1940,42 @@ fn shared_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
         }
         _ => {
             return Err(CodegenError::Internal(format!(
-                "WGSL backend: shared variable type {:?} is not a fixed-size array",
+                "WGSL backend: variable type {:?} is not a fixed-size array",
                 kind
             )))
         }
     };
     crate::type_checker::TypeChecker::try_eval_const_int(size_expr).ok_or_else(|| {
         CodegenError::Internal(
-            "WGSL backend: shared array size must be a compile-time constant".to_string(),
+            "WGSL backend: array size must be a compile-time constant".to_string(),
         )
     })
+}
+
+/// True when `kind` is a fixed-size `Array<T, N>` (either the canonical
+/// [`TypeKind::Array`] or its post-resolution `Custom("Array", [elem, size])`
+/// form) rather than a scalar or vector. Fixed-size array locals are declared
+/// as WGSL `array<T, N>` storage, not scalarized.
+fn is_fixed_array(kind: &TypeKind) -> bool {
+    use crate::ast::types::BuiltinCollectionKind;
+    match kind {
+        TypeKind::Array(_, _) => true,
+        TypeKind::Custom(name, Some(args)) => {
+            BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+                && args.len() == 2
+        }
+        _ => false,
+    }
+}
+
+/// WGSL `array<elem, N>` type spelling for a fixed-size `Array<T, N>` kind.
+/// Backs both `var<workgroup>` shared arrays and `var<function>` per-invocation
+/// scratch arrays. Errors if `kind` is not a fixed-size array or its element /
+/// extent cannot be resolved.
+fn fixed_array_typename(kind: &TypeKind) -> Result<String, CodegenError> {
+    let element = buffer_element_typename(kind)?;
+    let extent = fixed_array_extent(kind)?;
+    Ok(format!("array<{}, {}>", element, extent))
 }
 
 fn binop_symbol(op: BinOp) -> Result<&'static str, CodegenError> {

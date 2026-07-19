@@ -24,8 +24,8 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 384×216 pixels (16:9); RGBA paint output.
-const PAINT = 384 * 216 * 4
+// Canvas: 1280×720 pixels (16:9); RGBA paint output.
+const PAINT = 1280 * 720 * 4
 
 // Camera state: [yaw, pitch, distance, idle_seconds] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
@@ -120,9 +120,9 @@ gpu forall i in 0..4
     cam_a[3] = 99.0
 
 // Clear the canvas. This 2-D pass over the exact display extent also tells the
-// web-gpu backend the canvas is 384×216 (a flat paint buffer reads as square).
-gpu forall px, py in 0..384, 0..216
-    let base = (py * 384 + px) * 4
+// web-gpu backend the canvas is 1280×720 (a flat paint buffer reads as square).
+gpu forall px, py in 0..1280, 0..720
+    let base = (py * 1280 + px) * 4
     paint[base] = 0.0
     paint[base + 1] = 0.0
     paint[base + 2] = 0.0
@@ -145,14 +145,14 @@ gpu frame
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel and composite the result.
-    gpu forall idx in 0..82944
-        let px = idx % 384
-        let py = idx / 384
+    gpu forall idx in 0..921600
+        let px = idx % 1280
+        let py = idx / 1280
         let tm = frame.time
         // Aspect-corrected screen coords: widen x for the 16:9 frame (matches the
         // reference shader's `uv.x *= res.x / res.y`).
-        let uvx = ((px as f32) / 384.0 - 0.5) * (384.0 / 216.0)
-        let uvy = 0.5 - (py as f32) / 216.0
+        let uvx = ((px as f32) / 1280.0 - 0.5) * (1280.0 / 720.0)
+        let uvy = 0.5 - (py as f32) / 720.0
 
         // Camera orbiting the hole on a sphere of radius `dist`.
         let ya = cam_b[0]
@@ -293,11 +293,17 @@ gpu frame
                         col_g = col_g + trans * ccg * em
                         col_b = col_b + trans * ccb * em
                         trans = trans * (1.0 - disk_opacity(cr))
-                prev_y = pos_y
-                prev_r = r
-                prev_px = pos_x
-                prev_py = pos_y
-                prev_pz = pos_z
+                // Stop once the ray has escaped to infinity or the disk has gone
+                // fully opaque, leaving `prev_*` one step behind `pos_*` so the
+                // escaped-sky direction below is a real displacement, not zero.
+                if r > 60.0 or trans < 0.01
+                    i = 260
+                else
+                    prev_y = pos_y
+                    prev_r = r
+                    prev_px = pos_x
+                    prev_py = pos_y
+                    prev_pz = pos_z
             i = i + 1
 
         // Rays that never crossed the horizon escape to the lensed sky.
@@ -305,7 +311,10 @@ gpu frame
             let dnx = pos_x - prev_px
             let dny = pos_y - prev_py
             let dnz = pos_z - prev_pz
-            let dl = sqrt(dnx * dnx + dny * dny + dnz * dnz) as f32
+            // Photon-ring rays that neither escaped nor were captured within the
+            // step budget end with `pos_* == prev_*`; floor the length so the
+            // direction stays finite instead of dividing by zero.
+            let dl = max(sqrt(dnx * dnx + dny * dny + dnz * dnz) as f32, 0.0001) as f32
             let dirx = dnx / dl
             let diry = dny / dl
             let dirz = dnz / dl
@@ -341,7 +350,7 @@ gpu frame
 let host = paint
 var total = 0.0
 var k = 0
-while k < 82944
+while k < 921600
     total = total + host[k * 4]
     k = k + 1
 let scaled = (total * 1000.0) as i32

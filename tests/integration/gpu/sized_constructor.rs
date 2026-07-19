@@ -102,3 +102,71 @@ fn main()
         "10000",
     );
 }
+
+/// A fixed-size `Array<f32, N>` declared as a per-invocation scratch local
+/// inside a `gpu forall` body is written and summed within the same
+/// invocation. Proves the `var<function>` array carries real values, not the
+/// codegen error that used to reject an array-typed kernel local.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_local_scratch_array_sum() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.gpu
+use system.collections.array
+
+gpu var out = Array<f32, 4>()
+gpu forall t in 0..1
+    var h = Array<f32, 4>()
+    var k = 0
+    while k < 4
+        h[k] = (k as f32) * 2.0
+        k = k + 1
+    out[0] = (h[0] + h[1] + h[2] + h[3]) as f32
+
+let r = out
+println(f"sum={r[0]}")
+"#,
+        "sum=12.0",
+    );
+}
+
+/// A scratch array written in one loop and read back by dynamic index in a
+/// later loop within the same invocation keeps its per-element values (they
+/// are not zeroed or aliased between the two loops). The reversal makes a
+/// stale-read bug visible: reading zeros or garbage would not reverse.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_local_scratch_array_reverse() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.gpu
+use system.collections.array
+
+gpu var out = Array<i32, 4>()
+gpu forall t in 0..1
+    var h = Array<i32, 4>()
+    var w = 0
+    while w < 4
+        h[w] = (w + 1) * 10
+        w = w + 1
+    var r = 0
+    while r < 4
+        out[r] = h[3 - r]
+        r = r + 1
+
+let host = out
+println(f"{host[0]}")
+println(f"{host[1]}")
+println(f"{host[2]}")
+println(f"{host[3]}")
+"#,
+        "40\n30\n20\n10",
+    );
+}

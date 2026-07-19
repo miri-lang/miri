@@ -5,9 +5,9 @@
 //!
 //! A `gpu frame` loop is a variant of `forall` that synthesizes a kernel marked
 //! with `is_frame_step=true` for animation drivers. The frame kernel is structured
-//! as a `forall` kernel plus 11 leading frame-input uniform parameters (f0..f10),
+//! as a `forall` kernel plus the leading frame-input uniform parameters (f0..fN),
 //! which precede any ordinary scalar captures. This parameter ordering ensures the
-//! WGSL `_Inputs` struct fields at offsets 0–40 are fixed for frame fields,
+//! WGSL `_Inputs` struct fields (one 4-byte slot each from offset 0) are fixed for frame fields,
 //! simplifying integration with the web-gpu driver.
 //!
 //! The frame input fields (time, dt, index, mouse_x, mouse_y, mouse_down, drag_dx,

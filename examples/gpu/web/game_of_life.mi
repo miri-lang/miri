@@ -67,8 +67,8 @@ gpu frame
         if frame.mouse_down
             let x = idx % 320
             let y = idx / 320
-            let mx = frame.mouse_x / 4.0
-            let my = frame.mouse_y / 4.0
+            let mx = frame.mouse_x * 320.0
+            let my = frame.mouse_y * 180.0
             let dx = (x as f32) - mx
             let dy = (y as f32) - my
             if dx * dx + dy * dy < 36.0
