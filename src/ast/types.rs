@@ -132,7 +132,8 @@ pub const FRAME_INPUT_TYPE_NAME: &str = "FrameInput";
 
 /// Canonical implicit identifier bound to the per-frame input context inside
 /// a `gpu frame` body. Exposes `time`/`dt`/`index`/`mouse_x`/`mouse_y`/
-/// `mouse_down`/`drag_dx`/`drag_dy`/`wheel`/`clicked`/`double_clicked`.
+/// `mouse_down`/`drag_dx`/`drag_dy`/`wheel`/`clicked`/`double_clicked`/
+/// `move_x`/`move_y`.
 pub const FRAME_INPUT_IDENT: &str = "frame";
 
 /// Descriptor for a single frame input field.
@@ -150,10 +151,10 @@ pub enum FrameFieldKind {
     Bool,
 }
 
-/// Canonical descriptor of the 11 frame input fields, ordered as they appear
-/// in the uniform block (offsets 0–40). Single source of truth for:
+/// Canonical descriptor of the frame input fields, ordered as they appear
+/// in the uniform block (offsets from 0, one 4-byte slot each). Single source of truth for:
 /// - Type checker builtin FrameInput struct field definitions
-/// - MIR lowering parameter registration (f0..f10)
+/// - MIR lowering parameter registration (f0..fN)
 /// - WGSL manifest emission (buffer layout)
 pub const FRAME_INPUT_FIELDS: &[FrameInputFieldDef] = &[
     FrameInputFieldDef {
@@ -200,9 +201,21 @@ pub const FRAME_INPUT_FIELDS: &[FrameInputFieldDef] = &[
         name: "double_clicked",
         kind: FrameFieldKind::Bool,
     },
+    // Per-frame pointer displacement in normalized canvas units, reported on any
+    // pointer move (hover or drag) and cleared each frame — unlike `drag_*`,
+    // which only accumulate while a button is held. Lets a demo react to a bare
+    // hover (e.g. the fluid injects dye where the pointer sweeps).
+    FrameInputFieldDef {
+        name: "move_x",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "move_y",
+        kind: FrameFieldKind::F32,
+    },
 ];
 
-/// Returns the reserved variable_map key for frame input parameter `idx` (0..11).
+/// Returns the reserved variable_map key for frame input parameter `idx`.
 /// Uses a prefix that cannot be a valid Miri identifier (contains `$`) to prevent
 /// collision with user-captured variables.
 pub fn frame_input_param_key(idx: usize) -> String {

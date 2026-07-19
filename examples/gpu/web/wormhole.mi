@@ -25,7 +25,7 @@ use system.math
 use system.io
 
 // Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
-const PAINT = 384 * 216 * 4
+const PAINT = 1280 * 720 * 4
 
 // Camera state: [yaw, pitch, distance, idle_seconds] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
@@ -114,9 +114,9 @@ gpu forall i in 0..4
     cam_a[3] = 99.0
 
 // Clear the canvas. This 2-D pass over the exact display extent also tells the
-// web-gpu backend the canvas is 384×216 (a flat paint buffer reads as square).
-gpu forall px, py in 0..384, 0..216
-    let base = (py * 384 + px) * 4
+// web-gpu backend the canvas is 1280×720 (a flat paint buffer reads as square).
+gpu forall px, py in 0..1280, 0..720
+    let base = (py * 1280 + px) * 4
     paint[base] = 0.0
     paint[base + 1] = 0.0
     paint[base + 2] = 0.0
@@ -139,11 +139,11 @@ gpu frame
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel through the throat.
-    gpu forall idx in 0..82944
-        let px = idx % 384
-        let py = idx / 384
-        let uvx = ((px as f32) / 384.0 - 0.5) * (384.0 / 216.0)
-        let uvy = 0.5 - (py as f32) / 216.0
+    gpu forall idx in 0..921600
+        let px = idx % 1280
+        let py = idx / 1280
+        let uvx = ((px as f32) / 1280.0 - 0.5) * (1280.0 / 720.0)
+        let uvy = 0.5 - (py as f32) / 720.0
 
         // Camera orbiting the throat on a sphere of radius `dist`.
         let ya = cam_b[0]
@@ -302,7 +302,7 @@ gpu frame
 let host = paint
 var total = 0.0
 var k = 0
-while k < 82944
+while k < 921600
     total = total + host[k * 4]
     k = k + 1
 let scaled = (total * 1000.0) as i32

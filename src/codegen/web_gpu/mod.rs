@@ -618,7 +618,7 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
         (None, None)
     };
 
-    // For frame kernels, populate the 11 frame input fields
+    // For frame kernels, populate the frame input fields
     let inputs = if artifact.is_frame_step {
         Some(build_frame_inputs())
     } else {
@@ -777,7 +777,6 @@ fn generate_index_html(
 <body>
     <div class="wrap">
         <h1>{name}</h1>
-        <p class="lead">GPU-accelerated computation, compiled from Miri to WebGPU.</p>
         <div class="stage">
             <div class="frame">
                 <canvas id="output" width="64" height="64" aria-label="Compute output"></canvas>

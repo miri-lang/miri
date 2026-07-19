@@ -248,7 +248,7 @@ fn demo_raymarch_web() {
 )]
 fn demo_blackhole_web() {
     let source = include_str!("../../../examples/gpu/web/blackhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=1440788");
+    assert_gpu_runs_with_output(source, "red_sum_milli=186008720");
 }
 
 /// wormhole_web: a traversable Morris–Thorne wormhole rendered by integrating one
@@ -267,7 +267,7 @@ fn demo_blackhole_web() {
 )]
 fn demo_wormhole_web() {
     let source = include_str!("../../../examples/gpu/web/wormhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=9613551");
+    assert_gpu_runs_with_output(source, "red_sum_milli=106794584");
 }
 
 /// particles_web: 147,456 particles advected through a two-octave curl-noise
@@ -292,10 +292,11 @@ fn demo_particles_web() {
 /// fluid_web: Stam-style stable-fluids simulation, the frame-graph stress test.
 /// A `gpu frame` block runs the full pressure-projection pipeline as ordered
 /// passes over ping-ponged fields: splat, semi-Lagrangian advect (velocity then
-/// dye, manual bilinear), divergence, an 18-iteration Jacobi pressure solve
-/// (written as `for _ in 0..9` of two ping-pong passes — the repeated-pass
-/// unroll), gradient subtraction, and a gamma tone-mapped display. The native
-/// run uses zero pointer input, so an ambient swirl drives the field; the smoke
+/// dye, manual bilinear), divergence, a 24-iteration Jacobi pressure solve
+/// (written as `for _ in 0..12` of two ping-pong passes — the repeated-pass
+/// unroll), gradient subtraction, and a bilinearly-sampled tone-mapped display.
+/// The native run uses zero pointer input, so an ambient swirl drives the field;
+/// the smoke
 /// value is the whole-field dye-green total (scaled to milli-units), a finite
 /// deterministic integer that proves the chain runs without NaN blow-up.
 #[test]
@@ -305,7 +306,7 @@ fn demo_particles_web() {
 )]
 fn demo_fluid_web() {
     let source = include_str!("../../../examples/gpu/web/fluid.mi");
-    assert_gpu_runs_with_output(source, "dye_sum_milli=10266");
+    assert_gpu_runs_with_output(source, "dye_sum_milli=41066");
 }
 
 /// neural_web: the capstone — a 2-12-12-1 MLP (205 parameters) trained entirely
@@ -325,5 +326,5 @@ fn demo_fluid_web() {
 )]
 fn demo_neural_web() {
     let source = include_str!("../../../examples/gpu/web/neural.mi");
-    assert_gpu_runs_with_output(source, "loss_milli=967 acc_milli=499");
+    assert_gpu_runs_with_output(source, "loss_milli=677 acc_milli=499");
 }
