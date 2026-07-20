@@ -19,8 +19,9 @@
 
 use system.collections.array
 
-// One output neuron per thread.
+// One output neuron per thread; each neuron weights INPUTS features.
 const NEURONS = 3
+const INPUTS = 2
 
 gpu let w = [1.0, -1.0, 2.0, 0.5, 0.5, 0.5]
 gpu let bias = [0.5, -3.0, -5.0]
@@ -28,11 +29,11 @@ gpu let x = [2.0, 1.0]
 gpu var y = Array<f32, NEURONS>()
 
 // One thread per output neuron.
-gpu forall j in 0..NEURONS
+forall j in 0..NEURONS
     var sum = bias[j]
     var i = 0
-    while i < 2
-        sum = sum + w[j * 2 + i] * x[i]
+    while i < INPUTS
+        sum = sum + w[j * INPUTS + i] * x[i]
         i = i + 1
     y[j] = sum if sum > 0.0 else 0.0
 

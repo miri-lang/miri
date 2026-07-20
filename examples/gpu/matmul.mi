@@ -9,13 +9,10 @@
 //   A = | 1  2 |   B = | 5  6 |   C = A×B = | 19  22 |
 //       | 3  4 |       | 7  8 |             | 43  50 |
 //
-// Note: the matrix dimension is inlined as the literal `2` inside the kernel —
-// host scalars/consts cannot be captured into a `forall` body, only buffers.
-//
 // Performance: this demo is illustrative, NOT optimized. Each thread streams its
 // row of A and column of B straight from global memory with no cross-thread
-// reuse, and the inner loop reads B column-strided (`b[k * 2 + col]` advances by
-// stride 2), so neighbouring threads cannot share loaded data and global memory
+// reuse, and the inner loop reads B column-strided (`b[k * N + col]` advances by
+// stride N), so neighbouring threads cannot share loaded data and global memory
 // bandwidth is wasted. Correct, but the canonical GEMM anti-pattern. For the
 // shared-memory tiled counterpart that stages tiles into workgroup memory and
 // reuses them across threads, see `tiled_matmul.mi`. The performance model
@@ -24,25 +21,24 @@
 
 use system.collections.array
 
-// The output matrix has 2×2 = 4 cells, one GPU thread each. (The matrix
-// dimension 2 stays a kernel-body literal: host scalars cannot be captured
-// into a `forall`, so only the value-generic buffer size uses a named const.)
-const CELLS = 4
+// N×N matrices, so the output has N*N = 4 cells, one GPU thread each.
+const N = 2
+const CELLS = N * N
 
 gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var c = Array<f32, CELLS>()
 
-// One thread per output cell: idx = row * 2 + col.
-gpu forall idx in 0..CELLS
-    let row = idx / 2
-    let col = idx - row * 2
+// One thread per output cell: idx = row * N + col.
+forall idx in 0..CELLS
+    let row = idx / N
+    let col = idx - row * N
 
     // Dot product of A's row with B's column.
     var sum = 0.0
     var k = 0
-    while k < 2
-        sum = sum + a[row * 2 + k] * b[k * 2 + col]
+    while k < N
+        sum = sum + a[row * N + k] * b[k * N + col]
         k = k + 1
     c[idx] = sum
 

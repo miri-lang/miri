@@ -11,24 +11,28 @@
 
 use system.collections.array
 
-const SIZE = 64 * 64
+// Image is W×W; the bright square spans [SQ_LO, SQ_HI) on both axes.
+const W = 64
+const SIZE = W * W
+const SQ_LO = 24
+const SQ_HI = 40
 
 // Source image and the destination that receives the blurred result.
 gpu var src = Array<f32, SIZE>()
 gpu var dst = Array<f32, SIZE>()
 
-// Initialize source image: a bright 16×16 square (value 1.0) centered in a
-// 64×64 buffer. Pixels (24, 24) to (39, 39) are white; outside is black.
-gpu forall idx in 0..SIZE
-    let y = idx / 64
-    let x = idx - y * 64
-    src[idx] = 1.0 if x >= 24 and x < 40 and y >= 24 and y < 40 else 0.0
+// Initialize the source image: a bright 16×16 square (value 1.0) centered in the
+// buffer. Pixels [24, 40) on both axes are white; everything outside is black.
+forall idx in 0..SIZE
+    let y = idx / W
+    let x = idx - y * W
+    src[idx] = 1.0 if x >= SQ_LO and x < SQ_HI and y >= SQ_LO and y < SQ_HI else 0.0
 
-// Apply 3×3 box blur: for each output pixel, sum the 3×3 neighborhood.
-// Out-of-bounds neighbors (beyond [0, 64)) contribute 0 (zero-padding).
-gpu forall idx in 0..SIZE
-    let y = idx / 64
-    let x = idx - y * 64
+// Apply the 3×3 box blur: for each output pixel, sum the 3×3 neighborhood.
+// Out-of-bounds neighbors (beyond [0, W)) contribute 0 (zero-padding).
+forall idx in 0..SIZE
+    let y = idx / W
+    let x = idx - y * W
     var sum = 0.0
     var dy = -1
     while dy <= 1
@@ -36,17 +40,17 @@ gpu forall idx in 0..SIZE
         while dx <= 1
             let nx = x + dx
             let ny = y + dy
-            if nx >= 0 and nx < 64 and ny >= 0 and ny < 64
-                sum = sum + src[ny * 64 + nx]
+            if nx >= 0 and nx < W and ny >= 0 and ny < W
+                sum = sum + src[ny * W + nx]
             dx = dx + 1
         dy = dy + 1
     dst[idx] = sum / 9.0
 
-// Readback to host
+// Readback to host.
 let host = dst
 
 // Sentinel values proving correctness:
 // - interior pixel (32, 32) = 1.0 (surrounded by 9 white pixels: 9/9 = 1.0)
 // - corner pixel (24, 24) = 0.4444444477558136 (4 white due to zero-padding: 4/9)
 // - edge pixel (24, 32) = 0.6666666865348816 (6 white in neighborhood: 6/9)
-println(f"interior={host[32 * 64 + 32]} corner={host[24 * 64 + 24]} edge={host[24 * 64 + 32]}")
+println(f"interior={host[32 * W + 32]} corner={host[24 * W + 24]} edge={host[24 * W + 32]}")

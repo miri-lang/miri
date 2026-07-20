@@ -23,6 +23,7 @@ use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
+use crate::ast::node::IdNode;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
 use crate::ast::types::{
     resolve_element_type_kind, BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME,
@@ -143,7 +144,10 @@ pub fn lower_forall_gpu(
         ));
     }
 
-    let axes = extract_axes(decls, iterable, span, rank)?;
+    // Fold const-valued bounds to literals so `0..CONST` takes the fixed-grid
+    // path (a real dispatch grid) rather than the runtime `_bound` uniform.
+    let folded_iterable = fold_iterable_bounds(ctx, iterable);
+    let axes = extract_axes(decls, &folded_iterable, span, rank)?;
     let loop_var_name = decls[0].name.clone();
     let captures = collect_capture_infos(ctx, body, &loop_var_name, *span)?;
 
@@ -1415,6 +1419,70 @@ pub fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringEr
             "forall range bounds must be integer literals or simple variables".to_string(),
             span,
         )),
+    }
+}
+
+/// Resolve a range-bound expression to its compile-time integer value: a numeric
+/// literal, or a module-level `const` bound to an integer. Returns `None` for a
+/// genuinely dynamic bound, which keeps the runtime `_bound` uniform path.
+pub fn const_bound_value(ctx: &LoweringContext, expr: &Expression) -> Option<i64> {
+    match &expr.node {
+        ExpressionKind::Literal(Literal::Integer(lit)) => Some(int_literal_to_i64(lit)),
+        ExpressionKind::Identifier(name, _) => {
+            let info = ctx.type_checker.global_scope().get(name)?;
+            if !info.is_constant {
+                return None;
+            }
+            match &info.value {
+                Some(Literal::Integer(lit)) => Some(int_literal_to_i64(lit)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Replace a const-foldable range bound with its integer-literal form so the
+/// fixed-grid fast path treats `0..CONST` exactly like `0..literal` — a named
+/// `const` bound then dispatches a real grid instead of falling back to the
+/// runtime `_bound` uniform (which collides with the frame `_Inputs` binding).
+/// A non-const bound is returned untouched so dynamic bounds still work.
+pub fn fold_const_bound(ctx: &LoweringContext, expr: &Expression) -> Expression {
+    match const_bound_value(ctx, expr) {
+        Some(v) => IdNode::new(
+            expr.id,
+            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I64(v))),
+            expr.span,
+        ),
+        None => expr.clone(),
+    }
+}
+
+/// Fold const-valued bounds inside a `forall` iterable (a single range, or a
+/// tuple of ranges for a 2-D/3-D loop) so every axis uses the fixed-grid path
+/// when its bounds are compile-time constants.
+pub fn fold_iterable_bounds(ctx: &LoweringContext, iterable: &Expression) -> Expression {
+    match &iterable.node {
+        ExpressionKind::Range(start, Some(end), range_type) => IdNode::new(
+            iterable.id,
+            ExpressionKind::Range(
+                Box::new(fold_const_bound(ctx, start)),
+                Some(Box::new(fold_const_bound(ctx, end))),
+                range_type.clone(),
+            ),
+            iterable.span,
+        ),
+        ExpressionKind::Tuple(ranges) => IdNode::new(
+            iterable.id,
+            ExpressionKind::Tuple(
+                ranges
+                    .iter()
+                    .map(|r| fold_iterable_bounds(ctx, r))
+                    .collect(),
+            ),
+            iterable.span,
+        ),
+        _ => iterable.clone(),
     }
 }
 

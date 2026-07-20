@@ -51,7 +51,11 @@ pub fn lower_gpu_frame(
         ));
     };
 
-    let start_lit = forall_gpu::read_int_literal(start, *span)?;
+    // Fold const-valued bounds to literals so `0..CONST` dispatches a real grid
+    // instead of the runtime `_bound` uniform (which collides with `_Inputs`).
+    let start = forall_gpu::fold_const_bound(ctx, start);
+    let end = forall_gpu::fold_const_bound(ctx, end);
+    let start_lit = forall_gpu::read_int_literal(&start, *span)?;
     let is_literal_end = matches!(
         &end.node,
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
@@ -69,7 +73,7 @@ pub fn lower_gpu_frame(
         decls,
         start_lit,
         is_literal_end,
-        end,
+        &end,
         range_type.clone(),
         &captures,
         body,
@@ -131,10 +135,12 @@ pub fn lower_gpu_frame_block(
                 ));
             };
 
-            let start_lit = forall_gpu::read_int_literal(start, *span)?;
-            // A named `const` bound is not folded to a literal at this stage, so it
-            // takes the runtime `_bound` uniform path, which collides with the frame
-            // `_Inputs` binding and aborts the launch. Only numeric literal bounds work.
+            // Fold const-valued bounds to literals so `0..CONST` dispatches a real
+            // grid rather than the runtime `_bound` uniform, which would collide
+            // with the frame `_Inputs` binding and abort the launch.
+            let start = forall_gpu::fold_const_bound(ctx, start);
+            let end = forall_gpu::fold_const_bound(ctx, end);
+            let start_lit = forall_gpu::read_int_literal(&start, *span)?;
             let is_literal_end = matches!(
                 &end.node,
                 ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
@@ -152,7 +158,7 @@ pub fn lower_gpu_frame_block(
                 decls,
                 start_lit,
                 is_literal_end,
-                end,
+                &end,
                 range_type.clone(),
                 &captures,
                 body,
@@ -734,14 +740,17 @@ fn detect_frame_usage_expr(expr: &Expression) -> bool {
             detect_frame_usage_expr(start)
                 || end.as_ref().is_some_and(|e| detect_frame_usage_expr(e))
         }
+        // Expressions that wrap a subexpression which can reference `frame`:
+        // recurse so a `frame.*` read nested inside them still injects the frame
+        // inputs (e.g. `(frame.time * 2.0) as f32`, `f"{frame.dt}"`).
+        ExpressionKind::Cast(value, _ty) => detect_frame_usage_expr(value),
+        ExpressionKind::Guard(_, arg) => detect_frame_usage_expr(arg),
+        ExpressionKind::FormattedString(parts) => parts.iter().any(detect_frame_usage_expr),
+        ExpressionKind::NamedArgument(_, arg) => detect_frame_usage_expr(arg),
         ExpressionKind::Lambda(_)
         | ExpressionKind::TypeDeclaration(_, _, _, _)
         | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::Cast(_, _)
-        | ExpressionKind::Guard(_, _)
-        | ExpressionKind::FormattedString(_)
-        | ExpressionKind::EnumValue(_, _)
-        | ExpressionKind::NamedArgument(_, _) => false,
+        | ExpressionKind::EnumValue(_, _) => false,
     }
 }
 
@@ -1043,6 +1052,34 @@ mod tests {
     fn detect_frame_usage_finds_frame_in_return() {
         let ret = stmt(StatementKind::Return(Some(Box::new(frame_access()))));
         assert!(detect_frame_usage(&ret));
+    }
+
+    #[test]
+    fn detect_frame_usage_finds_frame_nested_in_cast() {
+        // `(frame.time * 2.0) as f32` — the frame read is buried under a binary
+        // and a cast. If the scan stops at the cast the frame inputs are never
+        // injected, and the kernel body fails codegen ("Identifier as scalar").
+        let mul = IdNode::new(
+            1,
+            ExpressionKind::Binary(
+                Box::new(frame_access()),
+                crate::ast::operator::BinaryOp::Mul,
+                Box::new(IdNode::new(
+                    2,
+                    ExpressionKind::Literal(crate::ast::literal::Literal::Float(
+                        crate::ast::literal::FloatLiteral::F64(2.0f64.to_bits()),
+                    )),
+                    Span::default(),
+                )),
+            ),
+            Span::default(),
+        );
+        let cast = IdNode::new(
+            3,
+            ExpressionKind::Cast(Box::new(mul), Box::new(ident("f32"))),
+            Span::default(),
+        );
+        assert!(detect_frame_usage(&stmt(StatementKind::Expression(cast))));
     }
 
     #[test]

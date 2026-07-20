@@ -270,6 +270,68 @@ fn target_web_gpu_frame_kernel_in_manifest() {
     }
 }
 
+// A `gpu frame` pass whose range bound is a named `const` and whose body reads
+// `frame.*` input. The const bound must fold to a literal so the pass dispatches
+// a real grid (ceil(1024 / 256) = 4 workgroups); if it fell back to the runtime
+// `_bound` uniform it would both collapse to a [1, 1, 1] grid and collide with
+// the frame `_Inputs` binding, aborting the launch on real hardware.
+const GPU_FRAME_CONST_BOUND_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+const N = 1024
+
+gpu var grid_a = Array<int, N>()
+gpu var grid_b = Array<int, N>()
+
+forall idx in 0..N
+    grid_a[idx] = idx as int
+
+gpu frame
+    forall idx in 0..N
+        var v = grid_a[idx] + 1
+        if frame.mouse_down
+            v = 0
+        grid_b[idx] = v
+"#;
+
+#[test]
+fn target_web_gpu_const_frame_bound_dispatches_real_grid() {
+    let source = write_source(GPU_FRAME_CONST_BOUND_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    // Every kernel — the seed forall and the frame pass — must carry a real
+    // dispatch grid derived from the const bound (1024 / 256 = 4 workgroups),
+    // never the [1, 1, 1] fallback that an unfolded runtime bound produces.
+    let seed = manifest["seed"].as_array().expect("seed kernels");
+    let frame_passes = manifest["framePasses"].as_array().expect("frame passes");
+    for kernel in seed.iter().chain(frame_passes.iter()) {
+        let wg = kernel["workgroups"].as_array().expect("workgroups array");
+        assert_eq!(
+            wg[0].as_u64(),
+            Some(4),
+            "const-bounded kernel must dispatch ceil(1024/256)=4 workgroups, got {:?}",
+            kernel["workgroups"]
+        );
+    }
+}
+
 #[test]
 fn target_web_gpu_rejects_program_without_gpu_kernels() {
     let source = write_source(

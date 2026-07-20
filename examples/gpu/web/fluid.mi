@@ -32,7 +32,10 @@ use system.io
 
 // Simulation grid (36864 cells); the display samples it into a 16:9 canvas.
 const CELLS = 192 * 192
-const PAINT = 1280 * 720 * 4
+const CW = 1280
+const CH = 720
+const PIXELS = CW * CH
+const PAINT = PIXELS * 4
 
 // Velocity components (ping-ponged a -> b).
 gpu var vx_a = Array<f32, CELLS>()
@@ -57,7 +60,7 @@ gpu var p_b = Array<f32, CELLS>()
 gpu var paint = Array<f32, PAINT>()
 
 // Seed all fields to zero (still, dark fluid).
-gpu forall i in 0..36864
+forall i in 0..36864
     vx_a[i] = 0.0
     vy_a[i] = 0.0
     dr_a[i] = 0.0
@@ -68,8 +71,8 @@ gpu forall i in 0..36864
 // Clear the paint buffer. This top-level 2-D pass over the exact display extent
 // tells the web-gpu backend the canvas is 1280×720 (16:9); the per-frame display
 // pass is 1-D, which alone would leave the canvas shape ambiguous.
-gpu forall px, py in 0..1280, 0..720
-    let base = (py * 1280 + px) * 4
+forall px, py in 0..CW, 0..CH
+    let base = (py * CW + px) * 4
     paint[base] = 0.0
     paint[base + 1] = 0.0
     paint[base + 2] = 0.0
@@ -81,7 +84,7 @@ gpu frame
     // swirl (driven by frame.time) keeps the field alive. The dye colour
     // alternates yellow/blue over time, as in the reference. Pointer position is
     // normalized [0,1] (matching fx/fy); move_* is a normalized per-frame delta.
-    gpu forall idx in 0..36864
+    forall idx in 0..36864
         let x = idx % 192
         let y = idx / 192
         let fx = (x as f32) / 192.0
@@ -126,7 +129,7 @@ gpu frame
         db_b[idx] = (db_a[idx] + cb * inj) as f32
 
     // Pass 2: advect velocity (read _b, write _a). Backtrace in cell units.
-    gpu forall idx in 0..36864
+    forall idx in 0..36864
         let x = idx % 192
         let y = idx / 192
         let dt = frame.dt
@@ -156,7 +159,7 @@ gpu frame
         vy_a[idx] = ((vytop + (vybot - vytop) * ty) * 0.995) as f32
 
     // Pass 3: advect dye (read _b, write _a) along the new velocity (in _a).
-    gpu forall idx in 0..36864
+    forall idx in 0..36864
         let x = idx % 192
         let y = idx / 192
         let dt = frame.dt
@@ -185,7 +188,7 @@ gpu frame
         db_a[idx] = ((btop + (bbot - btop) * ty) * 0.985) as f32
 
     // Pass 4: divergence of the velocity field (read _a).
-    gpu forall idx in 0..36864
+    forall idx in 0..36864
         let x = idx % 192
         let y = idx / 192
         let xm = max(0, x - 1)
@@ -202,7 +205,7 @@ gpu frame
     // Pass 5: Jacobi pressure solve. The repeat unrolls to 24 ordered passes;
     // each iteration runs two passes that ping-pong p_a <-> p_b.
     for _ in 0..12
-        gpu forall idx in 0..36864
+        forall idx in 0..36864
             let x = idx % 192
             let y = idx / 192
             let l = p_a[y * 192 + max(0, x - 1)]
@@ -210,7 +213,7 @@ gpu frame
             let b = p_a[max(0, y - 1) * 192 + x]
             let tt = p_a[min(191, y + 1) * 192 + x]
             p_b[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
-        gpu forall idx in 0..36864
+        forall idx in 0..36864
             let x = idx % 192
             let y = idx / 192
             let l = p_b[y * 192 + max(0, x - 1)]
@@ -220,7 +223,7 @@ gpu frame
             p_a[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
 
     // Pass 6: subtract the pressure gradient (read _a vel + p_a, write _b vel).
-    gpu forall idx in 0..36864
+    forall idx in 0..36864
         let x = idx % 192
         let y = idx / 192
         let l = p_a[y * 192 + max(0, x - 1)]
@@ -233,12 +236,12 @@ gpu frame
     // Pass 7: display. Bilinearly sample the 192×192 dye into the 1280×720 (16:9)
     // canvas — the square field stretched across the frame, as the reference does
     // with a linear-filtered texture — then gamma tone-map over a dark background.
-    gpu forall pidx in 0..921600
-        let px = pidx % 1280
-        let py = pidx / 1280
+    forall pidx in 0..PIXELS
+        let px = pidx % CW
+        let py = pidx / CW
         // Sample position in grid space (stretch the square field to 16:9).
-        let sx = (((px as f32) + 0.5) / 1280.0) * 192.0 - 0.5
-        let sy = (((py as f32) + 0.5) / 720.0) * 192.0 - 0.5
+        let sx = (((px as f32) + 0.5) / (CW as f32)) * 192.0 - 0.5
+        let sy = (((py as f32) + 0.5) / (CH as f32)) * 192.0 - 0.5
         let x0 = floor(sx) as i32
         let y0 = floor(sy) as i32
         let tx = (sx - (x0 as f32)) as f32

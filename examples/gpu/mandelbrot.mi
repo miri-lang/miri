@@ -6,34 +6,32 @@
 
 use system.collections.array
 
-const SIZE = 64 * 64
+// Grid width and total pixel count; MAX_ITER bounds the escape-time loop.
+const W = 64
+const SIZE = W * W
+const MAX_ITER = 100
 
 // Allocate a 64×64 pixel buffer on the GPU (4096 pixels total).
 // Store iteration counts as f32 for web bundle compatibility.
 gpu var pixels = Array<f32, SIZE>()
 
-// Main computation: for each pixel (as a linear index), map to 2D coordinates,
-// then to complex plane, iterate z = z² + c until |z|² > 4 or reach iteration limit.
-// The viewport mapping is computed device-side from idx using the literal 64.
-// TODO: a module `const` referenced in a kernel body now inlines correctly (see
-// tests/integration/gpu/scalar_capture.rs), so this repeated literal could be
-// replaced by a single named `const W = 64`.
-gpu forall idx in 0..SIZE
-    // Convert linear index to (x, y) coordinates
-    let y = idx / 64
-    let x = idx - y * 64
+// For each pixel (as a linear index), map to 2D coordinates, then to the complex
+// plane, and iterate z = z² + c until |z|² > 4 or the iteration cap is reached.
+forall idx in 0..SIZE
+    let y = idx / W
+    let x = idx - y * W
 
-    // Map pixel coordinates to complex plane
-    // Viewport: Real axis [-2.5, 1.0], Imaginary axis [-1.25, 1.25]
-    let cx = -2.5 + (x as f32) * 3.5 / 64.0
-    let cy = -1.25 + (y as f32) * 2.5 / 64.0
+    // Map pixel to the complex plane.
+    // Viewport: real axis [-2.5, 1.0], imaginary axis [-1.25, 1.25].
+    let cx = -2.5 + (x as f32) * 3.5 / (W as f32)
+    let cy = -1.25 + (y as f32) * 2.5 / (W as f32)
 
-    // Escape-time iteration
+    // Escape-time iteration.
     var zx = 0.0
     var zy = 0.0
     var iterations = 0
 
-    while iterations < 100
+    while iterations < MAX_ITER
         let zx_sq = zx * zx
         let zy_sq = zy * zy
         if zx_sq + zy_sq > 4.0: break
@@ -48,12 +46,12 @@ gpu forall idx in 0..SIZE
     // Classic Mandelbrot palette: points that never escape (the set itself) are
     // black; escaped points are shaded by how long they took to escape, so the
     // set's boundary glows bright and fades into the surrounding void.
-    pixels[idx] = 0.0 if iterations == 100 else iterations as f32
+    pixels[idx] = 0.0 if iterations == MAX_ITER else iterations as f32
 
-// Readback results to host
+// Readback results to host.
 let host = pixels
 
-// Print sentinel values demonstrating the fractal correctness:
+// Sentinel values demonstrating fractal correctness:
 // - Index 2085 ≈ (37, 32): inside the set → black (0.0)
 // - Index 2048 ≈ (0, 32): far-left edge, escapes after 1 iteration (1.0)
 println(f"inside={host[2085]} outside={host[2048]}")

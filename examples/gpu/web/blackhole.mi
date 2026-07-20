@@ -25,7 +25,10 @@ use system.math
 use system.io
 
 // Canvas: 1280×720 pixels (16:9); RGBA paint output.
-const PAINT = 1280 * 720 * 4
+const CW = 1280
+const CH = 720
+const PIXELS = CW * CH
+const PAINT = PIXELS * 4
 
 // Camera state: [yaw, pitch, distance, idle_seconds] — ping-ponged across frames.
 gpu var cam_a = Array<f32, 4>()
@@ -113,7 +116,7 @@ fn disk_opacity(r f32) f32
 
 // Seed: starting pose (near edge-on for the iconic warped-disk view), idle past
 // the auto-rotate threshold so the camera drifts until the pointer takes over.
-gpu forall i in 0..4
+forall i in 0..4
     cam_a[0] = 1.15
     cam_a[1] = 0.18
     cam_a[2] = 19.5
@@ -121,8 +124,8 @@ gpu forall i in 0..4
 
 // Clear the canvas. This 2-D pass over the exact display extent also tells the
 // web-gpu backend the canvas is 1280×720 (a flat paint buffer reads as square).
-gpu forall px, py in 0..1280, 0..720
-    let base = (py * 1280 + px) * 4
+forall px, py in 0..CW, 0..CH
+    let base = (py * CW + px) * 4
     paint[base] = 0.0
     paint[base + 1] = 0.0
     paint[base + 2] = 0.0
@@ -130,7 +133,7 @@ gpu forall px, py in 0..1280, 0..720
 
 gpu frame
     // Pass 1: integrate orbit angles, zoom distance, and idle timer from input.
-    gpu forall i in 0..4
+    forall i in 0..4
         let yaw = cam_a[0]
         let pitch = cam_a[1]
         let dist = cam_a[2]
@@ -145,14 +148,14 @@ gpu frame
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel and composite the result.
-    gpu forall idx in 0..921600
-        let px = idx % 1280
-        let py = idx / 1280
+    forall idx in 0..PIXELS
+        let px = idx % CW
+        let py = idx / CW
         let tm = frame.time
         // Aspect-corrected screen coords: widen x for the 16:9 frame (matches the
         // reference shader's `uv.x *= res.x / res.y`).
-        let uvx = ((px as f32) / 1280.0 - 0.5) * (1280.0 / 720.0)
-        let uvy = 0.5 - (py as f32) / 720.0
+        let uvx = ((px as f32) / (CW as f32) - 0.5) * ((CW as f32) / (CH as f32))
+        let uvy = 0.5 - (py as f32) / (CH as f32)
 
         // Camera orbiting the hole on a sphere of radius `dist`.
         let ya = cam_b[0]
@@ -350,7 +353,7 @@ gpu frame
 let host = paint
 var total = 0.0
 var k = 0
-while k < 921600
+while k < PIXELS
     total = total + host[k * 4]
     k = k + 1
 let scaled = (total * 1000.0) as i32
