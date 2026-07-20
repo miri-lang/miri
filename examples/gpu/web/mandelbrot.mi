@@ -3,7 +3,9 @@ use system.math
 use system.io
 
 // Canvas: 1024×1024 pixels (square, so the aspect factor is 1); RGBA paint output.
-const PAINT = 1024 * 1024 * 4
+const CW = 1024
+const PIXELS = CW * CW
+const PAINT = PIXELS * 4
 
 // View state: [center_x, center_y, scale, _pad] — ping-ponged across frames.
 gpu var view_a = Array<f32, 4>()
@@ -33,7 +35,7 @@ fn pal_b(t f32) f32
     return mix(0.24, 0.85, (t - 0.85) / 0.15) as f32
 
 // Seed: initial viewport centred near the main cardioid at full extent.
-gpu forall i in 0..4
+forall i in 0..4
     view_a[0] = -0.6
     view_a[1] = 0.0
     view_a[2] = 3.0
@@ -56,16 +58,16 @@ gpu frame
         view_b[3] = 0.0
 
     // Pass 2: render the fractal with smooth escape coloring.
-    forall idx in 0..1048576
-        let px = idx % 1024
-        let py = idx / 1024
+    forall idx in 0..PIXELS
+        let px = idx % CW
+        let py = idx / CW
         let cx = view_b[0]
         let cy = view_b[1]
         let scale = view_b[2]
 
         // Map pixel to the complex plane around the current center.
-        let uu = (px as f32) / 1024.0 - 0.5
-        let vv = (py as f32) / 1024.0 - 0.5
+        let uu = (px as f32) / (CW as f32) - 0.5
+        let vv = (py as f32) / (CW as f32) - 0.5
         let cre = cx + uu * scale
         let cim = cy + vv * scale
 
@@ -115,7 +117,7 @@ gpu frame
 let host = paint
 var total = 0.0
 var k = 0
-while k < 1048576
+while k < PIXELS
     total = total + host[k * 4]
     k = k + 1
 let scaled = (total * 1000.0) as i32

@@ -87,7 +87,7 @@ fn curl_y(x f32, y f32) f32
     return ((n4 - n3) / (2.0 * e)) as f32
 
 // Seed: scatter particles uniformly with randomized age and seed.
-gpu forall i in 0..147456
+forall i in 0..147456
     let sx = rand_unit(i * 4)
     let sy = rand_unit(i * 4 + 1)
     let sa = rand_unit(i * 4 + 2)
@@ -99,14 +99,14 @@ gpu forall i in 0..147456
     pstate_a[base + 3] = ss
 
 // Clear both intensity surfaces.
-gpu forall i in 0..36864
+forall i in 0..36864
     accum_a[i] = 0
     accum_b[i] = 0
 
 gpu frame
     // Pass 1: advect every particle through the curl field plus the pointer
     // vortex, then age and respawn expired or escaped particles.
-    gpu forall i in 0..147456
+    forall i in 0..147456
         let base = i * 4
         let px = pstate_a[base]
         let py = pstate_a[base + 1]
@@ -152,13 +152,13 @@ gpu frame
         pstate_b[base + 3] = seed
 
     // Pass 2: decay the persistent intensity surface (motion trails).
-    gpu forall p in 0..36864
+    forall p in 0..36864
         let prev = accum_a[p] as f32
         accum_b[p] = (prev * 0.90) as u32
 
     // Pass 3: scatter — additively deposit each particle's intensity into its
     // pixel. Contended cells are correct because the deposit is atomic.
-    gpu forall i in 0..147456
+    forall i in 0..147456
         let base = i * 4
         let px = pstate_b[base]
         let py = pstate_b[base + 1]
@@ -174,7 +174,7 @@ gpu frame
         atomic_add(accum_b, cell, amount)
 
     // Pass 4: present — tone-map the intensity surface to a white/blue field.
-    gpu forall p in 0..36864
+    forall p in 0..36864
         let v = (accum_b[p] as f32) / 4096.0
         let bright = v / (1.0 + v)
         let fade = (smoothstep(0.0, 0.6, bright) as f32) * 0.85 + 0.15

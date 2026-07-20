@@ -311,14 +311,14 @@ fn demo_fluid_web() {
 
 /// neural_web: the capstone — a 2-12-12-1 MLP (205 parameters) trained entirely
 /// on the GPU to classify a two-arm spiral. A `gpu frame` block runs the full
-/// training step as buffer-disjoint passes: base loss, a forward-difference
-/// gradient (one thread per parameter, looping over all 220 samples — no
-/// reduction primitive), a momentum-SGD weight update (ping-ponged wa/va ->
-/// wb/vb), a loss+accuracy stats pass for the HUD readback, and a per-pixel
-/// decision-field render with a data-point overlay. The native run does one
-/// training step from the seeded weights; the smoke value is the post-step loss
-/// and accuracy (in milli-units), proving the on-device forward + gradient +
-/// update chain reduces the loss below its ~1.0 random-init baseline.
+/// training step as buffer-disjoint passes: a single-thread full-batch analytic
+/// backprop step accumulating the exact gradient into per-invocation local
+/// scratch arrays and applying a momentum update (ping-ponged wa/va -> wb/vb), a
+/// loss+accuracy stats pass for the HUD readback, and a per-pixel decision-field
+/// render with a data-point overlay. The native run does one training step from
+/// the seeded weights; the smoke value is the post-step loss and accuracy (in
+/// milli-units), proving the on-device forward + backprop + update chain moves
+/// the net off its random-init baseline (one step lifts accuracy past ~0.7).
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -326,5 +326,5 @@ fn demo_fluid_web() {
 )]
 fn demo_neural_web() {
     let source = include_str!("../../../examples/gpu/web/neural.mi");
-    assert_gpu_runs_with_output(source, "loss_milli=677 acc_milli=499");
+    assert_gpu_runs_with_output(source, "loss_milli=624 acc_milli=709");
 }

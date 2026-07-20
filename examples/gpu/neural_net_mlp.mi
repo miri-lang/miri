@@ -22,10 +22,12 @@
 
 use system.collections.array
 
-// Four input samples; the hidden layer has one cell per (sample, hidden unit)
-// pair (4 samples × 2 units = 8).
+// Network shape: SAMPLES inputs, IN features each, HU hidden units. The hidden
+// layer has one cell per (sample, hidden unit) pair (4 samples × 2 units = 8).
 const SAMPLES = 4
-const HIDDEN = 8
+const IN = 2
+const HU = 2
+const HIDDEN = SAMPLES * HU
 
 // Four input samples, 2 features each (row-major: sample 0 = inputs[0..2], ...).
 gpu let inputs = [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
@@ -40,23 +42,23 @@ gpu let w2 = [1.0, -2.0]
 gpu var hidden = Array<f32, HIDDEN>()
 gpu var output = Array<f32, SAMPLES>()
 
-// Hidden layer: one thread per (sample s, hidden unit j). idx = s * 2 + j.
-gpu forall idx in 0..HIDDEN
-    let s = idx / 2
-    let j = idx - s * 2
+// Hidden layer: one thread per (sample s, hidden unit j). idx = s * HU + j.
+forall idx in 0..HIDDEN
+    let s = idx / HU
+    let j = idx - s * HU
     var sum = b1[j]
     var i = 0
-    while i < 2
-        sum = sum + w1[j * 2 + i] * inputs[s * 2 + i]
+    while i < IN
+        sum = sum + w1[j * IN + i] * inputs[s * IN + i]
         i = i + 1
     hidden[idx] = sum if sum > 0.0 else 0.0
 
-// Output layer: one thread per sample, dot product over the 2 hidden units.
-gpu forall s in 0..SAMPLES
+// Output layer: one thread per sample, dot product over the HU hidden units.
+forall s in 0..SAMPLES
     var sum = 0.0
     var j = 0
-    while j < 2
-        sum = sum + w2[j] * hidden[s * 2 + j]
+    while j < HU
+        sum = sum + w2[j] * hidden[s * HU + j]
         j = j + 1
     output[s] = sum
 
