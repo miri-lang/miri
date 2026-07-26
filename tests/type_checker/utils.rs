@@ -622,3 +622,289 @@ fn boolean_is_kernel_only_not_bindable() {
     assert!(!is_gpu_buffer_element(&TypeKind::Boolean));
     assert!(!is_accelerable(&TypeKind::Boolean, &defs));
 }
+
+// Accelerator binding registry: how a host type binds on the device
+// (`accelerable_binding_kind`) and how many bytes one element occupies
+// (`accelerable_byte_size`).
+
+use miri::ast::common::MemberVisibility;
+use miri::ast::types::{
+    BuiltinCollectionKind, ACCELERABLE_TRAIT_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+};
+use miri::type_checker::context::AliasDefinition;
+use miri::type_checker::utils::{
+    accelerable_binding_kind, accelerable_byte_size, AcceleratorBindingKind,
+};
+
+fn array_name() -> &'static str {
+    BuiltinCollectionKind::Array.name()
+}
+
+fn list_name() -> &'static str {
+    BuiltinCollectionKind::List.name()
+}
+
+/// Builds a non-generic type alias whose underlying template is `template`,
+/// e.g. `alias(TypeKind::U8)` models `type Byte is u8`.
+fn alias(template: TypeKind) -> TypeDefinition {
+    TypeDefinition::Alias(AliasDefinition {
+        template: make_type(template),
+        generics: None,
+    })
+}
+
+fn custom(name: &str, args: Vec<TypeKind>) -> TypeKind {
+    TypeKind::Custom(
+        name.to_string(),
+        Some(
+            args.into_iter()
+                .map(|kind| type_expr_non_null(make_type(kind)))
+                .collect(),
+        ),
+    )
+}
+
+fn no_defs() -> HashMap<String, TypeDefinition> {
+    HashMap::new()
+}
+
+#[test]
+fn binding_kind_scalars_are_uniforms() {
+    for kind in [
+        TypeKind::Int,
+        TypeKind::I8,
+        TypeKind::I32,
+        TypeKind::I64,
+        TypeKind::U16,
+        TypeKind::Float,
+        TypeKind::F32,
+        TypeKind::F64,
+        // Kernel-only scalars still ride as uniforms even though they are
+        // not storage-buffer elements — matches the forall capture split.
+        TypeKind::Boolean,
+        TypeKind::I128,
+    ] {
+        assert_eq!(
+            accelerable_binding_kind(&kind),
+            Some(AcceleratorBindingKind::Uniform),
+            "{kind:?} should bind as a uniform"
+        );
+    }
+}
+
+#[test]
+fn binding_kind_collections_and_aggregates_are_storage() {
+    let cases = [
+        custom(array_name(), vec![TypeKind::I32, TypeKind::Int]),
+        custom(list_name(), vec![TypeKind::F32]),
+        TypeKind::Tuple(vec![
+            type_expr_non_null(make_type(TypeKind::I32)),
+            type_expr_non_null(make_type(TypeKind::F32)),
+        ]),
+    ];
+    for kind in cases {
+        assert_eq!(
+            accelerable_binding_kind(&kind),
+            Some(AcceleratorBindingKind::Storage),
+            "{kind:?} should bind as storage"
+        );
+    }
+}
+
+#[test]
+fn binding_kind_vectors_are_uniforms() {
+    assert_eq!(
+        accelerable_binding_kind(&custom(VEC3_TYPE_NAME, vec![TypeKind::F32])),
+        Some(AcceleratorBindingKind::Uniform)
+    );
+}
+
+#[test]
+fn binding_kind_unbindable_types_are_none() {
+    assert_eq!(accelerable_binding_kind(&TypeKind::String), None);
+    assert_eq!(
+        accelerable_binding_kind(&TypeKind::Map(
+            Box::new(type_expr_non_null(make_type(TypeKind::Int))),
+            Box::new(type_expr_non_null(make_type(TypeKind::Int))),
+        )),
+        None
+    );
+}
+
+#[test]
+fn byte_size_scalars_use_host_widths() {
+    let defs = no_defs();
+    assert_eq!(accelerable_byte_size(&TypeKind::Int, &defs), Some(8));
+    assert_eq!(accelerable_byte_size(&TypeKind::I8, &defs), Some(1));
+    assert_eq!(accelerable_byte_size(&TypeKind::U16, &defs), Some(2));
+    assert_eq!(accelerable_byte_size(&TypeKind::I32, &defs), Some(4));
+    assert_eq!(accelerable_byte_size(&TypeKind::I64, &defs), Some(8));
+    assert_eq!(accelerable_byte_size(&TypeKind::Float, &defs), Some(8));
+    assert_eq!(accelerable_byte_size(&TypeKind::F32, &defs), Some(4));
+    assert_eq!(accelerable_byte_size(&TypeKind::F64, &defs), Some(8));
+}
+
+#[test]
+fn byte_size_non_accelerable_scalars_are_none() {
+    let defs = no_defs();
+    assert_eq!(accelerable_byte_size(&TypeKind::Boolean, &defs), None);
+    assert_eq!(accelerable_byte_size(&TypeKind::I128, &defs), None);
+}
+
+#[test]
+fn byte_size_collection_reports_element_width() {
+    let defs = no_defs();
+    // Element width only — the runtime multiplies by the length.
+    assert_eq!(
+        accelerable_byte_size(
+            &custom(array_name(), vec![TypeKind::I32, TypeKind::Int]),
+            &defs
+        ),
+        Some(4)
+    );
+    assert_eq!(
+        accelerable_byte_size(&custom(list_name(), vec![TypeKind::F64]), &defs),
+        Some(8)
+    );
+    assert_eq!(
+        accelerable_byte_size(
+            &custom(array_name(), vec![TypeKind::Int, TypeKind::Int]),
+            &defs
+        ),
+        Some(8)
+    );
+}
+
+#[test]
+fn byte_size_vector_is_dim_times_component() {
+    let defs = no_defs();
+    assert_eq!(
+        accelerable_byte_size(&custom(VEC3_TYPE_NAME, vec![TypeKind::F32]), &defs),
+        Some(12)
+    );
+    assert_eq!(
+        accelerable_byte_size(&custom(VEC4_TYPE_NAME, vec![TypeKind::F32]), &defs),
+        Some(16)
+    );
+}
+
+#[test]
+fn byte_size_tuple_is_sum_of_fields() {
+    let defs = no_defs();
+    assert_eq!(
+        accelerable_byte_size(
+            &TypeKind::Tuple(vec![
+                type_expr_non_null(make_type(TypeKind::I32)),
+                type_expr_non_null(make_type(TypeKind::F64)),
+            ]),
+            &defs
+        ),
+        Some(12)
+    );
+}
+
+#[test]
+fn byte_size_struct_sums_field_widths_from_the_type_table() {
+    let mut defs = no_defs();
+    defs.insert(
+        "Point".to_string(),
+        TypeDefinition::Struct(StructDefinition {
+            fields: vec![
+                (
+                    "x".to_string(),
+                    make_type(TypeKind::I32),
+                    MemberVisibility::Public,
+                ),
+                (
+                    "y".to_string(),
+                    make_type(TypeKind::F64),
+                    MemberVisibility::Public,
+                ),
+            ],
+            generics: None,
+            traits: vec![ACCELERABLE_TRAIT_NAME.to_string()],
+            module: String::new(),
+            has_drop: false,
+        }),
+    );
+    assert_eq!(
+        accelerable_byte_size(&TypeKind::Custom("Point".to_string(), None), &defs),
+        Some(12)
+    );
+}
+
+#[test]
+fn byte_size_string_has_no_device_width() {
+    assert_eq!(accelerable_byte_size(&TypeKind::String, &no_defs()), None);
+}
+
+#[test]
+fn byte_size_follows_scalar_alias_to_its_width() {
+    // `type Byte is u8`
+    let mut defs = no_defs();
+    defs.insert("Byte".to_string(), alias(TypeKind::U8));
+
+    // A bare alias reference sizes as its underlying scalar.
+    assert_eq!(
+        accelerable_byte_size(&TypeKind::Custom("Byte".to_string(), None), &defs),
+        Some(1)
+    );
+    // An `Array<Byte, N>` reports the alias element width, not `None`.
+    assert_eq!(
+        accelerable_byte_size(
+            &custom(
+                array_name(),
+                vec![TypeKind::Custom("Byte".to_string(), None), TypeKind::Int],
+            ),
+            &defs
+        ),
+        Some(1)
+    );
+}
+
+#[test]
+fn byte_size_follows_alias_chain() {
+    // `type A is B`, `type B is u16`
+    let mut defs = no_defs();
+    defs.insert(
+        "A".to_string(),
+        alias(TypeKind::Custom("B".to_string(), None)),
+    );
+    defs.insert("B".to_string(), alias(TypeKind::U16));
+    assert_eq!(
+        accelerable_byte_size(&TypeKind::Custom("A".to_string(), None), &defs),
+        Some(2)
+    );
+}
+
+#[test]
+fn byte_size_follows_alias_to_a_collection() {
+    // `type Buf is Array<i32, 4>` — the element width is still what matters.
+    let mut defs = no_defs();
+    defs.insert(
+        "Buf".to_string(),
+        alias(custom(array_name(), vec![TypeKind::I32, TypeKind::Int])),
+    );
+    assert_eq!(
+        accelerable_byte_size(&TypeKind::Custom("Buf".to_string(), None), &defs),
+        Some(4)
+    );
+}
+
+#[test]
+fn byte_size_alias_cycle_terminates_without_a_width() {
+    // A pathological `type A is B`, `type B is A` must not loop forever.
+    let mut defs = no_defs();
+    defs.insert(
+        "A".to_string(),
+        alias(TypeKind::Custom("B".to_string(), None)),
+    );
+    defs.insert(
+        "B".to_string(),
+        alias(TypeKind::Custom("A".to_string(), None)),
+    );
+    assert_eq!(
+        accelerable_byte_size(&TypeKind::Custom("A".to_string(), None), &defs),
+        None
+    );
+}

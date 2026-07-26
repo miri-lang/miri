@@ -569,8 +569,11 @@ impl TypeChecker {
     }
 }
 
+// Stays inline rather than moving to `tests/type_checker/generics.rs`: both
+// `substitute_type` and `MAX_SUBSTITUTION_DEPTH` are crate-internal, and the
+// nesting depth this exercises is not expressible in a `.mi` source program.
 #[cfg(test)]
-mod tests {
+mod substitution_depth_tests {
     use super::*;
     use crate::type_checker::TypeChecker;
 
