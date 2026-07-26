@@ -14,6 +14,7 @@ pub mod function;
 pub mod gpu;
 pub mod gpu_launch;
 pub mod if_statement;
+pub mod kernel_namer;
 pub mod literal;
 pub mod r#loop;
 pub mod match_expression;

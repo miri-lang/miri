@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod config;
+
 use miri::ast::types::TypeKind;
 use miri::mir::backend::{GpuIndexNarrowing, I32_INDEX_MAX};
 
