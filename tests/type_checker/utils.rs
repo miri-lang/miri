@@ -8,7 +8,7 @@ use miri::ast::{Statement, StatementKind};
 use miri::error::compiler::CompilerError;
 use miri::lexer::Lexer;
 use miri::parser::Parser;
-use miri::pipeline::Pipeline;
+use miri::pipeline::{Pipeline, PipelineResult};
 use miri::type_checker::context::{
     ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
 };
@@ -16,11 +16,21 @@ use miri::type_checker::utils::{is_residency_gated_buffer, is_resource};
 use miri::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
 
-pub fn type_checker_test(source: &str) {
+/// Runs the frontend over `source` and hands back its result, panicking if the
+/// source does not type-check. This is the single entry point for tests that
+/// need to inspect what the type checker recorded (inferred types, warnings,
+/// generic-class instantiations, GPU buffer initializers); they must not build a
+/// `Pipeline` themselves, so the coupling to the pipeline API stays in one file.
+pub fn type_checker_result(source: &str) -> PipelineResult {
     let pipeline = Pipeline::new();
-    if let Err(e) = pipeline.frontend(source) {
-        panic!("Expected success, but got error: {:?}", e);
+    match pipeline.frontend(source) {
+        Ok(result) => result,
+        Err(e) => panic!("Expected success, but got error: {:?}", e),
     }
+}
+
+pub fn type_checker_test(source: &str) {
+    type_checker_result(source);
 }
 
 pub fn type_checker_error_test(source: &str, expected_error: &str) {
@@ -122,11 +132,7 @@ pub fn type_checker_multi_module_error_test(modules: Vec<(&str, &str)>, expected
 }
 
 pub fn type_checker_expr_type_test(source: &str, expected_type: Type) {
-    let pipeline = Pipeline::new();
-    let result = match pipeline.frontend(source) {
-        Ok(res) => res,
-        Err(e) => panic!("Type check failed unexpectedly: {}", e),
-    };
+    let result = type_checker_result(source);
 
     let last_stmt = result
         .ast
@@ -218,11 +224,7 @@ fn find_variable_type_in_statements(
 }
 
 pub fn type_checker_vars_type_test(source: &str, expected_types: Vec<(&str, Type)>) {
-    let pipeline = Pipeline::new();
-    let result = match pipeline.frontend(source) {
-        Ok(res) => res,
-        Err(e) => panic!("Type check failed unexpectedly: {}", e),
-    };
+    let result = type_checker_result(source);
 
     for (var_name, expected_type) in expected_types {
         let actual_type = if let Some(ty) = result.type_checker.get_variable_type(var_name) {
@@ -243,11 +245,7 @@ pub fn type_checker_vars_type_test(source: &str, expected_types: Vec<(&str, Type
     }
 }
 pub fn type_checker_const_type_test(source: &str, expected_types: Vec<(&str, Type)>) {
-    let pipeline = Pipeline::new();
-    let result = match pipeline.frontend(source) {
-        Ok(res) => res,
-        Err(e) => panic!("Type check failed unexpectedly: {}", e),
-    };
+    let result = type_checker_result(source);
 
     for (var_name, expected_type) in expected_types {
         let actual_type = if let Some(ty) = result.type_checker.get_variable_type(var_name) {
@@ -276,11 +274,7 @@ pub fn type_checker_const_type_test(source: &str, expected_types: Vec<(&str, Typ
 }
 
 pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
-    let pipeline = Pipeline::new();
-    let result = match pipeline.frontend(source) {
-        Ok(res) => res,
-        Err(e) => panic!("Type check failed unexpectedly: {}", e),
-    };
+    let result = type_checker_result(source);
 
     let found = result
         .type_checker
@@ -305,11 +299,7 @@ pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
 }
 
 pub fn count_warnings_with_code(source: &str, code: &str) -> usize {
-    let pipeline = Pipeline::new();
-    let result = match pipeline.frontend(source) {
-        Ok(res) => res,
-        Err(e) => panic!("Type check failed unexpectedly: {}", e),
-    };
+    let result = type_checker_result(source);
 
     result
         .type_checker

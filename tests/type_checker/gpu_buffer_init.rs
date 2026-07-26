@@ -6,17 +6,12 @@
 //! a sized `Array<T, N>()` constructor) records its initial data on the type
 //! checker so the web-gpu emitter can consume it without re-walking the AST.
 
-use miri::pipeline::Pipeline;
+use crate::type_checker::utils::type_checker_result;
+use miri::type_checker::GpuBufferInit;
+use std::collections::HashMap;
 
-fn buffer_inits(
-    source: &str,
-) -> std::collections::HashMap<String, miri::type_checker::GpuBufferInit> {
-    let pipeline = Pipeline::new();
-    pipeline
-        .frontend(source)
-        .expect("type check should succeed")
-        .type_checker
-        .gpu_buffer_inits
+fn buffer_inits(source: &str) -> HashMap<String, GpuBufferInit> {
+    type_checker_result(source).type_checker.gpu_buffer_inits
 }
 
 #[test]
