@@ -2,7 +2,10 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::factory::{identifier, int_literal_expression};
-use miri::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use miri::ast::types::{
+    inline_element_payload, inline_element_stride, BuiltinCollectionKind, Type, TypeKind,
+    VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+};
 use miri::error::syntax::Span;
 
 fn span() -> Span {
@@ -191,4 +194,91 @@ fn test_is_copy_option_inherits_inner() {
     assert!(opt_int.is_copy());
     let opt_string = TypeKind::Option(Box::new(Type::new(TypeKind::String, span())));
     assert!(!opt_string.is_copy());
+}
+
+#[test]
+fn stride_four_byte_components_follow_std430() {
+    assert_eq!(
+        inline_element_stride(VEC2_TYPE_NAME, &TypeKind::F32),
+        Some(8)
+    );
+    assert_eq!(
+        inline_element_stride(VEC3_TYPE_NAME, &TypeKind::F32),
+        Some(16)
+    );
+    assert_eq!(
+        inline_element_stride(VEC4_TYPE_NAME, &TypeKind::F32),
+        Some(16)
+    );
+    assert_eq!(
+        inline_element_stride(VEC2_TYPE_NAME, &TypeKind::I32),
+        Some(8)
+    );
+    assert_eq!(
+        inline_element_stride(VEC4_TYPE_NAME, &TypeKind::U32),
+        Some(16)
+    );
+}
+
+#[test]
+fn payload_is_dim_times_component_and_never_exceeds_stride() {
+    // vec3 is the only case where payload (12) < stride (16): the std430 pad.
+    assert_eq!(
+        inline_element_payload(VEC2_TYPE_NAME, &TypeKind::F32),
+        Some(8)
+    );
+    assert_eq!(
+        inline_element_payload(VEC3_TYPE_NAME, &TypeKind::F32),
+        Some(12)
+    );
+    assert_eq!(
+        inline_element_payload(VEC4_TYPE_NAME, &TypeKind::F32),
+        Some(16)
+    );
+    for name in [VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME] {
+        let (Some(payload), Some(stride)) = (
+            inline_element_payload(name, &TypeKind::F32),
+            inline_element_stride(name, &TypeKind::F32),
+        ) else {
+            panic!("{name} must have an inline vector layout");
+        };
+        assert!(
+            payload <= stride,
+            "{name}: payload {payload} > stride {stride}"
+        );
+    }
+}
+
+#[test]
+fn eight_byte_components_double_the_layout() {
+    assert_eq!(
+        inline_element_stride(VEC2_TYPE_NAME, &TypeKind::F64),
+        Some(16)
+    );
+    assert_eq!(
+        inline_element_stride(VEC3_TYPE_NAME, &TypeKind::F64),
+        Some(32)
+    );
+    assert_eq!(
+        inline_element_stride(VEC4_TYPE_NAME, &TypeKind::I64),
+        Some(32)
+    );
+    assert_eq!(
+        inline_element_payload(VEC3_TYPE_NAME, &TypeKind::F64),
+        Some(24)
+    );
+}
+
+#[test]
+fn non_vector_or_non_numeric_kinds_are_none() {
+    assert_eq!(inline_element_stride("String", &TypeKind::F32), None);
+    assert_eq!(inline_element_payload("List", &TypeKind::F32), None);
+    assert_eq!(
+        inline_element_stride(VEC3_TYPE_NAME, &TypeKind::String),
+        None
+    );
+    assert_eq!(
+        inline_element_payload(VEC3_TYPE_NAME, &TypeKind::Boolean),
+        None
+    );
 }
