@@ -60,6 +60,11 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> &'static str {
         TypeKind::Boolean => "bool",
         TypeKind::String => STRING_TYPE_NAME,
         TypeKind::Void => "void",
+        // TODO: every user-defined type collapses to one token, so `Box<Widget>`
+        // and `Box<Gadget>` mangle to the same `Box__custom`. Per-instantiation
+        // drop thunks are deduplicated by mangled name, so the second
+        // instantiation would run the first one's field layout. Returning the
+        // type's own name requires an owned String here (see the doc comment).
         TypeKind::Custom(_, None) => "custom",
         TypeKind::Custom(_, Some(_)) => "custom",
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {

@@ -35,6 +35,7 @@ use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 
+pub use rc::mangle_class_instantiation;
 pub use translator::FunctionTranslator;
 pub use types::translate_type;
 
