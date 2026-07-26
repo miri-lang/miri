@@ -112,14 +112,20 @@ fn main()
 }
 
 #[test]
-fn test_set_alias_no_double_free() {
-    assert_runs(
+fn test_set_three_way_alias() {
+    // Three variables sharing a single Set; the last drop must free it exactly
+    // once, and every alias must still see all three elements.
+    assert_runs_with_output(
         r#"
 use system.collections.set
-let s1 = {10, 20, 30}
-let s2 = s1
-let s3 = s1
+
+fn main()
+    let s1 = {10, 20, 30}
+    let s2 = s1
+    let s3 = s1
+    println(f"s2={s2.length()} s3={s3.length()}")
 "#,
+        "s2=3 s3=3",
     );
 }
 

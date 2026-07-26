@@ -106,6 +106,54 @@ fn test_invalid_underscore_in_numbers() {
 }
 
 #[test]
+fn test_invalid_repeated_underscore_in_decimal_numbers() {
+    run_lexer_error_tests(
+        vec!["1__0", "1__000_000", "1_.5"],
+        &SyntaxErrorKind::InvalidNumberLiteral,
+    );
+}
+
+#[test]
+fn test_trailing_underscore_after_a_fraction_splits_off_an_identifier() {
+    // A trailing `_` is rejected in the integer part (`1_2_` above) but ends the
+    // number token after a fraction, so `_` continues as a bare identifier.
+    run_lexer_tests(vec![
+        ("1.5_", vec![Token::Float, Token::Identifier]),
+        ("0.5__", vec![Token::Float, Token::Identifier]),
+    ]);
+}
+
+#[test]
+fn test_base_n_numbers_accept_repeated_underscores() {
+    // Decimal literals reject `__` (see above); base-N literals accept it,
+    // because their digit runs are validated per-character rather than by
+    // separator position.
+    run_lexer_tests(vec![
+        ("0b1010__1010", vec![Token::BinaryNumber]),
+        ("0o7__5", vec![Token::OctalNumber]),
+        ("0x1__A", vec![Token::HexNumber]),
+    ]);
+}
+
+#[test]
+fn test_base_n_numbers_reject_a_trailing_letter_suffix() {
+    lexer_error_test("0b1010b", &SyntaxErrorKind::InvalidBinaryLiteral);
+    lexer_error_test("0o755o", &SyntaxErrorKind::InvalidOctalLiteral);
+    lexer_error_test("0xFFx", &SyntaxErrorKind::InvalidHexLiteral);
+}
+
+#[test]
+fn test_exponent_without_digits_splits_into_int_and_identifier() {
+    // `1e` is not a malformed float: the exponent is only part of the number
+    // token when digits follow it, so the `e` lexes as a separate identifier.
+    run_lexer_tests(vec![
+        ("1e", vec![Token::Int, Token::Identifier]),
+        ("1.2e", vec![Token::Float, Token::Identifier]),
+        ("1e+", vec![Token::Int, Token::Identifier, Token::Plus]),
+    ]);
+}
+
+#[test]
 fn test_invalid_base_n_numbers_with_only_underscores() {
     run_lexer_error_tests(
         vec!["0b_", "0b___________"],

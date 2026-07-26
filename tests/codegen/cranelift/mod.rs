@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod backend;
+pub mod closure;
 pub mod layout;
 pub mod predicates;
 pub mod rc;

@@ -77,6 +77,40 @@ fn test_unclosed_string_literal() {
 }
 
 #[test]
+fn test_unclosed_double_quoted_string_literal() {
+    lexer_error_test(r#""unclosed string"#, &SyntaxErrorKind::InvalidToken);
+}
+
+#[test]
+fn test_string_ending_in_a_backslash_is_unclosed() {
+    // The trailing backslash escapes the closing quote, so the literal never
+    // terminates: both quote styles must fail rather than swallow the rest.
+    run_lexer_error_tests(
+        vec![r#""tail\"#, r#"'tail\"#],
+        &SyntaxErrorKind::InvalidToken,
+    );
+}
+
+#[test]
+fn test_unclosed_formatted_string_is_an_invalid_token() {
+    run_lexer_error_tests(
+        vec![r#"f"unclosed"#, r#"f'unclosed"#],
+        &SyntaxErrorKind::InvalidToken,
+    );
+}
+
+#[test]
+fn test_unknown_escape_sequence_lexes_as_one_string() {
+    // The lexer only tracks which backslashes hide a quote; interpreting escape
+    // sequences is a later stage, so an unknown escape is not a lexer error.
+    run_lexer_tests(vec![
+        (r#""\q""#, vec![Token::String]),
+        (r#"'\q'"#, vec![Token::String]),
+        (r#""\u{}""#, vec![Token::String]),
+    ]);
+}
+
+#[test]
 fn test_string_with_complex_escapes() {
     lexer_token_test(r#""a \\\" b""#, vec![Token::String]);
     lexer_token_test(r#"'a \\\' b'"#, vec![Token::String]);

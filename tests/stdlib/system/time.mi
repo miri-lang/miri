@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.time`. The clock reads nanoseconds since program start, so
+// the observable contract is: never negative, never goes backwards, and a
+// measurable amount of work moves it forward.
+
+use system.time
+use system.testing
+
+fn busy_sum(iterations int) int
+    var total = 0
+    var i = 0
+    while i < iterations
+        total = total + i
+        i += 1
+    return total
+
+fn test_nanotime_is_not_negative()
+    assert(nanotime() >= 0, "nanotime is a non-negative elapsed count")
+
+fn test_nanotime_never_goes_backwards()
+    let first = nanotime()
+    let second = nanotime()
+    assert(second >= first, "nanotime is monotonic across calls")
+
+fn test_nanotime_advances_over_measurable_work()
+    let start = nanotime()
+    let sum = busy_sum(200000)
+    let end = nanotime()
+    assert(sum > 0, "the measured work actually ran")
+    assert(end > start, "nanotime advances while work runs")
+
+fn test_elapsed_span_is_a_plain_subtraction()
+    let start = nanotime()
+    let end = nanotime()
+    let elapsed = end - start
+    assert(elapsed >= 0, "an elapsed span is non-negative")
+
+fn main()
+    test_nanotime_is_not_negative()
+    test_nanotime_never_goes_backwards()
+    test_nanotime_advances_over_measurable_work()
+    test_elapsed_span_is_a_plain_subtraction()
+    println("system.time: OK")
