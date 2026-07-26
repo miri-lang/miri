@@ -163,15 +163,17 @@ println(f"{c.length()}")
 
 #[test]
 fn test_list_string_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.list
 
 var lst = List<String>(["a", "b", "c"])
 let c = lst.clone()
-println(f"{c.length()}")
+println(f"clone_len={c.length()}")
+println(c[2])
 "#,
+        "clone_len=3\nc",
     );
 }
 
@@ -229,15 +231,17 @@ println(f"{b.length()}")
 
 #[test]
 fn test_array_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.array
 
 let a = [1, 2, 3]
 let b = a.clone()
-println(f"{b.length()}")
+println(f"clone_len={b.length()}")
+println(f"clone_last={b[2]}")
 "#,
+        "clone_len=3\nclone_last=3",
     );
 }
 
@@ -278,15 +282,17 @@ println(f"{c.length()}")
 
 #[test]
 fn test_set_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.set
 
 var s = {1, 2, 3}
 let c = s.clone()
-println(f"{c.length()}")
+println(f"clone_len={c.length()}")
+println(f"has_two={2 in c}")
 "#,
+        "clone_len=3\nhas_two=true",
     );
 }
 
@@ -327,15 +333,18 @@ println(f"{c.length()}")
 
 #[test]
 fn test_map_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.map
 
 let m = {"a": 1, "b": 2}
 let c = m.clone()
-println(f"{c.length()}")
+let b = c["b"]
+println(f"clone_len={c.length()}")
+println(f"clone_b={b}")
 "#,
+        "clone_len=2\nclone_b=2",
     );
 }
 
@@ -345,15 +354,18 @@ println(f"{c.length()}")
 
 #[test]
 fn test_set_string_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.set
 
 var s = {"alpha", "beta", "gamma"}
 let c = s.clone()
-println(f"{c.length()}")
+let has_beta = "beta" in c
+println(f"clone_len={c.length()}")
+println(f"has_beta={has_beta}")
 "#,
+        "clone_len=3\nhas_beta=true",
     );
 }
 
@@ -379,15 +391,17 @@ println(f"{c.length()}")
 
 #[test]
 fn test_map_string_string_clone_no_leak() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.map
 
 let m = {"a": "alpha", "b": "beta"}
 let c = m.clone()
-println(f"{c.length()}")
+println(f"clone_len={c.length()}")
+println(c["a"])
 "#,
+        "clone_len=2\nalpha",
     );
 }
 

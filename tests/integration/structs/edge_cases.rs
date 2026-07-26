@@ -64,8 +64,9 @@ fn main()
 
 #[test]
 fn test_struct_drop_method_still_allowed() {
-    // `drop` remains a valid struct method.
-    assert_runs(
+    // `drop` remains a valid struct method, and defining it leaves the struct's
+    // own fields readable.
+    assert_runs_with_output(
         r#"
 struct Res
     id int
@@ -74,6 +75,8 @@ struct Res
 
 fn main()
     let r = Res(id: 1)
+    println(f"id={r.id}")
 "#,
+        "id=1",
     );
 }

@@ -30,18 +30,19 @@ println(f"{x.length()}")
 
 #[test]
 fn test_list_clone_fixes_use_after_move() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.list
 
 fn process(x [int])
-    return
+    println(f"received={x.length()}")
 
 let x = List([1, 2, 3])
 process(x.clone())
-println(f"{x.length()}")
+println(f"original={x.length()}")
 "#,
+        "received=3\noriginal=3",
     );
 }
 
@@ -51,7 +52,7 @@ println(f"{x.length()}")
 
 #[test]
 fn test_auto_copy_struct_exempt_from_move() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 struct Point
@@ -59,12 +60,13 @@ struct Point
     y float
 
 fn process(p Point)
-    return
+    println(f"received={p.x}")
 
 let p = Point(1.0, 2.0)
 process(p)
-println(f"{p.x}")
+println(f"original={p.x}")
 "#,
+        "received=1.0\noriginal=1.0",
     );
 }
 
@@ -94,16 +96,17 @@ println(s)
 
 #[test]
 fn test_no_move_compiles_fine() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn process(x [int])
-    return
+    println(f"received={x.length()}")
 
 let x = List([1, 2, 3])
 process(x)
 "#,
+        "received=3",
     );
 }
 
@@ -113,16 +116,18 @@ process(x)
 
 #[test]
 fn test_primitive_int_always_copied() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 fn double(n int) int
     return n * 2
 
 let n = 42
-double(n)
-println(f"{n}")
+let d = double(n)
+println(f"doubled={d}")
+println(f"original={n}")
 "#,
+        "doubled=84\noriginal=42",
     );
 }
 
@@ -132,16 +137,17 @@ println(f"{n}")
 
 #[test]
 fn test_method_receiver_not_consumed() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 let x = List([1, 2, 3])
 let l = x.length()
-println(f"{l}")
+println(f"first={l}")
 let l2 = x.length()
-println(f"{l2}")
+println(f"second={l2}")
 "#,
+        "first=3\nsecond=3",
     );
 }
 
@@ -151,7 +157,7 @@ println(f"{l2}")
 
 #[test]
 fn test_consuming_one_var_does_not_affect_other() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -161,8 +167,10 @@ fn process(x [int])
 let x = List([1, 2, 3])
 let y = List([4, 5, 6])
 process(x)
-println(f"{y.length()}")
+println(f"y_len={y.length()}")
+println(f"y_first={y.element_at(0)}")
 "#,
+        "y_len=3\ny_first=4",
     );
 }
 
@@ -282,19 +290,20 @@ println(f"{s.length()}")
 
 #[test]
 fn test_consume_in_then_branch_only_not_flagged_after_if() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn process(x [int])
-    return
+    println(f"processed={x.length()}")
 
 var flag = true
 let x = List([1, 2, 3])
 if flag
     process(x)
-println("ok")
+println("after_if")
 "#,
+        "processed=3\nafter_if",
     );
 }
 
@@ -304,20 +313,23 @@ println("ok")
 
 #[test]
 fn test_else_branch_not_poisoned_by_then_consume() {
-    assert_runs(
+    // `flag` is false so the else branch actually runs: the list it reads must
+    // still be intact even though the then branch consumes it.
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn process(x [int])
     return
 
-var flag = true
+var flag = false
 let x = List([1, 2, 3])
 if flag
     process(x)
 else
-    println(f"{x.length()}")
+    println(f"else_len={x.length()}")
 "#,
+        "else_len=3",
     );
 }
 
@@ -371,20 +383,21 @@ handle(Conn(handle: 1))
 
 #[test]
 fn test_managed_type_not_consumed_in_function_body() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn step(l [int])
-    return
+    println(f"step={l.length()}")
 
 fn process(l [int])
     step(l)
     step(l)
 
 process(List([1, 2, 3]))
-println("ok")
+println("done")
 "#,
+        "step=3\nstep=3\ndone",
     );
 }
 
@@ -411,7 +424,7 @@ sink(r)
 
 #[test]
 fn test_resource_consumed_once_in_function_body_ok() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 struct Res
@@ -420,14 +433,15 @@ struct Res
         return
 
 fn sink(r Res)
-    return
+    println(f"sunk={r.x}")
 
 fn process(r Res)
     sink(r)
 
 process(Res(x: 1))
-println("ok")
+println("done")
 "#,
+        "sunk=1\ndone",
     );
 }
 
@@ -481,20 +495,22 @@ handle_conn(Conn(handle: 1))
 
 #[test]
 fn test_managed_alias_compiles_cleanly() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 let xs = List([1, 2, 3])
 var ys = xs
-println(f"{xs.length()}")
+println(f"original={xs.length()}")
+println(f"alias={ys.length()}")
 "#,
+        "original=3\nalias=3",
     );
 }
 
 #[test]
 fn test_resource_alias_reassignment_revives() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 struct Conn
@@ -503,15 +519,15 @@ struct Conn
         return
 
 fn sink(c Conn)
-    return
+    println(f"sunk={c.handle}")
 
 var a = Conn(handle: 1)
 var b = a
 sink(b)
 a = Conn(handle: 2)
 sink(a)
-println("ok")
 "#,
+        "sunk=1\nsunk=2",
     );
 }
 
@@ -561,26 +577,27 @@ process(Conn(handle: 1))
 
 #[test]
 fn test_managed_type_in_function_body_no_error() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn helper(items [int])
-    return
+    println(f"helper={items.element_at(0)}")
 
 fn process(items [int])
     helper(items)
     helper(items)
 
-process(List([1, 2, 3]))
-println("ok")
+process(List([7, 8, 9]))
+println("done")
 "#,
+        "helper=7\nhelper=7\ndone",
     );
 }
 
 #[test]
 fn test_resource_conditional_consume_no_else_compiles() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 struct Conn
@@ -589,14 +606,15 @@ struct Conn
         return
 
 fn sink(c Conn)
-    return
+    println(f"sunk={c.handle}")
 
 let cond = true
 let c = Conn(handle: 1)
 if cond
     sink(c)
-println("ok")
+println("after_if")
 "#,
+        "sunk=1\nafter_if",
     );
 }
 
@@ -658,35 +676,38 @@ process(List([1, 2, 3]), true)
 
 #[test]
 fn test_dynamic_fn_param_clone_workaround_compiles() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.memory
 use system.collections.list
 
 fn apply(items [int], f fn(xs [int]) int)
-    f(items.clone())
-    println(f"{items.length()}")
+    let n = f(items.clone())
+    println(f"callee_saw={n}")
+    println(f"still_alive={items.length()}")
 
 apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
 "#,
+        "callee_saw=3\nstill_alive=3",
     );
 }
 
 #[test]
 fn test_literal_free_fn_does_not_trigger_dynamic_fallback() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn helper(xs [int])
-    return
+    println(f"helper={xs.length()}")
 
 fn process(items [int])
     helper(items)
-    println(f"{items.length()}")
+    println(f"still_alive={items.length()}")
 
 process(List([1, 2, 3]))
 "#,
+        "helper=3\nstill_alive=3",
     );
 }
 
@@ -731,20 +752,21 @@ fn test_dynamic_fn_for_loop_does_not_leak_binding_past_loop() {
     // After the for loop exits, `helper` should resolve back to the free fn —
     // the loop variable `helper` must not stay in `fn_bindings` and force
     // calls to the free `helper` to be classified as dynamic.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn helper(xs [int])
-    return
+    println(f"helper={xs.length()}")
 
 fn run(fns [fn(xs [int]) int], items [int])
     for helper in fns
         let _ = helper(items.clone())
     helper(items)
-    println(f"{items.length()}")
+    println(f"still_alive={items.length()}")
 
 run(List<fn(xs [int]) int>(), List([1, 2, 3]))
 "#,
+        "helper=3\nstill_alive=3",
     );
 }
