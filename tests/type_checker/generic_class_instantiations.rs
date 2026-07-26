@@ -7,15 +7,12 @@
 //! to emit one specialized body per distinct instantiation; recording happens
 //! here so the discovery does not require a second AST walk.
 
+use crate::type_checker::utils::type_checker_result;
 use miri::ast::types::{Type, TypeKind};
-use miri::pipeline::Pipeline;
 use std::collections::HashMap;
 
 fn instantiations(source: &str) -> HashMap<String, Vec<Vec<Type>>> {
-    let pipeline = Pipeline::new();
-    pipeline
-        .frontend(source)
-        .expect("type check should succeed")
+    type_checker_result(source)
         .type_checker
         .generic_class_instantiations
 }
