@@ -172,6 +172,7 @@ function newInputState() {
         double_clicked: 0,
         move_x: 0,
         move_y: 0,
+        hovering: 0,
     };
 }
 
@@ -783,14 +784,21 @@ function attachInputListeners(canvas, state) {
     let lastNX = null;
     let lastNY = null;
 
+    const onEnter = (event) => {
+        state.hovering = 1;
+        [state.mouse_x, state.mouse_y] = toNorm(event);
+        [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
+    };
     const onDown = (event) => {
         dragging = true;
         state.mouse_down = 1;
+        state.hovering = 1;
         [lastX, lastY] = toPixel(event);
         [state.mouse_x, state.mouse_y] = toNorm(event);
         [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
     };
     const onMove = (event) => {
+        state.hovering = 1;
         [state.mouse_x, state.mouse_y] = toNorm(event);
         if (lastNX !== null) {
             state.move_x += state.mouse_x - lastNX;
@@ -813,6 +821,16 @@ function attachInputListeners(canvas, state) {
         dragging = false;
         state.mouse_down = 0;
     };
+    // Pointer left the canvas: end any drag, release the button, and clear the
+    // hover flag so hover-driven demos settle. `move_*` deltas are left as-is
+    // (they are cleared by the caller each frame).
+    const onLeave = () => {
+        dragging = false;
+        state.mouse_down = 0;
+        state.hovering = 0;
+        lastNX = null;
+        lastNY = null;
+    };
     const onWheel = (event) => {
         event.preventDefault();
         // Pass the raw wheel delta through: a demo reading `frame.wheel` decides
@@ -827,19 +845,21 @@ function attachInputListeners(canvas, state) {
         state.double_clicked = 1;
     };
 
+    canvas.addEventListener("pointerenter", onEnter);
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerup", onUp);
-    canvas.addEventListener("pointerleave", onUp);
+    canvas.addEventListener("pointerleave", onLeave);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("click", onClick);
     canvas.addEventListener("dblclick", onDblClick);
 
     return () => {
+        canvas.removeEventListener("pointerenter", onEnter);
         canvas.removeEventListener("pointerdown", onDown);
         canvas.removeEventListener("pointermove", onMove);
         canvas.removeEventListener("pointerup", onUp);
-        canvas.removeEventListener("pointerleave", onUp);
+        canvas.removeEventListener("pointerleave", onLeave);
         canvas.removeEventListener("wheel", onWheel);
         canvas.removeEventListener("click", onClick);
         canvas.removeEventListener("dblclick", onDblClick);

@@ -120,7 +120,7 @@ gpu frame
         // After >4s idle the camera auto-rotates; drag always steers it.
         let auto = frame.dt * 0.18 if next_idle > 4.0 else 0.0
         cam_b[0] = yaw + frame.drag_dx * 0.008 + auto
-        cam_b[1] = pitch + frame.drag_dy * 0.006
+        cam_b[1] = pitch - frame.drag_dy * 0.006
         cam_b[2] = next_idle
         cam_b[3] = 0.0
 

@@ -2,20 +2,20 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 // On-device neural-network training (the capstone): a 2-12-12-1 MLP with 205
-// parameters is trained, entirely on the GPU, to classify a two-arm spiral.
-// JS only paints the result and reads back the loss/accuracy HUD — every bit
-// of training (forward pass, analytic backprop, weight update) is a Miri GPU
-// kernel.
+// parameters is trained, entirely on the GPU, to classify cycling 2-D datasets
+// (a two-arm spiral, concentric rings, then XOR). JS only paints the result and
+// reads back the loss/accuracy HUD — every bit of training (forward pass,
+// analytic backprop, weight update) is a Miri GPU kernel.
 //
-// The training is a faithful full-batch backprop step, run by a single GPU
-// thread each frame. It forwards every sample through the net, backpropagates
-// the binary-cross-entropy error to an exact gradient, and takes one momentum
-// SGD step (lr 0.25, momentum 0.9). This is only expressible on-device because
-// the gradient and per-sample activations live in per-invocation local `Array`
-// scratch (g[205], h1/h2/d1/d2) that is read-modify-written across the batch —
-// no cross-thread reduction, no host round-trip. Weights and velocities
-// ping-pong (a -> b); the host swaps a/b between frames, so each displayed
-// frame is one training step and the decision field visibly sharpens.
+// Each frame runs one faithful full-batch backprop epoch on a single GPU thread:
+// it forwards all samples through the net, backpropagates the binary-cross-entropy
+// error to an exact gradient, and takes one momentum SGD step (lr 0.25, momentum
+// 0.9, light L2 decay). This is only expressible on-device because the gradient
+// and per-sample activations live in per-invocation local `Array` scratch
+// (g[205], h1/h2/d1/d2) accumulated across the batch — no cross-thread reduction,
+// no host round-trip. Weights and velocities ping-pong (a -> b); the host swaps
+// a/b between frames, so the decision field converges to a clean closed boundary
+// within a second or two.
 //
 // The dataset itself cycles on a timer — spiral, then rings, then xor — so the
 // demo shows the same net re-forming its decision boundary for three different
@@ -23,12 +23,12 @@
 // persistent state is needed; the net simply adapts in place as the data changes.
 //
 // A `gpu frame` block runs four buffer-disjoint passes:
-// 1. Train:   one thread — forward + backprop over the batch, momentum update.
+// 1. Train:   one thread — one full-batch backprop epoch, w_a/v_a -> w_b/v_b.
 // 2. Stats:   one thread — post-step loss + accuracy for the HUD readback.
 // 3. Dataset: regenerate the current mode's points (`train` stays the first pass
 //             so it keeps ownership of the weight ping-pong).
-// 4. Render:  per-pixel decision field with confidence bands, a pulsing decision
-//             boundary, and the data points overlaid.
+// 4. Render:  per-pixel decision field (class glow over navy, flowing confidence
+//             bands, a bright pulsing seam) with the data points overlaid.
 // Every math-intrinsic result is anchored to f32 so the device path stays 32-bit.
 
 use system.collections.array
@@ -50,28 +50,37 @@ const W3 = 192
 const B3 = 204
 const PARAMS = 205
 
-// Dataset: 220 points, each (x, y, label in {0, 1}); PER_ARM points per class.
-const SAMPLES = 220
-const PER_ARM = 110
+// Dataset: 100 points, each (x, y, label in {0, 1}); PER_ARM points per class.
+// Training runs on a single GPU thread that walks the whole batch each epoch, so
+// the per-frame cost is linear in the sample count; 100 points keeps the frame
+// well inside budget while still defining two clean spiral arms (and the rings /
+// XOR shapes). Fewer points, not fewer pixels, is what buys frame rate here — the
+// GPU saturates its lanes at any sane resolution, so the field render is nearly
+// free next to the serial training walk.
+const SAMPLES = 100
+const PER_ARM = 50
 const DATA = SAMPLES * 3
 
-// Decision-field surface: a 1280×720 (16:9) RGBA image.
-const CW = 1280
-const CH = 720
+// Decision-field surface: a 960×540 (16:9) RGBA image. The render pass evaluates
+// the whole net and scans every data point per pixel, so the pixel count is the
+// dominant per-frame cost; 960×540 keeps the field and dots crisp (the browser
+// scales the canvas to fit) while staying well within frame budget.
+const CW = 960
+const CH = 540
 const PIXELS = CW * CH
 const PAINT = PIXELS * 4
 
 // Weights and velocities (ping-ponged a -> b).
-gpu var wa = Array<f32, PARAMS>()
-gpu var wb = Array<f32, PARAMS>()
-gpu var va = Array<f32, PARAMS>()
-gpu var vb = Array<f32, PARAMS>()
+gpu var w_a = Array<f32, PARAMS>()
+gpu var w_b = Array<f32, PARAMS>()
+gpu var v_a = Array<f32, PARAMS>()
+gpu var v_b = Array<f32, PARAMS>()
 
 // Dataset points and the [loss, accuracy] HUD stats.
 gpu var data = Array<f32, DATA>()
 gpu var stats = Array<f32, 2>()
 
-// Decision-field paint output (1280×720 RGBA).
+// Decision-field paint output (960×540 RGBA).
 gpu var paint = Array<f32, PAINT>()
 
 fn rand_unit(key i32) f32
@@ -88,8 +97,8 @@ forall i in 0..PARAMS
         scale = 0.5
     if i >= W3 and i < B3
         scale = 0.68
-    wa[i] = ((rand_unit(i + 1) * 2.0 - 1.0) * scale) as f32
-    va[i] = 0.0
+    w_a[i] = ((rand_unit(i + 1) * 2.0 - 1.0) * scale) as f32
+    v_a[i] = 0.0
 
 // Seed a two-arm spiral: points 0..PER_ARM are class 0, the rest class 1.
 forall s in 0..SAMPLES
@@ -105,7 +114,7 @@ forall s in 0..SAMPLES
     data[s * 3 + 2] = c as f32
 
 // Clear the paint buffer. This top-level 2-D pass over the exact display extent
-// tells the web-gpu backend the canvas is 1280×720 (16:9); the per-frame render
+// tells the web-gpu backend the canvas is 960×540 (16:9); the per-frame render
 // pass is 1-D, which alone would leave the canvas shape ambiguous.
 forall px, py in 0..CW, 0..CH
     let base = (py * CW + px) * 4
@@ -115,10 +124,13 @@ forall px, py in 0..CW, 0..CH
     paint[base + 3] = 1.0
 
 gpu frame
-    // Pass 1: one full-batch backprop step. A single thread forwards every
-    // sample, backpropagates the cross-entropy error into the exact gradient
-    // `g`, then applies the momentum update wa/va -> wb/vb. The gradient and
-    // the activation buffers are per-invocation local scratch arrays.
+    // Pass 1: one full-batch backprop epoch. A single thread forwards every
+    // sample from the previous frame's weights `w_a`, backpropagates the
+    // cross-entropy error into the exact gradient `g`, then applies one momentum
+    // SGD step, writing w_a/v_a -> w_b/v_b (the host ping-pongs a/b each frame). Only
+    // the gradient and the tiny activation buffers are local scratch — the
+    // weights stay in device memory, so the kernel avoids the register spill that
+    // a burst of local weight copies would cause on the single training lane.
     forall t in 0..1
         var g = Array<f32, PARAMS>()
         var h1 = Array<f32, H1>()
@@ -134,22 +146,22 @@ gpu frame
             // Forward pass.
             var j = 0
             while j < H1
-                let a1 = (wa[W1 + j * IN] * x0 + wa[W1 + j * IN + 1] * x1 + wa[B1 + j]) as f32
+                let a1 = (w_a[W1 + j * IN] * x0 + w_a[W1 + j * IN + 1] * x1 + w_a[B1 + j]) as f32
                 h1[j] = tanh(a1) as f32
                 j = j + 1
             j = 0
             while j < H2
-                var a2 = wa[B2 + j]
+                var a2 = w_a[B2 + j]
                 var k = 0
                 while k < H1
-                    a2 = (a2 + wa[W2 + j * H1 + k] * h1[k]) as f32
+                    a2 = (a2 + w_a[W2 + j * H1 + k] * h1[k]) as f32
                     k = k + 1
                 h2[j] = tanh(a2) as f32
                 j = j + 1
-            var y = wa[B3]
+            var y = w_a[B3]
             j = 0
             while j < H2
-                y = (y + wa[W3 + j] * h2[j]) as f32
+                y = (y + w_a[W3 + j] * h2[j]) as f32
                 j = j + 1
             let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
 
@@ -159,7 +171,7 @@ gpu frame
             j = 0
             while j < H2
                 g[W3 + j] = (g[W3 + j] + ds * h2[j]) as f32
-                d2[j] = (ds * wa[W3 + j] * (1.0 - h2[j] * h2[j])) as f32
+                d2[j] = (ds * w_a[W3 + j] * (1.0 - h2[j] * h2[j])) as f32
                 j = j + 1
             j = 0
             while j < H2
@@ -174,7 +186,7 @@ gpu frame
                 var acc = 0.0
                 j = 0
                 while j < H2
-                    acc = (acc + d2[j] * wa[W2 + j * H1 + k]) as f32
+                    acc = (acc + d2[j] * w_a[W2 + j * H1 + k]) as f32
                     j = j + 1
                 d1[k] = (acc * (1.0 - h1[k] * h1[k])) as f32
                 k = k + 1
@@ -186,13 +198,15 @@ gpu frame
                 k = k + 1
             s = s + 1
 
-        // Momentum SGD update (lr 0.25, momentum 0.9), averaged over the batch.
+        // Momentum SGD (lr 0.25, momentum 0.9), gradient averaged over the batch,
+        // writing the new weights/velocities to w_b/v_b. No weight decay: the
+        // spiral needs the sharp, high-curvature boundary that L2 would smooth.
         let sc = (0.25 / (SAMPLES as f32)) as f32
         var i = 0
         while i < PARAMS
-            let nv = (0.9 * va[i] - sc * g[i]) as f32
-            vb[i] = nv
-            wb[i] = (wa[i] + nv) as f32
+            let nv = (0.9 * v_a[i] - sc * g[i]) as f32
+            v_b[i] = nv
+            w_b[i] = (w_a[i] + nv) as f32
             i = i + 1
 
     // Pass 2: post-step loss + accuracy over the batch for the HUD readback.
@@ -208,22 +222,22 @@ gpu frame
             let lbl = data[s * 3 + 2]
             var j = 0
             while j < H1
-                let a1 = (wb[W1 + j * IN] * x0 + wb[W1 + j * IN + 1] * x1 + wb[B1 + j]) as f32
+                let a1 = (w_b[W1 + j * IN] * x0 + w_b[W1 + j * IN + 1] * x1 + w_b[B1 + j]) as f32
                 h1[j] = tanh(a1) as f32
                 j = j + 1
             j = 0
             while j < H2
-                var a2 = wb[B2 + j]
+                var a2 = w_b[B2 + j]
                 var k = 0
                 while k < H1
-                    a2 = (a2 + wb[W2 + j * H1 + k] * h1[k]) as f32
+                    a2 = (a2 + w_b[W2 + j * H1 + k] * h1[k]) as f32
                     k = k + 1
                 h2[j] = tanh(a2) as f32
                 j = j + 1
-            var y = wb[B3]
+            var y = w_b[B3]
             j = 0
             while j < H2
-                y = (y + wb[W3 + j] * h2[j]) as f32
+                y = (y + w_b[W3 + j] * h2[j]) as f32
                 j = j + 1
             let p = clamp(1.0 / (1.0 + (exp(0.0 - y) as f32)), 0.000001, 0.999999) as f32
             loss = (loss - (lbl * (log(p) as f32) + (1.0 - lbl) * (log(1.0 - p) as f32))) as f32
@@ -241,8 +255,8 @@ gpu frame
     // first pass (it owns the weight ping-pong); this pass feeds the render below
     // and next frame's training, so the shape only lags a frame at a boundary.
     forall s in 0..SAMPLES
-        // Mode advances every 6 seconds: spiral (0), rings (1), xor (2).
-        let mode = (floor(frame.time / 6.0) as i32) % 3
+        // Mode advances every 10 seconds: spiral (0), rings (1), xor (2).
+        let mode = (floor(frame.time / 14.0) as i32) % 3
         var dx = 0.0
         var dy = 0.0
         var lbl = 0.0
@@ -257,8 +271,9 @@ gpu frame
             dy = (r * (sin(th) as f32) + (rand_unit(s * 2 + 2) - 0.5) * 0.07) as f32
             lbl = c as f32
         if mode == 1
-            // Concentric rings: an inner disk (class 1) in an outer annulus.
-            let inner = s < 100
+            // Concentric rings: an inner disk (class 1) in an outer annulus,
+            // split evenly across the batch.
+            let inner = s * 2 < SAMPLES
             let rad = (sqrt(rand_unit(100003 + s * 3 + 1)) * 0.34) as f32 if inner else (0.58 + rand_unit(100003 + s * 3 + 1) * 0.27) as f32
             let ang = (rand_unit(100003 + s * 3 + 2) * (6.2831853 as f32)) as f32
             dx = (rad * (cos(ang) as f32)) as f32
@@ -288,26 +303,28 @@ gpu frame
         var h2 = Array<f32, H2>()
         var j = 0
         while j < H1
-            let a1 = (wb[W1 + j * IN] * gx + wb[W1 + j * IN + 1] * gy + wb[B1 + j]) as f32
+            let a1 = (w_b[W1 + j * IN] * gx + w_b[W1 + j * IN + 1] * gy + w_b[B1 + j]) as f32
             h1[j] = tanh(a1) as f32
             j = j + 1
         j = 0
         while j < H2
-            var a2 = wb[B2 + j]
+            var a2 = w_b[B2 + j]
             var k = 0
             while k < H1
-                a2 = (a2 + wb[W2 + j * H1 + k] * h1[k]) as f32
+                a2 = (a2 + w_b[W2 + j * H1 + k] * h1[k]) as f32
                 k = k + 1
             h2[j] = tanh(a2) as f32
             j = j + 1
-        var y = wb[B3]
+        var y = w_b[B3]
         j = 0
         while j < H2
-            y = (y + wb[W3 + j] * h2[j]) as f32
+            y = (y + w_b[W3 + j] * h2[j]) as f32
             j = j + 1
         let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
 
-        // Class side (blue below 0.5, gold above) shaded by squared confidence.
+        // Class side (blue below 0.5, gold above) lifted off a deep navy base by
+        // the squared confidence, so the uncertain band around the boundary stays
+        // dark and the settled regions glow.
         let conf = (abs(p - 0.5) * 2.0) as f32
         let sr = 0.16 if p < 0.5 else 1.0
         let sg = 0.31 if p < 0.5 else 0.84
@@ -317,38 +334,45 @@ gpu frame
         var cg = (0.02 + sg * fill) as f32
         var cb = (0.046 + sb * fill) as f32
 
-        // Confidence iso-contours that drift outward from the boundary.
-        let tm = frame.time
-        let bnd = (abs(fract(p * 9.0 - tm * 0.25) - 0.5)) as f32
-        let bw = (smoothstep(0.44, 0.5, bnd) * 0.10) as f32
-        cr = (cr + sr * bw) as f32
-        cg = (cg + sg * bw) as f32
-        cb = (cb + sb * bw) as f32
+        // Confidence iso-contours flowing outward from the boundary: the field
+        // keeps moving even once the weights have nearly settled.
+        let bands = (abs(fract(p * 9.0 - frame.time * 0.25) - 0.5)) as f32
+        let band = (smoothstep(0.44, 0.5, bands) * 0.10) as f32
+        cr = (cr + sr * band) as f32
+        cg = (cg + sg * band) as f32
+        cb = (cb + sb * band) as f32
 
-        // Decision boundary: a bright, breathing seam at p = 0.5.
+        // Decision boundary: a bright seam at p = 0.5, breathing on a slow pulse.
         let e = (abs(p - 0.5) / 0.035) as f32
         let edge = (exp(0.0 - e * e)) as f32
-        let pulse = (0.72 + 0.28 * (sin(tm * 2.4) as f32)) as f32
-        let seam = (edge * 0.55 * pulse) as f32
-        cr = (cr + 0.90 * seam) as f32
-        cg = (cg + 0.95 * seam) as f32
-        cb = (cb + 1.0 * seam) as f32
+        let pulse = (0.72 + 0.28 * (sin(frame.time * 2.4) as f32)) as f32
+        cr = (cr + 0.90 * edge * 0.55 * pulse) as f32
+        cg = (cg + 0.95 * edge * 0.55 * pulse) as f32
+        cb = (cb + 1.0 * edge * 0.55 * pulse) as f32
 
-        // Data-point overlay: soft dots colored by their true label.
+        // Data-point overlay: small filled dots colored by their true label, each
+        // ringed by a dark rim so they read against the field. Samples outside the
+        // pixel's x band are rejected on one load, before the distance math.
         var s = 0
         while s < SAMPLES
             let dx = (gx - data[s * 3]) as f32
-            let dy = (gy - data[s * 3 + 1]) as f32
-            let dd = (dx * dx + dy * dy) as f32
-            if dd < 0.0016
-                let lbl = data[s * 3 + 2]
-                let pr = 0.45 if lbl < 0.5 else 1.0
-                let pg = 0.62 if lbl < 0.5 else 0.88
-                let pb = 1.0 if lbl < 0.5 else 0.4
-                let core = (1.0 - smoothstep(0.0008, 0.0016, dd)) as f32
-                cr = (cr + (pr - cr) * core) as f32
-                cg = (cg + (pg - cg) * core) as f32
-                cb = (cb + (pb - cb) * core) as f32
+            if dx * dx < 0.00032
+                let dy = (gy - data[s * 3 + 1]) as f32
+                let dd = (dx * dx + dy * dy) as f32
+                if dd < 0.00032
+                    let rr = (sqrt(dd)) as f32
+                    let lbl = data[s * 3 + 2]
+                    let pr = 0.45 if lbl < 0.5 else 1.0
+                    let pg = 0.62 if lbl < 0.5 else 0.88
+                    let pb = 1.0 if lbl < 0.5 else 0.40
+                    let disc = (1.0 - smoothstep(0.0155, 0.0178, rr)) as f32
+                    cr = (cr + (0.01 - cr) * disc) as f32
+                    cg = (cg + (0.02 - cg) * disc) as f32
+                    cb = (cb + (0.05 - cb) * disc) as f32
+                    let core = (1.0 - smoothstep(0.0100, 0.0148, rr)) as f32
+                    cr = (cr + (pr - cr) * core) as f32
+                    cg = (cg + (pg - cg) * core) as f32
+                    cb = (cb + (pb - cb) * core) as f32
             s = s + 1
 
         let base = px * 4
@@ -358,9 +382,10 @@ gpu frame
         paint[base + 3] = 1.0
 
 
-// Native smoke: after the seed and one training step, report the post-step loss
-// and accuracy. Training reduces the loss below the ~0.7 random-init baseline,
-// verifying the on-device forward + backprop + update chain end to end.
+// Native smoke: after the seed and one frame (a burst of STEPS epochs), report
+// the post-step loss and accuracy. Training reduces the loss well below the
+// ~0.7 random-init baseline, verifying the on-device forward + backprop + update
+// chain end to end.
 let h = stats
 let loss_milli = (h[0] * 1000.0) as i32
 let acc_milli = (h[1] * 1000.0) as i32

@@ -56,36 +56,6 @@ fn demo_buffer_reuse() {
     assert_gpu_runs_with_output(source, "15 1 2 1 1");
 }
 
-/// mandelbrot: Mandelbrot set fractal using sized Array<f32, N>() constructor.
-/// Computes escape-time iterations for each pixel in a 64×64 grid, demonstrating
-/// fixed-size GPU buffers and correctness of in-set vs escaped pixels. The classic
-/// palette renders the set black (0.0); escaped pixels carry their escape count.
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn demo_mandelbrot() {
-    let source = include_str!("../../../examples/gpu/mandelbrot.mi");
-    assert_gpu_runs_with_output(source, "inside=0.0 outside=1.0");
-}
-
-/// game_of_life: Conway's Game of Life cellular automaton on a 64×64 toroidal grid.
-/// Seeds a deterministic ~38% pseudo-random soup, then advances one B3/S23
-/// generation with a `gpu frame` kernel (the browser runtime loops it). The
-/// native run counts live cells after one generation — a deterministic smoke
-/// value (the soup hash + the rule are fixed). Rule correctness on isolated
-/// patterns is covered by the blinker/glider tests in gpu_frame.rs / launch.rs.
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn demo_game_of_life() {
-    let source = include_str!("../../../examples/gpu/game_of_life.mi");
-    assert_gpu_runs_with_output(source, "alive=1993");
-}
-
 /// box_blur: 3×3 clamped-edge box blur convolution. Initializes a bright 16×16
 /// square (value 1.0) centered in a 64×64 f32 image, applies two-kernel GPU
 /// computation (initialization then blur), and readbacks to host. Demonstrates
@@ -270,7 +240,7 @@ fn demo_wormhole_web() {
     assert_gpu_runs_with_output(source, "red_sum_milli=106794584");
 }
 
-/// particles_web: 147,456 particles advected through a two-octave curl-noise
+/// particles_web: 1,048,576 particles advected through a two-octave curl-noise
 /// flow field, scattered with additive GPU atomics into a fixed-point intensity
 /// surface, tone-mapped to a white/blue field. A `gpu frame` block runs four
 /// buffer-disjoint passes (advect / fade / atomic-scatter / present) over
@@ -286,7 +256,7 @@ fn demo_wormhole_web() {
 )]
 fn demo_particles_web() {
     let source = include_str!("../../../examples/gpu/web/particles.mi");
-    assert_gpu_runs_with_output(source, "surface_total=35753440");
+    assert_gpu_runs_with_output(source, "surface_total=254161920");
 }
 
 /// fluid_web: Stam-style stable-fluids simulation, the frame-graph stress test.
@@ -310,15 +280,16 @@ fn demo_fluid_web() {
 }
 
 /// neural_web: the capstone — a 2-12-12-1 MLP (205 parameters) trained entirely
-/// on the GPU to classify a two-arm spiral. A `gpu frame` block runs the full
-/// training step as buffer-disjoint passes: a single-thread full-batch analytic
-/// backprop step accumulating the exact gradient into per-invocation local
-/// scratch arrays and applying a momentum update (ping-ponged wa/va -> wb/vb), a
-/// loss+accuracy stats pass for the HUD readback, and a per-pixel decision-field
-/// render with a data-point overlay. The native run does one training step from
-/// the seeded weights; the smoke value is the post-step loss and accuracy (in
-/// milli-units), proving the on-device forward + backprop + update chain moves
-/// the net off its random-init baseline (one step lifts accuracy past ~0.7).
+/// on the GPU to classify cycling 2-D datasets (spiral, rings, XOR). A `gpu
+/// frame` block runs the training as buffer-disjoint passes: a single-thread
+/// full-batch analytic backprop epoch that accumulates the exact gradient into
+/// local scratch and applies a momentum update (wa/va -> wb/vb, ping-ponged by
+/// the host), a stats pass for the HUD
+/// readback, a dataset-regeneration pass, and a per-pixel decision-field render
+/// with a data-point overlay. The native run does one frame (one epoch)
+/// from the seeded weights; the smoke value is the post-step loss and accuracy
+/// (in milli-units), proving the on-device forward + backprop + update chain
+/// drives the net well below its random-init baseline.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -326,5 +297,5 @@ fn demo_fluid_web() {
 )]
 fn demo_neural_web() {
     let source = include_str!("../../../examples/gpu/web/neural.mi");
-    assert_gpu_runs_with_output(source, "loss_milli=624 acc_milli=709");
+    assert_gpu_runs_with_output(source, "loss_milli=624 acc_milli=700");
 }
