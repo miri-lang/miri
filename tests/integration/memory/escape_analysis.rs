@@ -19,7 +19,7 @@ use super::super::utils::*;
 fn test_method_receiver_not_consumed_without_summary() {
     // Calling a read-only method on a class instance multiple times must NOT
     // consume the receiver when no escape summary marks self as escaping.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 class Square
@@ -32,11 +32,12 @@ class Square
 fn measure_twice(sq Square)
     let a = sq.area()
     let b = sq.area()
-    println(f"{a} {b}")
+    println(f"first={a} second={b}")
 
 let sq = Square(s: 4)
 measure_twice(sq)
 "#,
+        "first=16 second=16",
     );
 }
 
@@ -44,7 +45,7 @@ measure_twice(sq)
 fn test_method_arg_not_consumed_without_summary() {
     // Passing a managed argument to a method that only reads it must NOT
     // consume the argument variable (no escape summary for the method).
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -58,12 +59,13 @@ class Lens
 fn measure_twice(lens Lens, items [int])
     let a = lens.peek(items)
     let b = lens.peek(items)
-    println(f"{a} {b}")
+    println(f"first={a} second={b}")
 
 let lens = Lens(s: 2)
 let xs = List([1, 2, 3])
 measure_twice(lens, xs)
 "#,
+        "first=6 second=6",
     );
 }
 
@@ -71,7 +73,7 @@ measure_twice(lens, xs)
 fn test_inherited_method_receiver_not_consumed() {
     // Calling an inherited method (defined on the base class) multiple times
     // must not consume the receiver — the lookup walks the base_class chain.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 class Base
@@ -90,11 +92,12 @@ class Child extends Base
 fn use_child(c Child)
     let a = c.read()
     let b = c.read()
-    println(f"{a} {b}")
+    println(f"first={a} second={b}")
 
 let c = Child(v: 42, lbl: "hi")
 use_child(c)
 "#,
+        "first=42 second=42",
     );
 }
 
@@ -102,7 +105,7 @@ use_child(c)
 fn test_trait_receiver_not_consumed_without_implementer_summary() {
     // When the receiver has a trait type and no implementer escape summaries
     // are present, virtual dispatch must NOT falsely consume the receiver.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 trait Measurable
@@ -120,11 +123,12 @@ class Rect implements Measurable
 fn measure_twice(m Measurable)
     let a = m.size()
     let b = m.size()
-    println(f"{a} {b}")
+    println(f"first={a} second={b}")
 
 let r = Rect(w: 3, h: 4)
 measure_twice(r)
 "#,
+        "first=12 second=12",
     );
 }
 
@@ -132,7 +136,7 @@ measure_twice(r)
 fn test_method_chain_no_false_consume() {
     // Chaining multiple read-only method calls on the same receiver must not
     // consume the receiver between calls.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 class Stats
@@ -149,18 +153,19 @@ class Stats
         return self.max - self.min
 
 fn report(s Stats)
-    println(f"{s.lo()} {s.hi()} {s.range()}")
+    println(f"lo={s.lo()} hi={s.hi()} range={s.range()}")
 
 let s = Stats(lo: 2, hi: 10)
 report(s)
 "#,
+        "lo=2 hi=10 range=8",
     );
 }
 
 #[test]
 fn test_managed_param_passed_to_readonly_fn_no_error() {
     // Passing a list to a function that only reads it must never be flagged.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -170,11 +175,12 @@ fn length_of(items [int]) int
 fn check(items [int])
     let n = length_of(items)
     let m = length_of(items)
-    println(f"{n} {m}")
+    println(f"first={n} second={m}")
 
 let xs = List([1, 2, 3])
 check(xs)
 "#,
+        "first=3 second=3",
     );
 }
 
@@ -182,7 +188,7 @@ check(xs)
 fn test_managed_param_multi_pass_no_error() {
     // Passing the same managed param to multiple calls inside a function body
     // must not consume it.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -200,8 +206,9 @@ fn double_sum(items [int]) int
     return a + b
 
 let xs = List([1, 2, 3])
-println(f"{double_sum(xs)}")
+println(f"double_sum={double_sum(xs)}")
 "#,
+        "double_sum=12",
     );
 }
 
@@ -209,7 +216,7 @@ println(f"{double_sum(xs)}")
 fn test_managed_param_passed_transitively_no_error() {
     // A managed param passed through a helper chain that never stores it
     // must not be flagged.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -223,8 +230,9 @@ fn outer(items [int]) int
     return middle(items)
 
 let xs = List([10, 20])
-println(f"{outer(xs)}")
+println(f"outer={outer(xs)}")
 "#,
+        "outer=2",
     );
 }
 
@@ -232,7 +240,7 @@ println(f"{outer(xs)}")
 fn test_managed_param_recursive_no_error() {
     // A recursive function that passes the same managed param to itself
     // must not be flagged.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -241,9 +249,10 @@ fn count_down(items [int], n int) int
         return 0
     return items.element_at(0) + count_down(items, n - 1)
 
-let xs = List([1, 2, 3])
-println(f"{count_down(xs, 3)}")
+let xs = List([5, 2, 3])
+println(f"count_down={count_down(xs, 3)}")
 "#,
+        "count_down=15",
     );
 }
 
@@ -289,7 +298,7 @@ use_twice(c)
 fn test_unbounded_generic_param_not_consumed_in_fn_body() {
     // An unbounded generic param `T` is a managed-typed unknown — passing it
     // to a read-only helper twice inside a fn body must not be flagged.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 fn pass_through<T>(x T)
@@ -298,10 +307,13 @@ fn pass_through<T>(x T)
 fn use_twice<T>(x T)
     pass_through(x)
     pass_through(x)
+    println("passed twice")
 
-use_twice(42)
-println("ok")
+let n = 42
+use_twice(n)
+println(f"n={n}")
 "#,
+        "passed twice\nn=42",
     );
 }
 
@@ -310,7 +322,7 @@ fn test_managed_bounded_generic_not_consumed_in_fn_body() {
     // A class-bounded generic where the class is NOT a resource (no fn drop)
     // must follow the managed-type pathway — no false-positive consume inside
     // a function body.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 
 class Greeter
@@ -326,11 +338,13 @@ fn pass_through<T extends Greeter>(x T)
 fn use_twice<T extends Greeter>(x T)
     pass_through(x)
     pass_through(x)
+    println("passed twice")
 
 let g = Greeter(n: "world")
 use_twice(g)
-println("ok")
+println("done")
 "#,
+        "passed twice\ndone",
     );
 }
 
@@ -431,7 +445,7 @@ fn test_generic_function_two_monomorphizations_no_re_analysis() {
     // managed types must not re-trigger escape analysis. Monomorphization
     // specialises *types*, not the call graph — if the generic version is
     // clean, every monomorphization is clean.
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -441,13 +455,16 @@ fn pass_through<T>(x T)
 fn use_twice<T>(x T)
     pass_through(x)
     pass_through(x)
+    println("used twice")
 
 let xs = List([1, 2, 3])
 let ys = List(["a", "b"])
+println(f"xs_len={xs.length()}")
 use_twice(xs)
+println(f"ys_len={ys.length()}")
 use_twice(ys)
-println("ok")
 "#,
+        "xs_len=3\nused twice\nys_len=2\nused twice",
     );
 }
 
@@ -547,7 +564,7 @@ check(data)
 
 #[test]
 fn test_pure_borrow_summary_no_consume() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -557,11 +574,12 @@ fn count(xs [int]) int
 fn use_twice(xs [int])
     let a = count(xs)
     let b = count(xs)
-    println(f"{a} {b}")
+    println(f"first={a} second={b}")
 
 let data = List([1, 2, 3])
 use_twice(data)
 "#,
+        "first=3 second=3",
     );
 }
 
@@ -571,7 +589,7 @@ use_twice(data)
 
 #[test]
 fn test_recursive_fn_no_false_positive() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -582,9 +600,10 @@ fn sum_n(xs [int], n int) int
 
 let data = List([10, 20, 30])
 let total = sum_n(data, 3)
-println(f"{total}")
-println(f"{data.length()}")
+println(f"total={total}")
+println(f"len={data.length()}")
 "#,
+        "total=60\nlen=3",
     );
 }
 
@@ -594,7 +613,7 @@ println(f"{data.length()}")
 
 #[test]
 fn test_mutual_scc_no_false_positive() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -611,9 +630,10 @@ fn count_from_b(xs [int], i int) int
 let data = List([1, 2, 3, 4])
 let a = count_from_a(data, 0)
 let b = count_from_b(data, 0)
-println(f"{a} {b}")
-println(f"{data.length()}")
+println(f"a={a} b={b}")
+println(f"len={data.length()}")
 "#,
+        "a=10 b=10\nlen=4",
     );
 }
 
@@ -623,7 +643,7 @@ println(f"{data.length()}")
 
 #[test]
 fn test_method_calls_on_param_no_false_consume_with_summaries() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -638,6 +658,7 @@ fn report(xs [int])
 let data = List([5, 6, 7])
 report(data)
 "#,
+        "len=3 again=3",
     );
 }
 
@@ -678,7 +699,7 @@ caller(data)
 
 #[test]
 fn test_pure_borrow_in_match_arm_no_consume() {
-    assert_runs(
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
@@ -694,5 +715,6 @@ fn inspect(xs [int], n int)
 let data = List([10, 20])
 inspect(data, 0)
 "#,
+        "zero: 2\nstill alive: 2",
     );
 }

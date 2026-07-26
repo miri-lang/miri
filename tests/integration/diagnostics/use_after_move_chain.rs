@@ -263,33 +263,36 @@ println(f"{items.length()}")
 #[test]
 fn test_chain_no_false_positive_pure_borrow() {
     // All functions only read the list — nothing stores or returns it.
-    // The program must compile cleanly with no use-after-move error.
-    assert_runs(
+    // The program must compile cleanly with no use-after-move error, and every
+    // borrow must still observe the intact list.
+    assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn print_first(items [int])
-    println(f"{items.length()}")
+    println(f"inner_len={items.length()}")
 
 fn print_all(items [int])
     var i = 0
     while i < items.length()
-        println(f"{items.element_at(i)}")
+        println(f"item={items.element_at(i)}")
         i = i + 1
     print_first(items)
 
 let xs = List([1, 2, 3])
 print_all(xs)
-println(f"{xs.length()}")
+println(f"outer_len={xs.length()}")
 "#,
+        "item=1\nitem=2\nitem=3\ninner_len=3\nouter_len=3",
     );
 }
 
 #[test]
 fn test_chain_no_false_positive_local_mutation() {
     // count_unique creates a local Set and mutates it, but items itself
-    // never escapes — it only has its elements read.  Must compile cleanly.
-    assert_runs(
+    // never escapes — it only has its elements read.  The caller's list must
+    // survive the call with every element intact.
+    assert_runs_with_output(
         r#"
 use system.collections.list
 use system.collections.set
@@ -304,9 +307,10 @@ fn count_unique(items [int]) int
 
 let xs = List([1, 2, 2, 3])
 let n = count_unique(xs)
-println(f"{xs.length()}")
-println(f"{n}")
+println(f"len={xs.length()}")
+println(f"unique={n}")
 "#,
+        "len=4\nunique=3",
     );
 }
 
