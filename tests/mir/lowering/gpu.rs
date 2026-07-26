@@ -1,29 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::{mir_lowering_gpu_flag_test, mir_lowering_gpu_intrinsic_test};
+use crate::mir::utils::{has_gpu_intrinsic, mir_lower_code};
 use miri::mir::{Dimension, GpuIntrinsic};
+
+fn assert_gpu_intrinsics(source: &str, expected: &[GpuIntrinsic]) {
+    let body = mir_lower_code(source);
+    for intrinsic in expected {
+        assert!(
+            has_gpu_intrinsic(&body, intrinsic),
+            "Expected {:?} GPU intrinsic in MIR for source:\n{}",
+            intrinsic,
+            source
+        );
+    }
+}
 
 #[test]
 fn test_gpu_function_flag() {
-    mir_lowering_gpu_flag_test(
+    let body = mir_lower_code(
         "
 gpu fn kernel()
     // empty
 ",
-        true,
     );
+    assert!(body.is_gpu());
 }
 
 #[test]
 fn test_normal_function_flag() {
-    mir_lowering_gpu_flag_test(
+    let body = mir_lower_code(
         "
 fn normal()
     // empty
 ",
-        false,
     );
+    assert!(!body.is_gpu());
 }
 
 #[test]
@@ -32,52 +44,66 @@ fn test_gpu_thread_idx_x() {
     gpu fn main()
         let idx = kernel.thread_idx.x
 ";
-    mir_lowering_gpu_flag_test(source, true);
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::ThreadIdx(Dimension::X));
+    assert!(mir_lower_code(source).is_gpu());
+    assert_gpu_intrinsics(source, &[GpuIntrinsic::ThreadIdx(Dimension::X)]);
 }
 
 #[test]
 fn test_gpu_block_idx_all() {
-    let source = "
+    assert_gpu_intrinsics(
+        "
     gpu fn main()
         let x = kernel.block_idx.x
         let y = kernel.block_idx.y
         let z = kernel.block_idx.z
-";
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::BlockIdx(Dimension::X));
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::BlockIdx(Dimension::Y));
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::BlockIdx(Dimension::Z));
+",
+        &[
+            GpuIntrinsic::BlockIdx(Dimension::X),
+            GpuIntrinsic::BlockIdx(Dimension::Y),
+            GpuIntrinsic::BlockIdx(Dimension::Z),
+        ],
+    );
 }
 
 #[test]
 fn test_gpu_context_alias_lowers_to_intrinsic() {
-    let source = "
+    assert_gpu_intrinsics(
+        "
     gpu fn main()
         let idx = gpu_context.thread_idx.x
-";
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::ThreadIdx(Dimension::X));
+",
+        &[GpuIntrinsic::ThreadIdx(Dimension::X)],
+    );
 }
 
 #[test]
 fn test_kernel_block_dim_and_grid_dim() {
-    let source = "
+    assert_gpu_intrinsics(
+        "
     gpu fn main()
         let bd = kernel.block_dim.x
         let gd = kernel.grid_dim.y
-";
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::BlockDim(Dimension::X));
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GridDim(Dimension::Y));
+",
+        &[
+            GpuIntrinsic::BlockDim(Dimension::X),
+            GpuIntrinsic::GridDim(Dimension::Y),
+        ],
+    );
 }
 
 #[test]
 fn test_kernel_global_idx_all_dimensions() {
-    let source = "
+    assert_gpu_intrinsics(
+        "
     gpu fn main()
         let gx = kernel.global_idx.x
         let gy = kernel.global_idx.y
         let gz = kernel.global_idx.z
-";
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::X));
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::Y));
-    mir_lowering_gpu_intrinsic_test(source, GpuIntrinsic::GlobalIdx(Dimension::Z));
+",
+        &[
+            GpuIntrinsic::GlobalIdx(Dimension::X),
+            GpuIntrinsic::GlobalIdx(Dimension::Y),
+            GpuIntrinsic::GlobalIdx(Dimension::Z),
+        ],
+    );
 }

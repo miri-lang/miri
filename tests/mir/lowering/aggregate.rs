@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::{
-    make_int_const, make_string_const, mir_rvalue_display_contains_test,
-    mir_rvalue_display_ends_with_test, mir_rvalue_display_starts_with_test,
-    mir_rvalue_equality_test,
-};
+use crate::mir::utils::{make_int_const, make_string_const};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::{AggregateKind, Rvalue};
+
+fn assert_display(rvalue: &Rvalue, expected: &str) {
+    assert_eq!(format!("{}", rvalue), expected);
+}
 
 #[test]
 fn test_aggregate_tuple_display() {
@@ -16,8 +16,7 @@ fn test_aggregate_tuple_display() {
         AggregateKind::Tuple,
         vec![make_int_const(1), make_int_const(2)],
     );
-    mir_rvalue_display_starts_with_test(&rvalue, "(");
-    mir_rvalue_display_ends_with_test(&rvalue, ")");
+    assert_display(&rvalue, "(const Integer(I32(1)), const Integer(I32(2)))");
 }
 
 #[test]
@@ -26,8 +25,10 @@ fn test_aggregate_array_display() {
         AggregateKind::Array,
         vec![make_int_const(1), make_int_const(2), make_int_const(3)],
     );
-    mir_rvalue_display_starts_with_test(&rvalue, "[");
-    mir_rvalue_display_ends_with_test(&rvalue, "]");
+    assert_display(
+        &rvalue,
+        "[const Integer(I32(1)), const Integer(I32(2)), const Integer(I32(3))]",
+    );
 }
 
 #[test]
@@ -36,8 +37,7 @@ fn test_aggregate_list_display() {
         AggregateKind::List,
         vec![make_int_const(1), make_int_const(2)],
     );
-    mir_rvalue_display_starts_with_test(&rvalue, "[");
-    mir_rvalue_display_ends_with_test(&rvalue, "]");
+    assert_display(&rvalue, "[const Integer(I32(1)), const Integer(I32(2))]");
 }
 
 #[test]
@@ -46,8 +46,7 @@ fn test_aggregate_set_display() {
         AggregateKind::Set,
         vec![make_int_const(1), make_int_const(2)],
     );
-    mir_rvalue_display_starts_with_test(&rvalue, "{");
-    mir_rvalue_display_ends_with_test(&rvalue, "}");
+    assert_display(&rvalue, "{const Integer(I32(1)), const Integer(I32(2))}");
 }
 
 #[test]
@@ -61,9 +60,10 @@ fn test_aggregate_map_display() {
             make_int_const(2),
         ],
     );
-    mir_rvalue_display_starts_with_test(&rvalue, "{");
-    mir_rvalue_display_ends_with_test(&rvalue, "}");
-    mir_rvalue_display_contains_test(&rvalue, ":");
+    assert_display(
+        &rvalue,
+        "{const String(\"a\"): const Integer(I32(1)), const String(\"b\"): const Integer(I32(2))}",
+    );
 }
 
 #[test]
@@ -73,9 +73,10 @@ fn test_aggregate_struct_display() {
         AggregateKind::Struct(ty),
         vec![make_int_const(10), make_int_const(20)],
     );
-    mir_rvalue_display_contains_test(&rvalue, "Point");
-    mir_rvalue_display_contains_test(&rvalue, "{");
-    mir_rvalue_display_contains_test(&rvalue, "}");
+    assert_display(
+        &rvalue,
+        "Point { const Integer(I32(10)), const Integer(I32(20)) }",
+    );
 }
 
 #[test]
@@ -88,7 +89,7 @@ fn test_aggregate_equality() {
         AggregateKind::Tuple,
         vec![make_int_const(1), make_int_const(2)],
     );
-    mir_rvalue_equality_test(&a, &b);
+    assert_eq!(a, b);
 }
 
 #[test]
@@ -98,5 +99,5 @@ fn test_aggregate_cloning() {
         vec![make_int_const(1), make_int_const(2)],
     );
     let cloned = original.clone();
-    mir_rvalue_equality_test(&original, &cloned);
+    assert_eq!(original, cloned);
 }

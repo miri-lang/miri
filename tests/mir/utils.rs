@@ -1,14 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+//! Shared helpers for the MIR tests.
+//!
+//! # Which assertion style to use
+//!
+//! - [`mir_snapshot_test`] — the *shape* of the lowered body is the claim: how
+//!   many basic blocks exist, in what order they are emitted, which temps they
+//!   use, how the terminators wire them together. It compares the whole
+//!   pretty-printed body, so it is brittle on purpose: any lowering reorder
+//!   breaks it, which is exactly the regression these tests exist to catch.
+//!   When lowering legitimately changes, re-read the new shape and update the
+//!   expectation — do not weaken the test into a substring check.
+//! - [`mir_snapshot_contains_test`] — one targeted property of the printed body
+//!   (a specific statement, cast, intrinsic, or terminator is present) where the
+//!   surrounding shape is not part of the claim. Use it so the test does not
+//!   accidentally re-assert unrelated lowering.
+//! - A direct assertion over the [`Body`] returned by [`mir_lower_code`] — the
+//!   property is not visible in the printed form (storage classes, launch
+//!   arguments, declaration order) or is only expressible by walking the body.
+//!
+//! # What belongs in this file
+//!
+//! Lowering, snapshot comparison, and query primitives that walk a [`Body`].
+//! Assertions belong in the tests, where the expectation is visible to the
+//! reader: a helper that pairs [`mir_lower_code`] with a single `assert!` only
+//! hides the expectation behind a name. A multi-assert routine used by exactly
+//! one test file lives in that file, not here.
+
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::lowering::lower_function;
 use miri::mir::{
-    AggregateKind, BinOp, Body, Constant, GpuIntrinsic, Operand, Place, PlaceElem, Rvalue,
-    StatementKind, StorageClass, TerminatorKind, UnOp,
+    Body, Constant, GpuIntrinsic, LocalDecl, Operand, Rvalue, StatementKind, Terminator,
+    TerminatorKind,
 };
 use miri::pipeline::Pipeline;
 
@@ -93,11 +120,20 @@ pub fn mir_snapshot_contains_test(source: &str, expected_fragments: &[&str]) {
     }
 }
 
-pub fn expect_assignment(stmt: &miri::mir::Statement) -> (&Place, &Rvalue) {
-    match &stmt.kind {
-        StatementKind::Assign(place, rvalue) => (place, rvalue),
-        _ => panic!("Expected Assign statement, got {:?}", stmt.kind),
-    }
+/// Checks that a declaration reaches MIR lowering without a frontend error.
+///
+/// Class and trait declarations lower no function body of their own, so
+/// `tests/mir/class.rs` can only assert that they pass the frontend; the helper
+/// makes that limit explicit at every call site.
+pub fn mir_frontend_succeeds(source: &str) {
+    let pipeline = Pipeline::new();
+    pipeline.frontend(source).expect("Frontend should succeed");
+}
+
+pub fn local_decl<'a>(body: &'a Body, name: &str) -> Option<&'a LocalDecl> {
+    body.local_decls
+        .iter()
+        .find(|d| d.name.as_deref() == Some(name))
 }
 
 pub fn find_local_idx(body: &Body, name: &str) -> Option<usize> {
@@ -107,16 +143,7 @@ pub fn find_local_idx(body: &Body, name: &str) -> Option<usize> {
 }
 
 pub fn has_local(body: &Body, name: &str) -> bool {
-    body.local_decls
-        .iter()
-        .any(|d| d.name.as_deref() == Some(name))
-}
-
-pub fn count_locals_named(body: &Body, name: &str) -> usize {
-    body.local_decls
-        .iter()
-        .filter(|d| d.name.as_deref() == Some(name))
-        .count()
+    local_decl(body, name).is_some()
 }
 
 pub fn count_assignments(body: &Body, block_idx: usize) -> usize {
@@ -155,63 +182,65 @@ pub fn count_assignments_to(body: &Body, block_idx: usize, local_idx: usize) -> 
         .count()
 }
 
-pub fn count_switch_int(body: &Body) -> usize {
+pub fn terminator_of(body: &Body, block_idx: usize) -> Option<&Terminator> {
+    body.basic_blocks[block_idx].terminator.as_ref()
+}
+
+pub fn last_terminator(body: &Body) -> &Terminator {
     body.basic_blocks
-        .iter()
-        .filter(|bb| {
-            matches!(
-                bb.terminator.as_ref().map(|t| &t.kind),
-                Some(TerminatorKind::SwitchInt { .. })
-            )
+        .last()
+        .expect("No basic blocks")
+        .terminator
+        .as_ref()
+        .expect("No terminator")
+}
+
+pub fn has_gpu_launch(body: &Body) -> bool {
+    body.basic_blocks.iter().any(|bb| {
+        bb.terminator
+            .as_ref()
+            .is_some_and(|t| matches!(t.kind, TerminatorKind::GpuLaunch { .. }))
+    })
+}
+
+/// Buffer-argument count and per-argument read-only flags of the first
+/// `GpuLaunch` terminator, or `None` when the body launches no kernel.
+pub fn gpu_launch_buffer_args(body: &Body) -> Option<(usize, Vec<bool>)> {
+    body.basic_blocks.iter().find_map(|bb| {
+        if let Some(TerminatorKind::GpuLaunch { launch_args, .. }) =
+            bb.terminator.as_ref().map(|t| &t.kind)
+        {
+            return Some((launch_args.len(), launch_args.arg_read_only().to_vec()));
+        }
+        None
+    })
+}
+
+/// Whether the body assigns the given GPU intrinsic, matching the dimension of
+/// the thread/block/grid intrinsics rather than only their variant.
+pub fn has_gpu_intrinsic(body: &Body, expected: &GpuIntrinsic) -> bool {
+    body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let StatementKind::Assign(_, Rvalue::GpuIntrinsic(intrinsic)) = &stmt.kind {
+                gpu_intrinsics_match(intrinsic, expected)
+            } else {
+                false
+            }
         })
-        .count()
+    })
 }
 
-pub fn count_basic_blocks(body: &Body) -> usize {
-    body.basic_blocks.len()
-}
-
-pub fn has_index_projection(body: &Body) -> bool {
-    for block in &body.basic_blocks {
-        for stmt in &block.statements {
-            if let StatementKind::Assign(place, _) = &stmt.kind {
-                if place
-                    .projection
-                    .iter()
-                    .any(|p| matches!(p, PlaceElem::Index(_)))
-                {
-                    return true;
-                }
-            }
-            if let StatementKind::Assign(
-                _,
-                Rvalue::Use(Operand::Copy(place)) | Rvalue::Use(Operand::Move(place)),
-            ) = &stmt.kind
-            {
-                if place
-                    .projection
-                    .iter()
-                    .any(|p| matches!(p, PlaceElem::Index(_)))
-                {
-                    return true;
-                }
-            }
-        }
+fn gpu_intrinsics_match(actual: &GpuIntrinsic, expected: &GpuIntrinsic) -> bool {
+    if std::mem::discriminant(actual) != std::mem::discriminant(expected) {
+        return false;
     }
-    false
-}
-
-pub fn find_aggregate_in_body(body: &Body, expected_kind: &AggregateKind) -> Option<Vec<String>> {
-    for block in &body.basic_blocks {
-        for stmt in &block.statements {
-            if let StatementKind::Assign(_, Rvalue::Aggregate(kind, ops)) = &stmt.kind {
-                if std::mem::discriminant(kind) == std::mem::discriminant(expected_kind) {
-                    return Some(ops.iter().map(|op| format!("{}", op)).collect());
-                }
-            }
-        }
+    match (actual, expected) {
+        (GpuIntrinsic::ThreadIdx(a), GpuIntrinsic::ThreadIdx(b)) => a == b,
+        (GpuIntrinsic::BlockIdx(a), GpuIntrinsic::BlockIdx(b)) => a == b,
+        (GpuIntrinsic::BlockDim(a), GpuIntrinsic::BlockDim(b)) => a == b,
+        (GpuIntrinsic::GridDim(a), GpuIntrinsic::GridDim(b)) => a == b,
+        _ => true,
     }
-    None
 }
 
 pub fn make_int_const(val: i32) -> Operand {
@@ -228,494 +257,4 @@ pub fn make_string_const(val: &str) -> Operand {
         ty: Type::new(TypeKind::String, Span::default()),
         literal: Literal::String(val.to_string()),
     }))
-}
-
-pub fn mir_lowering_aggregate_test(source: &str, kind: AggregateKind, expected_count: usize) {
-    let body = mir_lower_code(source);
-    let ops = find_aggregate_in_body(&body, &kind);
-    assert!(
-        ops.is_some(),
-        "Expected {:?} aggregate in MIR for source:\n{}",
-        kind,
-        source
-    );
-    assert_eq!(
-        ops.unwrap().len(),
-        expected_count,
-        "Expected {} elements in {:?} for source:\n{}",
-        expected_count,
-        kind,
-        source
-    );
-}
-
-pub fn mir_lowering_local_test(source: &str, name: &str) {
-    let body = mir_lower_code(source);
-    assert!(
-        has_local(&body, name),
-        "Expected local '{}' in MIR for source:\n{}",
-        name,
-        source
-    );
-}
-
-pub fn mir_lowering_locals_test(source: &str, expected_locals: &[&str]) {
-    let body = mir_lower_code(source);
-    for name in expected_locals {
-        assert!(has_local(&body, name), "Expected local '{}' to exist", name);
-    }
-}
-
-pub fn mir_lowering_switch_int_test(source: &str, min_count: usize) {
-    let body = mir_lower_code(source);
-    let count = count_switch_int(&body);
-    assert!(
-        count >= min_count,
-        "Expected at least {} SwitchInt terminators, got {} for source:\n{}",
-        min_count,
-        count,
-        source
-    );
-}
-
-pub fn mir_lowering_index_test(source: &str) {
-    let body = mir_lower_code(source);
-    assert!(
-        has_index_projection(&body),
-        "Expected Index projection in MIR for source:\n{}",
-        source
-    );
-}
-
-pub fn mir_lowering_tuple_aggregate_test(source: &str, expected_count: usize) {
-    let body = mir_lower_code(source);
-    let found = body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Tuple, ops)) =
-                &stmt.kind
-            {
-                ops.len() == expected_count
-            } else {
-                false
-            }
-        })
-    });
-    assert!(
-        found,
-        "Expected Tuple aggregate with {} elements for source:\n{}",
-        expected_count, source
-    );
-}
-
-pub fn mir_lowering_binary_op_test(source: &str, expected_op: BinOp) {
-    let body = mir_lower_code(source);
-    let found = body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let StatementKind::Assign(_, Rvalue::BinaryOp(op, _, _)) = &stmt.kind {
-                *op == expected_op
-            } else {
-                false
-            }
-        })
-    });
-    assert!(found, "Expected {:?} operation in MIR", expected_op);
-}
-
-pub fn mir_lowering_unary_op_test(source: &str, expected_op: UnOp) {
-    let body = mir_lower_code(source);
-    let found = body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let StatementKind::Assign(_, Rvalue::UnaryOp(op, _)) = &stmt.kind {
-                *op == expected_op
-            } else {
-                false
-            }
-        })
-    });
-    assert!(found, "Expected {:?} operation in MIR", expected_op);
-}
-
-pub fn mir_lowering_terminator_test(source: &str, expected: TerminatorKind) {
-    let body = mir_lower_code(source);
-    let last_block = body.basic_blocks.last().expect("No basic blocks");
-    let term = last_block.terminator.as_ref().expect("No terminator");
-    assert!(
-        std::mem::discriminant(&term.kind) == std::mem::discriminant(&expected),
-        "Expected {:?} terminator, got {:?}",
-        expected,
-        term.kind
-    );
-}
-
-pub fn mir_lowering_basic_blocks_test(source: &str, expected_count: usize) {
-    let body = mir_lower_code(source);
-    assert_eq!(
-        body.basic_blocks.len(),
-        expected_count,
-        "Expected {} basic blocks for source:\n{}",
-        expected_count,
-        source
-    );
-}
-
-pub fn mir_lowering_min_basic_blocks_test(source: &str, min_count: usize) {
-    let body = mir_lower_code(source);
-    assert!(
-        body.basic_blocks.len() >= min_count,
-        "Expected at least {} basic blocks, got {} for source:\n{}",
-        min_count,
-        body.basic_blocks.len(),
-        source
-    );
-}
-
-pub fn mir_lowering_call_count_test(source: &str, expected_count: usize) {
-    let body = mir_lower_code(source);
-    let calls_count = body
-        .basic_blocks
-        .iter()
-        .filter(|bb| {
-            if let Some(term) = &bb.terminator {
-                matches!(term.kind, TerminatorKind::Call { .. })
-            } else {
-                false
-            }
-        })
-        .count();
-    assert_eq!(
-        calls_count, expected_count,
-        "Expected {} Call terminators for source:\n{}",
-        expected_count, source
-    );
-}
-
-pub fn mir_lowering_min_call_count_test(source: &str, min_count: usize) {
-    let body = mir_lower_code(source);
-    let calls_count = body
-        .basic_blocks
-        .iter()
-        .filter(|bb| {
-            if let Some(term) = &bb.terminator {
-                matches!(term.kind, TerminatorKind::Call { .. })
-            } else {
-                false
-            }
-        })
-        .count();
-    assert!(
-        calls_count >= min_count,
-        "Expected at least {} Call terminators, got {} for source:\n{}",
-        min_count,
-        calls_count,
-        source
-    );
-}
-
-pub fn mir_lowering_gpu_flag_test(source: &str, expected_gpu: bool) {
-    let body = mir_lower_code(source);
-    assert_eq!(
-        body.is_gpu(),
-        expected_gpu,
-        "Expected is_gpu() to be {} for source:\n{}",
-        expected_gpu,
-        source
-    );
-}
-
-pub fn mir_lowering_gpu_intrinsic_test(source: &str, expected: GpuIntrinsic) {
-    let body = mir_lower_code(source);
-    let found = body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let StatementKind::Assign(_, Rvalue::GpuIntrinsic(intr)) = &stmt.kind {
-                std::mem::discriminant(intr) == std::mem::discriminant(&expected)
-                    && match (intr, &expected) {
-                        (GpuIntrinsic::ThreadIdx(d1), GpuIntrinsic::ThreadIdx(d2)) => d1 == d2,
-                        (GpuIntrinsic::BlockIdx(d1), GpuIntrinsic::BlockIdx(d2)) => d1 == d2,
-                        (GpuIntrinsic::BlockDim(d1), GpuIntrinsic::BlockDim(d2)) => d1 == d2,
-                        (GpuIntrinsic::GridDim(d1), GpuIntrinsic::GridDim(d2)) => d1 == d2,
-                        _ => true,
-                    }
-            } else {
-                false
-            }
-        })
-    });
-    assert!(
-        found,
-        "Expected {:?} GPU intrinsic in MIR for source:\n{}",
-        expected, source
-    );
-}
-
-pub fn mir_lowering_gpu_launch_test(source: &str) {
-    let body = mir_lower_code(source);
-    let found = body.basic_blocks.iter().any(|bb| {
-        if let Some(terminator) = &bb.terminator {
-            matches!(terminator.kind, TerminatorKind::GpuLaunch { .. })
-        } else {
-            false
-        }
-    });
-    assert!(
-        found,
-        "Expected TerminatorKind::GpuLaunch for source:\n{}",
-        source
-    );
-}
-
-pub fn mir_lowering_gpu_fn_launch_test(
-    source: &str,
-    expected_num_buffers: usize,
-    expected_read_only: Vec<bool>,
-) {
-    let body = mir_lower_code(source);
-    let launch = body.basic_blocks.iter().find_map(|bb| {
-        if let Some(terminator) = &bb.terminator {
-            if let TerminatorKind::GpuLaunch { launch_args, .. } = &terminator.kind {
-                return Some((launch_args.len(), launch_args.arg_read_only().to_vec()));
-            }
-        }
-        None
-    });
-
-    let (actual_num_buffers, actual_read_only) = launch.expect(&format!(
-        "Expected TerminatorKind::GpuLaunch with buffer args for source:\n{}",
-        source
-    ));
-
-    assert_eq!(
-        actual_num_buffers, expected_num_buffers,
-        "Expected {} buffer args, got {} for source:\n{}",
-        expected_num_buffers, actual_num_buffers, source
-    );
-
-    assert_eq!(
-        actual_read_only, expected_read_only,
-        "Expected arg_read_only {:?}, got {:?} for source:\n{}",
-        expected_read_only, actual_read_only, source
-    );
-
-    // Verify kernel_workgroups was recorded for the gpu fn launch.
-    assert!(
-        !body.kernel_workgroups.is_empty(),
-        "Expected kernel_workgroups to be populated for source:\n{}",
-        source
-    );
-}
-
-pub fn mir_lowering_storage_class_test(source: &str, var_name: &str, expected: StorageClass) {
-    let body = mir_lower_code(source);
-    let decl = body
-        .local_decls
-        .iter()
-        .find(|d| d.name.as_deref() == Some(var_name));
-    assert!(
-        decl.is_some(),
-        "Expected local '{}' for source:\n{}",
-        var_name,
-        source
-    );
-    assert_eq!(
-        decl.unwrap().storage_class,
-        expected,
-        "Expected storage class {:?} for '{}' in source:\n{}",
-        expected,
-        var_name,
-        source
-    );
-}
-
-pub fn mir_lowering_literal_i8_test(source: &str, expected_value: i8) {
-    let body = mir_lower_code(source);
-    let bb0 = &body.basic_blocks[0];
-    let found = bb0.statements.iter().any(|stmt| {
-        if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt.kind {
-            matches!(c.literal, Literal::Integer(IntegerLiteral::I8(v)) if v == expected_value)
-        } else {
-            false
-        }
-    });
-    assert!(
-        found,
-        "Expected integer literal {} in MIR for source:\n{}",
-        expected_value, source
-    );
-}
-
-pub fn mir_lowering_assignment_count_test(source: &str, var_name: &str, expected_count: usize) {
-    let body = mir_lower_code(source);
-    let idx = find_local_idx(&body, var_name);
-    assert!(
-        idx.is_some(),
-        "Expected local '{}' for source:\n{}",
-        var_name,
-        source
-    );
-    let actual = count_assignments_to(&body, 0, idx.unwrap());
-    assert_eq!(
-        actual, expected_count,
-        "Expected {} assignments to '{}' for source:\n{}",
-        expected_count, var_name, source
-    );
-}
-
-pub fn mir_lowering_switch_target_test(source: &str, block_idx: usize, expected_target: u128) {
-    let body = mir_lower_code(source);
-    let bb = &body.basic_blocks[block_idx];
-    if let Some(term) = &bb.terminator {
-        if let TerminatorKind::SwitchInt { targets, .. } = &term.kind {
-            assert!(
-                targets
-                    .iter()
-                    .any(|(val, _)| val.value() == expected_target),
-                "Expected SwitchInt target {} in block {} for source:\n{}",
-                expected_target,
-                block_idx,
-                source
-            );
-            return;
-        }
-    }
-    panic!(
-        "Expected SwitchInt terminator in block {} for source:\n{}",
-        block_idx, source
-    );
-}
-
-pub fn mir_lowering_goto_target_test(source: &str, block_idx: usize, expected_target: usize) {
-    let body = mir_lower_code(source);
-    let bb = &body.basic_blocks[block_idx];
-    if let Some(term) = &bb.terminator {
-        if let TerminatorKind::Goto { target } = &term.kind {
-            assert_eq!(
-                target.0, expected_target,
-                "Expected Goto target {} in block {}, got {} for source:\n{}",
-                expected_target, block_idx, target.0, source
-            );
-            return;
-        }
-    }
-    panic!(
-        "Expected Goto terminator in block {} for source:\n{}",
-        block_idx, source
-    );
-}
-
-pub fn mir_lowering_return_terminator_test(source: &str, block_idx: usize) {
-    let body = mir_lower_code(source);
-    let bb = &body.basic_blocks[block_idx];
-    let term = bb.terminator.as_ref().expect("No terminator");
-    assert!(
-        matches!(term.kind, TerminatorKind::Return),
-        "Expected Return terminator in block {} for source:\n{}",
-        block_idx,
-        source
-    );
-}
-
-pub fn mir_lowering_pretty_print_contains_test(source: &str, expected_substring: &str) {
-    let body = mir_lower_code(source);
-    let output = format!("{}", body);
-    assert!(
-        output.contains(expected_substring),
-        "Expected MIR output to contain '{}', got:\n{}",
-        expected_substring,
-        output
-    );
-}
-
-pub fn mir_rvalue_display_starts_with_test(rvalue: &Rvalue, prefix: &str) {
-    let display = format!("{}", rvalue);
-    assert!(
-        display.starts_with(prefix),
-        "Expected display to start with '{}', got '{}'",
-        prefix,
-        display
-    );
-}
-
-pub fn mir_rvalue_display_ends_with_test(rvalue: &Rvalue, suffix: &str) {
-    let display = format!("{}", rvalue);
-    assert!(
-        display.ends_with(suffix),
-        "Expected display to end with '{}', got '{}'",
-        suffix,
-        display
-    );
-}
-
-pub fn mir_rvalue_display_contains_test(rvalue: &Rvalue, substring: &str) {
-    let display = format!("{}", rvalue);
-    assert!(
-        display.contains(substring),
-        "Expected display to contain '{}', got '{}'",
-        substring,
-        display
-    );
-}
-
-pub fn mir_rvalue_equality_test(a: &Rvalue, b: &Rvalue) {
-    assert_eq!(a, b, "Expected rvalues to be equal");
-}
-
-pub fn mir_lowering_min_assignments_test(source: &str, block_idx: usize, min_count: usize) {
-    let body = mir_lower_code(source);
-    let actual = count_assignments(&body, block_idx);
-    assert!(
-        actual >= min_count,
-        "Expected at least {} assignments in block {}, got {} for source:\n{}",
-        min_count,
-        block_idx,
-        actual,
-        source
-    );
-}
-
-pub fn mir_lowering_min_locals_test(source: &str, min_count: usize) {
-    let body = mir_lower_code(source);
-    assert!(
-        body.local_decls.len() >= min_count,
-        "Expected at least {} locals, got {} for source:\n{}",
-        min_count,
-        body.local_decls.len(),
-        source
-    );
-}
-
-pub fn mir_lowering_has_terminator_test(source: &str, block_idx: usize) {
-    let body = mir_lower_code(source);
-    assert!(
-        body.basic_blocks[block_idx].terminator.is_some(),
-        "Expected terminator in block {} for source:\n{}",
-        block_idx,
-        source
-    );
-}
-
-pub fn mir_lowering_order_preserved_test(source: &str, var_names: &[&str]) {
-    let body = mir_lower_code(source);
-    let indices: Vec<_> = var_names
-        .iter()
-        .map(|name| find_local_idx(&body, name).unwrap_or_else(|| panic!("{} not found", name)))
-        .collect();
-
-    let order = get_assignment_order(&body, 0);
-    let positions: Vec<_> = indices
-        .iter()
-        .map(|&idx| order.iter().position(|&x| x == idx).unwrap())
-        .collect();
-
-    for i in 0..positions.len() - 1 {
-        assert!(
-            positions[i] < positions[i + 1],
-            "{} should come before {}",
-            var_names[i],
-            var_names[i + 1]
-        );
-    }
-}
-
-pub fn mir_class_compiles_test(source: &str) {
-    let pipeline = Pipeline::new();
-    pipeline.frontend(source).expect("Frontend should succeed");
 }
