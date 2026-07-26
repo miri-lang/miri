@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Binary search whose hit branch returns a String from an `int` function.
+
+use system.io
+use system.collections.array
+
+fn binary_search(arr Array<int, 5>, target int) int
+    var low = 0
+    var high = arr.length() - 1
+
+    while low <= high
+        let mid = (low + high) / 2
+        if arr[mid] == target: return "found"
+        if arr[mid] < target: low = mid + 1
+        else: high = mid - 1
+
+    return -1
+
+fn main()
+    let data = [10, 20, 30, 40, 50]
+    println(f"Binary Search result for 30: {binary_search(data, 30)}")

@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Summing program carrying two independent mistakes: a misspelled argument and
+// a declared type that does not match the initializer.
+
+use system.io
+use system.collections.list
+
+fn total(xs List<int>) int
+    var sum = 0
+    var i = 0
+    while i < xs.length()
+        sum = sum + xs.get(i)
+        i = i + 1
+    return sum
+
+fn main()
+    let data = List([1, 2, 3])
+    let sum int = total(dta)
+    let avg String = sum / data.length()
+    println(f"Average: {avg}")

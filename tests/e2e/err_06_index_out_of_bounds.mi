@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Linear scan whose loop condition runs one index past the last element.
+
+use system.io
+use system.collections.array
+
+fn main()
+    let data = [3, 1, 2]
+    println("Scanning:")
+    var i = 0
+    while i <= data.length()
+        println(f"item {data[i]}")
+        i = i + 1

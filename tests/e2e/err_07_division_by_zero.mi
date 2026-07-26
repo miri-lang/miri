@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Mean of an empty sample: the divisor reaches the division as zero.
+
+use system.io
+
+fn mean(total int, count int) int
+    return total / count
+
+fn main()
+    println("Computing mean:")
+    println(f"mean = {mean(10, 0)}")

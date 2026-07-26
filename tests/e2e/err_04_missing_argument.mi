@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Euclidean GCD invoked with only the first of its two parameters.
+
+use system.io
+
+fn gcd(a int, b int) int
+    if b == 0: return a
+    return gcd(b, a % b)
+
+fn main()
+    println(f"gcd(48, 18) = {gcd(48)}")
