@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod errors;
+
 use crate::utils::{miri_run, strip_ansi};
 
 #[test]

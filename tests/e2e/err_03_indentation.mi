@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Recursive factorial whose recursive step sits at an indentation level that
+// matches no enclosing block.
+
+use system.io
+
+fn factorial(n int) int
+    if n <= 1
+        return 1
+      return n * factorial(n - 1)
+
+fn main()
+    println(f"factorial(5) = {factorial(5)}")

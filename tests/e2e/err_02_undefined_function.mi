@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Bubble sort called through a misspelled name.
+
+use system.io
+use system.collections.list
+
+fn bubble_sort(xs List<int>) List<int>
+    var i = 0
+    while i < xs.length()
+        i = i + 1
+    return xs
+
+fn main()
+    let data = List([64, 25, 12])
+    let sorted = buble_sort(data)
+    println(f"Sorted count: {sorted.length()}")
