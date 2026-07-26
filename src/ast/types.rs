@@ -213,6 +213,14 @@ pub const FRAME_INPUT_FIELDS: &[FrameInputFieldDef] = &[
         name: "move_y",
         kind: FrameFieldKind::F32,
     },
+    // True whenever the pointer is over the canvas, whether or not a button is
+    // held — set on pointer enter/move, cleared on leave. Lets a demo react to a
+    // bare hover (e.g. a particle field that swirls toward the cursor) instead of
+    // gating interaction on a held click via `mouse_down`.
+    FrameInputFieldDef {
+        name: "hovering",
+        kind: FrameFieldKind::Bool,
+    },
 ];
 
 /// Returns the reserved variable_map key for frame input parameter `idx`.
