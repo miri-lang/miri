@@ -30,7 +30,7 @@ use std::sync::Arc;
 /// `Box__String`). Shares `mangle_generic_name`'s scheme so the drop call site
 /// and the thunk-generation site agree byte-for-byte; the parameter names are
 /// irrelevant to the mangling, so an empty placeholder name is used.
-pub(crate) fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
+pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
     let pairs: Vec<(String, Type)> = type_args
         .iter()
         .map(|ty| (String::new(), ty.clone()))
@@ -164,7 +164,7 @@ impl<'a> FunctionTranslator<'a> {
     /// table or known only as `TypeDefinition::Generic`. This guards the
     /// elem-drop-fn override sites where emitting a reference to an undefined
     /// symbol would later fail at link time.
-    fn is_unresolved_generic_elem(
+    pub fn is_unresolved_generic_elem(
         elem_kind: &TypeKind,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {
@@ -222,7 +222,7 @@ impl<'a> FunctionTranslator<'a> {
     /// argument at the parameter's declared position. Returns `None` when the
     /// field is not a bare generic, or when no per-instantiation arguments are
     /// available (the shared bare-name thunk), so the caller skips the field.
-    fn generic_field_concrete_kind(
+    pub fn generic_field_concrete_kind(
         class_def: &ClassDefinition,
         field_kind: &TypeKind,
         inst_args: Option<&[Type]>,
@@ -770,7 +770,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Resolves a type alias to its underlying type kind.
     /// Returns `Some(resolved_kind)` if the type is an alias, `None` otherwise.
-    fn resolve_alias<'b>(
+    pub fn resolve_alias<'b>(
         kind: &TypeKind,
         type_definitions: &'b HashMap<String, TypeDefinition>,
     ) -> Option<&'b TypeKind> {
@@ -934,7 +934,7 @@ impl<'a> FunctionTranslator<'a> {
     /// enum variant carrying at least one managed field. Variants without
     /// managed fields are filtered out so the caller only emits guarded
     /// blocks when there is decref work to do.
-    fn enum_variants_with_managed_fields(
+    pub fn enum_variants_with_managed_fields(
         enum_def: &EnumDefinition,
     ) -> Vec<(usize, Vec<(usize, TypeKind)>)> {
         enum_def
@@ -1616,7 +1616,7 @@ impl<'a> FunctionTranslator<'a> {
     /// concrete-caller / abstract-definer rule is applied: if the defining class
     /// is abstract, the caller's name is used instead (matching how
     /// `resolve_inherited_method` in `mir::lowering::dispatch` mangles the call).
-    fn resolve_clone_method_name(
+    pub fn resolve_clone_method_name(
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> String {
@@ -1630,7 +1630,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Returns true if `type_name` (or any ancestor class) lists `"Cloneable"` in its traits.
-    pub(crate) fn class_implements_cloneable(
+    pub fn class_implements_cloneable(
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {

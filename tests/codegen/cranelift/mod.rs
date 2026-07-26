@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod layout;
 pub mod predicates;
+pub mod rc;
 pub mod translate_rvalue;
 pub mod translate_statement;
 pub mod translator;
