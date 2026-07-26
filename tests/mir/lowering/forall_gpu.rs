@@ -3,6 +3,7 @@
 
 use crate::mir::utils::mir_lower_code;
 use miri::ast::statement::StatementKind;
+use miri::mir::lowering::forall_gpu::{literal_grid_dim, literal_grid_x};
 use miri::mir::lowering::{
     lower_function, lower_function_with_kernel_namer, new_shared_kernel_namer,
 };
@@ -538,4 +539,61 @@ fn main()
         launch.0 && launch.1,
         "expected mixed 2D bounds (literal x, runtime y) to carry both uniform_bound_x and uniform_bound_y"
     );
+}
+
+#[test]
+fn test_literal_grid_x_small_range() {
+    assert_eq!(literal_grid_x(256, 256), 1);
+}
+
+#[test]
+fn test_literal_grid_x_with_remainder() {
+    assert_eq!(literal_grid_x(257, 256), 2);
+}
+
+#[test]
+fn test_literal_grid_x_zero() {
+    assert_eq!(literal_grid_x(0, 256), 0);
+}
+
+#[test]
+fn test_literal_grid_x_large_clamped() {
+    let length = 1_099_511_627_776_i64;
+    assert_eq!(literal_grid_x(length, 256), u32::MAX);
+}
+
+#[test]
+fn test_literal_grid_x_i64_max() {
+    assert_eq!(literal_grid_x(i64::MAX, 256), u32::MAX);
+}
+
+#[test]
+fn test_literal_grid_dim_2d_small_range() {
+    const BLOCK_SIZE_2D: u32 = 16;
+    assert_eq!(literal_grid_dim(16, BLOCK_SIZE_2D), 1);
+}
+
+#[test]
+fn test_literal_grid_dim_2d_with_remainder() {
+    const BLOCK_SIZE_2D: u32 = 16;
+    assert_eq!(literal_grid_dim(17, BLOCK_SIZE_2D), 2);
+}
+
+#[test]
+fn test_literal_grid_dim_2d_zero() {
+    const BLOCK_SIZE_2D: u32 = 16;
+    assert_eq!(literal_grid_dim(0, BLOCK_SIZE_2D), 0);
+}
+
+#[test]
+fn test_literal_grid_dim_2d_large_clamped() {
+    const BLOCK_SIZE_2D: u32 = 16;
+    let extent = 68_719_476_736_i64;
+    assert_eq!(literal_grid_dim(extent, BLOCK_SIZE_2D), u32::MAX);
+}
+
+#[test]
+fn test_literal_grid_dim_2d_i64_max() {
+    const BLOCK_SIZE_2D: u32 = 16;
+    assert_eq!(literal_grid_dim(i64::MAX, BLOCK_SIZE_2D), u32::MAX);
 }
