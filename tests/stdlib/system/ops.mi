@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.ops`. Each trait is a protocol the operators dispatch to,
+// so the claim under test is that the operator reaches the user's method:
+// `==`/`!=` reach `equals`, `+` reaches `concat`, `*` reaches `repeat`, and a
+// `for` loop drives `length`/`element_at` on an `Iterable`.
+
+use system.ops
+use system.testing
+
+class Color implements Equatable
+    r int
+
+    fn init(r int)
+        self.r = r
+
+    public fn equals(other Color) bool
+        return self.r == other.r
+
+class Counter implements Addable
+    value int
+
+    fn init(value int)
+        self.value = value
+
+    public fn concat(other Counter) Counter
+        return Counter(self.value + other.value)
+
+class Pattern implements Multiplicable
+    value int
+
+    fn init(value int)
+        self.value = value
+
+    public fn repeat(count int) Pattern
+        return Pattern(self.value * count)
+
+fn test_equatable_dispatches_equality_to_equals()
+    let red = Color(1)
+    let same_red = Color(1)
+    let blue = Color(2)
+    assert(red == same_red, "== compares by the fields equals() reads")
+    assert(red == red, "== is reflexive")
+    assert((blue == red) == false, "== is false for differing fields")
+
+fn test_equatable_derives_inequality_from_equals()
+    let red = Color(1)
+    let blue = Color(2)
+    assert(red != blue, "!= is the negation of equals()")
+    assert((red != Color(1)) == false, "!= is false when equals() holds")
+
+fn test_addable_dispatches_plus_to_concat()
+    let combined = Counter(2) + Counter(3)
+    assert_eq(combined.value, 5, "+ returns what concat() built")
+
+fn test_addable_chains_left_to_right()
+    let combined = Counter(1) + Counter(2) + Counter(4)
+    assert_eq(combined.value, 7, "chained + folds through concat()")
+
+fn test_multiplicable_dispatches_star_to_repeat()
+    let repeated = Pattern(3) * 4
+    assert_eq(repeated.value, 12, "* returns what repeat() built")
+
+fn test_multiplicable_by_zero_uses_the_user_method()
+    let repeated = Pattern(7) * 0
+    assert_eq(repeated.value, 0, "repeat(0) is the user's own result")
+
+fn test_iterable_string_yields_one_character_per_step()
+    var count = 0
+    var joined = ""
+    for ch in "hey"
+        count += 1
+        joined = joined + ch
+    assert_eq(count, 3, "for visits every element_at index below length")
+    assert_eq(joined, "hey", "iteration yields the characters in order")
+
+fn main()
+    test_equatable_dispatches_equality_to_equals()
+    test_equatable_derives_inequality_from_equals()
+    test_addable_dispatches_plus_to_concat()
+    test_addable_chains_left_to_right()
+    test_multiplicable_dispatches_star_to_repeat()
+    test_multiplicable_by_zero_uses_the_user_method()
+    test_iterable_string_yields_one_character_per_step()
+    println("system.ops: OK")

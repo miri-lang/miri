@@ -281,3 +281,302 @@ fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError>
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::expression::Expression;
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::types::{
+        BuiltinCollectionKind, Type, ATOMIC_TYPE_NAME, STRING_TYPE_NAME, VEC2_TYPE_NAME,
+        VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+    };
+    use crate::error::syntax::Span;
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn type_arg(kind: TypeKind) -> Expression {
+        let ty = Type::new(kind, span());
+        Expression::new(0, ExpressionKind::Type(Box::new(ty), false), span())
+    }
+
+    fn literal_arg() -> Expression {
+        Expression::new(
+            0,
+            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I32(4))),
+            span(),
+        )
+    }
+
+    fn generic(name: &str, args: Vec<TypeKind>) -> TypeKind {
+        TypeKind::Custom(
+            name.to_string(),
+            Some(args.into_iter().map(type_arg).collect()),
+        )
+    }
+
+    fn vec_of(name: &str, elem: TypeKind) -> TypeKind {
+        generic(name, vec![elem])
+    }
+
+    fn list_of(elem: TypeKind) -> TypeKind {
+        TypeKind::List(Box::new(type_arg(elem)))
+    }
+
+    fn array_of(elem: TypeKind) -> TypeKind {
+        TypeKind::Array(Box::new(type_arg(elem)), Box::new(literal_arg()))
+    }
+
+    /// The WGSL scalar for `kind`, failing the test if the mapping rejects it.
+    fn wgsl_scalar(kind: &TypeKind) -> WgslScalar {
+        scalar(kind).unwrap_or_else(|e| panic!("{kind:?} should be a WGSL scalar: {e:?}"))
+    }
+
+    fn buffer_scalar(kind: &TypeKind) -> WgslScalar {
+        buffer_element(kind).unwrap_or_else(|e| panic!("{kind:?} should be a buffer: {e:?}"))
+    }
+
+    fn buffer_typename(kind: &TypeKind) -> String {
+        buffer_element_typename(kind)
+            .unwrap_or_else(|e| panic!("{kind:?} should be a buffer: {e:?}"))
+    }
+
+    #[test]
+    fn test_narrow_signed_kinds_widen_to_the_i32_lane() {
+        for kind in [TypeKind::I32, TypeKind::I16, TypeKind::I8] {
+            assert_eq!(wgsl_scalar(&kind), WgslScalar::I32, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn test_narrow_unsigned_kinds_widen_to_the_u32_lane() {
+        for kind in [TypeKind::U32, TypeKind::U16, TypeKind::U8] {
+            assert_eq!(wgsl_scalar(&kind), WgslScalar::U32, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn test_default_int_maps_to_i32_for_browser_portability() {
+        // WebGPU/Tint has no 64-bit ints, so the default `int` must not reach
+        // WGSL as i64 — the runtime marshals host i64 buffers to device i32.
+        assert_eq!(wgsl_scalar(&TypeKind::Int), WgslScalar::I32);
+        assert_eq!(wgsl_scalar(&TypeKind::I64), WgslScalar::I64);
+        assert_eq!(wgsl_scalar(&TypeKind::U64), WgslScalar::U64);
+    }
+
+    #[test]
+    fn test_float_kinds_keep_their_declared_widths() {
+        assert_eq!(wgsl_scalar(&TypeKind::F16), WgslScalar::F16);
+        assert_eq!(wgsl_scalar(&TypeKind::F32), WgslScalar::F32);
+        assert_eq!(wgsl_scalar(&TypeKind::F64), WgslScalar::F64);
+        assert_eq!(wgsl_scalar(&TypeKind::Float), WgslScalar::F64);
+    }
+
+    #[test]
+    fn test_boolean_maps_to_the_wgsl_bool() {
+        assert_eq!(wgsl_scalar(&TypeKind::Boolean), WgslScalar::Bool);
+    }
+
+    #[test]
+    fn test_atomic_unwraps_to_its_inner_scalar() {
+        assert_eq!(
+            wgsl_scalar(&vec_of(ATOMIC_TYPE_NAME, TypeKind::U32)),
+            WgslScalar::U32
+        );
+        assert_eq!(
+            wgsl_scalar(&vec_of(ATOMIC_TYPE_NAME, TypeKind::I32)),
+            WgslScalar::I32
+        );
+    }
+
+    #[test]
+    fn test_atomic_over_a_non_scalar_is_rejected() {
+        assert!(scalar(&vec_of(ATOMIC_TYPE_NAME, TypeKind::String)).is_err());
+    }
+
+    #[test]
+    fn test_atomic_without_exactly_one_type_argument_is_rejected() {
+        assert!(scalar(&generic(ATOMIC_TYPE_NAME, vec![])).is_err());
+        assert!(scalar(&generic(
+            ATOMIC_TYPE_NAME,
+            vec![TypeKind::U32, TypeKind::U32]
+        ))
+        .is_err());
+        assert!(scalar(&TypeKind::Custom(ATOMIC_TYPE_NAME.to_string(), None)).is_err());
+    }
+
+    #[test]
+    fn test_non_scalar_kinds_are_rejected_with_the_kind_named() {
+        let unrepresentable = TypeKind::String;
+        let err = scalar(&unrepresentable).expect_err("a string is not a WGSL scalar");
+        assert!(
+            format!("{err:?}").contains(&format!("{unrepresentable:?}")),
+            "the error should name the offending kind, got: {err:?}"
+        );
+        for kind in [
+            TypeKind::Void,
+            TypeKind::I128,
+            TypeKind::U128,
+            TypeKind::RawPtr,
+            list_of(TypeKind::F32),
+            TypeKind::Custom("Widget".to_string(), None),
+        ] {
+            assert!(scalar(&kind).is_err(), "{kind:?} must not be a scalar");
+        }
+    }
+
+    #[test]
+    fn test_scalar_spellings_are_the_wgsl_keywords() {
+        assert_eq!(WgslScalar::I32.name(), "i32");
+        assert_eq!(WgslScalar::U32.name(), "u32");
+        assert_eq!(WgslScalar::F16.name(), "f16");
+        assert_eq!(WgslScalar::F32.name(), "f32");
+        assert_eq!(WgslScalar::Bool.name(), "bool");
+        assert_eq!(WgslScalar::I64.name(), "i64");
+        assert_eq!(WgslScalar::U64.name(), "u64");
+        assert_eq!(WgslScalar::F64.name(), "f64");
+    }
+
+    #[test]
+    fn test_vector_types_spell_their_dimension_and_component() {
+        assert_eq!(
+            vector_type(&vec_of(VEC2_TYPE_NAME, TypeKind::F32)).as_deref(),
+            Some("vec2<f32>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC3_TYPE_NAME, TypeKind::F32)).as_deref(),
+            Some("vec3<f32>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC4_TYPE_NAME, TypeKind::U32)).as_deref(),
+            Some("vec4<u32>")
+        );
+    }
+
+    #[test]
+    fn test_vector_type_is_none_for_anything_that_is_not_a_vector() {
+        assert_eq!(vector_type(&TypeKind::F32), None);
+        assert_eq!(vector_type(&generic("Widget", vec![TypeKind::F32])), None);
+        assert_eq!(
+            vector_type(&TypeKind::Custom(VEC3_TYPE_NAME.to_string(), None)),
+            None
+        );
+        assert_eq!(vector_type(&generic(VEC3_TYPE_NAME, vec![])), None);
+    }
+
+    #[test]
+    fn test_vector_type_is_none_when_the_component_is_unresolved_or_unrepresentable() {
+        let unresolved = TypeKind::Custom(VEC3_TYPE_NAME.to_string(), Some(vec![literal_arg()]));
+        assert_eq!(vector_type(&unresolved), None);
+        assert_eq!(vector_type(&vec_of(VEC3_TYPE_NAME, TypeKind::String)), None);
+    }
+
+    #[test]
+    fn test_vector_swizzle_maps_field_order_to_xyzw() {
+        let vec4 = vec_of(VEC4_TYPE_NAME, TypeKind::F32);
+        assert_eq!(vector_swizzle(&vec4, 0), Some('x'));
+        assert_eq!(vector_swizzle(&vec4, 1), Some('y'));
+        assert_eq!(vector_swizzle(&vec4, 2), Some('z'));
+        assert_eq!(vector_swizzle(&vec4, 3), Some('w'));
+    }
+
+    #[test]
+    fn test_vector_swizzle_is_none_for_non_vector_types() {
+        // A `None` answer routes the caller to numeric field access instead.
+        assert_eq!(vector_swizzle(&TypeKind::F32, 0), None);
+        assert_eq!(
+            vector_swizzle(&TypeKind::Custom("Widget".to_string(), None), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn test_buffer_element_reads_through_every_collection_shape() {
+        assert_eq!(buffer_scalar(&list_of(TypeKind::F32)), WgslScalar::F32);
+        assert_eq!(buffer_scalar(&array_of(TypeKind::I32)), WgslScalar::I32);
+        assert_eq!(
+            buffer_scalar(&generic(
+                BuiltinCollectionKind::List.name(),
+                vec![TypeKind::U32]
+            )),
+            WgslScalar::U32
+        );
+        assert_eq!(
+            buffer_scalar(&generic(
+                BuiltinCollectionKind::Array.name(),
+                vec![TypeKind::Boolean]
+            )),
+            WgslScalar::Bool
+        );
+    }
+
+    #[test]
+    fn test_buffer_element_of_a_vector_element_is_its_component_scalar() {
+        let buffer = list_of(vec_of(VEC3_TYPE_NAME, TypeKind::F32));
+        assert_eq!(buffer_scalar(&buffer), WgslScalar::F32);
+    }
+
+    #[test]
+    fn test_buffer_element_rejects_non_collection_and_non_buffer_collections() {
+        assert!(buffer_element(&TypeKind::F32).is_err());
+        assert!(buffer_element(&TypeKind::Tuple(vec![])).is_err());
+        assert!(buffer_element(&generic(
+            BuiltinCollectionKind::Set.name(),
+            vec![TypeKind::F32]
+        ))
+        .is_err());
+        assert!(buffer_element(&generic("Widget", vec![TypeKind::F32])).is_err());
+    }
+
+    #[test]
+    fn test_buffer_element_rejects_a_collection_with_no_element_argument() {
+        let empty = TypeKind::Custom(
+            BuiltinCollectionKind::Array.name().to_string(),
+            Some(vec![]),
+        );
+        let err = buffer_element(&empty).expect_err("an Array with no element type is malformed");
+        assert!(
+            format!("{err:?}").contains("missing element type argument"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_buffer_element_rejects_an_unresolved_element_expression() {
+        let unresolved = TypeKind::Custom(
+            BuiltinCollectionKind::List.name().to_string(),
+            Some(vec![literal_arg()]),
+        );
+        let err = buffer_element(&unresolved).expect_err("a literal is not an element type");
+        assert!(
+            format!("{err:?}").contains("unresolved buffer element type expression"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_buffer_element_typename_keeps_a_vector_element_whole() {
+        assert_eq!(
+            buffer_typename(&list_of(vec_of(VEC3_TYPE_NAME, TypeKind::F32))),
+            "vec3<f32>"
+        );
+        assert_eq!(
+            buffer_typename(&array_of(vec_of(VEC2_TYPE_NAME, TypeKind::U32))),
+            "vec2<u32>"
+        );
+    }
+
+    #[test]
+    fn test_buffer_element_typename_of_a_scalar_element_is_the_scalar_spelling() {
+        assert_eq!(buffer_typename(&list_of(TypeKind::F32)), "f32");
+        assert_eq!(buffer_typename(&array_of(TypeKind::Int)), "i32");
+    }
+
+    #[test]
+    fn test_buffer_element_typename_rejects_an_unrepresentable_element() {
+        let strings = list_of(TypeKind::Custom(STRING_TYPE_NAME.to_string(), None));
+        assert!(buffer_element_typename(&strings).is_err());
+    }
+}

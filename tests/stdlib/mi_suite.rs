@@ -23,6 +23,20 @@
 //! cargo test --test mod stdlib::mi_suite::test_system_string
 //! ```
 //!
+//! Not every stdlib module has a mirror here, because some cannot assert
+//! anything from a plain `miri run` process. Their coverage lives elsewhere and
+//! is deliberate, not a gap:
+//!
+//!   - `memory.mi` — RC/leak behavior, covered by `tests/integration/memory/**`.
+//!   - `collections/queryable.mi` — query methods, exercised per collection in
+//!     `tests/integration/{list,set,map}/**`.
+//!   - `prelude.mi` / `prelude_internal.mi` — implicit imports, covered by
+//!     `tests/integration/implicit_imports.rs`.
+//!   - `accelerator.mi`, `gpu/atomic.mi`, `gpu/vector.mi` — GPU-only surfaces
+//!     that need a device; covered by `tests/integration/gpu/{accelerable,
+//!     atomics,vectors}.rs`, which gate execution behind the `gpu_hardware`
+//!     feature.
+//!
 //! To add a new suite: drop a `<path>.mi` file mirroring the stdlib source
 //! path (e.g. `tests/stdlib/system/collections/queryable.mi` for
 //! `src/stdlib/system/collections/queryable.mi`) and add a matching
@@ -80,6 +94,8 @@ macro_rules! mi_suite_test {
 mi_suite_test!(test_system_io, "io.mi");
 mi_suite_test!(test_system_string, "string.mi");
 mi_suite_test!(test_system_math, "math.mi");
+mi_suite_test!(test_system_ops, "ops.mi");
+mi_suite_test!(test_system_time, "time.mi");
 mi_suite_test!(test_system_testing, "testing.mi");
 mi_suite_test!(test_system_result, "result.mi");
 mi_suite_test!(test_system_collections_array, "collections/array.mi");
@@ -132,6 +148,8 @@ fn every_mi_file_is_wired() {
         "io.mi",
         "string.mi",
         "math.mi",
+        "ops.mi",
+        "time.mi",
         "testing.mi",
         "result.mi",
         "collections/array.mi",

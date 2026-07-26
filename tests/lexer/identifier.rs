@@ -29,6 +29,26 @@ fn test_unicode_identifiers() {
 }
 
 #[test]
+fn test_identifier_sigils_are_invalid_tokens() {
+    // Identifiers are ASCII letters, digits and `_` only; a leading sigil has no
+    // token to belong to and must be rejected rather than silently skipped.
+    run_lexer_error_tests(
+        vec!["$foo", "@name", "#tag", "`quoted`", "\\escape"],
+        &SyntaxErrorKind::InvalidToken,
+    );
+}
+
+#[test]
+fn test_non_ascii_characters_after_an_identifier_are_invalid_tokens() {
+    // The ASCII prefix lexes as an identifier, then the non-ASCII character
+    // fails — a trailing emoji or non-breaking space is not identifier material.
+    run_lexer_error_tests(
+        vec!["name\u{1F600}", "value\u{00A0}", "count\u{00B5}"],
+        &SyntaxErrorKind::InvalidToken,
+    );
+}
+
+#[test]
 fn test_colon_identifier_boundaries() {
     run_lexer_tests(vec![("identifier:", vec![Token::Identifier, Token::Colon])]);
 }
