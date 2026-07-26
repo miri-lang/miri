@@ -7,13 +7,13 @@
 use super::device::assert_gpu_runs_with_output;
 use super::helpers::{assert_gpu_wgsl_valid, compile_to_wgsl};
 use crate::integration::utils::assert_build_error;
-use crate::mir::utils::mir_lowering_gpu_fn_launch_test;
+use crate::mir::utils::{gpu_launch_buffer_args, mir_lower_code};
 
 /// MIR-level test: verify that `gpu fn` call with buffer args produces
 /// a GpuLaunch with correct read/write flags based on `out` parameters.
 #[test]
 fn gpu_fn_launch_with_buffers_lowers_to_correct_mir() {
-    mir_lowering_gpu_fn_launch_test(
+    let body = mir_lower_code(
         "
 use system.collections.array
 
@@ -26,8 +26,16 @@ fn main()
     gpu var c = Array<f32,4>()
     tiled_matmul(a, b, c).launch(Dim3(1, 1, 1), Dim3(2, 2, 1))
 ",
-        3,                       // expected num_buffers
-        vec![true, true, false], // c is marked `out`, so it's writable (read_only=false)
+    );
+
+    let (num_buffers, read_only) =
+        gpu_launch_buffer_args(&body).expect("Expected a GpuLaunch terminator with buffer args");
+    assert_eq!(num_buffers, 3);
+    // `c` is marked `out`, so it is writable (read_only = false).
+    assert_eq!(read_only, vec![true, true, false]);
+    assert!(
+        !body.kernel_workgroups.is_empty(),
+        "Expected kernel_workgroups to be recorded for the launch"
     );
 }
 

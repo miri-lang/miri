@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::mir_class_compiles_test;
+use crate::mir::utils::mir_frontend_succeeds;
 
 #[test]
 fn test_class_declaration_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 class Animal
     var name String
@@ -15,7 +15,7 @@ class Animal
 
 #[test]
 fn test_class_with_inheritance_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 class Animal
     var name String
@@ -28,7 +28,7 @@ class Dog extends Animal
 
 #[test]
 fn test_trait_declaration_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 trait Drawable
     fn draw() int
@@ -39,7 +39,7 @@ trait Drawable
 
 #[test]
 fn test_trait_with_parent_traits_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 trait Drawable
     fn draw() int
@@ -58,7 +58,7 @@ trait Canvas extends Drawable, Printable
 
 #[test]
 fn test_class_implements_trait_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 trait Drawable
     fn draw() int
@@ -72,7 +72,7 @@ class Circle implements Drawable
 
 #[test]
 fn test_generic_class_compiles() {
-    mir_class_compiles_test(
+    mir_frontend_succeeds(
         "
 class Box<T>
     var value T

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::{mir_lowering_basic_blocks_test, mir_lowering_return_terminator_test};
+use crate::mir::utils::{mir_lower_code, terminator_of};
+use miri::mir::TerminatorKind;
 
 #[test]
 fn test_lower_empty_function() {
-    let source = "fn main() int: 0";
-    mir_lowering_basic_blocks_test(source, 1);
-    mir_lowering_return_terminator_test(source, 0);
+    let body = mir_lower_code("fn main() int: 0");
+    assert_eq!(body.basic_blocks.len(), 1);
+    let terminator = terminator_of(&body, 0).expect("Expected a terminator in block 0");
+    assert!(matches!(terminator.kind, TerminatorKind::Return));
 }
