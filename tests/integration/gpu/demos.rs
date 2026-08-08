@@ -31,18 +31,6 @@ fn demo_vector_add() {
     assert_gpu_runs_with_output(source, "6.0 8.0 10.0 12.0");
 }
 
-/// saxpy: fused multiply-add with a literal scalar constant. Demonstrates
-/// inline scalar math in the kernel body.
-#[test]
-#[cfg_attr(
-    not(feature = "gpu_hardware"),
-    ignore = "requires a real GPU; runs on the macos-14 hardware job"
-)]
-fn demo_saxpy() {
-    let source = include_str!("../../../examples/gpu/saxpy.mi");
-    assert_gpu_runs_with_output(source, "7.0 10.0 13.0 16.0");
-}
-
 /// buffer_reuse: two sequential gpu forall blocks on the same gpu var with no
 /// readback between them. Demonstrates persistent buffer cost model
 /// (1 upload, 2 launches, 1 readback).

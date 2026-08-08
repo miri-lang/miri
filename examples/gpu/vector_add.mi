@@ -3,6 +3,10 @@
 
 // Vector addition: two float arrays captured on the device, element-wise sum
 // written to a mutable device buffer, readback to host, and print.
+//
+// Any coefficient in the kernel body must be a literal (or a `const`): host
+// scalars cannot be captured into a `forall`, so a scaled variant such as
+// `dst[i] = 2.0 * a[i] + b[i]` inlines the factor into the kernel source.
 
 const N = 4
 

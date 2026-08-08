@@ -1,6 +1,5 @@
-use system.collections.array
-use system.math
-use system.io
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
 
 // Conway's Game of Life on a 320×180 toroidal grid, rendered to a 1280×720
 // (16:9) RGBA canvas — 4×4 display pixels per cell. A single f32 state buffer
@@ -9,6 +8,10 @@ use system.io
 //   state <  1.0  → the decaying "trail" left where a cell recently died
 // Folding them lets the whole simulation ride one ping-pong pair (the runtime
 // double-buffers exactly one state pair; `paint` is a separate terminal output).
+
+use system.collections.array
+use system.math
+use system.io
 
 // Simulation grid, display canvas, and the cell-to-pixel magnification.
 const GW = 320

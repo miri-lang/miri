@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Interactive Mandelbrot set: one escape-time orbit per pixel over a 1024×1024
+// canvas, colored by a smooth (fractional) iteration count through a five-stop
+// palette so the classic escape banding disappears.
+//
+// A `gpu frame` block with two passes:
+// 1. Integrate: read view_a + frame.* (drag pans, wheel zooms) → view_b.
+// 2. Render: read view_b → iterate z² + c per pixel and write paint RGBA.
+//
+// View state ping-pongs (view_a → view_b) so the integrator never reads the
+// buffer it writes; the host swaps a/b between frames. The per-pixel iteration
+// budget grows as the view zooms in, capped at 880 so a deep zoom stays inside
+// the frame budget. Every math-intrinsic result is anchored to f32 (`as f32`)
+// so the device path stays 32-bit (browser WGSL has no f64).
+
 use system.collections.array
 use system.math
 use system.io
