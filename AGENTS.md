@@ -138,6 +138,54 @@ This is Red-Green-Refactor with the diagnosis made explicit. Skipping it is what
 
 ---
 
+## 4.2 GPU Demo Sync: `examples/gpu/web/` ↔ the website (MANDATORY)
+`examples/gpu/web/*.mi` is the **single source of truth** for the interactive demos published on the website. The website repo is a **separate checkout**, expected as a sibling directory: `../miri-lang.org`. The two copies must never drift.
+
+**Whenever you add, edit, or delete anything under `examples/gpu/web/`, update the website copy in the same pass.** Do not leave it for later, and do not hand-edit the website copy — regenerate it:
+
+```bash
+cd ../miri-lang.org && python3 tools/gen_displayed_demos.py
+```
+
+That rewrites `assets/demos/<name>.mi` (the copyable program) and the inline `<pre class="lang-miri">` block for each demo in `gpu-demos.html`.
+
+### What the website shows: the displayed region
+The website displays a **contiguous byte-range** of the repo source — everything from the first `use ` line through the line **before** the `// Native smoke` tail. Exactly two things are stripped, and nothing else may differ:
+
+1. **The file header** — the SPDX/copyright lines and the demo's doc comment. The website starts straight at the `use` statements.
+2. **The `// Native smoke` tail** — the host-side verification block (readback plus a deterministic checksum `println`) that lets the native GPU test value-verify the demo. It is meaningless in a browser.
+
+Both stripped parts emit no WGSL, so the source a reader copies off the website compiles to byte-identical WebGPU kernels.
+
+**This forces a file layout every `examples/gpu/web/*.mi` must follow:**
+
+```
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// <doc comment: what the demo renders, its passes, its buffers>
+
+use system.collections.array          <-- website copy starts HERE
+...
+    <GPU code>                        <-- website copy ends at the last line
+                                          before the tail below
+// Native smoke: <what the checksum proves>
+<host readback + println>
+```
+
+The doc comment goes **above** the `use` lines, never below them — a doc comment placed after the first `use` leaks into the published source. The `// Native smoke` marker is a required boundary: a web demo missing either it or a `use` line fails the gate.
+
+### The gate
+`tests/integration/gpu/wgsl_identity.rs` mechanizes this. It asserts (a) the website copy is a verbatim slice of the repo source, and (b) both compile to byte-identical WebGPU kernels. It skips with a log line when `../miri-lang.org` is absent, so it stays green in checkouts without the website tree — **a green suite on a machine without the sibling repo does not prove the demos are in sync.** Run it explicitly after touching a web demo:
+
+```bash
+cargo test --test mod wgsl_identity
+```
+
+Keep `WEB_DEMOS` in that test and `DEMOS` in `tools/gen_displayed_demos.py` in lockstep with `examples/gpu/web/*.mi` when adding or removing a demo.
+
+---
+
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 
