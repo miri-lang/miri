@@ -178,9 +178,26 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serializes every test that allocates or frees through `alloc_with_rc` /
+    /// `free_with_rc`. Both maintain the process-global `RC_ALLOC_BALANCE`, so a
+    /// test asserting an exact balance delta races with any sibling test that
+    /// allocates concurrently. Holding this lock makes the delta deterministic
+    /// under the default multi-threaded test runner.
+    static BALANCE_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquires [`BALANCE_LOCK`], recovering the guard when an earlier panicking
+    /// test poisoned it: one test failing must not cascade into the others.
+    fn balance_guard() -> MutexGuard<'static, ()> {
+        BALANCE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn alloc_with_rc_returns_pointer_with_rc_one() {
+        let _balance = balance_guard();
         unsafe {
             let ptr = alloc_with_rc(64);
             assert!(!ptr.is_null(), "alloc_with_rc should not return null");
@@ -196,6 +213,7 @@ mod tests {
 
     #[test]
     fn incref_increments_rc() {
+        let _balance = balance_guard();
         unsafe {
             let ptr = alloc_with_rc(64);
             let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
@@ -220,6 +238,7 @@ mod tests {
 
     #[test]
     fn incref_skips_immortal_objects() {
+        let _balance = balance_guard();
         unsafe {
             let ptr = alloc_with_rc(64);
             let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
@@ -244,6 +263,7 @@ mod tests {
 
     #[test]
     fn alloc_and_free_balance() {
+        let _balance = balance_guard();
         unsafe {
             let before = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
 
