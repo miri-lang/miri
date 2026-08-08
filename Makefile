@@ -10,11 +10,15 @@ RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 # which silently masks intrinsic changes and produces non-reproducible test
 # failures. This target keeps the linked artifact fresh; `build` and `test`
 # depend on it so nothing links a stale runtime.
+# A `for` loop's exit status is that of its last iteration, so a failure in any
+# earlier runtime would be swallowed and the recipe would report success. Every
+# per-runtime command in this file is followed by `|| exit 1` to fail the recipe
+# on the first broken runtime.
 runtimes:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Building $$rt (release staticlib — the profile the compiler links)"; \
-			cargo build --release --manifest-path "$$rt/Cargo.toml"; \
+			cargo build --release --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
 
@@ -29,7 +33,7 @@ test: runtimes
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Testing $$rt"; \
-			cargo test --manifest-path "$$rt/Cargo.toml"; \
+			cargo test --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
 
@@ -39,8 +43,8 @@ lint:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Linting $$rt"; \
-			cargo fmt --manifest-path "$$rt/Cargo.toml" -- --check; \
-			cargo clippy --manifest-path "$$rt/Cargo.toml" -- -D warnings; \
+			cargo fmt --manifest-path "$$rt/Cargo.toml" -- --check || exit 1; \
+			cargo clippy --manifest-path "$$rt/Cargo.toml" -- -D warnings || exit 1; \
 		done; \
 	fi
 
@@ -49,7 +53,7 @@ format:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Formatting $$rt"; \
-			cargo fmt --manifest-path "$$rt/Cargo.toml"; \
+			cargo fmt --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
 
@@ -58,7 +62,7 @@ clean:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Cleaning $$rt"; \
-			cargo clean --manifest-path "$$rt/Cargo.toml"; \
+			cargo clean --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
 
