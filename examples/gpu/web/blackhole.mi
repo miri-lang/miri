@@ -116,10 +116,14 @@ fn disk_opacity(r f32) f32
 
 // Seed: starting pose (near edge-on for the iconic warped-disk view), idle past
 // the auto-rotate threshold so the camera drifts until the pointer takes over.
+// The distance is set so the lensed disk's widest extent — the sheared outer rim
+// at r = 9, magnified by the lensing — lands inside the horizontal field of view
+// with margin to spare, since the page scales the 16:9 render to cover frames of
+// other aspect ratios and crops the overflow.
 forall i in 0..4
     cam_a[0] = 1.15
     cam_a[1] = 0.18
-    cam_a[2] = 19.5
+    cam_a[2] = 26.0
     cam_a[3] = 99.0
 
 // Clear the canvas. This 2-D pass over the exact display extent also tells the
@@ -147,7 +151,7 @@ gpu frame
         // so raising the pointer must raise the camera: subtract, matching the
         // reference's `rot.y += (clientY - lastY) * 0.006`.
         cam_b[1] = clamp(pitch - frame.drag_dy * 0.006, -1.45, 1.45) as f32
-        cam_b[2] = clamp(dist * (exp(frame.wheel * 0.0012) as f32), 4.5, 28.0) as f32
+        cam_b[2] = clamp(dist * (exp(frame.wheel * 0.0012) as f32), 4.5, 34.0) as f32
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel and composite the result.
