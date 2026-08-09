@@ -141,13 +141,17 @@ This is Red-Green-Refactor with the diagnosis made explicit. Skipping it is what
 ## 4.2 GPU Demo Sync: `examples/gpu/web/` ↔ the website (MANDATORY)
 `examples/gpu/web/*.mi` is the **single source of truth** for the interactive demos published on the website. The website repo is a **separate checkout**, expected as a sibling directory: `../miri-lang.org`. The two copies must never drift.
 
-**Whenever you add, edit, or delete anything under `examples/gpu/web/`, update the website copy in the same pass.** Do not leave it for later, and do not hand-edit the website copy — regenerate it:
+**Whenever you add, edit, or delete anything under `examples/gpu/web/`, update the website copy in the same pass.** Do not leave it for later, and do not hand-edit the website copy — regenerate it, both the displayed text and the compiled artifacts:
 
 ```bash
-cd ../miri-lang.org && python3 tools/gen_displayed_demos.py
+cd ../miri-lang.org
+python3 tools/gen_displayed_demos.py   # the shown source
+python3 tools/gen_demo_bundles.py      # the WGSL the page actually runs
 ```
 
-That rewrites `assets/demos/<name>.mi` (the copyable program) and the inline `<pre class="lang-miri">` block for each demo in `gpu-demos.html`.
+The first rewrites `assets/demos/<name>.mi` (the copyable program) and the inline `<pre class="lang-miri">` block for each demo in `gpu-demos.html`. The second compiles each of those displayed programs and vendors the results: `assets/demos/bundles/<name>.json` (the manifest carrying the WGSL) and `assets/js/miri-gpu.js` (the runtime driver). The site serves those artifacts directly, because a static generator cannot run the Miri compiler at publish time — so a stale artifact is how the page starts lying again. `gen_demo_bundles.py` rebuilds the release compiler first and refuses to run against stale displayed source, but it only helps if you run it.
+
+Editing `assets/web/miri-gpu.js` counts: it is `include_str!`-baked into the compiler *and* vendored to the site, so it needs a `cargo build --release` and a bundle regeneration before either reflects the change.
 
 ### What the website shows: the displayed region
 The website displays a **contiguous byte-range** of the repo source — everything from the first `use ` line through the line **before** the `// Native smoke` tail. Exactly two things are stripped, and nothing else may differ:
@@ -176,13 +180,13 @@ use system.collections.array          <-- website copy starts HERE
 The doc comment goes **above** the `use` lines, never below them — a doc comment placed after the first `use` leaks into the published source. The `// Native smoke` marker is a required boundary: a web demo missing either it or a `use` line fails the gate.
 
 ### The gate
-`tests/integration/gpu/wgsl_identity.rs` mechanizes this. It asserts (a) the website copy is a verbatim slice of the repo source, and (b) both compile to byte-identical WebGPU kernels. It skips with a log line when `../miri-lang.org` is absent, so it stays green in checkouts without the website tree — **a green suite on a machine without the sibling repo does not prove the demos are in sync.** Run it explicitly after touching a web demo:
+`tests/integration/gpu/wgsl_identity.rs` mechanizes this. It asserts (a) the website copy is a verbatim slice of the repo source, (b) both compile to byte-identical WebGPU kernels, (c) each published `assets/demos/bundles/<name>.json` matches a fresh build of the source shown beside it, and (d) the vendored `assets/js/miri-gpu.js` matches this repo's copy. The last two are what catch a committed artifact going stale. It skips with a log line when `../miri-lang.org` is absent, so it stays green in checkouts without the website tree — **a green suite on a machine without the sibling repo does not prove the demos are in sync.** Run it explicitly after touching a web demo or the runtime driver:
 
 ```bash
 cargo test --test mod wgsl_identity
 ```
 
-Keep `WEB_DEMOS` in that test and `DEMOS` in `tools/gen_displayed_demos.py` in lockstep with `examples/gpu/web/*.mi` when adding or removing a demo.
+Keep `WEB_DEMOS` in that test and `DEMOS` in `tools/gen_displayed_demos.py` in lockstep with `examples/gpu/web/*.mi` when adding or removing a demo; `gen_demo_bundles.py` imports that same list, so it follows automatically.
 
 ---
 
