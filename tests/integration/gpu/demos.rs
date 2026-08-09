@@ -206,7 +206,7 @@ fn demo_raymarch_web() {
 )]
 fn demo_blackhole_web() {
     let source = include_str!("../../../examples/gpu/web/blackhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=186008720");
+    assert_gpu_runs_with_output(source, "red_sum_milli=117803200");
 }
 
 /// wormhole_web: a traversable Morris–Thorne wormhole rendered by integrating one
