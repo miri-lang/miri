@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::ast::types::TypeKind;
 use crate::lexer::RegexToken;
 
 use std::fmt;
@@ -61,6 +62,24 @@ pub enum IntegerLiteral {
 }
 
 impl IntegerLiteral {
+    /// The literal variant matching `kind`, carrying `value`; `None` for a
+    /// non-integer kind.
+    pub fn from_type_kind(kind: &TypeKind, value: i128) -> Option<Self> {
+        match kind {
+            TypeKind::I8 => Some(IntegerLiteral::I8(value as i8)),
+            TypeKind::I16 => Some(IntegerLiteral::I16(value as i16)),
+            TypeKind::I32 => Some(IntegerLiteral::I32(value as i32)),
+            TypeKind::Int | TypeKind::I64 => Some(IntegerLiteral::I64(value as i64)),
+            TypeKind::I128 => Some(IntegerLiteral::I128(value)),
+            TypeKind::U8 => Some(IntegerLiteral::U8(value as u8)),
+            TypeKind::U16 => Some(IntegerLiteral::U16(value as u16)),
+            TypeKind::U32 => Some(IntegerLiteral::U32(value as u32)),
+            TypeKind::U64 => Some(IntegerLiteral::U64(value as u64)),
+            TypeKind::U128 => Some(IntegerLiteral::U128(value as u128)),
+            _ => None,
+        }
+    }
+
     /// Returns `true` if the literal value is zero.
     pub fn is_zero(&self) -> bool {
         match self {

@@ -137,7 +137,10 @@ gpu frame
         // After a brief idle the camera auto-orbits; drag always steers it.
         let auto = frame.dt * 0.09 if next_idle > 0.1 else 0.0
         cam_b[0] = yaw + frame.drag_dx * 0.008 + auto
-        cam_b[1] = clamp(pitch + frame.drag_dy * 0.006, -1.45, 1.45) as f32
+        // `drag_dy` points up the screen while the pointer's travel points down,
+        // so raising the pointer must raise the camera: subtract, matching the
+        // reference's `rot.y += (clientY - lastY) * 0.006`.
+        cam_b[1] = clamp(pitch - frame.drag_dy * 0.006, -1.45, 1.45) as f32
         cam_b[2] = clamp(dist * (exp(frame.wheel * 0.0012) as f32), 3.5, 22.0) as f32
         cam_b[3] = next_idle
 

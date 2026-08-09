@@ -522,6 +522,9 @@ fn build_kernel_body_nd(
     out_params.extend(std::iter::repeat_n(false, bound_count + start_count));
     out_params.extend(scalar_captures.iter().map(|_| false));
     kernel.out_params = out_params;
+    let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
+    param_written.resize(kernel.out_params.len(), false);
+    kernel.param_written = param_written;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
@@ -1351,7 +1354,13 @@ pub struct CaptureInfo {
     pub ty: Type,
     pub outer_local: Local,
     pub is_scalar: bool,
+    /// Whether the buffer must bind `read_write` in WGSL. Forced true for
+    /// atomic-element buffers, which cannot be declared read-only.
     pub is_written: bool,
+    /// Whether the kernel actually writes the buffer. Unlike `is_written` this
+    /// is the kernel's real data flow, so a buffer that is only atomically read
+    /// reports false here while still binding `read_write`.
+    pub writes_buffer: bool,
 }
 
 pub fn collect_capture_infos(
@@ -1390,13 +1399,15 @@ pub fn collect_capture_infos(
             // Atomic-element buffers must bind `read_write`: WGSL requires
             // `atomic<u32>` storage to be read_write even when a pass only
             // atomicLoads it, so they are never treated as read-only.
-            let is_written = written.contains(&name) || buffer_has_atomic_element(&ty.kind);
+            let writes_buffer = written.contains(&name);
+            let is_written = writes_buffer || buffer_has_atomic_element(&ty.kind);
             captures.push(CaptureInfo {
                 name,
                 ty,
                 outer_local,
                 is_scalar: false,
                 is_written,
+                writes_buffer,
             });
         } else if is_scalar {
             captures.push(CaptureInfo {
@@ -1405,6 +1416,7 @@ pub fn collect_capture_infos(
                 outer_local,
                 is_scalar: true,
                 is_written: false,
+                writes_buffer: false,
             });
         }
     }

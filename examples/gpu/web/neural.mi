@@ -50,6 +50,22 @@ const W3 = 192
 const B3 = 204
 const PARAMS = 205
 
+// One slot past the weights carries the epoch count, so it ping-pongs with them
+// and resets exactly when they do. The host reads it out for the HUD.
+const EPOCH = PARAMS
+const SLOTS = PARAMS + 1
+
+// Optimizer steps taken per displayed frame. The reference host takes three, and
+// the convergence rate a viewer sees is the product of this and the step size.
+const EPOCHS_PER_FRAME = 3
+
+// How long each shape stays on screen, and how many shapes the demo cycles
+// through. The net converges in well under a second, so a long hold would leave
+// the field frozen for most of the loop; this holds the settled boundary just
+// long enough to read before re-forming on the next shape.
+const SECS_PER_MODE = 6
+const MODES = 3
+
 // Dataset: 100 points, each (x, y, label in {0, 1}); PER_ARM points per class.
 // Training runs on a single GPU thread that walks the whole batch each epoch, so
 // the per-frame cost is linear in the sample count; 100 points keeps the frame
@@ -70,15 +86,15 @@ const CH = 540
 const PIXELS = CW * CH
 const PAINT = PIXELS * 4
 
-// Weights and velocities (ping-ponged a -> b).
-gpu var w_a = Array<f32, PARAMS>()
-gpu var w_b = Array<f32, PARAMS>()
+// Weights (plus the trailing epoch slot) and velocities, ping-ponged a -> b.
+gpu var w_a = Array<f32, SLOTS>()
+gpu var w_b = Array<f32, SLOTS>()
 gpu var v_a = Array<f32, PARAMS>()
 gpu var v_b = Array<f32, PARAMS>()
 
-// Dataset points and the [loss, accuracy] HUD stats.
+// Dataset points and the [loss, accuracy, epoch] HUD stats.
 gpu var data = Array<f32, DATA>()
-gpu var stats = Array<f32, 2>()
+gpu var stats = Array<f32, 3>()
 
 // Decision-field paint output (960×540 RGBA).
 gpu var paint = Array<f32, PAINT>()
@@ -87,17 +103,21 @@ fn rand_unit(key i32) f32
     let h = hash_u32(key as u32)
     return (h as f32) / (4294967295.0 as f32)
 
-// Seed weights with small per-layer scales (biases start at zero); zero the
-// velocities. Matches the reference net's Xavier-ish initialization.
+// Initial spread of parameter `i`, small and per-layer in the Xavier-ish manner
+// the reference net uses. Biases start at exactly zero, so they scale by 0.
+fn init_scale(i i32) f32
+    if i < B1: return 0.65
+    if i >= W2 and i < B2: return 0.5
+    if i >= W3 and i < B3: return 0.68
+    return 0.0
+
+// Which shape is on screen at time `t`: spiral (0), then rings (1), then xor (2).
+fn mode_at(t f32) i32
+    return (floor(t / (SECS_PER_MODE as f32)) as i32) % MODES
+
+// Seed weights from that spread; zero the velocities.
 forall i in 0..PARAMS
-    var scale = 0.0
-    if i < B1
-        scale = 0.65
-    if i >= W2 and i < B2
-        scale = 0.5
-    if i >= W3 and i < B3
-        scale = 0.68
-    w_a[i] = ((rand_unit(i + 1) * 2.0 - 1.0) * scale) as f32
+    w_a[i] = ((rand_unit(i + 1) * 2.0 - 1.0) * init_scale(i)) as f32
     v_a[i] = 0.0
 
 // Seed a two-arm spiral: points 0..PER_ARM are class 0, the rest class 1.
@@ -124,92 +144,144 @@ forall px, py in 0..CW, 0..CH
     paint[base + 3] = 1.0
 
 gpu frame
-    // Pass 1: one full-batch backprop epoch. A single thread forwards every
-    // sample from the previous frame's weights `w_a`, backpropagates the
-    // cross-entropy error into the exact gradient `g`, then applies one momentum
-    // SGD step, writing w_a/v_a -> w_b/v_b (the host ping-pongs a/b each frame). Only
-    // the gradient and the tiny activation buffers are local scratch — the
-    // weights stay in device memory, so the kernel avoids the register spill that
-    // a burst of local weight copies would cause on the single training lane.
+    // Pass 1: several full-batch backprop epochs. A single thread takes the
+    // previous frame's weights from `w_a`/`v_a`, and for each epoch forwards
+    // every sample, backpropagates the cross-entropy error into the exact
+    // gradient `g`, and takes one momentum SGD step. The result is published to
+    // `w_b`/`v_b`, which the host ping-pongs back each frame. Weights, gradient
+    // and activations are all per-invocation scratch, which is what makes the
+    // whole training loop expressible on-device: no cross-thread reduction and
+    // no host round-trip.
     forall t in 0..1
+        // The epochs run against per-invocation copies of the weights. A pass may
+        // not both read and write a device buffer — the compiler rejects that as a
+        // race, and rightly, since it cannot know this pass is a single lane — so
+        // the ping-pong happens once at the edges of the frame rather than once
+        // per epoch.
+        var w = Array<f32, PARAMS>()
+        var vel = Array<f32, PARAMS>()
+        var c = 0
+        while c < PARAMS
+            w[c] = w_a[c]
+            vel[c] = v_a[c]
+            c = c + 1
+
         var g = Array<f32, PARAMS>()
         var h1 = Array<f32, H1>()
         var h2 = Array<f32, H2>()
         var d1 = Array<f32, H1>()
         var d2 = Array<f32, H2>()
-        var s = 0
-        while s < SAMPLES
-            let x0 = data[s * 3]
-            let x1 = data[s * 3 + 1]
-            let lbl = data[s * 3 + 2]
 
-            // Forward pass.
-            var j = 0
-            while j < H1
-                let a1 = (w_a[W1 + j * IN] * x0 + w_a[W1 + j * IN + 1] * x1 + w_a[B1 + j]) as f32
-                h1[j] = tanh(a1) as f32
-                j = j + 1
-            j = 0
-            while j < H2
-                var a2 = w_a[B2 + j]
-                var k = 0
-                while k < H1
-                    a2 = (a2 + w_a[W2 + j * H1 + k] * h1[k]) as f32
-                    k = k + 1
-                h2[j] = tanh(a2) as f32
-                j = j + 1
-            var y = w_a[B3]
-            j = 0
-            while j < H2
-                y = (y + w_a[W3 + j] * h2[j]) as f32
-                j = j + 1
-            let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
+        var epoch = 0
+        while epoch < EPOCHS_PER_FRAME
+            // The gradient accumulates across the batch, so it must start each
+            // epoch at zero rather than carrying the previous epoch's sum.
+            var z = 0
+            while z < PARAMS
+                g[z] = 0.0
+                z = z + 1
+            var s = 0
+            while s < SAMPLES
+                let x0 = data[s * 3]
+                let x1 = data[s * 3 + 1]
+                let lbl = data[s * 3 + 2]
 
-            // Backward pass: accumulate the exact gradient into `g`.
-            let ds = (p - lbl) as f32
-            g[B3] = (g[B3] + ds) as f32
-            j = 0
-            while j < H2
-                g[W3 + j] = (g[W3 + j] + ds * h2[j]) as f32
-                d2[j] = (ds * w_a[W3 + j] * (1.0 - h2[j] * h2[j])) as f32
-                j = j + 1
-            j = 0
-            while j < H2
-                g[B2 + j] = (g[B2 + j] + d2[j]) as f32
-                var k = 0
-                while k < H1
-                    g[W2 + j * H1 + k] = (g[W2 + j * H1 + k] + d2[j] * h1[k]) as f32
-                    k = k + 1
-                j = j + 1
-            var k = 0
-            while k < H1
-                var acc = 0.0
+                // Forward pass.
+                var j = 0
+                while j < H1
+                    let a1 = (w[W1 + j * IN] * x0 + w[W1 + j * IN + 1] * x1 + w[B1 + j]) as f32
+                    h1[j] = tanh(a1) as f32
+                    j = j + 1
                 j = 0
                 while j < H2
-                    acc = (acc + d2[j] * w_a[W2 + j * H1 + k]) as f32
+                    var a2 = w[B2 + j]
+                    var k = 0
+                    while k < H1
+                        a2 = (a2 + w[W2 + j * H1 + k] * h1[k]) as f32
+                        k = k + 1
+                    h2[j] = tanh(a2) as f32
                     j = j + 1
-                d1[k] = (acc * (1.0 - h1[k] * h1[k])) as f32
-                k = k + 1
-            k = 0
-            while k < H1
-                g[B1 + k] = (g[B1 + k] + d1[k]) as f32
-                g[W1 + k * IN] = (g[W1 + k * IN] + d1[k] * x0) as f32
-                g[W1 + k * IN + 1] = (g[W1 + k * IN + 1] + d1[k] * x1) as f32
-                k = k + 1
-            s = s + 1
+                var y = w[B3]
+                j = 0
+                while j < H2
+                    y = (y + w[W3 + j] * h2[j]) as f32
+                    j = j + 1
+                let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
 
-        // Momentum SGD (lr 0.25, momentum 0.9), gradient averaged over the batch,
-        // writing the new weights/velocities to w_b/v_b. No weight decay: the
-        // spiral needs the sharp, high-curvature boundary that L2 would smooth.
-        let sc = (0.25 / (SAMPLES as f32)) as f32
-        var i = 0
-        while i < PARAMS
-            let nv = (0.9 * v_a[i] - sc * g[i]) as f32
-            v_b[i] = nv
-            w_b[i] = (w_a[i] + nv) as f32
-            i = i + 1
+                // Backward pass: accumulate the exact gradient into `g`.
+                let ds = (p - lbl) as f32
+                g[B3] = (g[B3] + ds) as f32
+                j = 0
+                while j < H2
+                    g[W3 + j] = (g[W3 + j] + ds * h2[j]) as f32
+                    d2[j] = (ds * w[W3 + j] * (1.0 - h2[j] * h2[j])) as f32
+                    j = j + 1
+                j = 0
+                while j < H2
+                    g[B2 + j] = (g[B2 + j] + d2[j]) as f32
+                    var k = 0
+                    while k < H1
+                        g[W2 + j * H1 + k] = (g[W2 + j * H1 + k] + d2[j] * h1[k]) as f32
+                        k = k + 1
+                    j = j + 1
+                var k = 0
+                while k < H1
+                    var acc = 0.0
+                    j = 0
+                    while j < H2
+                        acc = (acc + d2[j] * w[W2 + j * H1 + k]) as f32
+                        j = j + 1
+                    d1[k] = (acc * (1.0 - h1[k] * h1[k])) as f32
+                    k = k + 1
+                k = 0
+                while k < H1
+                    g[B1 + k] = (g[B1 + k] + d1[k]) as f32
+                    g[W1 + k * IN] = (g[W1 + k * IN] + d1[k] * x0) as f32
+                    g[W1 + k * IN + 1] = (g[W1 + k * IN + 1] + d1[k] * x1) as f32
+                    k = k + 1
+                s = s + 1
 
-    // Pass 2: post-step loss + accuracy over the batch for the HUD readback.
+            // Momentum SGD (lr 0.25, momentum 0.9), gradient averaged over the
+            // batch. No weight decay: the spiral needs the sharp, high-curvature
+            // boundary that L2 would smooth.
+            let sc = (0.25 / (SAMPLES as f32)) as f32
+            var i = 0
+            while i < PARAMS
+                let nv = (0.9 * vel[i] - sc * g[i]) as f32
+                vel[i] = nv
+                w[i] = (w[i] + nv) as f32
+                i = i + 1
+            epoch = epoch + 1
+
+        // Publish the frame's result. Clicking the canvas restarts training from a
+        // fresh net instead of the one just refined; the keys are offset by the
+        // frame clock so each restart draws different weights rather than
+        // replaying the first run, and the offset wraps well inside 32-bit range.
+        // A dataset change restarts it for the same reason a trainer would not
+        // fine-tune across unrelated tasks: the converged weights are large enough
+        // to saturate every tanh, leaving no gradient to fit the new shape with.
+        let before = frame.time - frame.dt
+        let prev = before if before > 0.0 else 0.0
+        let restart = frame.clicked or mode_at(frame.time) != mode_at(prev)
+        let key_base = ((((frame.time * 97.0) as i32) % 9973) * PARAMS) as i32
+        var o = 0
+        while o < PARAMS
+            if restart
+                w_b[o] = ((rand_unit(key_base + o + 1) * 2.0 - 1.0) * init_scale(o)) as f32
+                v_b[o] = 0.0
+            else
+                w_b[o] = w[o]
+                v_b[o] = vel[o]
+            o = o + 1
+
+        // Epochs taken by the net now on screen: it counts from zero for each
+        // freshly seeded one, so it measures this shape's training, not the
+        // session's.
+        let epochs_before = 0.0 if restart else w_a[EPOCH]
+        w_b[EPOCH] = (epochs_before + (EPOCHS_PER_FRAME as f32)) as f32
+
+    // Pass 2: post-step loss + accuracy over the batch, plus the epoch count
+    // the train pass just advanced, for the HUD readback.
     forall t in 0..1
         var h1 = Array<f32, H1>()
         var h2 = Array<f32, H2>()
@@ -246,17 +318,17 @@ gpu frame
             s = s + 1
         stats[0] = (loss / (SAMPLES as f32)) as f32
         stats[1] = (correct / (SAMPLES as f32)) as f32
+        stats[2] = w_b[EPOCH]
 
     // Pass 3: regenerate the dataset for the current mode. A timer cycles the
     // shape every SECS_PER_MODE seconds (spiral -> rings -> xor), so the field
-    // visibly re-forms for each one; the net adapts in place (no weight reset).
+    // visibly re-forms for each one from the net the train pass just reseeded.
     // Within a mode the layout is a deterministic function of the point index,
     // so it is stable across frames and the net can learn it. `train` stays the
     // first pass (it owns the weight ping-pong); this pass feeds the render below
     // and next frame's training, so the shape only lags a frame at a boundary.
     forall s in 0..SAMPLES
-        // Mode advances every 10 seconds: spiral (0), rings (1), xor (2).
-        let mode = (floor(frame.time / 14.0) as i32) % 3
+        let mode = mode_at(frame.time)
         var dx = 0.0
         var dy = 0.0
         var lbl = 0.0
@@ -380,7 +452,6 @@ gpu frame
         paint[base + 1] = cg
         paint[base + 2] = cb
         paint[base + 3] = 1.0
-
 
 // Native smoke: after the seed and one frame (a burst of STEPS epochs), report
 // the post-step loss and accuracy. Training reduces the loss well below the

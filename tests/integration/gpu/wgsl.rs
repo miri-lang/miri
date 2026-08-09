@@ -11,7 +11,7 @@
 //! expected results) is owned by `super::launch` via the compiler-driven
 //! native dispatch path.
 
-use super::helpers::assert_gpu_wgsl_valid;
+use super::helpers::{assert_gpu_wgsl_valid, compile_to_wgsl};
 
 #[test]
 fn vector_add_emits_naga_valid_wgsl() {
@@ -2181,6 +2181,89 @@ fn main()
     assert!(
         wgsl.contains("var<function>") && wgsl.contains("array<f32, 4>"),
         "expected a var<function> array local in the device fn body, got:\n{}",
+        wgsl
+    );
+    assert_gpu_wgsl_valid(source);
+}
+
+/// Body of the innermost `loop { ... }` block in `wgsl`, or `None` when the
+/// shader has no loop. Scans forward from the first `loop {` and tracks brace
+/// depth, so the slice ends at that block's own closing brace rather than at
+/// the first `}` of a nested `if` or `continuing` block.
+fn innermost_loop_body(wgsl: &str) -> Option<&str> {
+    let start = wgsl.find("loop {")? + "loop {".len();
+    let mut depth = 1usize;
+    for (offset, ch) in wgsl[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&wgsl[start..start + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// An array declared inside a loop is re-zeroed within the loop body.
+///
+/// A WGSL `var<function>` is zero-initialized once at function entry, and every
+/// local is hoisted to function scope, so without an explicit assignment at the
+/// declaration point the array would carry the previous iteration's values.
+/// The assignment has to sit inside the loop body, not merely somewhere in the
+/// kernel, which is why this asserts on the extracted body rather than on the
+/// whole shader.
+#[test]
+fn loop_scoped_array_is_rezeroed_inside_the_loop_body() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var out = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        var e = 0
+        while e < 3
+            var g = Array<f32, 4>()
+            g[i] = g[i] + 1.0
+            out[i] = g[i]
+            e = e + 1
+";
+    let wgsl = compile_to_wgsl(source);
+    let body = innermost_loop_body(&wgsl)
+        .unwrap_or_else(|| panic!("expected a loop in the emitted kernel:\n{}", wgsl));
+    assert!(
+        body.contains("= array<f32, 4>()"),
+        "expected the loop body to re-zero the loop-scoped array, got body:\n{}",
+        body
+    );
+    assert_gpu_wgsl_valid(source);
+}
+
+/// An array declared outside any loop is left to the zero-initialization that
+/// its `var<function>` declaration already performs at function entry. Emitting
+/// an assignment here would repeat an N-element store on every invocation for
+/// no benefit.
+#[test]
+fn array_declared_outside_a_loop_is_not_rezeroed() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var out = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        var g = Array<f32, 4>()
+        g[i] = g[i] + 1.0
+        out[i] = g[i]
+";
+    let wgsl = compile_to_wgsl(source);
+    assert!(
+        !wgsl.contains("= array<f32, 4>()"),
+        "expected no re-zeroing assignment for an array declared outside a loop, got:\n{}",
         wgsl
     );
     assert_gpu_wgsl_valid(source);

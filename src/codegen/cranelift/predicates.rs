@@ -116,16 +116,16 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Resolves the element `TypeKind` from a collection base type (Array,
-    /// List, the post-normalization `Custom("Array"|"List", _)` form, or
-    /// Tuple). Returns `None` when the base type is not a collection, when
-    /// type arguments are absent, or when the element expression is not a
-    /// `Type(...)` node — callers default to pointer-sized addressing.
+    /// Core implementation: resolves the element `TypeKind` from a collection
+    /// kind (Array, List, Tuple, or the post-normalization `Custom` forms).
+    /// Returns `None` when the base kind is not a collection, when type
+    /// arguments are absent, or when the element expression is not a
+    /// `Type(...)` node.
     ///
-    /// The exhaustive `TypeKind` match is deliberate: a new variant must
-    /// force this site to be revisited rather than silently absorbed by a
-    /// wildcard pattern.
-    pub(crate) fn resolve_collection_elem_type(base_type: &Type) -> Option<&TypeKind> {
+    /// This is the canonical home for all collection element type resolution.
+    /// Call this when you need just the TypeKind; wrap it as needed for
+    /// &TypeKind or &Type returns.
+    pub(crate) fn resolve_collection_elem_type_kind_impl(kind: &TypeKind) -> Option<&TypeKind> {
         fn elem_kind_from_expr(expr: &Expression) -> Option<&TypeKind> {
             if let ExpressionKind::Type(ty, _) = &expr.node {
                 Some(&ty.kind)
@@ -133,19 +133,19 @@ impl<'a> FunctionTranslator<'a> {
                 None
             }
         }
-        match &base_type.kind {
+        match kind {
             TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
                 elem_kind_from_expr(elem_ty_expr)
             }
+            TypeKind::Tuple(elems) => elems.first().and_then(elem_kind_from_expr),
             TypeKind::Custom(name, Some(args))
                 if matches!(
                     BuiltinCollectionKind::from_name(name),
                     Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
-                ) =>
+                ) || name == crate::ast::types::TUPLE_TYPE_NAME =>
             {
                 args.first().and_then(elem_kind_from_expr)
             }
-            TypeKind::Tuple(elems) => elems.first().and_then(elem_kind_from_expr),
             TypeKind::Custom(_, _)
             | TypeKind::Int
             | TypeKind::I8
@@ -180,6 +180,19 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
+    /// Resolves the element `TypeKind` from a collection base type (Array,
+    /// List, the post-normalization `Custom("Array"|"List"|"Tuple", _)` form, or
+    /// Tuple). Returns `None` when the base type is not a collection, when
+    /// type arguments are absent, or when the element expression is not a
+    /// `Type(...)` node — callers default to pointer-sized addressing.
+    ///
+    /// The exhaustive `TypeKind` match is deliberate: a new variant must
+    /// force this site to be revisited rather than silently absorbed by a
+    /// wildcard pattern.
+    pub(crate) fn resolve_collection_elem_type(base_type: &Type) -> Option<&TypeKind> {
+        Self::resolve_collection_elem_type_kind_impl(&base_type.kind)
+    }
+
     /// Returns the element `Type` of a collection type (Array or List), or `None`.
     ///
     /// Unlike `resolve_collection_elem_type` which returns `&TypeKind`, this returns
@@ -199,6 +212,8 @@ impl<'a> FunctionTranslator<'a> {
                 None
             }
         }
+        // Use the core impl to resolve the TypeKind first, then extract the full Type
+        // from the matching expression to preserve the full Type context.
         match &base_type.kind {
             TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
                 elem_type_from_expr(elem_ty_expr)

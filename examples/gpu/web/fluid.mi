@@ -91,18 +91,34 @@ gpu frame
         let fy = (y as f32) / 192.0
         let t = frame.time
 
-        // Pointer activity: moved this frame (hover or drag) or button held.
+        // Pointer activity is movement, with or without a button: the pointer
+        // pushes dye by dragging through the fluid, so a stationary pointer
+        // injects nothing however long it is held down. Holding also counting as
+        // activity would pour dye into one spot for as long as the button was
+        // pressed.
         let mvx = frame.move_x
         let mvy = frame.move_y
-        let held = 1.0 if frame.mouse_down else 0.0
-        let active = 1.0 if (abs(mvx) + abs(mvy)) > 0.0006 or held > 0.5 else 0.0
+        let active = 1.0 if (abs(mvx) + abs(mvy)) > 0.0006 else 0.0
 
-        // Ambient swirl, on only while the pointer is idle.
-        let amb = (1.0 - active) as f32
-        let ax = (0.5 + 0.33 * (cos(t * 0.8) as f32)) as f32
-        let ay = (0.5 + 0.33 * (sin(t * 1.04) as f32)) as f32
-        let adx = (0.0 - (sin(t * 0.8) as f32)) * 30.0
-        let ady = (cos(t * 1.04) as f32) * 30.0
+        // Ambient swirl, on only while the pointer is idle. It fires as a puff
+        // roughly every 1.4 seconds rather than continuously: a source that ran
+        // every frame would inject dye some eighty times faster than it
+        // dissipates, so the field would keep brightening instead of settling.
+        // The window is one frame wide, so the phase test needs `dt`.
+        // The opening frame puffs too, so the field is never empty waiting for
+        // the first period to elapse; `dt` is zero only on that frame.
+        let period = 1.4
+        let cycle = (t / period) as f32
+        let phase = (cycle - (floor(cycle) as f32)) as f32
+        let puff = 1.0 if phase < (frame.dt / period) or frame.dt <= 0.0 else 0.0
+        let amb = ((1.0 - active) * puff) as f32
+        // The emission point walks a wobbling circle, so successive puffs land
+        // in different places and stir the whole field over time.
+        let a = (t * 0.8 + (sin(t * 0.37) as f32) * 3.0) as f32
+        let ax = (0.5 + 0.33 * (cos(a) as f32)) as f32
+        let ay = (0.5 + 0.33 * (sin(a * 1.3) as f32)) as f32
+        let adx = (0.0 - (sin(a) as f32)) * 220.0
+        let ady = (cos(a * 1.3) as f32) * 220.0
         let dxa = (fx - ax) as f32
         let dya = (fy - ay) as f32
         let ga = (exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) as f32) * amb

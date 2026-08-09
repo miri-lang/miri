@@ -1428,10 +1428,29 @@ impl<'a> BodyEmitter<'a> {
         _target: Option<&BasicBlock>,
     ) -> Result<(), CodegenError> {
         // An `Array<T, N>()` constructor targeting a function-scope array local
-        // allocates nothing on the GPU: the `var<function>` declaration already
-        // provides zero-initialized per-invocation storage. Drop the call rather
-        // than emit a host-only `miri_rt_array_new(...)` that has no WGSL form.
+        // has no WGSL form of its own: there is no `miri_rt_array_new(...)` to
+        // call, and the hoisted `var<function>` declaration already supplies
+        // zero-initialized storage. That declaration is initialized once at
+        // function entry, though, so a constructor reached on more than one pass
+        // must re-zero the storage itself. Emit an explicit `_dest = array<T,
+        // N>()` at the statement position, which places it inside the loop body
+        // and runs it every iteration. Outside a loop the entry initialization
+        // already holds and the assignment would be a redundant N-element store
+        // on every invocation, so the call is dropped as before.
         if self.is_local_array_construction(destination) {
+            if self.loop_stack.is_empty() {
+                return Ok(());
+            }
+            let decl = self.body.local_decls.get(destination.local.0).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: array constructor destination {} has no local declaration in body",
+                    destination.local
+                ))
+            })?;
+            let array_ty = fixed_array_typename(&decl.ty.kind)?;
+            self.write_indent()?;
+            let dest_str = self.render_place(destination)?;
+            writeln!(self.output, "{} = {}();", dest_str, array_ty).map_err(emit_err)?;
             return Ok(());
         }
 

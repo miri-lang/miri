@@ -370,6 +370,403 @@ fn stub_device_binds_inputs_uniform_and_double_buffers() {
     );
 }
 
+/// Prints, per manifest given on the command line, the cross-frame ping-pong
+/// pairs the runtime derives from it.
+const STATE_PAIR_DRIVER: &str = r#"
+import { statePairs } from "./miri-gpu.js";
+import fs from "fs";
+const out = {};
+for (const path of process.argv.slice(2)) {
+    const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+    out[manifest.name] = statePairs(manifest.framePasses ?? [])
+        .map((p) => `${p.source}->${p.dest}`)
+        .sort();
+}
+console.log(JSON.stringify(out));
+"#;
+
+/// Every published demo's ping-pong pairs, as the runtime derives them.
+///
+/// The pairing rule keys on each binding's `writes` flag rather than its WGSL
+/// `access` qualifier, because atomic storage is always bound read-write. Under
+/// the old `access`-based rule the particle accumulator presented as two
+/// destinations and no source, so `accum_a`/`accum_b` never registered as a pair
+/// and never swapped: every frame's decay pass read a buffer nothing had
+/// written, and the demo lost its motion trails entirely.
+///
+/// Pinning all eight demos, not just the one that broke, is the point — the rule
+/// is shared, so a change to it has to be shown not to move any other demo's
+/// pairs.
+const EXPECTED_STATE_PAIRS: &[(&str, &[&str])] = &[
+    ("mandelbrot", &["view_a->view_b"]),
+    ("game_of_life", &["state_a->state_b"]),
+    (
+        "particles",
+        &["accum_a->accum_b", "pstate_a->pstate_b", "warm_a->warm_b"],
+    ),
+    ("fluid", &["vx_a->vx_b", "vy_a->vy_b"]),
+    ("raymarch", &["cam_a->cam_b"]),
+    ("neural", &["v_a->v_b", "w_a->w_b"]),
+    ("blackhole", &["cam_a->cam_b"]),
+    ("wormhole", &["cam_a->cam_b"]),
+];
+
+#[test]
+fn published_demos_derive_their_expected_state_pairs() {
+    let node = match resolve_runtime("MIRI_NODE", "node") {
+        Some(n) => n,
+        None => {
+            eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+            return;
+        }
+    };
+
+    let demos_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gpu/web");
+    let mut manifests = Vec::new();
+    let mut runtime_dir = None;
+    for (name, _) in EXPECTED_STATE_PAIRS {
+        let source = fs::read_to_string(demos_dir.join(format!("{name}.mi")))
+            .unwrap_or_else(|e| panic!("read {name}.mi: {e}"));
+        let bundle = build_bundle(&source);
+        // The manifest is named after the bundle directory, so rename it to the
+        // demo: the driver keys its output on `manifest.name`.
+        let built = manifest_path(&bundle);
+        let renamed = bundle.join(format!("{name}.json"));
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&built).expect("read manifest"))
+                .expect("manifest parses");
+        value["name"] = serde_json::Value::String((*name).to_string());
+        fs::write(&renamed, value.to_string()).expect("write renamed manifest");
+        manifests.push(renamed);
+        runtime_dir.get_or_insert(bundle);
+    }
+
+    let runtime_dir = runtime_dir.expect("at least one demo");
+    let driver = runtime_dir.join("state-pair-driver.mjs");
+    fs::write(&driver, STATE_PAIR_DRIVER).expect("write state pair driver");
+
+    let output = Command::new(&node)
+        .arg(&driver)
+        .args(&manifests)
+        .output()
+        .expect("run node state pair driver");
+    assert!(
+        output.status.success(),
+        "state pair driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let derived: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("state pair driver must print JSON");
+
+    for (name, expected) in EXPECTED_STATE_PAIRS {
+        let got: Vec<String> = derived[name]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: no pairs reported"))
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            got,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            "{name}: derived ping-pong pairs changed"
+        );
+    }
+}
+
+/// A demo whose frame pass reads the pointer drag deltas, so the value the
+/// runtime packs into the `_inputs` uniform can be read back and checked.
+const DRAG_INPUTS: &str = r#"
+use system.gpu
+use system.collections.array
+
+gpu var view_a = Array<f32, 4>()
+gpu var view_b = Array<f32, 4>()
+gpu var paint = Array<f32, 16>()
+
+gpu forall i in 0..4
+    view_a[i] = 0.0
+
+gpu frame
+    gpu forall i in 0..4
+        view_b[i] = view_a[i] + frame.drag_dx + frame.drag_dy
+    gpu forall idx in 0..16
+        paint[idx] = view_b[0]
+"#;
+
+/// A stub-GPU driver that mounts a demo on a fake canvas whose CSS box
+/// (512x288) deliberately differs from its backing store, fires a pointer drag,
+/// and prints the drag deltas the runtime packed into the `_inputs` uniform plus
+/// the pointer-capture calls it made.
+const DRAG_INPUT_STUB_DRIVER: &str = r#"
+import { mount } from "./miri-gpu.js";
+import fs from "fs";
+globalThis.GPUBufferUsage = { STORAGE:1, COPY_SRC:2, COPY_DST:4, UNIFORM:8, MAP_READ:16 };
+globalThis.GPUShaderStage = { COMPUTE:1, FRAGMENT:2, VERTEX:4 };
+globalThis.GPUMapMode = { READ:1 };
+
+const uniformWrites = [];
+function buf(label, size){ const ab = new ArrayBuffer(size||4);
+  return { label, getMappedRange:(o=0,l)=>l?ab.slice(o,o+l):ab, unmap(){}, destroy(){}, mapAsync:async()=>{}, size }; }
+const device = {
+  limits:{}, lost:new Promise(()=>{}),
+  createBuffer:({label,size})=>buf(label,size),
+  createShaderModule:()=>({}), createBindGroupLayout:()=>({}), createPipelineLayout:()=>({}),
+  createComputePipeline:(d)=>({ entry:d.compute.entryPoint }),
+  createRenderPipeline:()=>({}),
+  createBindGroup:()=>({ entries:[] }),
+  createCommandEncoder:()=>({
+    beginComputePass:()=>({ setPipeline(){}, setBindGroup(){}, dispatchWorkgroups(){}, end(){} }),
+    beginRenderPass:()=>({ setPipeline(){}, setBindGroup(){}, draw(){}, end(){} }),
+    copyBufferToBuffer(){}, finish:()=>({}) }),
+  queue:{ submit(){},
+    writeBuffer(buffer, _off, data){ uniformWrites.push({ label:buffer.label, bytes:new Uint8Array(data).slice() }); },
+    onSubmittedWorkDone:async()=>{} },
+  destroy(){},
+};
+Object.defineProperty(globalThis, "navigator",
+  { value:{ gpu:{ requestAdapter:async()=>({ requestDevice:async()=>device, limits:{} }),
+    getPreferredCanvasFormat:()=>"bgra8unorm" } }, configurable:true });
+
+let rafCb = null;
+globalThis.requestAnimationFrame = (cb) => { rafCb = cb; return 1; };
+globalThis.cancelAnimationFrame = () => {};
+
+const ctx = { configure(){}, getCurrentTexture:()=>({ createView:()=>({}) }) };
+const listeners = {};
+let captured = null, released = null;
+const canvas = {
+  width:0, height:0, getContext:()=>ctx,
+  // A CSS box that differs from the backing store: a runtime that scaled drag
+  // deltas by width/rect.width would report something other than the CSS delta.
+  getBoundingClientRect:()=>({ left:0, top:0, width:512, height:288 }),
+  addEventListener(type, fn){ (listeners[type] = listeners[type] || []).push(fn); },
+  removeEventListener(){},
+  setPointerCapture(id){ captured = id; },
+  releasePointerCapture(id){ released = id; },
+  hasPointerCapture(id){ return captured === id; },
+};
+const fire = (type, ev) => (listeners[type] || []).forEach((fn) => fn(ev));
+
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+await mount(canvas, manifest, {});
+
+fire("pointerdown", { clientX:100, clientY:100, pointerId:7, preventDefault(){} });
+fire("pointermove", { clientX:150, clientY:130, pointerId:7, preventDefault(){} });
+const cb = rafCb; rafCb = null; if (cb) cb(16);
+fire("pointerup", { clientX:150, clientY:130, pointerId:7, preventDefault(){} });
+
+const pass = (manifest.framePasses || []).find((p) => p.inputs && p.inputs.length);
+const write = uniformWrites.filter((w) => w.label && w.label.endsWith("-inputs")).pop();
+const view = new DataView(write.bytes.buffer, write.bytes.byteOffset, write.bytes.byteLength);
+const read = (name) => {
+  const f = pass.inputs.find((x) => x.name === name);
+  return f ? view.getFloat32(f.offset, true) : null;
+};
+console.log(JSON.stringify({
+  drag_dx: read("drag_dx"), drag_dy: read("drag_dy"),
+  backingWidth: canvas.width, captured, released,
+}));
+"#;
+
+/// Drag deltas must reach the kernel in CSS pixels — the units the pointer moves
+/// in — not in backing-store pixels. A demo tunes its pan and orbit constants
+/// against pointer travel, so scaling by the canvas's resolution would make
+/// sensitivity depend on how large the canvas happens to be drawn. The drag also
+/// has to capture the pointer, so leaving the canvas mid-drag does not stop it.
+#[test]
+fn drag_deltas_are_css_pixels_and_capture_the_pointer() {
+    let node = match resolve_runtime("MIRI_NODE", "node") {
+        Some(n) => n,
+        None => {
+            eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+            return;
+        }
+    };
+
+    let bundle = build_bundle(DRAG_INPUTS);
+    let driver = bundle.join("drag-input-stub-driver.mjs");
+    fs::write(&driver, DRAG_INPUT_STUB_DRIVER).expect("write drag input stub driver");
+    let manifest = manifest_path(&bundle);
+
+    let output = Command::new(&node)
+        .arg(&driver)
+        .arg(&manifest)
+        .output()
+        .expect("run node drag input stub driver");
+    assert!(
+        output.status.success(),
+        "drag input stub driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let trace: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("drag input stub driver must print JSON");
+
+    // The canvas is drawn in a 512-wide CSS box but its backing store is the
+    // demo's own resolution; without a difference between the two this test
+    // could not tell the units apart.
+    assert_ne!(
+        trace["backingWidth"].as_u64().unwrap(),
+        512,
+        "the fake canvas must have a backing width different from its CSS width"
+    );
+
+    let dx = trace["drag_dx"].as_f64().unwrap();
+    let dy = trace["drag_dy"].as_f64().unwrap();
+    assert!(
+        (dx - 50.0).abs() < 1e-3,
+        "a 50 CSS-pixel horizontal drag must report drag_dx = 50, got {dx}"
+    );
+    // Vertical is reported pointing up, opposite the pointer's downward travel.
+    assert!(
+        (dy + 30.0).abs() < 1e-3,
+        "a 30 CSS-pixel downward drag must report drag_dy = -30, got {dy}"
+    );
+
+    assert_eq!(
+        trace["captured"].as_u64(),
+        Some(7),
+        "pointerdown must capture the pointer so a drag survives leaving the canvas"
+    );
+    assert_eq!(
+        trace["released"].as_u64(),
+        Some(7),
+        "pointerup must release the captured pointer"
+    );
+}
+
+/// A stub-GPU driver that mounts the same demo on two canvases — the shape of a
+/// page showing several demos — then stops both. Counts device requests, buffer
+/// creations and destructions, and device destructions.
+const TWO_MOUNT_STUB_DRIVER: &str = r#"
+import { mount } from "./miri-gpu.js";
+import fs from "fs";
+globalThis.GPUBufferUsage = { STORAGE:1, COPY_SRC:2, COPY_DST:4, UNIFORM:8, MAP_READ:16 };
+globalThis.GPUShaderStage = { COMPUTE:1, FRAGMENT:2, VERTEX:4 };
+globalThis.GPUMapMode = { READ:1 };
+
+let devicesRequested = 0, deviceDestroyed = 0, nextId = 0;
+const created = [], destroyed = [];
+// Identify buffers by allocation id, not by label: two mounts of the same demo
+// allocate the same labels, and only ids can show a double free.
+function buf(label, size){ const ab = new ArrayBuffer(size||4); const id = ++nextId; created.push(id);
+  return { label, getMappedRange:(o=0,l)=>l?ab.slice(o,o+l):ab, unmap(){},
+           destroy(){ destroyed.push(id); }, mapAsync:async()=>{}, size }; }
+const device = {
+  limits:{}, lost:new Promise(()=>{}),
+  createBuffer:({label,size})=>buf(label,size),
+  createShaderModule:()=>({}), createBindGroupLayout:()=>({}), createPipelineLayout:()=>({}),
+  createComputePipeline:(d)=>({ entry:d.compute.entryPoint }),
+  createRenderPipeline:()=>({}),
+  createBindGroup:()=>({ entries:[] }),
+  createCommandEncoder:()=>({
+    beginComputePass:()=>({ setPipeline(){}, setBindGroup(){}, dispatchWorkgroups(){}, end(){} }),
+    beginRenderPass:()=>({ setPipeline(){}, setBindGroup(){}, draw(){}, end(){} }),
+    copyBufferToBuffer(){}, finish:()=>({}) }),
+  queue:{ submit(){}, writeBuffer(){}, onSubmittedWorkDone:async()=>{} },
+  destroy(){ deviceDestroyed++; },
+};
+Object.defineProperty(globalThis, "navigator",
+  { value:{ gpu:{ requestAdapter:async()=>({
+      requestDevice:async()=>{ devicesRequested++; return device; }, limits:{} }),
+    getPreferredCanvasFormat:()=>"bgra8unorm" } }, configurable:true });
+
+globalThis.requestAnimationFrame = () => 1;
+globalThis.cancelAnimationFrame = () => {};
+
+const ctx = { configure(){}, getCurrentTexture:()=>({ createView:()=>({}) }) };
+function canvas(){ return {
+  width:0, height:0, getContext:()=>ctx,
+  getBoundingClientRect:()=>({ left:0, top:0, width:512, height:288 }),
+  addEventListener(){}, removeEventListener(){},
+}; }
+
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const a = await mount(canvas(), manifest, {});
+const b = await mount(canvas(), manifest, {});
+const afterMounts = { devicesRequested, created: created.length, destroyed: destroyed.length };
+a.stop();
+b.stop();
+a.stop();   // idempotent: a second stop must not double-destroy
+console.log(JSON.stringify({
+  ...afterMounts,
+  destroyedAfterStop: destroyed.length,
+  uniqueDestroyed: new Set(destroyed).size,
+  deviceDestroyed,
+}));
+"#;
+
+/// A page shows many demos, so mounts must share one device and must give their
+/// storage back when they scroll out of view. Both were leaks: every mount
+/// requested its own device, and `stop()` freed nothing, so the buffers of every
+/// demo ever scrolled past stayed resident for the session.
+#[test]
+fn mounts_share_one_device_and_release_their_buffers_on_stop() {
+    let node = match resolve_runtime("MIRI_NODE", "node") {
+        Some(n) => n,
+        None => {
+            eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+            return;
+        }
+    };
+
+    let bundle = build_bundle(FRAME_PINGPONG);
+    let driver = bundle.join("two-mount-stub-driver.mjs");
+    fs::write(&driver, TWO_MOUNT_STUB_DRIVER).expect("write two mount stub driver");
+    let manifest = manifest_path(&bundle);
+
+    let output = Command::new(&node)
+        .arg(&driver)
+        .arg(&manifest)
+        .output()
+        .expect("run node two mount stub driver");
+    assert!(
+        output.status.success(),
+        "two mount stub driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let trace: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("two mount stub driver must print JSON");
+
+    assert_eq!(
+        trace["devicesRequested"].as_u64(),
+        Some(1),
+        "two mounts must share one device, got {} requests",
+        trace["devicesRequested"]
+    );
+
+    let created = trace["created"].as_u64().unwrap();
+    assert!(created > 0, "the mounts must have allocated buffers");
+    assert_eq!(
+        trace["destroyed"].as_u64(),
+        Some(0),
+        "nothing may be released while the demos are still mounted"
+    );
+    assert_eq!(
+        trace["destroyedAfterStop"].as_u64(),
+        Some(created),
+        "stopping both mounts must release every buffer they allocated"
+    );
+    assert_eq!(
+        trace["uniqueDestroyed"].as_u64(),
+        Some(created),
+        "no buffer may be destroyed twice — the third stop() call is a no-op"
+    );
+    assert_eq!(
+        trace["deviceDestroyed"].as_u64(),
+        Some(0),
+        "stopping a mount must not destroy the device other mounts are still using"
+    );
+}
+
 /// A stub-GPU driver for the canvas `mount` path. Stubs a `webgpu` canvas
 /// context and requestAnimationFrame, runs two animation frames, and prints —
 /// per render pass — the buffer bound at binding 0. Proves the paint buffer is
@@ -516,4 +913,130 @@ fn headless_runner_dispatches_under_deno() {
         .map(|v| v.as_i64().unwrap_or_default())
         .collect();
     assert_eq!(got, vec![6, 8, 10, 12], "vector-add readback under Deno");
+}
+
+/// Drives `mount` with a numeric readout wired, recording every readback the
+/// driver issues and every value batch it hands back.
+const STATS_STUB_DRIVER: &str = r#"
+import { mount } from "./miri-gpu.js";
+import fs from "fs";
+globalThis.GPUBufferUsage = { STORAGE:1, COPY_SRC:2, COPY_DST:4, UNIFORM:8, MAP_READ:16 };
+globalThis.GPUShaderStage = { COMPUTE:1, FRAGMENT:2, VERTEX:4 };
+globalThis.GPUMapMode = { READ:1 };
+
+const copies = [];   // source buffer label of every readback copy
+const samples = [];  // value batches handed to onStats
+function buf(label, size){ const ab = new ArrayBuffer(size||4);
+  return { label, getMappedRange:(o=0,l)=>l?ab.slice(o,o+l):ab, unmap(){}, destroy(){}, mapAsync:async()=>{}, size }; }
+const device = {
+  limits:{}, lost:new Promise(()=>{}),
+  createBuffer:({label,size})=>buf(label,size),
+  createShaderModule:()=>({}), createBindGroupLayout:()=>({}), createPipelineLayout:()=>({}),
+  createComputePipeline:(d)=>({ entry:d.compute.entryPoint }),
+  createRenderPipeline:()=>({}),
+  createBindGroup:(d)=>({ entries:d.entries.map(e=>({ binding:e.binding, label:e.resource.buffer.label })) }),
+  createCommandEncoder:()=>({
+    beginComputePass:()=>({ setPipeline(){}, setBindGroup(){}, dispatchWorkgroups(){}, end(){} }),
+    beginRenderPass:()=>({ setPipeline(){}, setBindGroup(){}, draw(){}, end(){} }),
+    copyBufferToBuffer(src){ copies.push(src.label); }, finish:()=>({}) }),
+  queue:{ submit(){}, writeBuffer(){}, onSubmittedWorkDone:async()=>{} }, destroy(){},
+};
+Object.defineProperty(globalThis, "navigator",
+  { value:{ gpu:{ requestAdapter:async()=>({ requestDevice:async()=>device, limits:{} }),
+    getPreferredCanvasFormat:()=>"bgra8unorm" } }, configurable:true });
+
+let rafCb = null;
+globalThis.requestAnimationFrame = (cb) => { rafCb = cb; return 1; };
+globalThis.cancelAnimationFrame = () => {};
+const ctx = { configure(){}, getCurrentTexture:()=>({ createView:()=>({}) }) };
+const canvas = { width:0, height:0, getContext:()=>ctx,
+  getBoundingClientRect:()=>({ left:0, top:0, width:512, height:512 }),
+  addEventListener(){}, removeEventListener(){} };
+
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const handle = await mount(canvas, manifest, {
+  statsBuffer: "view_b", statsHz: 4, onStats: (v) => samples.push(v),
+});
+// 20 frames at 16 ms is 320 ms of demo time: at 4 Hz that is a couple of
+// samples, not one per frame.
+let ts = 0;
+for (let f = 0; f < 20; f++) {
+  const cb = rafCb; rafCb = null; if (cb) cb(ts); ts += 16;
+  await new Promise((r) => setTimeout(r, 0));
+}
+handle.stop();
+console.log(JSON.stringify({ copies, sampleCount: samples.length, first: samples[0] ?? null }));
+"#;
+
+/// A demo that publishes numbers reads them back through `onStats`: the values
+/// reach the page, the copy reads the buffer the caller named, and sampling is
+/// rate-limited well below frame rate so a readout cannot throttle the present
+/// path it was added alongside.
+#[test]
+fn stats_readback_samples_the_named_buffer_below_frame_rate() {
+    let node = match resolve_runtime("MIRI_NODE", "node") {
+        Some(n) => n,
+        None => {
+            eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+            return;
+        }
+    };
+
+    let bundle = build_bundle(FRAME_PINGPONG);
+    let driver = bundle.join("stats-stub-driver.mjs");
+    fs::write(&driver, STATS_STUB_DRIVER).expect("write stats stub driver");
+    let manifest = manifest_path(&bundle);
+
+    let output = Command::new(&node)
+        .arg(&driver)
+        .arg(&manifest)
+        .output()
+        .expect("run node stats stub driver");
+    assert!(
+        output.status.success(),
+        "stats stub driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let trace: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("stats stub driver must print JSON");
+
+    let count = trace["sampleCount"].as_u64().expect("sampleCount");
+    assert!(
+        count >= 1,
+        "the readout must be populated, got {} samples",
+        count
+    );
+    assert!(
+        count < 20,
+        "sampling must be rate-limited below frame rate, got {} samples in 20 frames",
+        count
+    );
+
+    let first = trace["first"].as_array().expect("a sample's values");
+    assert_eq!(
+        first.len(),
+        4,
+        "a sample must carry every element of the named buffer"
+    );
+
+    // `view_a`/`view_b` ping-pong, so the named buffer resolves to a different
+    // physical buffer as the pair swaps; both are legitimate sources, and
+    // nothing else is.
+    let copies: Vec<&str> = trace["copies"]
+        .as_array()
+        .expect("copies")
+        .iter()
+        .filter_map(|c| c.as_str())
+        .collect();
+    assert!(!copies.is_empty(), "a sample must issue a readback copy");
+    for label in &copies {
+        assert!(
+            *label == "miri-view_a" || *label == "miri-view_b",
+            "readback must copy from the buffer named to `statsBuffer`, got {}",
+            label
+        );
+    }
 }

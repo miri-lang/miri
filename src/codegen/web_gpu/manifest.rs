@@ -76,6 +76,11 @@ pub struct SourceMapEntry {
 pub struct BindingSpec {
     pub name: String,
     pub access: String, // "read" or "read_write"
+    /// Whether this pass writes the buffer. `access` is only the WGSL storage
+    /// qualifier and is forced to `read_write` for atomic buffers, so consumers
+    /// that need the pass's real data flow — state-pair inference in the runtime
+    /// driver — read this instead.
+    pub writes: bool,
 }
 
 impl Manifest {

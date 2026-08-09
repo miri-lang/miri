@@ -69,6 +69,12 @@ pub struct Body {
     /// Populated by MIR lowering from `Parameter::is_out`.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// Which parameters (indexed 1..=arg_count) the body actually writes.
+    /// `param_written[i-1] == true` means parameter `_i` is written by this body.
+    /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
+    /// qualifier and stays true for atomic buffers regardless of data flow; this
+    /// carries the truthful flow to backends that need it.
+    pub param_written: Vec<bool>,
     /// Names of custom types that define a `fn drop(self)` method (resource types).
     /// Populated by MIR lowering from the type checker's struct/class definitions.
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
@@ -99,6 +105,7 @@ impl Body {
             type_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
+            param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
         }

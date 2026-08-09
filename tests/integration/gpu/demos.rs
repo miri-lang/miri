@@ -151,7 +151,7 @@ fn demo_neural_net_mlp() {
 )]
 fn demo_game_of_life_web() {
     let source = include_str!("../../../examples/gpu/web/game_of_life.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=188982976");
+    assert_gpu_runs_with_output(source, "red_sum_milli=172274064");
 }
 
 /// mandelbrot_web: interactive pan/zoom Mandelbrot, a faithful port of the
@@ -169,7 +169,7 @@ fn demo_game_of_life_web() {
 )]
 fn demo_mandelbrot_web() {
     let source = include_str!("../../../examples/gpu/web/mandelbrot.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=414656800");
+    assert_gpu_runs_with_output(source, "red_sum_milli=336563072");
 }
 
 /// raymarch_web: interactive ray marcher, a faithful port of the reference
@@ -244,7 +244,7 @@ fn demo_wormhole_web() {
 )]
 fn demo_particles_web() {
     let source = include_str!("../../../examples/gpu/web/particles.mi");
-    assert_gpu_runs_with_output(source, "surface_total=254161920");
+    assert_gpu_runs_with_output(source, "surface_total=35753440");
 }
 
 /// fluid_web: Stam-style stable-fluids simulation, the frame-graph stress test.
@@ -285,5 +285,5 @@ fn demo_fluid_web() {
 )]
 fn demo_neural_web() {
     let source = include_str!("../../../examples/gpu/web/neural.mi");
-    assert_gpu_runs_with_output(source, "loss_milli=624 acc_milli=700");
+    assert_gpu_runs_with_output(source, "loss_milli=583 acc_milli=700");
 }

@@ -19,9 +19,12 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 1024×1024 pixels (square, so the aspect factor is 1); RGBA paint output.
-const CW = 1024
-const PIXELS = CW * CW
+// Canvas: 1280×720 pixels (16:9, matching the frame it is drawn in, so the set
+// is never stretched); RGBA paint output. The wider axis carries the extra span,
+// scaled by the aspect ratio, exactly as a widescreen viewport should.
+const CW = 1280
+const CH = 720
+const PIXELS = CW * CH
 const PAINT = PIXELS * 4
 
 // View state: [center_x, center_y, scale, _pad] — ping-ponged across frames.
@@ -58,19 +61,45 @@ forall i in 0..4
     view_a[2] = 3.0
     view_a[3] = 0.0
 
+// Clear the canvas to the interior colour. This 2-D pass over the exact display
+// extent also tells the web-gpu backend the canvas is 1280×720; a flat paint
+// buffer carries no shape of its own and would otherwise read as square.
+forall px, py in 0..CW, 0..CH
+    let base = (py * CW + px) * 4
+    paint[base] = 0.008
+    paint[base + 1] = 0.012
+    paint[base + 2] = 0.03
+    paint[base + 3] = 1.0
+
 gpu frame
     // Pass 1: integrate pan/zoom from pointer state into the next view.
     forall i in 0..4
         let cx = view_a[0]
         let cy = view_a[1]
         let scale = view_a[2]
-        // Drag pans by a scale-proportional delta; wheel zooms (clamped step).
-        let next_cx = cx - frame.drag_dx * scale * 0.0016
-        let next_cy = cy + frame.drag_dy * scale * 0.0016
+
+        // Drag pans the view under the pointer. The delta arrives in canvas
+        // CSS pixels, so dividing by the canvas height turns it into a fraction
+        // of the vertical span and multiplying by `scale` into plane units.
+        // `drag_dy` points up while the pointer's travel points down, hence both
+        // axes subtract.
+        let pan_x = cx - frame.drag_dx * scale / (CH as f32)
+        let pan_y = cy - frame.drag_dy * scale / (CH as f32)
+
+        // Wheel zooms about the pointer rather than the centre, so the point
+        // under the cursor stays under it. The step is clamped per frame so one
+        // flick of a high-resolution wheel cannot leap the whole depth range.
         let zoom = clamp(exp(frame.wheel * 0.0014) as f32, 0.6, 1.6) as f32
         let next_scale = clamp(scale * zoom, 0.00002, 4.0) as f32
-        view_b[0] = next_cx
-        view_b[1] = next_cy
+        // Fraction of the distance from the centre to the cursor that the view
+        // must travel to keep the cursor's point fixed. Zero when the scale did
+        // not change, so a frame with no wheel input never shifts the view.
+        let anchor = 1.0 - next_scale / scale
+        let ux = (frame.mouse_x - 0.5) * (CW as f32) / (CH as f32)
+        let uy = 0.5 - frame.mouse_y
+
+        view_b[0] = pan_x + ux * scale * anchor
+        view_b[1] = pan_y + uy * scale * anchor
         view_b[2] = next_scale
         view_b[3] = 0.0
 
@@ -82,9 +111,12 @@ gpu frame
         let cy = view_b[1]
         let scale = view_b[2]
 
-        // Map pixel to the complex plane around the current center.
-        let uu = (px as f32) / (CW as f32) - 0.5
-        let vv = (py as f32) / (CW as f32) - 0.5
+        // Map pixel to the complex plane around the current center. `scale` is
+        // the vertical span, so the horizontal one is widened by the aspect
+        // ratio. Row 0 is the top of the canvas, so the imaginary axis is
+        // flipped to point up the screen, as the plane is conventionally drawn.
+        let uu = ((px as f32) / (CW as f32) - 0.5) * (CW as f32) / (CH as f32)
+        let vv = 0.5 - (py as f32) / (CH as f32)
         let cre = cx + uu * scale
         let cim = cy + vv * scale
 
