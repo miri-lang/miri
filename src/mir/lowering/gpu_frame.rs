@@ -789,6 +789,9 @@ fn build_frame_kernel_literal(
     out_params.extend(std::iter::repeat_n(false, frame_param_count));
     out_params.extend(scalar_captures.iter().map(|_| false));
     kernel.out_params = out_params;
+    let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
+    param_written.resize(kernel.out_params.len(), false);
+    kernel.param_written = param_written;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
@@ -892,6 +895,9 @@ fn build_frame_kernel_runtime(
     out_params.push(false);
     out_params.extend(scalar_captures.iter().map(|_| false));
     kernel.out_params = out_params;
+    let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
+    param_written.resize(kernel.out_params.len(), false);
+    kernel.param_written = param_written;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 

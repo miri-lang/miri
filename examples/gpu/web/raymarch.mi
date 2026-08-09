@@ -19,7 +19,8 @@ use system.collections.array
 use system.math
 use system.io
 
-// Canvas: 96×96 pixels (square, so the aspect factor is 1); RGBA paint output.
+// Canvas: 1280×720 pixels (16:9); the ray direction widens the horizontal axis
+// by that aspect ratio, so the scene is never stretched. RGBA paint output.
 const CW = 1280
 const CH = 720
 const PIXELS = CW * CH

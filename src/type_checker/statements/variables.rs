@@ -123,8 +123,10 @@ impl TypeChecker {
 
         let const_value = if is_constant {
             decl.initializer.as_ref().and_then(|init| {
-                Self::try_eval_const_int_with_context(init, context)
-                    .map(|v| Literal::Integer(crate::ast::literal::IntegerLiteral::I128(v)))
+                Self::try_eval_const_int_with_context(init, context).and_then(|v| {
+                    crate::ast::literal::IntegerLiteral::from_type_kind(&inferred_type.kind, v)
+                        .map(Literal::Integer)
+                })
             })
         } else {
             None

@@ -26,7 +26,7 @@ use system.math
 use system.io
 
 // Canvas: 1280×720 intensity cells (16:9), one per display pixel, RGBA paint.
-// Particles: 1024x1024 = 1,048,576, four loose f32 components each (px, py in the
+// Particles: 384x384 = 147,456, four loose f32 components each (px, py in the
 // aspect-scaled play field; age in seconds; seed in [0, 1)). Particles live in
 // x ∈ [-1.7777778, 1.7777778], y ∈ [-1, 1] so the flow is isotropic on a wide
 // canvas (the aspect 1280/720 stretches x, not the swirls).
@@ -34,7 +34,7 @@ const CW = 1280
 const CH = 720
 const GRID = CW * CH
 const PAINT = GRID * 4
-const PARTICLES = 1024 * 1024
+const PARTICLES = 384 * 384
 const PSTATE = PARTICLES * 4
 
 gpu var pstate_a = Array<f32, PSTATE>()
@@ -43,6 +43,14 @@ gpu var pstate_b = Array<f32, PSTATE>()
 // Persistent fixed-point intensity surface (ping-ponged for the decay pass).
 gpu var accum_a = Array<Atomic<u32>, GRID>()
 gpu var accum_b = Array<Atomic<u32>, GRID>()
+
+// The warm particles' share of each cell, deposited and faded alongside the
+// total. One scalar surface cannot carry a hue, so a field scattered into a
+// single accumulator can only ramp one colour toward white; the reference draws
+// blue and yellow particles and keeps both. The ratio of the two surfaces is the
+// warm fraction, which is what the present pass mixes on.
+gpu var warm_a = Array<Atomic<u32>, GRID>()
+gpu var warm_b = Array<Atomic<u32>, GRID>()
 
 // Paint output (RGBA: 4 floats per pixel).
 gpu var paint = Array<f32, PAINT>()
@@ -93,7 +101,7 @@ fn curl_y(x f32, y f32) f32
 
 // Seed: scatter particles uniformly across the aspect-scaled play field with
 // randomized age and seed. x spans [-1.7777778, 1.7777778], y spans [-1, 1].
-forall i in 0..1048576
+forall i in 0..PARTICLES
     let sx = rand_unit(i * 4)
     let sy = rand_unit(i * 4 + 1)
     let sa = rand_unit(i * 4 + 2)
@@ -104,10 +112,12 @@ forall i in 0..1048576
     pstate_a[base + 2] = sa * 6.0
     pstate_a[base + 3] = ss
 
-// Clear both intensity surfaces.
+// Clear the intensity surfaces and their warm-share counterparts.
 forall i in 0..921600
     accum_a[i] = 0
     accum_b[i] = 0
+    warm_a[i] = 0
+    warm_b[i] = 0
 
 // Clear the paint buffer. This 2-D pass over the exact display extent also
 // tells the web-gpu backend the canvas is 1280×720 (a flat paint buffer that
@@ -122,7 +132,7 @@ forall px, py in 0..CW, 0..CH
 gpu frame
     // Pass 1: advect every particle through the curl field plus the pointer
     // vortex, then age and respawn expired or escaped particles.
-    forall i in 0..1048576
+    forall i in 0..PARTICLES
         let base = i * 4
         let px = pstate_a[base]
         let py = pstate_a[base + 1]
@@ -148,8 +158,13 @@ gpu frame
             let dirx = dx / r
             let diry = dy / r
             let g = exp(0.0 - r * 3.2) as f32
-            vx = (vx + (dirx * 0.45 - diry * 0.85) * g) as f32
-            vy = (vy + (diry * 0.45 + dirx * 0.85) * g) as f32
+            // Pull toward the pointer, plus a tangent for the swirl. The play
+            // field's y runs down the screen (a particle at y = -1 lands on the
+            // top row), so the tangent is the clockwise perpendicular
+            // (dy, -dx) — the anticlockwise one would spin the vortex the wrong
+            // way for a viewer.
+            vx = (vx + (dirx * 0.45 + diry * 0.85) * g) as f32
+            vy = (vy + (diry * 0.45 - dirx * 0.85) * g) as f32
 
         let dt = frame.dt
         var nx = (px + vx * dt) as f32
@@ -171,12 +186,18 @@ gpu frame
     // Pass 2: decay the persistent intensity surface (motion trails).
     forall p in 0..921600
         let prev = accum_a[p] as f32
-        accum_b[p] = (prev * 0.96) as u32
+        let prev_warm = warm_a[p] as f32
+        // Trails fade toward black at the same rate the reference blends its
+        // background over the previous frame, so a streak lives about a dozen
+        // frames — long enough to draw the flow line, short enough that the
+        // field never fills in.
+        accum_b[p] = (prev * 0.915) as u32
+        warm_b[p] = (prev_warm * 0.915) as u32
 
     // Pass 3: scatter — additively deposit each particle's intensity into its
     // pixel. Contended cells are correct because the deposit is atomic. The
     // aspect-scaled x ∈ [-1.7777778, 1.7777778] maps to the full 1280 columns.
-    forall i in 0..1048576
+    forall i in 0..PARTICLES
         let base = i * 4
         let px = pstate_b[base]
         let py = pstate_b[base + 1]
@@ -185,26 +206,43 @@ gpu frame
         let sy = ((py * 0.5 + 0.5) * 720.0) as i32
         let cx = max(0, min(1279, sx)) as i32
         let cy = max(0, min(719, sy)) as i32
-        let cell = cy * 1280 + cx
+        // One cell per particle. The reference draws points about 2.5 pixels
+        // across, but on a canvas nearly twice as wide as this one — scaled to
+        // this resolution that is a single cell, and spreading the deposit wider
+        // only blurs the streaks that carry the field's detail.
+        let cell = (cy * 1280 + cx) as i32
         // Warm (yellow-ish) particles deposit more; tone maps to white highs.
         let warm = 1.0 if seed > 0.86 else 0.0
         let amount = (220.0 + warm * 160.0) as u32
+        let warm_amount = (amount as f32 * warm) as u32
         atomic_add(accum_b, cell, amount)
+        atomic_add(warm_b, cell, warm_amount)
 
     // Pass 4: present — tone-map the intensity surface to a saturated blue
     // field on black (empty cells stay black), whitening as intensity rises.
     // The per-pixel color is scaled by brightness so untouched cells are pure
     // black, matching the sparse blue/white streaks of the reference field.
     forall p in 0..921600
-        let v = (accum_b[p] as f32) / 600.0
-        let bright = v / (1.0 + v)
-        // Blue base (0.22, 0.42, 1.0) that ramps toward white with intensity.
-        let hue_r = (0.22 + 0.78 * bright) as f32
-        let hue_g = (0.42 + 0.58 * bright) as f32
+        let total = (accum_b[p] as f32) as f32
+        // The divisor sets where the tone map's knee falls. Saturated blue is a
+        // darker colour than the white the field used to ramp to, so the knee sits
+        // lower to keep the overall brightness the reference has.
+        let v = (total / 92.0) as f32
+        let bright = (v / (1.0 + v)) as f32
+        // Hue comes from the cell's warm share, so blue and yellow particles stay
+        // distinguishable however they pile up; a single accumulator could only
+        // have ramped one colour toward white.
+        let warmth = (warm_b[p] as f32) / (max(1.0, total) as f32)
+        let hue_r = mix(0.22, 1.0, warmth) as f32
+        let hue_g = mix(0.42, 0.82, warmth) as f32
+        let hue_b = mix(1.0, 0.25, warmth) as f32
+        // Dense cores wash toward white, the way additive blending saturates in
+        // the reference; sparse cells keep their colour.
+        let wash = (bright * bright * 0.75) as f32
         let base = p * 4
-        paint[base] = (hue_r * bright) as f32
-        paint[base + 1] = (hue_g * bright) as f32
-        paint[base + 2] = bright
+        paint[base] = ((hue_r + (1.0 - hue_r) * wash) * bright) as f32
+        paint[base + 1] = ((hue_g + (1.0 - hue_g) * wash) * bright) as f32
+        paint[base + 2] = ((hue_b + (1.0 - hue_b) * wash) * bright) as f32
         paint[base + 3] = 1.0
 
 // Native smoke: after the seed and one frame, sum the whole intensity surface.

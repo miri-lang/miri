@@ -98,10 +98,53 @@ async function initGpu(opts) {
     return device;
 }
 
+// One GPUDevice is shared by every mount on a page. A page showing eight demos
+// would otherwise request eight devices, each with its own driver-side state and
+// memory budget, for work that can all be submitted through one. Acquisition is
+// memoized on the in-flight promise, so mounts started concurrently still share.
+let sharedDevice = null;
+
+// Acquire the page's shared device, creating it on first use. A device that is
+// lost (a driver reset, a background tab reclaimed) is forgotten here so the
+// next mount transparently builds a fresh one instead of binding to a dead
+// handle. `runHeadless` deliberately does not use this: it owns and destroys its
+// device, which would take every other mount down with it.
+function acquireDevice(opts) {
+    if (sharedDevice) return sharedDevice;
+    sharedDevice = initGpu(opts).then((device) => {
+        if (device.lost && typeof device.lost.then === "function") {
+            device.lost.then(() => {
+                sharedDevice = null;
+            });
+        }
+        return device;
+    });
+    sharedDevice.catch(() => {
+        sharedDevice = null;
+    });
+    return sharedDevice;
+}
+
 const STORAGE_USAGE =
     (typeof GPUBufferUsage !== "undefined" &&
         GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST) ||
     0;
+
+// Release every GPU allocation a mount made. The shared device is deliberately
+// left alone — other mounts are still using it. Destroying is best-effort so a
+// partially built mount can still be torn down after a failure.
+function destroyAll(resources) {
+    for (const resource of resources) {
+        if (resource && typeof resource.destroy === "function") {
+            try {
+                resource.destroy();
+            } catch {
+                // A buffer already destroyed, or a stub without the API.
+            }
+        }
+    }
+    resources.length = 0;
+}
 
 // Allocate one persistent device buffer per manifest buffer, seeded from
 // initialData (or zero-filled). These live for the lifetime of the mount.
@@ -542,7 +585,12 @@ function runSeedKernels(device, manifest, bufferOf) {
 // A demo can ping-pong several fields independently (e.g. weights AND velocities)
 // since every qualifying pair swaps. A name-paired buffer that is never written
 // (a read-only input) is not a pair, so an input is never swapped with a scratch.
-function statePairs(framePasses) {
+//
+// Which side is read and which is written comes from each binding's `writes`
+// flag, not from its WGSL `access` qualifier: atomic storage is always bound
+// read-write, so a pair of atomic buffers would otherwise present as two
+// destinations and no source, and never swap at all.
+export function statePairs(framePasses) {
     const rec = new Map();
     const get = (base) => {
         let r = rec.get(base);
@@ -564,8 +612,13 @@ function statePairs(framePasses) {
             if (!m) continue;
             const r = rec.get(m[1]);
             if (!r.hasA || !r.hasB) continue;
-            if (b.access === "read" && r.firstRead === null) r.firstRead = m[2];
-            if (b.access === "read_write") r.lastWrite = m[2];
+            // `writes` is the pass's data flow; `access` is only the WGSL
+            // binding qualifier, and an atomic buffer is bound read-write even
+            // where a pass only reads it. Keying on `access` therefore made a
+            // pair of atomic buffers look like two destinations and no source,
+            // which left the pair unregistered and never swapped.
+            if (!b.writes && r.firstRead === null) r.firstRead = m[2];
+            if (b.writes) r.lastWrite = m[2];
         }
     }
     const pairs = [];
@@ -657,11 +710,73 @@ export async function runHeadless(manifest, opts = {}) {
     }
 }
 
+// Periodically read one buffer back so a page can show the numbers a demo
+// computes — a training loss, a particle count — rather than only its picture.
+//
+// Presenting is deliberately readback-free: the paint buffer is blitted straight
+// to the canvas, so frame rate is bound by the GPU rather than by copy latency.
+// A numeric readout has no such path, since the values must reach JavaScript to
+// be formatted. Sampling is therefore rate-limited (a few times a second, far
+// below frame rate) and never overlaps itself, so a slow map cannot queue copies
+// behind it. Returns null when the caller asked for no readout.
+function createStatsSampler(device, manifest, resolve, opts) {
+    if (typeof opts.onStats !== "function") return null;
+    const name = opts.statsBuffer;
+    const spec = manifest.buffers.find((b) => b.name === name);
+    if (!spec) {
+        throw new MiriGpuError(`mount: onStats needs a buffer named '${name}' in the manifest`);
+    }
+    const ArrayType = typedArrayFor(spec.elemType);
+    const byteLength = spec.length * ArrayType.BYTES_PER_ELEMENT;
+    const interval = 1 / Math.max(0.1, opts.statsHz ?? 4);
+    // Start due, so the readout is populated on the first frame rather than
+    // after the first interval.
+    let since = interval;
+    let inFlight = false;
+    let stopped = false;
+    let warned = false;
+
+    return {
+        tick(dt) {
+            if (stopped || inFlight) return;
+            since += dt;
+            if (since < interval) return;
+            since = 0;
+            inFlight = true;
+            readBackInto(device, resolve(name), byteLength, ArrayType)
+                .then((view) => {
+                    if (!stopped) opts.onStats(Array.from(view, Number));
+                })
+                .catch((err) => {
+                    // A mount that stopped mid-copy rejects here as a matter of
+                    // course; anything else is worth saying once.
+                    if (stopped || warned) return;
+                    warned = true;
+                    console.warn(`[miri-gpu] stats readback failed: ${err?.message ?? err}`);
+                })
+                .finally(() => {
+                    inFlight = false;
+                });
+        },
+        stop() {
+            stopped = true;
+        },
+    };
+}
+
 /// Mount a Miri GPU demo described by `manifest` onto `canvas`.
-/// Returns `{ stop() }`. The paint buffer is drawn to the canvas entirely on the
-/// GPU (a fullscreen render pass, no readback). Static demos present one frame;
-/// demos with `framePasses` animate via requestAnimationFrame, double-buffering
-/// the state pair each frame.
+/// Returns `{ pause(), resume(), stop() }`. The paint buffer is drawn to the
+/// canvas entirely on the GPU (a fullscreen render pass, no readback). Static
+/// demos present one frame; demos with `framePasses` animate via
+/// requestAnimationFrame, double-buffering the state pair each frame.
+///
+/// `opts.input: false` leaves the pointer unwired, for a demo shown as a preview
+/// inside something the pointer is meant to reach — a card that is itself a
+/// link, say. The demo still animates; it just does not steer.
+///
+/// `opts.onStats` with `opts.statsBuffer` reads that buffer back `opts.statsHz`
+/// times a second (default 4) and hands its values to the callback, for a demo
+/// that publishes numbers alongside its picture.
 export async function mount(canvas, manifest, opts = {}) {
     if (!canvas) throw new MiriGpuError("mount: a canvas element is required");
     if (!manifest || !manifest.buffers) throw new MiriGpuError("mount: invalid manifest");
@@ -669,10 +784,17 @@ export async function mount(canvas, manifest, opts = {}) {
     canvas.width = manifest.canvas.width;
     canvas.height = manifest.canvas.height;
 
-    const device = await initGpu(opts);
+    const device = await acquireDevice(opts);
     const buffers = createBuffers(device, manifest);
     const bufferOf = makeBufferResolver(buffers);
     const presenter = createPresenter(device, canvas, manifest, opts);
+
+    // Everything this mount allocated on the device, so `stop()` can give it
+    // back. A page mounts demos as they scroll into view; without this, the
+    // storage of every demo ever seen would stay resident for the session.
+    const resources = [...buffers.values()].map((b) => b.buffer);
+    resources.push(presenter.infoBuf, presenter.minmaxBuf);
+    if (presenter.reduce) resources.push(presenter.reduce.rinfoBuf);
 
     // Seed kernels: compile + dispatch once, binding by name.
     runSeedKernels(device, manifest, bufferOf);
@@ -684,7 +806,15 @@ export async function mount(canvas, manifest, opts = {}) {
     // Static demo: run-once already done by seed; present a single frame.
     if (!framePasses) {
         presentFrame(device, presenter, bufferOf(manifest.paint).buffer);
-        return { stop() {} };
+        // A static demo has nothing to pause: its single frame is already on the
+        // canvas and no work is scheduled.
+        return {
+            pause() {},
+            resume() {},
+            stop() {
+                destroyAll(resources);
+            },
+        };
     }
 
     // Animated demo: dispatch all frame passes in order each animation frame,
@@ -692,28 +822,38 @@ export async function mount(canvas, manifest, opts = {}) {
     // previous frame's result.
     const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
     const passUniforms = framePasses.map((pass) => createInputUniform(device, pass));
+    for (const uniform of passUniforms) {
+        if (uniform) resources.push(uniform.buffer);
+    }
 
     const swapState = makeSwapState(statePairs(framePasses), bufferOf);
     const resolve = swapState.resolve;
+    const stats = createStatsSampler(device, manifest, resolve, opts);
 
     // Live pointer/wheel state feeding the `frame.*` uniforms. Only wired when a
     // pass actually reads inputs, so static and input-free demos add no listeners.
     const state = newInputState();
-    const wantsInput = passUniforms.some((u) => u !== null);
+    const wantsInput = opts.input !== false && passUniforms.some((u) => u !== null);
     const detachInput = wantsInput ? attachInputListeners(canvas, state) : () => {};
-    let startTime = null;
+    // The frame clock accumulates elapsed time rather than measuring against a
+    // start timestamp, so a demo that was paused resumes with its own time
+    // continuing instead of jumping forward by the wall time it spent away. A
+    // pause sets `lastTime` to null, which makes the first frame back contribute
+    // no elapsed time and no `dt` spike.
     let lastTime = null;
+    let elapsed = 0;
 
     let running = true;
+    let stopped = false;
     let rafId = null;
 
     const step = (now) => {
         if (!running) return;
-        // Advance the frame clock (seconds); `now` is the rAF timestamp (ms).
+        // `now` is the rAF timestamp in milliseconds.
         const t = typeof now === "number" ? now : 0;
-        if (startTime === null) startTime = t;
-        state.time = (t - startTime) / 1000;
         state.dt = lastTime === null ? 0 : (t - lastTime) / 1000;
+        elapsed += state.dt;
+        state.time = elapsed;
         lastTime = t;
 
         // Dispatch all passes in order against the shared resolver, so a later
@@ -738,6 +878,8 @@ export async function mount(canvas, manifest, opts = {}) {
         presentFrame(device, presenter, resolve(manifest.paint));
         // Report the just-submitted frame so callers can derive an FPS readout.
         if (typeof opts.onFrame === "function") opts.onFrame(state.dt);
+        // Sample before the swap, so the copy reads the buffer this frame wrote.
+        if (stats) stats.tick(state.dt);
         // Swap every ping-pong pair: next frame reads what this frame produced.
         swapState.swap();
         rafId = requestAnimationFrame(step);
@@ -746,10 +888,33 @@ export async function mount(canvas, manifest, opts = {}) {
     rafId = requestAnimationFrame(step);
 
     return {
-        stop() {
+        // Stop scheduling frames while keeping the demo's state on the device,
+        // so an off-screen or backgrounded demo costs no GPU time and resumes
+        // exactly where it left off. The frame clock is not advanced while
+        // paused: `frame.time` continues rather than jumping by the time spent
+        // away, which would make a simulation lurch on resume.
+        pause() {
+            if (!running) return;
             running = false;
+            if (rafId !== null) cancelAnimationFrame(rafId);
+            rafId = null;
+        },
+        resume() {
+            if (running || stopped) return;
+            running = true;
+            // Re-anchor the clock so the gap counts as no elapsed time.
+            lastTime = null;
+            rafId = requestAnimationFrame(step);
+        },
+        stop() {
+            if (stopped) return;
+            stopped = true;
+            running = false;
+            if (stats) stats.stop();
             detachInput();
             if (rafId !== null) cancelAnimationFrame(rafId);
+            rafId = null;
+            destroyAll(resources);
         },
     };
 }
@@ -757,20 +922,16 @@ export async function mount(canvas, manifest, opts = {}) {
 // Wire pointer, wheel, and click events on `canvas` into `state`. Absolute
 // pointer position (`mouse_x`/`mouse_y`) is reported in normalized [0,1] canvas
 // space so a demo reads it independent of its render resolution; drag deltas
-// (`drag_dx`/`drag_dy`) are reported in canvas pixels so pan/orbit sensitivity
-// stays in the units the camera demos are tuned for. Deltas accumulate into
-// `state` and are cleared by the caller each frame. Returns a detach function.
+// (`drag_dx`/`drag_dy`) are reported in CSS pixels — the units the pointer
+// itself moves in — so a demo's pan and orbit sensitivity is the same however
+// large the canvas is drawn and whatever its backing-store resolution is.
+// Deltas accumulate into `state` and are cleared by the caller each frame.
+// Returns a detach function.
 function attachInputListeners(canvas, state) {
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
 
-    const toPixel = (event) => {
-        const rect = canvas.getBoundingClientRect();
-        const sx = rect.width > 0 ? canvas.width / rect.width : 1;
-        const sy = rect.height > 0 ? canvas.height / rect.height : 1;
-        return [(event.clientX - rect.left) * sx, (event.clientY - rect.top) * sy];
-    };
     const toNorm = (event) => {
         const rect = canvas.getBoundingClientRect();
         const nx = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
@@ -793,9 +954,15 @@ function attachInputListeners(canvas, state) {
         dragging = true;
         state.mouse_down = 1;
         state.hovering = 1;
-        [lastX, lastY] = toPixel(event);
+        [lastX, lastY] = [event.clientX, event.clientY];
         [state.mouse_x, state.mouse_y] = toNorm(event);
         [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
+        // Capture the pointer so a drag that leaves the canvas keeps steering the
+        // demo instead of stopping dead at the edge. Guarded because a headless
+        // canvas stub has no pointer-capture API.
+        if (typeof canvas.setPointerCapture === "function" && event.pointerId !== undefined) {
+            canvas.setPointerCapture(event.pointerId);
+        }
     };
     const onMove = (event) => {
         state.hovering = 1;
@@ -806,20 +973,28 @@ function attachInputListeners(canvas, state) {
         }
         [lastNX, lastNY] = [state.mouse_x, state.mouse_y];
         if (dragging) {
-            const [x, y] = toPixel(event);
             // Grab-and-pan: the image follows the pointer. The axes differ in
             // sign because the paint buffer's first row is the top of the canvas,
             // which flips the vertical (imaginary) axis relative to the pointer
             // but leaves the horizontal (real) axis aligned.
-            state.drag_dx += x - lastX;
-            state.drag_dy -= y - lastY;
-            lastX = x;
-            lastY = y;
+            state.drag_dx += event.clientX - lastX;
+            state.drag_dy -= event.clientY - lastY;
+            lastX = event.clientX;
+            lastY = event.clientY;
         }
     };
-    const onUp = () => {
+    const onUp = (event) => {
         dragging = false;
         state.mouse_down = 0;
+        if (
+            typeof canvas.releasePointerCapture === "function" &&
+            event &&
+            event.pointerId !== undefined &&
+            (typeof canvas.hasPointerCapture !== "function" ||
+                canvas.hasPointerCapture(event.pointerId))
+        ) {
+            canvas.releasePointerCapture(event.pointerId);
+        }
     };
     // Pointer left the canvas: end any drag, release the button, and clear the
     // hover flag so hover-driven demos settle. `move_*` deltas are left as-is

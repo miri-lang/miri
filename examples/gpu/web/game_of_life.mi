@@ -27,12 +27,19 @@ gpu var state_a = Array<f32, CELLS>()
 gpu var state_b = Array<f32, CELLS>()
 gpu var paint = Array<f32, PIXELS * 4>()
 
-// Seed the grid: a deterministic ~18%-density soup.
+// Seed the grid: a deterministic ~18%-density soup. The mix is deliberately
+// non-linear — a squaring step between two linear ones — because a purely
+// linear hash of the cell index lays the soup out on a visible lattice, and a
+// Life field that starts patterned keeps looking patterned for many
+// generations. Every intermediate stays well inside 32-bit range.
+fn soup(idx int) f32
+    let a = (idx * 1597 + 51749) % 40000
+    let b = (a * a + a * 37 + 11) % 40009
+    let c = (b * 613 + 7919) % 40009
+    return 1.0 if c % 100 < 18 else 0.0
+
 forall idx in 0..CELLS
-    let x = idx % GW
-    let y = idx / GW
-    let hash = (x * x * 3 + y * y * 5 + x * y * 7 + x * 13 + y * 17) % 100
-    state_a[idx] = 1.0 if hash < 18 else 0.0
+    state_a[idx] = soup(idx)
 
 // Clear the canvas to the background color. This 2-D pass over the exact
 // display extent also tells the web-gpu backend the canvas is 1280×720 (a flat
@@ -87,10 +94,7 @@ gpu frame
     // Pass 3: reseed a fresh soup on double-click.
     forall idx in 0..CELLS
         if frame.double_clicked
-            let x = idx % GW
-            let y = idx / GW
-            let hash = (x * x * 3 + y * y * 5 + x * y * 7 + x * 13 + y * 17) % 100
-            state_b[idx] = 1.0 if hash < 18 else 0.0
+            state_b[idx] = soup(idx)
 
     // Pass 4: shade each display pixel. Cells are drawn as rounded dots (an
     // `inner` factor that falls off toward the cell edge) over a dark-blue

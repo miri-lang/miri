@@ -87,6 +87,22 @@ fn test_cast_i32_to_float() {
     );
 }
 
+/// A named constant is folded at compile time and its value substituted where
+/// the name appears, so the substituted literal must carry the constant's own
+/// width. A folded value stored wider than its declaration reaches the backend
+/// as a 128-bit operand, which has no integer-to-float lowering.
+#[test]
+fn test_cast_named_int_constant_to_float() {
+    assert_runs_with_output(
+        r#"
+        const SECONDS = 14
+        let scale = SECONDS as f32
+        println(f'{scale}')
+        "#,
+        "14.0",
+    );
+}
+
 #[test]
 fn test_cast_rejects_string() {
     assert_compiler_error(

@@ -5,7 +5,7 @@
 //! source that actually compiles, and it must produce the same WebGPU kernels as
 //! the repo program.
 //!
-//! For every web demo this asserts two properties:
+//! For every web demo this asserts three properties:
 //!
 //! 1. **Displayed == repo, verbatim.** The website's displayed copy
 //!    (`../miri-lang.org/assets/demos/<name>.mi`) is byte-identical to a
@@ -19,11 +19,20 @@
 //!    bindings, buffers). The stripped parts emit no WGSL, so the kernels a user
 //!    compiles from the shown source match the repo bundle exactly.
 //!
+//! 3. **The published artifacts are current.** The site serves compiled bundles
+//!    committed into the website repo, because a static generator cannot run the
+//!    Miri compiler at publish time — which makes a stale committed artifact the
+//!    obvious way for the page to start lying again. Each
+//!    `assets/demos/bundles/<name>.json` must equal a fresh build of the source
+//!    shown beside it, and the vendored `assets/js/miri-gpu.js` must equal this
+//!    repo's copy.
+//!
 //! This mechanizes "no drift": editing either copy so the shown source stops
-//! matching the repo — or stops producing the same kernels — fails the gate.
-//! The check reads the sibling website repo by relative path and skips with a
-//! log line when it is absent (mirroring the adapter-less GPU-test skips), so it
-//! stays green in checkouts without the website tree.
+//! matching the repo, or stops producing the same kernels, or leaving a published
+//! artifact behind a change, fails the gate. The check reads the sibling website
+//! repo by relative path and skips with a log line when it is absent (mirroring
+//! the adapter-less GPU-test skips), so it stays green in checkouts without the
+//! website tree.
 
 use std::fs;
 use std::path::PathBuf;
@@ -45,14 +54,17 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Path to the sibling website repo, or `None` when it is not checked out next
+/// to this one.
+fn website_root() -> Option<PathBuf> {
+    let dir = repo_root().parent()?.join("miri-lang.org");
+    dir.is_dir().then_some(dir)
+}
+
 /// Path to the sibling website's displayed demo copies, or `None` when the
 /// website repo is not checked out next to this one.
 fn website_demos_dir() -> Option<PathBuf> {
-    let dir = repo_root()
-        .parent()?
-        .join("miri-lang.org")
-        .join("assets")
-        .join("demos");
+    let dir = website_root()?.join("assets").join("demos");
     dir.is_dir().then_some(dir)
 }
 
@@ -197,4 +209,77 @@ fn website_displayed_source_compiles_to_identical_wgsl() {
              kernels than the repo program. Users would not get what they see."
         );
     }
+}
+
+/// The manifests the website serves are committed artifacts, so nothing rebuilds
+/// them when a demo changes. This is the check that catches one going stale: each
+/// published bundle must equal a fresh build of the source shown beside it.
+#[test]
+fn published_bundles_match_a_fresh_build_of_the_displayed_source() {
+    let Some(site_dir) = website_demos_dir() else {
+        eprintln!(
+            "skipping wgsl-identity gate: sibling website repo (../miri-lang.org) not present"
+        );
+        return;
+    };
+    let bundles = site_dir.join("bundles");
+
+    for name in WEB_DEMOS {
+        let published_path = bundles.join(format!("{name}.json"));
+        let published_text = fs::read_to_string(&published_path).unwrap_or_else(|e| {
+            panic!(
+                "website is missing the published bundle for `{name}` ({}): {e}. \
+                 Regenerate the artifacts with `tools/gen_demo_bundles.py`.",
+                published_path.display()
+            )
+        });
+        let mut published: serde_json::Value = serde_json::from_str(&published_text)
+            .unwrap_or_else(|e| panic!("published bundle for `{name}` is not valid JSON: {e}"));
+        if let Some(obj) = published.as_object_mut() {
+            obj.remove("name");
+        }
+        strip_source_maps(&mut published);
+
+        let displayed = fs::read_to_string(site_dir.join(format!("{name}.mi")))
+            .unwrap_or_else(|e| panic!("read website demo {name}: {e}"));
+
+        assert_eq!(
+            published,
+            canonical_manifest(&displayed),
+            "`{name}`: the published bundle does not match a fresh build of the \
+             source shown beside it — the committed artifact is stale, so the page \
+             runs kernels the reader cannot reproduce. Regenerate with \
+             `tools/gen_demo_bundles.py`."
+        );
+    }
+}
+
+/// The website vendors the runtime driver rather than importing it from here, so
+/// it is the same class of stale artifact as the manifests — and an easier one to
+/// forget, since editing the driver looks like a change to this repo alone.
+#[test]
+fn published_runtime_driver_matches_this_repo() {
+    let Some(site) = website_root() else {
+        eprintln!(
+            "skipping wgsl-identity gate: sibling website repo (../miri-lang.org) not present"
+        );
+        return;
+    };
+
+    let ours = fs::read_to_string(repo_root().join("assets/web/miri-gpu.js"))
+        .expect("read assets/web/miri-gpu.js");
+    let published_path = site.join("assets").join("js").join("miri-gpu.js");
+    let published = fs::read_to_string(&published_path).unwrap_or_else(|e| {
+        panic!(
+            "website is missing the vendored runtime driver ({}): {e}. \
+             Regenerate the artifacts with `tools/gen_demo_bundles.py`.",
+            published_path.display()
+        )
+    });
+
+    assert_eq!(
+        published, ours,
+        "the runtime driver the website serves differs from `assets/web/miri-gpu.js`. \
+         Regenerate the artifacts with `tools/gen_demo_bundles.py`."
+    );
 }

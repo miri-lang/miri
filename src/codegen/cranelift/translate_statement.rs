@@ -1126,10 +1126,32 @@ impl<'a> FunctionTranslator<'a> {
                         | TypeKind::Linear(_) => TypeKind::Error,
                     };
                 }
-                PlaceElem::Deref | PlaceElem::Index(_) => break,
+                PlaceElem::Index(_) => {
+                    current = Self::extract_collection_elem_type_kind(&current);
+                }
+                PlaceElem::Deref => break,
             }
         }
 
         current
+    }
+
+    /// Resolves the element type of a collection kind, returning an owned
+    /// clone of the TypeKind. Uses the same logic as other resolvers (see
+    /// predicates.rs) to ensure consistency across all element-type resolution.
+    /// Element kind of `collection_kind`, or `TypeKind::Error` when it is not a
+    /// collection or its element kind cannot be read.
+    ///
+    /// Delegates to the single element-type resolver rather than matching over
+    /// collection kinds again: this walker and the address walker disagreeing
+    /// about what an index projection yields is what silently corrupted indexed
+    /// writes, so there is one home for that answer and this is a view onto it.
+    /// `Error` is the fail-closed choice — it carries no width a store could be
+    /// emitted against, where a plausible-looking kind would write the wrong
+    /// number of bytes.
+    fn extract_collection_elem_type_kind(collection_kind: &TypeKind) -> TypeKind {
+        Self::resolve_collection_elem_type_kind_impl(collection_kind)
+            .cloned()
+            .unwrap_or(TypeKind::Error)
     }
 }

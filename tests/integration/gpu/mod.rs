@@ -41,6 +41,7 @@ pub mod i32_range_validation;
 pub mod kernel_callable_fns;
 pub mod launch;
 pub mod launch_3d;
+pub mod loop_scoped_array_reinit;
 pub mod math_kernels;
 pub mod persistent_buffer;
 pub mod ping_pong;

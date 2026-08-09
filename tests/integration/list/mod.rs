@@ -7,6 +7,7 @@ pub mod construction;
 pub mod cow;
 pub mod edge_cases;
 pub mod errors;
+pub mod float_collections;
 pub mod indexing_iteration;
 pub mod integration;
 pub mod methods;

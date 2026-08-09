@@ -44,6 +44,10 @@ pub(crate) struct BufferBinding {
     pub element_type: String,
     pub length: usize,
     pub read_only: bool,
+    /// Whether the kernel writes this buffer. `read_only` is the WGSL storage
+    /// qualifier and is forced false for atomic buffers, so it cannot answer
+    /// the data-flow question the runtime's state-pair inference asks.
+    pub writes: bool,
     pub initial_data: Vec<f64>,
     /// True if this buffer was zero-filled (sized-ctor like Array<T, N>()).
     /// When true, initialData should be null in the manifest.
@@ -404,6 +408,11 @@ fn extract_buffer_bindings(
         let is_atomic_buffer = is_buffer_atomic_element(&decl.ty.kind);
         let read_only =
             !is_atomic_buffer && !body.out_params.get(param_idx - 1).copied().unwrap_or(false);
+        let writes = body
+            .param_written
+            .get(param_idx - 1)
+            .copied()
+            .unwrap_or_else(|| body.out_params.get(param_idx - 1).copied().unwrap_or(false));
 
         let name = decl
             .name
@@ -435,6 +444,7 @@ fn extract_buffer_bindings(
             element_type,
             length,
             read_only,
+            writes,
             initial_data,
             is_zero_filled,
         });
@@ -598,20 +608,23 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
             } else {
                 "read_write".to_string()
             },
+            writes: b.writes,
         })
         .collect();
 
-    // For frame kernels, identify read and write buffers
+    // For frame kernels, identify read and write buffers. These key on the
+    // pass's real data flow rather than the storage qualifier, so an atomic
+    // buffer the pass only reads is not reported as the written one.
     let (read, write) = if artifact.is_frame_step {
         let read_buf = artifact
             .bindings
             .iter()
-            .find(|b| b.read_only)
+            .find(|b| !b.writes)
             .map(|b| b.name.clone());
         let write_buf = artifact
             .bindings
             .iter()
-            .find(|b| !b.read_only)
+            .find(|b| b.writes)
             .map(|b| b.name.clone());
         (read_buf, write_buf)
     } else {

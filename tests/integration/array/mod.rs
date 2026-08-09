@@ -6,6 +6,7 @@ pub use crate::integration::utils;
 pub mod creation;
 pub mod edge_cases;
 pub mod errors;
+pub mod float_assignment;
 pub mod indexing;
 pub mod integration;
 pub mod methods;
