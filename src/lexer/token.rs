@@ -133,6 +133,8 @@ pub enum Token {
     Intrinsic,
 
     // Symbols and Operators
+    #[token("@")]
+    At,
     #[token(";")]
     Semicolon,
     #[token(":")]
@@ -337,7 +339,7 @@ impl Token {
             | Token::Struct | Token::Class | Token::Trait | Token::Super | Token::Public | Token::Protected
             | Token::Shared | Token::Private | Token::System | Token::Local | Token::Abstract | Token::MustUse
             | Token::Out | Token::Runtime | Token::Intrinsic
-            | Token::Semicolon | Token::Colon | Token::DoubleColon | Token::FatArrow | Token::Arrow | Token::LeftArrow
+            | Token::At | Token::Semicolon | Token::Colon | Token::DoubleColon | Token::FatArrow | Token::Arrow | Token::LeftArrow
             | Token::Equal | Token::NotEqual | Token::GreaterThanEqual | Token::LessThanEqual | Token::GreaterThan | Token::LessThan
             | Token::Assign | Token::AssignAdd | Token::AssignSub | Token::AssignMul | Token::AssignDiv | Token::AssignMod
             | Token::Plus | Token::Increment | Token::Minus | Token::Decrement | Token::Star | Token::Slash | Token::Percent

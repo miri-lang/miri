@@ -2376,6 +2376,21 @@ impl TypeChecker {
         }
     }
 
+    /// Reports an already-classified error, preserving its diagnostic code.
+    /// Errors built from a [`TypeErrorKind`] must travel this path; the
+    /// message-only reporters relabel everything as a generic type error.
+    pub(crate) fn report_typed_error(&mut self, mut error: TypeError) {
+        if self.suppress_diagnostics {
+            return;
+        }
+        let properties = error.kind.properties();
+        let key = (properties.message.unwrap_or_default(), error.span);
+        if self.diagnostics.mark_reported(key) {
+            error.source_override = self.modules.current_source_override.clone();
+            self.diagnostics.push_error(error);
+        }
+    }
+
     /// Reports a type warning with an error code, title, message, and help text.
     pub(crate) fn report_warning(
         &mut self,

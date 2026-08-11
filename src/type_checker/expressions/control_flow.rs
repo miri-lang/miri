@@ -46,9 +46,17 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
+
+/// The enum facts an exhaustiveness check consults, detached from the definition.
+struct EnumMatchFacts {
+    remaining_variants: HashSet<String>,
+    module: String,
+    non_exhaustive: bool,
+}
 
 impl TypeChecker {
     /// Infers the type of a match expression.
@@ -82,44 +90,78 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) {
-        if let TypeKind::Custom(name, _) = &subject_type.kind {
-            let enum_def_opt = self.find_enum_definition(name, context);
-            if let Some(enum_def) = enum_def_opt {
-                let mut remaining_variants: HashSet<String> = enum_def.keys().cloned().collect();
-                let is_exhaustive =
-                    self.extract_covered_enum_variants(name, branches, &mut remaining_variants);
+        let TypeKind::Custom(name, _) = &subject_type.kind else {
+            return;
+        };
+        let Some(EnumMatchFacts {
+            mut remaining_variants,
+            module,
+            non_exhaustive,
+        }) = self.find_enum_match_facts(name, context)
+        else {
+            return;
+        };
 
-                if !is_exhaustive && !remaining_variants.is_empty() {
-                    let mut missing: Vec<_> = remaining_variants.into_iter().collect();
-                    missing.sort();
-                    self.report_error(
-                        format!(
-                            "Non-exhaustive match on Enum '{}'. Missing variants: {}",
-                            name,
-                            missing.join(", ")
-                        ),
-                        span,
-                    );
-                }
+        let has_catch_all =
+            self.extract_covered_enum_variants(name, branches, &mut remaining_variants);
+
+        // An open variant set makes listing today's variants insufficient: only a
+        // catch-all keeps the match compiling when a variant is added later. Inside
+        // the defining module the full set is enforced, so its own matches are
+        // updated alongside the new variant.
+        //
+        // `module` is stamped once where the enum is declared and never rewritten,
+        // so re-exporting or transitively importing the enum still compares against
+        // the module that owns the variants.
+        if non_exhaustive && module != self.modules.current_module {
+            if !has_catch_all {
+                self.report_typed_error(TypeError::new(
+                    TypeErrorKind::NonExhaustiveEnumNeedsCatchAll {
+                        enum_name: name.clone(),
+                        module,
+                    },
+                    span,
+                ));
             }
+            return;
+        }
+
+        if !has_catch_all && !remaining_variants.is_empty() {
+            let mut missing: Vec<_> = remaining_variants.into_iter().collect();
+            missing.sort();
+            self.report_error(
+                format!(
+                    "Non-exhaustive match on Enum '{}'. Missing variants: {}",
+                    name,
+                    missing.join(", ")
+                ),
+                span,
+            );
         }
     }
 
-    /// Finds an enum definition by name, checking local and global scopes.
-    fn find_enum_definition(
-        &self,
-        name: &str,
-        context: &Context,
-    ) -> Option<std::collections::BTreeMap<String, Vec<Type>>> {
-        for scope in context.type_definitions.iter().rev() {
-            if let Some(TypeDefinition::Enum(def)) = scope.get(name) {
-                return Some(def.variants.clone());
-            }
-        }
-        if let Some(TypeDefinition::Enum(def)) = self.type_table.global_type_definitions.get(name) {
-            return Some(def.variants.clone());
-        }
-        None
+    /// Everything exhaustiveness checking needs from an enum definition, owned so
+    /// the borrow of the definition ends before diagnostics are reported. Only the
+    /// variant names are copied; the generics and method tables are left untouched.
+    fn find_enum_match_facts(&self, name: &str, context: &Context) -> Option<EnumMatchFacts> {
+        let definition = context
+            .type_definitions
+            .iter()
+            .rev()
+            .find_map(|scope| match scope.get(name) {
+                Some(TypeDefinition::Enum(def)) => Some(def),
+                _ => None,
+            })
+            .or_else(|| match self.type_table.global_type_definitions.get(name) {
+                Some(TypeDefinition::Enum(def)) => Some(def),
+                _ => None,
+            })?;
+
+        Some(EnumMatchFacts {
+            remaining_variants: definition.variants.keys().cloned().collect(),
+            module: definition.module.clone(),
+            non_exhaustive: definition.non_exhaustive,
+        })
     }
 
     /// Extracts covered enum variants from match branches and checks exhaustiveness.

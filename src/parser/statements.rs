@@ -6,9 +6,111 @@ use crate::ast::*;
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
+use super::literals::unescape_string;
 use super::Parser;
 
 impl<'source> Parser<'source> {
+    /// Parses a sequence of attributes at the start of a statement.
+    /// Each attribute is on its own line and starts with `@`.
+    /// Returns an empty Vec if no attributes are present.
+    pub(crate) fn attributes(&mut self) -> Result<Vec<Attribute>, SyntaxError> {
+        let mut attrs = Vec::new();
+
+        while self.match_lookahead_type(|t| t == &Token::At) {
+            let Some((_, marker_span)) = self.lookahead else {
+                return Err(self.error_unexpected_lookahead_token("an attribute"));
+            };
+            self.eat_token(&Token::At)?;
+
+            let name = self.attribute_name()?;
+            let argument = self.attribute_argument()?;
+
+            attrs.push(Attribute::new(
+                name,
+                argument,
+                marker_span,
+                AttributeSpelling::Attribute,
+            ));
+
+            if !self.lookahead_is_expression_end() {
+                break;
+            }
+            self.try_eat_expression_end()?;
+        }
+
+        Ok(attrs)
+    }
+
+    /// The identifier following `@`. Keywords that name a registered attribute
+    /// are accepted here so `@must_use` spells the same as the keyword it replaces.
+    fn attribute_name(&mut self) -> Result<String, SyntaxError> {
+        let Some((token, span)) = self.lookahead.clone() else {
+            return Err(self.error_unexpected_lookahead_token("attribute name"));
+        };
+        match token {
+            Token::Identifier | Token::MustUse => {
+                self.eat_token(&token)?;
+            }
+            _ => return Err(self.error_unexpected_lookahead_token("attribute name")),
+        }
+        Ok(self.source[span.start..span.end].to_string())
+    }
+
+    /// Records attributes on the declaration they precede.
+    ///
+    /// Only enums, functions and classes carry attributes today. Any other
+    /// statement is rejected here rather than silently dropping them, so an
+    /// attribute never becomes a no-op.
+    pub(crate) fn attach_attributes(
+        &self,
+        mut statement: Statement,
+        attributes: Vec<Attribute>,
+    ) -> Result<Statement, SyntaxError> {
+        if attributes.is_empty() {
+            return Ok(statement);
+        }
+        let span = attributes[0].span;
+        match &mut statement.node {
+            StatementKind::Enum(_, _, _, _, _, existing) => existing.extend(attributes),
+            StatementKind::FunctionDeclaration(declaration) => {
+                declaration.attributes.extend(attributes)
+            }
+            StatementKind::Class(class_data) => class_data.attributes.extend(attributes),
+            _ => {
+                return Err(SyntaxError::new(
+                    SyntaxErrorKind::UnsupportedAttributeTarget,
+                    span,
+                ))
+            }
+        }
+        Ok(statement)
+    }
+
+    /// The optional single string-literal argument, with its delimiters removed
+    /// and escapes resolved. Interpolated strings are not accepted.
+    fn attribute_argument(&mut self) -> Result<Option<String>, SyntaxError> {
+        if !self.match_lookahead_type(|t| t == &Token::LParen) {
+            return Ok(None);
+        }
+        self.eat_token(&Token::LParen)?;
+
+        let Some((Token::String, span)) = self.lookahead else {
+            return Err(self.error_unexpected_lookahead_token("a string literal"));
+        };
+        let raw = &self.source[span.start..span.end];
+        let Some(inner) = raw.get(1..raw.len().saturating_sub(1)) else {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidStringLiteral,
+                span,
+            ));
+        };
+        let argument = unescape_string(inner).into_owned();
+
+        self.eat_token(&Token::String)?;
+        self.eat_token(&Token::RParen)?;
+        Ok(Some(argument))
+    }
+
     /*
         StatementList
             : Statement
@@ -58,6 +160,8 @@ impl<'source> Parser<'source> {
             return Ok(ast::empty_statement());
         }
 
+        let attributes = self.attributes()?;
+
         let statement = match &self.lookahead {
             Some((Token::Public, _)) => {
                 self.eat_token(&Token::Public)?;
@@ -103,7 +207,7 @@ impl<'source> Parser<'source> {
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
             Some((Token::Enum, _)) | Some((Token::MustUse, _)) => {
-                self.enum_statement(MemberVisibility::Public)?
+                self.enum_statement(MemberVisibility::Public, Vec::new())?
             }
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
             Some((Token::Class, _)) => self.class_statement(MemberVisibility::Public)?,
@@ -114,7 +218,7 @@ impl<'source> Parser<'source> {
             }
             _ => self.expression_statement()?,
         };
-        Ok(statement)
+        self.attach_attributes(statement, attributes)
     }
 
     /*

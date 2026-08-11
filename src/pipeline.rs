@@ -1228,7 +1228,14 @@ impl Pipeline {
                         }
                     }
                 }
-                StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
+                StatementKind::Enum(
+                    name_expr,
+                    _generics,
+                    _variants,
+                    methods,
+                    _vis,
+                    _attributes,
+                ) => {
                     // Compile enum methods as `EnumName_methodName` using lower_class_method.
                     // Enum methods have no explicit `self` in their param list (like class methods).
                     let Some(enum_name) = Self::identifier_name(name_expr) else {
@@ -1388,7 +1395,14 @@ impl Pipeline {
                         kernel_namer,
                     )?;
                 }
-                StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
+                StatementKind::Enum(
+                    name_expr,
+                    _generics,
+                    _variants,
+                    methods,
+                    _vis,
+                    _attributes,
+                ) => {
                     let Some(enum_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };

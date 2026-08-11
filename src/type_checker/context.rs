@@ -133,6 +133,9 @@ pub struct EnumDefinition {
     pub module: String,
     /// Whether expressions of this enum type must be used (not silently discarded).
     pub must_use: bool,
+    /// Whether the variant set may grow. Matches outside `module` must carry a
+    /// `default` arm so a later variant does not break them.
+    pub non_exhaustive: bool,
 }
 
 /// Definition of a generic type parameter.

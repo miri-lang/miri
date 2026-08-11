@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod analysis;
+pub mod attributes;
 pub mod captures;
 pub mod common;
 pub mod expression;
@@ -17,6 +18,7 @@ pub mod script;
 pub mod statement;
 pub mod types;
 
+pub use attributes::*;
 pub use common::*;
 pub use expression::*;
 pub use literal::*;

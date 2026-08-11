@@ -3,6 +3,7 @@
 
 use super::primitives::{empty_statement, identifier};
 use super::{expr, stmt};
+use crate::ast::attributes::Attribute;
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::{Expression, ExpressionKind, LambdaData};
 use crate::ast::statement::{ClassData, FunctionDeclarationData, Statement, StatementKind};
@@ -48,7 +49,7 @@ pub fn enum_statement(
     values: Vec<Expression>,
     methods: Vec<Statement>,
     visibility: MemberVisibility,
-    must_use: bool,
+    attributes: Vec<Attribute>,
 ) -> Statement {
     stmt(StatementKind::Enum(
         Box::new(name),
@@ -56,7 +57,7 @@ pub fn enum_statement(
         values,
         methods,
         visibility,
-        must_use,
+        attributes,
     ))
 }
 
@@ -116,6 +117,7 @@ pub fn class_statement(
         body,
         visibility,
         is_abstract: false,
+        attributes: Vec::new(),
     })))
 }
 
@@ -136,6 +138,7 @@ pub fn abstract_class_statement(
         body,
         visibility,
         is_abstract: true,
+        attributes: Vec::new(),
     })))
 }
 
@@ -282,6 +285,7 @@ impl FunctionBuilder {
                 return_type: self.return_type,
                 body: Some(Box::new(body)),
                 properties: self.properties,
+                attributes: Vec::new(),
             },
         )))
     }
@@ -296,6 +300,7 @@ impl FunctionBuilder {
                 return_type: self.return_type,
                 body: None,
                 properties: self.properties,
+                attributes: Vec::new(),
             },
         )))
     }
@@ -344,6 +349,7 @@ pub fn function_declaration(
             return_type,
             body: Some(Box::new(body)),
             properties,
+            attributes: Vec::new(),
         },
     )))
 }
@@ -364,6 +370,7 @@ pub fn abstract_function_declaration(
             return_type,
             body: None,
             properties,
+            attributes: Vec::new(),
         },
     )))
 }

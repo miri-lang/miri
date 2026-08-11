@@ -9,8 +9,9 @@ use miri::ast::factory::{
     identifier, return_statement, type_bool, type_expr_non_null, type_expr_option, type_int,
     type_list, type_map, type_string,
 };
-use miri::ast::{FunctionProperties, MemberVisibility};
-use miri::error::syntax::SyntaxErrorKind;
+use miri::ast::{Attribute, AttributeSpelling, FunctionProperties, MemberVisibility};
+use miri::error::syntax::{Span, SyntaxErrorKind};
+use std::default::Default;
 
 #[test]
 fn test_inline_enum_simple_values() {
@@ -28,7 +29,7 @@ enum Colors: Red, Green, Blue
             ],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -52,7 +53,7 @@ enum Colors
             ],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -78,7 +79,7 @@ enum Message: Write(String), Move(int, int)
             ],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -108,7 +109,7 @@ enum Event
             ],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -123,7 +124,7 @@ fn test_enum_with_single_value() {
             vec![enum_value("Ok", vec![])],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -146,7 +147,7 @@ enum Data: Point([int]?), Config({String: bool})
             ],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -202,7 +203,7 @@ fn test_error_enum_malformed_value_type() {
             vec![enum_value("V", vec![type_expr_non_null(type_int())])],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -217,7 +218,7 @@ fn test_enum_visibility_modifiers() {
             vec![enum_value("Red", vec![])],
             vec![],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 
@@ -236,7 +237,7 @@ fn test_enum_visibility_modifiers() {
             vec![enum_value("V", vec![])],
             vec![],
             MemberVisibility::Private,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -299,7 +300,7 @@ enum Status
                 },
             )],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -314,7 +315,12 @@ fn test_must_use_enum() {
             vec![enum_value("Ok", vec![]), enum_value("Err", vec![])],
             vec![],
             MemberVisibility::Public,
-            true,
+            vec![Attribute::new(
+                "must_use".to_string(),
+                None,
+                Span { start: 0, end: 8 },
+                AttributeSpelling::DeprecatedKeyword,
+            )],
         )],
     );
 }
@@ -348,7 +354,7 @@ enum Toggle
                 },
             )],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }
@@ -382,7 +388,7 @@ enum Flag
                 },
             )],
             MemberVisibility::Public,
-            false,
+            Vec::new(),
         )],
     );
 }

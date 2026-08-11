@@ -88,6 +88,7 @@ fn enum_def<const N: usize>(variants: [(&str, Vec<TypeKind>); N]) -> EnumDefinit
         methods: BTreeMap::new(),
         module: String::new(),
         must_use: false,
+        non_exhaustive: false,
     }
 }
 

@@ -17,7 +17,7 @@ fn test_whitespace_only() {
 
 #[test]
 fn test_invalid_characters() {
-    lexer_error_test("valid @ invalid", &SyntaxErrorKind::InvalidToken);
+    lexer_error_test("valid $ invalid", &SyntaxErrorKind::InvalidToken);
 }
 
 #[test]

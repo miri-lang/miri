@@ -3,7 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::super::Parser;
@@ -12,8 +12,25 @@ impl<'source> Parser<'source> {
     pub(crate) fn enum_statement(
         &mut self,
         visibility: MemberVisibility,
+        mut attributes: Vec<Attribute>,
     ) -> Result<Statement, SyntaxError> {
-        let must_use = self.try_eat_must_use_modifier()?;
+        // The keyword spelling becomes the attribute it is an alias for, so the
+        // registry and every consumer see one representation. The spelling is
+        // retained only so the type checker can report the deprecation.
+        if self.match_lookahead_type(|t| t == &Token::MustUse) {
+            let span = match self.lookahead {
+                Some((_, keyword_span)) => keyword_span,
+                None => Span::default(),
+            };
+            self.eat_token(&Token::MustUse)?;
+            attributes.push(Attribute::new(
+                MUST_USE_ATTRIBUTE.to_string(),
+                None,
+                span,
+                AttributeSpelling::DeprecatedKeyword,
+            ));
+        }
+
         self.eat_token(&Token::Enum)?;
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
@@ -30,17 +47,8 @@ impl<'source> Parser<'source> {
             variants,
             methods,
             visibility,
-            must_use,
+            attributes,
         ))
-    }
-
-    fn try_eat_must_use_modifier(&mut self) -> Result<bool, SyntaxError> {
-        if self.match_lookahead_type(|t| t == &Token::MustUse) {
-            self.eat_token(&Token::MustUse)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
     }
 
     /// Parses an enum body containing variant declarations and optionally method declarations.

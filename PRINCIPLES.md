@@ -360,3 +360,88 @@ A finding the owner cannot reproduce at a cited `file:line` is **not a finding**
 - **Memory**: `MEMORY.md` references this file so future sessions inherit the standard.
 
 When in doubt, optimize for the next reader. The next reader is often you.
+
+---
+
+## 12. Standard library design (BINDING)
+
+These rules govern every `.mi` file under `src/stdlib/`. The stdlib is the one API surface users cannot route around; a mistake here becomes a compatibility promise. Rules R1–R10. The existing trait algebra (`Iterable` → `Queryable`/`Foldable`/`Transformable`/`Sequenced`, everything derived from `length()` + `element_at()`) is the house style — new code extends it, never parallels it.
+
+### 12.1 R1 — Receiver rule (MUST)
+
+Every operation has exactly one home:
+
+- **Operation on a value of type `T`** → method on `T` (`s.trim()`, `list.sort()`).
+- **Operation against the external world** (filesystem, clock, network, environment, process) → method on a **capability class** (`fs.read_file(path)`, `clock.now()`).
+- **Pure function with no natural receiver** → free function (`sin(x)`, `hash_u32(seed)`). In practice: math only.
+
+**NEVER** add a free function that touches the world. *Sanctioned exception*: the stdio print family (`print`, `println`, `eprint`, `eprintln`) remains available as prelude free functions — scripting ergonomics outweigh strictness for terminal output. The exception is closed: it does not extend to reading stdin, files, env, time, or network.
+
+**Check**: does the function's behavior depend on anything outside its arguments? Then it needs a receiver that *is* that dependency.
+
+### 12.2 R2 — Capability classes (MUST)
+
+External-world access lives on capability classes (`Fs`, `Env`, `Args`, `Clock`, …). Today a handle comes from the class constructor (`let fs = Fs()`); when the runtime-supplied `World` entry-point handle ships, it comes from a `World` field instead. **Call sites never change** — only handle acquisition does. This is why the rule exists: API shape is decided once, at birth.
+
+- Capability classes carry no user-visible state beyond identity; they are cheap to construct and pass.
+- A function that needs a capability takes it as a parameter. Signatures document reach: a function whose parameters include no capability cannot touch the world (modulo the stdio exception).
+
+### 12.3 R3 — Error ladder (MUST)
+
+- **Total** operation → return `T`.
+- **One obvious absence, not a failure** → `T?` (`map.get`, `first`, `index_of`).
+- **External-world failure or multiple distinguishable causes** → `Result<T, E>` with a structured error type. **NEVER** `Result<T, String>`.
+
+Sentinel returns (`-1`, empty string, `0` meaning "missing") are **NEVER** acceptable in new API.
+
+### 12.4 R4 — Error types must be evolvable (MUST)
+
+Miri mandates exhaustive `match`. A public error enum under that mandate freezes the day it ships: every added variant breaks every user `match`. Therefore:
+
+- Every public stdlib error enum MUST be declared `@non_exhaustive`. Matching a `@non_exhaustive` enum outside its defining module requires an `else` arm; adding a variant is then non-breaking.
+- Shipping a public error enum without `@non_exhaustive` is rejected at review. If the attribute is not yet implemented in the language, the error enum waits for it — do not ship frozen.
+
+### 12.5 R5 — Trait algebra first (MUST)
+
+- A new collection implements the `Iterable<T>` primitives (`length`, `element_at`) and inherits the derived surface (`is_empty`, `first`, `last`, `contains`, `index_of`, folds). No re-implementing derived methods per type.
+- Adapter collections (queues, stacks) use **composition** over an existing backing collection held in a private field. The backing collection is never exposed.
+- Trait abstract surfaces are frozen small. A new capability is a new trait, not a widened abstract surface on an existing one.
+
+### 12.6 R6 — Mutation naming (MUST)
+
+- In-place mutation = imperative verb, returns nothing: `sort()`, `reverse()`, `push(x)`.
+- Copying transform = `to_*` / participle / noun, returns the new value: `to_lower()`, `sorted()`, `trimmed()`.
+- A method **NEVER** both mutates the receiver and returns it.
+
+### 12.7 R7 — FFI is private ABI (MUST)
+
+- `runtime "…" fn miri_rt_*` declarations are **never** `public` and are declared adjacent to their sole consumer (inside the class or module that wraps them).
+- One `.mi` API owns each intrinsic family; no two modules declare the same `miri_rt_*` name.
+- Intrinsic names are write-once, like diagnostic codes: renaming one is an ABI break across the runtime staticlib boundary.
+
+### 12.8 R8 — Module template (MUST)
+
+Every stdlib `.mi` file, in order: SPDX header → module doc comment → `use` block → error type (if any) → runtime declarations → one primary type or trait → free functions last. One primary type per file. Every `public` symbol carries a doc comment with an `Example:` block — examples become doctests once the test runner discovers them.
+
+### 12.9 R9 — Additive evolution (MUST)
+
+Once a module ships in a released version:
+
+- Adding methods/types: allowed.
+- Changing a signature, return type, or semantics: deprecation alias + machine-applicable fix packet + removal two minor versions later, recorded at the deprecation site.
+- Removing without the deprecation window: **NEVER**.
+
+### 12.10 R10 — Stdlib independence (restates §5.3)
+
+The compiler MUST NOT gain knowledge of any new stdlib module. json, regex, fs, http get zero MIR special-casing. Where a language feature must touch a stdlib type (formatting hooks, iteration protocol), it routes through the type's own trait/hook — never through name matching.
+
+### 12.11 Self-check
+
+- [ ] No new free function whose behavior depends on the external world (stdio print family excepted).
+- [ ] No new sentinel return (`-1`, magic empty value) — `T?` or `Result` instead.
+- [ ] No `Result<T, String>` in any public signature.
+- [ ] Every public error enum is `@non_exhaustive`.
+- [ ] No `public` `runtime` fn declaration; no intrinsic declared in two modules.
+- [ ] New collection types derive their query/fold surface from the trait algebra.
+- [ ] In-place methods return nothing; copying methods are named as copies.
+- [ ] Every public symbol has a doc comment with an example.

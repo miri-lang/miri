@@ -3,6 +3,7 @@
 
 pub mod arithmetic;
 pub mod array;
+pub mod attributes;
 pub mod basic;
 pub mod cast;
 pub mod comparisons;
