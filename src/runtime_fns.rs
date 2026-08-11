@@ -186,6 +186,18 @@ pub mod rt {
     /// than a negative `i64`.
     pub const UINT_TO_STRING: &str = "miri_rt_uint_to_string";
 
+    // ── Filesystem ────────────────────────────────────────────────────────────
+    pub const FS_STATUS: &str = "miri_rt_fs_status";
+    pub const FS_ERROR_MESSAGE: &str = "miri_rt_fs_error_message";
+    pub const FS_EXISTS: &str = "miri_rt_fs_exists";
+    pub const FS_READ_FILE: &str = "miri_rt_fs_read_file";
+    pub const FS_WRITE_FILE: &str = "miri_rt_fs_write_file";
+    pub const FS_APPEND_FILE: &str = "miri_rt_fs_append_file";
+    pub const FS_LIST_DIR: &str = "miri_rt_fs_list_dir";
+    pub const FS_CREATE_DIR: &str = "miri_rt_fs_create_dir";
+    pub const FS_DELETE: &str = "miri_rt_fs_delete";
+    pub const FS_CWD: &str = "miri_rt_fs_cwd";
+
     // ── Time ─────────────────────────────────────────────────────────────────
     pub const NANOTIME: &str = "miri_rt_nanotime";
 
@@ -280,6 +292,17 @@ pub mod rt {
         ASSERT_EQ_FAIL,
         ASSERT_NE_FAIL,
         DIV_BY_ZERO_PANIC,
+        // Filesystem
+        FS_STATUS,
+        FS_ERROR_MESSAGE,
+        FS_EXISTS,
+        FS_READ_FILE,
+        FS_WRITE_FILE,
+        FS_APPEND_FILE,
+        FS_LIST_DIR,
+        FS_CREATE_DIR,
+        FS_DELETE,
+        FS_CWD,
         // String
         STRING_NEW,
         STRING_FREE,

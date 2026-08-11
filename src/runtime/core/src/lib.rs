@@ -19,6 +19,7 @@
 
 pub mod alloc;
 pub mod array;
+pub mod fs;
 pub mod hash;
 pub mod io;
 pub mod list;
@@ -43,6 +44,7 @@ pub use string::MiriString;
 // This preserves `crate::miri_rt_list_new()` style calls used in array.rs and tests.
 pub use alloc::ffi::*;
 pub use array::ffi::*;
+pub use fs::ffi::*;
 pub use io::ffi::*;
 pub use list::ffi::*;
 pub use map::ffi::*;

@@ -9,6 +9,7 @@ The Standard Library provides the built-in functionality available to all Miri p
 ## Architecture
 
 -   **`system.io`**: Utilities for reading and writing to standard input, standard output, and standard error (e.g., `print`, `println`).
+-   **`system.fs`**: Filesystem operations via the `Fs` capability class (reading, writing, listing directories, etc.).
 -   **`system.string`**: The core `String` class, extending the runtime representation with methods for concatenation, comparison, and formatting.
 -   **Collections (Planned)**: Modules for `List`, `Map`, `Set`, `Tuple` etc., implemented using runtime intrinsics.
 -   **Math (Planned)**: Standard mathematical constants and functions (`sin`, `cos`, `abs`, etc.).
