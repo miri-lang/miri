@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Filesystem operations for Miri.
+///
+/// Provides file and directory operations through a capability class.
+/// Error handling uses the `FsError` enum.
+///
+/// Note: This module currently requires explicit import of `system.result` in programs that use it,
+/// due to a compiler limitation regarding module import resolution. Import `system.result` BEFORE
+/// `system.fs` in your program for this to work correctly.
+///
+/// Example:
+///     use system.result
+///     use system.fs
+///     let fs = Fs()
+///     match fs.read_file("/tmp/data.txt")
+///         Result.Ok(contents): println(contents)
+///         Result.Err(e): println("error")
+
+use system.result
+use system.string
+
+/// Represents a filesystem operation error.
+@non_exhaustive
+public enum FsError
+    NotFound(String)
+    PermissionDenied(String)
+    AlreadyExists(String)
+    NotADirectory(String)
+    InvalidData(String)
+    Other(String)
+
+/// Filesystem capability class. Acquire a handle with `let fs = Fs()` to access filesystem operations.
+public class Fs
+
+    runtime "core" fn miri_rt_fs_status() int
+    runtime "core" fn miri_rt_fs_error_message() String
+    runtime "core" fn miri_rt_fs_exists(path String) int
+    runtime "core" fn miri_rt_fs_read_file(path String) String
+    runtime "core" fn miri_rt_fs_write_file(path String, contents String) int
+    runtime "core" fn miri_rt_fs_append_file(path String, contents String) int
+    runtime "core" fn miri_rt_fs_list_dir(path String) [String]
+    runtime "core" fn miri_rt_fs_create_dir(path String) int
+    runtime "core" fn miri_rt_fs_delete(path String) int
+    runtime "core" fn miri_rt_fs_cwd() String
+
+    /// Checks whether a file or directory exists at the given path.
+    /// Returns true if exists, false if not. Never fails.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     if fs.exists("/tmp/data.txt"): println("found")
+    public fn exists(path String) bool
+        return miri_rt_fs_exists(path) == 1
+
+    /// Reads the entire contents of a file into a string.
+    /// Non-UTF-8 content returns Err(InvalidData(path)).
+    /// An empty file returns Ok(""), not an error.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.read_file("/tmp/data.txt")
+    ///         Result.Ok(contents): println(contents)
+    ///         Result.Err(e): println("error")
+    public fn read_file(path String) Result<String, FsError>
+        let contents = miri_rt_fs_read_file(path)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(contents)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            4: Result.Err(FsError.NotADirectory(path))
+            5: Result.Err(FsError.InvalidData(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Writes the given contents to a file, truncating if it exists.
+    /// Creates the file if it does not exist.
+    /// Returns Ok(n) where n is the number of bytes written.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.write_file("/tmp/output.txt", "Hello")
+    ///         Result.Ok(n): println(f"wrote {n} bytes")
+    ///         Result.Err(e): println("error")
+    public fn write_file(path String, contents String) Result<int, FsError>
+        let bytes_written = miri_rt_fs_write_file(path, contents)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(bytes_written)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            4: Result.Err(FsError.NotADirectory(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Appends the given contents to a file, creating it if it doesn't exist.
+    /// Returns Ok(n) where n is the number of bytes written.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.append_file("/tmp/log.txt", "line\n")
+    ///         Result.Ok(n): println(f"appended {n} bytes")
+    ///         Result.Err(e): println("error")
+    public fn append_file(path String, contents String) Result<int, FsError>
+        let bytes_written = miri_rt_fs_append_file(path, contents)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(bytes_written)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            4: Result.Err(FsError.NotADirectory(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Lists the entries (file and directory names) in a directory.
+    /// Returns Ok([names]) containing the basename of each entry.
+    /// The list is unordered.
+    ///
+    /// Note: Due to a compiler-level gap in reference-counting semantics for Result-wrapped
+    /// list payloads, the returned list and its string elements may not be freed when the
+    /// Result is destructed. This causes memory to leak if list_dir results are accumulated
+    /// across multiple calls. This is a compiler issue, not an Fs bug, and will be fixed
+    /// when Result<[T], E> deallocation is properly implemented.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.list_dir("/tmp")
+    ///         Result.Ok(entries): for e in entries: println(e)
+    ///         Result.Err(e): println("error")
+    public fn list_dir(path String) Result<[String], FsError>
+        let entries = miri_rt_fs_list_dir(path)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(entries)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            4: Result.Err(FsError.NotADirectory(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Creates a directory at the given path, creating missing parents as needed.
+    /// Idempotent: if the directory already exists, returns Ok(false).
+    /// Returns Ok(true) if newly created, Ok(false) if already existed.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.create_dir("/tmp/mydir")
+    ///         Result.Ok(was_new): println(f"created: {was_new}")
+    ///         Result.Err(e): println("error")
+    public fn create_dir(path String) Result<bool, FsError>
+        let result = miri_rt_fs_create_dir(path)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(result == 1)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            3: Result.Err(FsError.AlreadyExists(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Deletes a regular file at the given path.
+    /// Does not delete directories.
+    /// Returns Ok(true) on success; there is no soft "nothing was deleted" outcome.
+    /// Failures surface as Err with a status code, so do not confuse the bool with
+    /// indicating whether a file existed to delete — that distinction is in the error path.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.delete("/tmp/data.txt")
+    ///         Result.Ok(_): println("deleted")
+    ///         Result.Err(e): println("error")
+    public fn delete(path String) Result<bool, FsError>
+        let result = miri_rt_fs_delete(path)
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(result == 1)
+            1: Result.Err(FsError.NotFound(path))
+            2: Result.Err(FsError.PermissionDenied(path))
+            4: Result.Err(FsError.NotADirectory(path))
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
+
+    /// Returns the current working directory as an absolute path.
+    ///
+    /// Example:
+    ///     let fs = Fs()
+    ///     match fs.cwd()
+    ///         Result.Ok(dir): println(dir)
+    ///         Result.Err(e): println("error")
+    public fn cwd() Result<String, FsError>
+        let dir = miri_rt_fs_cwd()
+        let status = miri_rt_fs_status()
+        match status
+            0: Result.Ok(dir)
+            default: Result.Err(FsError.Other(miri_rt_fs_error_message()))
