@@ -56,6 +56,30 @@ pub enum TypeErrorKind {
         message: String,
         help: Option<String>,
     },
+    /// E0112: Unknown attribute name
+    /// E0111: Match on an open enum outside its defining module lacks a catch-all
+    NonExhaustiveEnumNeedsCatchAll {
+        enum_name: String,
+        module: String,
+    },
+    UnknownAttribute {
+        name: String,
+        known: Vec<String>,
+    },
+    /// E0113: Attribute used on the wrong declaration kind
+    AttributeNotValid {
+        name: String,
+        target: String,
+        accepted: Vec<String>,
+    },
+    /// E0114: Attribute argument mismatch
+    AttributeArgumentMissing {
+        name: String,
+    },
+    /// E0114: Attribute argument extra
+    AttributeArgumentExtra {
+        name: String,
+    },
     /// A syntax/parse error that originated in an imported module, preserved
     /// with its original error code and title rather than being downgraded to
     /// a generic "Type Error".
@@ -124,6 +148,52 @@ impl TypeErrorKind {
             }
             Self::Custom { message, .. } => {
                 ErrorProperties::simple("E0110", "Type Error").with_message(message.clone())
+            }
+            Self::NonExhaustiveEnumNeedsCatchAll { enum_name, module } => {
+                ErrorProperties::simple("E0111", "Non-Exhaustive Enum Match")
+                    .with_message(format!(
+                        "Match on `@non_exhaustive` enum '{}' requires a `default` arm outside its defining module '{}'",
+                        enum_name, module
+                    ))
+                    .with_help(format!(
+                        "Add a `default:` arm. '{}' may gain variants later, and listing only today's variants would stop compiling when it does.",
+                        enum_name
+                    ))
+            }
+            Self::UnknownAttribute { name, known } => {
+                ErrorProperties::simple("E0112", "Unknown Attribute")
+                    .with_message(format!("Unknown attribute: @{}", name))
+                    .with_help(format!(
+                        "Attributes are a closed set. Known attributes: {}.",
+                        known.join(", ")
+                    ))
+            }
+            Self::AttributeNotValid {
+                name,
+                target,
+                accepted,
+            } => {
+                let help = if accepted.is_empty() {
+                    format!("No attribute is valid on {}.", target)
+                } else {
+                    format!("Attributes valid on {}: {}.", target, accepted.join(", "))
+                };
+                ErrorProperties::simple("E0113", "Attribute Not Valid")
+                    .with_message(format!("Attribute @{} is not valid on {}", name, target))
+                    .with_help(help)
+            }
+            Self::AttributeArgumentMissing { name } => {
+                ErrorProperties::simple("E0114", "Attribute Argument Missing")
+                    .with_message(format!(
+                        "Attribute @{} requires a string literal argument",
+                        name
+                    ))
+                    .with_help(format!("Provide an argument: @{}(\"value\")", name))
+            }
+            Self::AttributeArgumentExtra { name } => {
+                ErrorProperties::simple("E0114", "Attribute Argument Extra")
+                    .with_message(format!("Attribute @{} does not take an argument", name))
+                    .with_help(format!("Remove the argument: @{}", name))
             }
             Self::ParseError {
                 code,

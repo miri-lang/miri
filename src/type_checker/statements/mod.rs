@@ -64,11 +64,99 @@ pub(crate) use returns::check_returns;
 pub(crate) use returns::ReturnStatus;
 
 impl TypeChecker {
+    /// The attributes a declaration carries, paired with the kind of declaration
+    /// they landed on. Statements that cannot carry attributes yield `None`.
+    ///
+    /// Giving a further statement kind an `attributes` field requires adding it
+    /// here too: an unlisted carrier is never validated, so its attributes would
+    /// become the silent no-op the closed registry exists to prevent. The parser
+    /// rejects attributes on every kind absent from this list, which keeps the
+    /// two in step.
+    fn declaration_attributes(statement: &Statement) -> Option<(&[Attribute], AttributeTarget)> {
+        match &statement.node {
+            StatementKind::Enum(_, _, _, _, _, attributes) => {
+                Some((attributes, AttributeTarget::Enum))
+            }
+            StatementKind::FunctionDeclaration(decl) => {
+                Some((&decl.attributes, AttributeTarget::Function))
+            }
+            StatementKind::Class(class_data) => {
+                Some((&class_data.attributes, AttributeTarget::Class))
+            }
+            _ => None,
+        }
+    }
+
+    /// Validates a declaration's attributes against the closed registry before
+    /// the declaration itself is checked. Returns false when the declaration
+    /// carries an invalid attribute and should not be checked further.
+    fn check_declaration_attributes(&mut self, statement: &Statement) -> bool {
+        let mut accepted = self.validate_statement_attributes(statement);
+
+        // Class members are checked through the class, not as top-level
+        // statements, so their attributes would otherwise never be validated.
+        if let StatementKind::Class(class_data) = &statement.node {
+            for member in &class_data.body {
+                accepted &= self.validate_statement_attributes(member);
+            }
+        }
+
+        accepted
+    }
+
+    /// Validates one declaration's own attributes, ignoring anything nested
+    /// inside it. Returns false when a violation was reported.
+    fn validate_statement_attributes(&mut self, statement: &Statement) -> bool {
+        let Some((attributes, target)) = Self::declaration_attributes(statement) else {
+            return true;
+        };
+        if attributes.is_empty() {
+            return true;
+        }
+
+        let violations = crate::type_checker::attributes::validate_attributes(attributes, target);
+        if !violations.is_empty() {
+            for violation in violations {
+                self.report_typed_error(violation);
+            }
+            return false;
+        }
+
+        self.report_deprecated_attribute_spellings(attributes);
+        true
+    }
+
+    /// Warns for each attribute written in a spelling that is on its way out.
+    /// The keyword and attribute spellings are otherwise interchangeable.
+    fn report_deprecated_attribute_spellings(&mut self, attributes: &[Attribute]) {
+        for attribute in attributes {
+            if attribute.spelling != AttributeSpelling::DeprecatedKeyword {
+                continue;
+            }
+            self.report_warning(
+                "W0005",
+                "Deprecated Attribute Spelling".to_string(),
+                format!(
+                    "the `{}` keyword is deprecated; use `@{}` instead",
+                    attribute.name, attribute.name
+                ),
+                attribute.span,
+                Some(format!(
+                    "Write `@{}` on the line above the declaration instead.",
+                    attribute.name
+                )),
+            );
+        }
+    }
+
     /// Checks a statement for type correctness.
     ///
     /// This method handles variable declarations, control flow, function declarations,
     /// and other statement types.
     pub(crate) fn check_statement(&mut self, statement: &Statement, context: &mut Context) {
+        if !self.check_declaration_attributes(statement) {
+            return;
+        }
         match &statement.node {
             StatementKind::Variable(decls, vis) => {
                 self.check_variable_declaration(decls, vis, context, statement.span)
@@ -112,8 +200,8 @@ impl TypeChecker {
             StatementKind::Struct(name, generics, fields, methods, vis, traits) => {
                 self.check_struct(name, generics, fields, methods, vis, traits, context)
             }
-            StatementKind::Enum(name, generics, variants, methods, vis, must_use) => {
-                self.check_enum(name, generics, variants, methods, *must_use, vis, context)
+            StatementKind::Enum(name, generics, variants, methods, vis, attributes) => {
+                self.check_enum(name, generics, variants, methods, attributes, vis, context)
             }
             StatementKind::Class(class_data) => self.check_class(
                 &class_data.name,

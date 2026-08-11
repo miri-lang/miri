@@ -29,6 +29,7 @@ use crate::error::type_error::TypeError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
+pub(crate) mod attributes;
 pub mod builtins;
 mod compatibility;
 pub mod context;
@@ -477,6 +478,7 @@ impl TypeChecker {
                 methods: BTreeMap::new(),
                 module: self.modules.current_module.clone(),
                 must_use: false,
+                non_exhaustive: false,
             }),
         );
     }
@@ -849,6 +851,7 @@ impl TypeChecker {
                 methods: BTreeMap::new(),
                 module: self.modules.current_module.clone(),
                 must_use: false,
+                non_exhaustive: false,
             }),
         );
     }

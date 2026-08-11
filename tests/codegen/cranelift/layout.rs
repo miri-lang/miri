@@ -387,6 +387,7 @@ fn make_enum(variants: Vec<(&str, Vec<TypeKind>)>) -> EnumDefinition {
         methods: BTreeMap::new(),
         module: String::new(),
         must_use: false,
+        non_exhaustive: false,
     }
 }
 

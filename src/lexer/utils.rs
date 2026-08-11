@@ -64,6 +64,7 @@ pub fn token_to_string(token: &Token) -> Cow<'static, str> {
         Token::Runtime => "runtime".into(),
         Token::Intrinsic => "intrinsic".into(),
 
+        Token::At => "@".into(),
         Token::Semicolon => ";".into(),
         Token::Colon => ":".into(),
         Token::DoubleColon => "::".into(),

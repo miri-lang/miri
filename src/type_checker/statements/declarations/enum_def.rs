@@ -6,6 +6,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::TypeKind;
 use crate::ast::*;
+use crate::type_checker::attributes;
 use crate::type_checker::context::{
     Context, EnumDefinition, GenericDefinition, MethodInfo, SymbolInfo, TypeDefinition,
 };
@@ -21,7 +22,7 @@ impl TypeChecker {
         generics: &Option<Vec<Expression>>,
         variants: &[Expression],
         methods: &[Statement],
-        must_use: bool,
+        attributes: &[Attribute],
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
@@ -73,7 +74,8 @@ impl TypeChecker {
             generics: generic_defs_opt,
             methods: method_map,
             module: self.modules.current_module.clone(),
-            must_use,
+            must_use: attributes::has_attribute(attributes, MUST_USE_ATTRIBUTE),
+            non_exhaustive: attributes::has_attribute(attributes, NON_EXHAUSTIVE_ATTRIBUTE),
         };
 
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));

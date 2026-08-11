@@ -472,7 +472,7 @@ match c
                 ],
                 vec![],
                 MemberVisibility::Public,
-                false,
+                Vec::new(),
             ),
             variable_statement(
                 vec![let_variable(
@@ -540,7 +540,7 @@ match c
                 ],
                 vec![],
                 MemberVisibility::Public,
-                false,
+                Vec::new(),
             ),
             variable_statement(
                 vec![let_variable(

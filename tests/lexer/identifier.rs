@@ -32,8 +32,9 @@ fn test_unicode_identifiers() {
 fn test_identifier_sigils_are_invalid_tokens() {
     // Identifiers are ASCII letters, digits and `_` only; a leading sigil has no
     // token to belong to and must be rejected rather than silently skipped.
+    // Note: @ is now valid (attribute symbol), so it's excluded from this test.
     run_lexer_error_tests(
-        vec!["$foo", "@name", "#tag", "`quoted`", "\\escape"],
+        vec!["$foo", "#tag", "`quoted`", "\\escape"],
         &SyntaxErrorKind::InvalidToken,
     );
 }

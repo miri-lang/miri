@@ -66,6 +66,7 @@ pub enum SyntaxErrorKind {
     MissingStructMemberType,
     MissingStructMembers,
     MissingEnumMembers,
+    UnsupportedAttributeTarget,
     MissingTypeExpression,
 
     DuplicateMatchPattern,
@@ -178,6 +179,8 @@ impl SyntaxErrorKind {
             K::MissingEnumMembers => {
                 p("E0029", "Missing Enum Members").with_help("All enum variants must be handled.")
             }
+            K::UnsupportedAttributeTarget => p("E0036", "Unsupported Attribute Target")
+                .with_help("Attributes may only precede an enum, function, or class declaration."),
             K::MissingTypeExpression => p("E0030", "Missing Type Expression")
                 .with_help("A type expression is expected here."),
             K::InvalidModifierCombination { .. } => p("E0031", "Invalid Modifier Combination")

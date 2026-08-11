@@ -56,6 +56,8 @@ impl<'source> Parser<'source> {
         &mut self,
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
+        let attributes = self.attributes()?;
+
         let statement = match &self.lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
                 self.variable_statement(visibility)?
@@ -70,7 +72,7 @@ impl<'source> Parser<'source> {
             }
             Some((Token::Intrinsic, _)) => self.intrinsic_function_declaration(visibility)?,
             Some((Token::Enum, _)) | Some((Token::MustUse, _)) => {
-                self.enum_statement(visibility)?
+                self.enum_statement(visibility, Vec::new())?
             }
             Some((Token::Struct, _)) => self.struct_statement(visibility)?,
             Some((Token::Type, _)) => self.type_statement(visibility)?,
@@ -87,7 +89,7 @@ impl<'source> Parser<'source> {
                 ));
             }
         };
-        Ok(statement)
+        self.attach_attributes(statement, attributes)
     }
 
     pub(crate) fn class_statement(
@@ -209,6 +211,12 @@ impl<'source> Parser<'source> {
     }
 
     fn class_member(&mut self, mode: BodyMode) -> Result<Statement, SyntaxError> {
+        let attributes = self.attributes()?;
+        let member = self.class_member_declaration(mode)?;
+        self.attach_attributes(member, attributes)
+    }
+
+    fn class_member_declaration(&mut self, mode: BodyMode) -> Result<Statement, SyntaxError> {
         let visibility = self.member_visibility()?;
         let is_abstract_method = self.try_eat_abstract_modifier()?;
         let effective_mode = if is_abstract_method {

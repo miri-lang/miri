@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::ast::attributes::Attribute;
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::Expression;
 use crate::ast::node::IdNode;
@@ -15,6 +16,7 @@ pub struct FunctionDeclarationData {
     /// Body is None for abstract functions in traits/abstract classes.
     pub body: Option<Box<Statement>>,
     pub properties: FunctionProperties,
+    pub attributes: Vec<Attribute>,
 }
 
 /// Data for a class declaration, boxed to reduce `StatementKind` enum size.
@@ -27,6 +29,7 @@ pub struct ClassData {
     pub body: Vec<Statement>,
     pub visibility: MemberVisibility,
     pub is_abstract: bool,
+    pub attributes: Vec<Attribute>,
 }
 
 /// Represents the type of an if statement
@@ -163,14 +166,14 @@ pub enum StatementKind {
     Type(Vec<Expression>, MemberVisibility),
 
     /// An enum declaration.
-    /// (name, generics, variants, methods, visibility, must_use)
+    /// (name, generics, variants, methods, visibility, attributes)
     Enum(
         Box<Expression>,
         Option<Vec<Expression>>,
         Vec<Expression>,
         Vec<Statement>,
         MemberVisibility,
-        bool,
+        Vec<Attribute>,
     ),
 
     /// A struct declaration.
