@@ -6,9 +6,9 @@
 /// Provides file and directory operations through a capability class.
 /// Error handling uses the `FsError` enum.
 ///
-/// Note: This module currently requires explicit import of `system.result` in programs that use it,
-/// due to a compiler limitation regarding module import resolution. Import `system.result` BEFORE
-/// `system.fs` in your program for this to work correctly.
+/// Note: programs using this module must import `system.result` BEFORE
+/// `system.fs`, because a stdlib module's own `use system.result` does not make
+/// `Result` visible while that module is being checked.
 ///
 /// Example:
 ///     use system.result

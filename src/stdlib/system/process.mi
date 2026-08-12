@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Process control for Miri.
+///
+/// Provides functions to terminate the process with an exit code.
+
+runtime "core" fn miri_rt_exit(code int)
+
+/// Terminates the program with the given exit code.
+///
+/// This function does not return; the process exits immediately after flushing
+/// output. Destructors do not run, so a value still live at the call site is not
+/// released. A shell observes only the low 8 bits of the code, per POSIX.
+///
+/// This is a free function rather than a capability method because the call never
+/// returns, so a capability handle would gate nothing — the same reasoning that
+/// leaves `panic()` a free function.
+///
+/// Example:
+///     if args.length() == 0
+///         println("usage: prog <args>")
+///         exit(1)
+public fn exit(code int)
+    miri_rt_exit(code)

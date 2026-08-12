@@ -496,7 +496,12 @@ impl Pipeline {
     }
 
     /// Compile and execute the source, returning the process exit code.
-    pub fn run(&self, source: &str) -> Result<i32, CompilerError> {
+    ///
+    /// `program_args` become the spawned program's `argv[1..]`; the program path
+    /// itself is `argv[0]`, as for any executable. They are an input to this one
+    /// execution rather than to compilation, which is why they are a parameter
+    /// instead of builder state like the source directory or the verifier flag.
+    pub fn run(&self, source: &str, program_args: &[String]) -> Result<i32, CompilerError> {
         let temp_dir = tempfile::tempdir()
             .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
         let executable_path = temp_dir.path().join("program");
@@ -527,6 +532,7 @@ impl Pipeline {
         }
 
         let output = Command::new(&canonical_executable)
+            .args(program_args)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 

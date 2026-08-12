@@ -198,6 +198,19 @@ pub mod rt {
     pub const FS_DELETE: &str = "miri_rt_fs_delete";
     pub const FS_CWD: &str = "miri_rt_fs_cwd";
 
+    // ── OS / Environment ──────────────────────────────────────────────────────
+    pub const ENV_HAS: &str = "miri_rt_env_has";
+    pub const ENV_GET: &str = "miri_rt_env_get";
+    pub const ENV_SET: &str = "miri_rt_env_set";
+    pub const ENV_STATUS: &str = "miri_rt_env_status";
+    pub const ENV_ERROR_MESSAGE: &str = "miri_rt_env_error_message";
+    pub const ARGS_COUNT: &str = "miri_rt_args_count";
+    pub const ARGS_AT: &str = "miri_rt_args_at";
+    pub const PLATFORM: &str = "miri_rt_platform";
+
+    // ── Process ────────────────────────────────────────────────────────────────
+    pub const EXIT: &str = "miri_rt_exit";
+
     // ── Time ─────────────────────────────────────────────────────────────────
     pub const NANOTIME: &str = "miri_rt_nanotime";
 
@@ -303,6 +316,17 @@ pub mod rt {
         FS_CREATE_DIR,
         FS_DELETE,
         FS_CWD,
+        // OS / Environment
+        ENV_HAS,
+        ENV_GET,
+        ENV_SET,
+        ENV_STATUS,
+        ENV_ERROR_MESSAGE,
+        ARGS_COUNT,
+        ARGS_AT,
+        PLATFORM,
+        // Process
+        EXIT,
         // String
         STRING_NEW,
         STRING_FREE,

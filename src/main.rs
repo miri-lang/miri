@@ -76,7 +76,7 @@ fn run_command(cli: Cli) -> Result<()> {
 
 fn run_file(
     path: PathBuf,
-    _program_args: Vec<String>,
+    program_args: Vec<String>,
     _verbose: u8,
     verify_mir: bool,
 ) -> Result<()> {
@@ -92,7 +92,7 @@ fn run_file(
     }
     pipeline = pipeline.with_source_path(abs_path.display().to_string());
 
-    match pipeline.run(&source) {
+    match pipeline.run(&source, &program_args) {
         Ok(exit_code) => {
             if exit_code != 0 {
                 std::process::exit(exit_code);

@@ -7,6 +7,7 @@ pub mod abstract_methods;
 pub mod arg_count;
 pub mod basic;
 pub mod constructor;
+pub mod custom_iterable;
 pub mod drop;
 pub mod generic_class_monomorphization;
 pub mod inheritance;
