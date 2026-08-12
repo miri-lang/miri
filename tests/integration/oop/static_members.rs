@@ -368,3 +368,38 @@ fn main()
         "42",
     );
 }
+
+#[test]
+fn test_instance_and_static_collision_underlines_method_name() {
+    // The caret must cover the method's own name. It previously fell through to
+    // the first parameter's type, or to the return type for a method with no
+    // parameters, pointing the reader at the wrong token.
+    assert_compiler_error(
+        r#"
+class Registry
+    public fn lookup() int
+        return 1
+
+    public static fn lookup() int
+        return 2
+    "#,
+        "^^^^^^ Method 'lookup' cannot be both instance and static method",
+    );
+}
+
+#[test]
+fn test_instance_and_static_collision_underlines_name_with_params() {
+    // With a parameter present the old fallback underlined the parameter's
+    // type; the name span must win regardless of the signature's shape.
+    assert_compiler_error(
+        r#"
+class Registry
+    public fn resolve(key int) int
+        return key
+
+    public static fn resolve(key int) int
+        return key
+    "#,
+        "^^^^^^^ Method 'resolve' cannot be both instance and static method",
+    );
+}

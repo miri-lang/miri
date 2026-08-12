@@ -4,7 +4,7 @@
 use crate::ast::common::RuntimeKind;
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::super::utils::is_guard;
@@ -190,7 +190,7 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Fn)?;
 
-        let name = self.function_name()?;
+        let (name, name_span) = self.function_name()?;
         let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
@@ -201,33 +201,54 @@ impl<'source> Parser<'source> {
 
         let body = self.statement_body()?;
         if matches!(mode, BodyMode::Optional) && matches!(body.node, StatementKind::Empty) {
-            return Ok(ast::abstract_function_declaration(
+            return Ok(Self::with_name_span(
+                ast::abstract_function_declaration(
+                    &name,
+                    generic_types,
+                    parameters,
+                    return_type,
+                    properties,
+                ),
+                name_span,
+            ));
+        }
+        Ok(Self::with_name_span(
+            ast::function_declaration(
                 &name,
                 generic_types,
                 parameters,
                 return_type,
+                body,
                 properties,
-            ));
-        }
-        Ok(ast::function_declaration(
-            &name,
-            generic_types,
-            parameters,
-            return_type,
-            body,
-            properties,
+            ),
+            name_span,
         ))
     }
 
-    fn function_name(&mut self) -> Result<String, SyntaxError> {
+    /// Parse the declared name, returning it with its source range. An
+    /// anonymous function (a lambda, which starts at `<` or `(`) yields an
+    /// empty name and an empty span.
+    fn function_name(&mut self) -> Result<(String, Span), SyntaxError> {
         match &self.lookahead {
             Some((Token::Identifier, _)) => {
                 let token = self.eat_token(&Token::Identifier)?;
-                Ok(self.source[token.1.start..token.1.end].to_string())
+                Ok((self.source[token.1.start..token.1.end].to_string(), token.1))
             }
-            Some((Token::LessThan, _)) | Some((Token::LParen, _)) => Ok(String::new()),
+            Some((Token::LessThan, _)) | Some((Token::LParen, _)) => {
+                Ok((String::new(), Span::new(0, 0)))
+            }
             _ => Err(self.error_unexpected_lookahead_token("a function name, '(' or '<'")),
         }
+    }
+
+    /// Record the declared name's source range on a freshly built function
+    /// declaration. The AST factory has no access to source text, so the span
+    /// is attached here, where the name token was read.
+    fn with_name_span(mut declaration: Statement, name_span: Span) -> Statement {
+        if let StatementKind::FunctionDeclaration(data) = &mut declaration.node {
+            data.name_span = name_span;
+        }
+        declaration
     }
 
     fn finish_lambda(

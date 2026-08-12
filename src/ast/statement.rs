@@ -5,11 +5,18 @@ use crate::ast::attributes::Attribute;
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::Expression;
 use crate::ast::node::IdNode;
+use crate::error::syntax::Span;
+use std::hash::{Hash, Hasher};
 
 /// Data for a function declaration, boxed to reduce `StatementKind` enum size.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct FunctionDeclarationData {
     pub name: String,
+    /// Source range of the declared name, so a diagnostic about the function
+    /// itself can point at the name rather than at a neighbouring parameter or
+    /// return type. Empty for declarations built programmatically, which have
+    /// no source text to point at.
+    pub name_span: Span,
     pub generics: Option<Vec<Expression>>,
     pub params: Vec<Parameter>,
     pub return_type: Option<Box<Expression>>,
@@ -17,6 +24,34 @@ pub struct FunctionDeclarationData {
     pub body: Option<Box<Statement>>,
     pub properties: FunctionProperties,
     pub attributes: Vec<Attribute>,
+}
+
+/// Equality and hashing ignore `name_span`, matching [`IdNode`], where a node's
+/// source location is metadata rather than part of its identity. This keeps a
+/// declaration built by the AST factory (which has no source text, so no span)
+/// equal to the same declaration produced by the parser.
+impl PartialEq for FunctionDeclarationData {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.generics == other.generics
+            && self.params == other.params
+            && self.return_type == other.return_type
+            && self.body == other.body
+            && self.properties == other.properties
+            && self.attributes == other.attributes
+    }
+}
+
+impl Hash for FunctionDeclarationData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.generics.hash(state);
+        self.params.hash(state);
+        self.return_type.hash(state);
+        self.body.hash(state);
+        self.properties.hash(state);
+        self.attributes.hash(state);
+    }
 }
 
 /// Data for a class declaration, boxed to reduce `StatementKind` enum size.
