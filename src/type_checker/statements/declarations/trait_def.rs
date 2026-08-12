@@ -205,6 +205,14 @@ impl TypeChecker {
         for stmt in body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
+                    // Reject static methods in traits
+                    if decl.properties.is_static {
+                        self.report_error(
+                            "Static methods are not allowed in trait declarations".to_string(),
+                            stmt.span,
+                        );
+                    }
+
                     let return_ty = if let Some(rt_expr) = &decl.return_type {
                         self.resolve_type_expression(rt_expr, context)
                     } else {
@@ -235,6 +243,7 @@ impl TypeChecker {
                             visibility: decl.properties.visibility.clone(),
                             is_constructor: false,
                             is_abstract: method_is_abstract,
+                            is_static: false,
                         },
                     );
 

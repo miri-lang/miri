@@ -89,7 +89,8 @@ impl TypeChecker {
         let class_type = make_type(TypeKind::Custom(name.clone(), None));
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
-        let (fields, methods, method_statements) = self.check_class_collect_members(body, context);
+        let (fields, methods, method_statements) =
+            self.check_class_collect_members(body, context, generic_defs.as_ref());
 
         self.check_accelerable_impl(&name, &trait_names, &fields, name_expr);
 
@@ -481,6 +482,7 @@ impl TypeChecker {
         &mut self,
         body: &'a [Statement],
         context: &mut Context,
+        class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     ) -> (
         Vec<(String, FieldInfo)>,
         BTreeMap<String, MethodInfo>,
@@ -502,6 +504,7 @@ impl TypeChecker {
                         stmt,
                         &mut method_statements,
                         context,
+                        class_generics,
                     );
                 }
                 StatementKind::RuntimeFunctionDeclaration(
@@ -584,13 +587,61 @@ impl TypeChecker {
         stmt: &'a Statement,
         method_statements: &mut Vec<&'a Statement>,
         context: &mut Context,
+        class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     ) {
-        let return_ty = if let Some(rt_expr) = &decl.return_type {
-            self.resolve_type_expression(rt_expr, context)
-        } else {
-            make_type(TypeKind::Void)
-        };
+        // Check for duplicate method names (instance + static)
+        if let Some(existing) = methods.get(&decl.name) {
+            if existing.is_static != decl.properties.is_static {
+                // Use a more specific span from the method declaration.
+                // Prefer the first parameter's type span if available (where "self"
+                // or the first parameter would be), then the return type, then fall
+                // back to the statement span.
+                let error_span = if !decl.params.is_empty() {
+                    decl.params[0].typ.span
+                } else if let Some(ref ret) = decl.return_type {
+                    ret.span
+                } else {
+                    stmt.span
+                };
+                self.report_error(
+                    format!(
+                        "Method '{}' cannot be both instance and static method",
+                        decl.name
+                    ),
+                    error_span,
+                );
+                return;
+            }
+        }
 
+        // Validate static method constraints
+        if decl.properties.is_static {
+            if decl.name == "init" {
+                self.report_error(
+                    "Static constructors are not supported - constructor cannot be static"
+                        .to_string(),
+                    stmt.span,
+                );
+            }
+            if decl.properties.is_async {
+                self.report_error("Static methods cannot be async".to_string(), stmt.span);
+            }
+            if decl.properties.is_gpu {
+                self.report_error(
+                    "Static methods cannot be GPU kernels".to_string(),
+                    stmt.span,
+                );
+            }
+            // Reject `self` as a parameter in static methods
+            if !decl.params.is_empty() && decl.params[0].name == "self" {
+                self.report_error(
+                    "Static methods cannot have a 'self' parameter".to_string(),
+                    stmt.span,
+                );
+            }
+        }
+
+        // Resolve all parameter and return types once, for both validation and MethodInfo building
         let param_types: Vec<(String, Type)> = decl
             .params
             .iter()
@@ -601,7 +652,48 @@ impl TypeChecker {
                 )
             })
             .collect();
+        let return_ty = if let Some(rt_expr) = &decl.return_type {
+            self.resolve_type_expression(rt_expr, context)
+        } else {
+            make_type(TypeKind::Void)
+        };
         let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
+
+        // Check if static method references class generic parameters
+        if decl.properties.is_static {
+            if let Some(class_gens) = class_generics {
+                if !class_gens.is_empty() {
+                    let class_gen_names: Vec<&str> =
+                        class_gens.iter().map(|g| g.name.as_str()).collect();
+
+                    // Check parameter types for generic references (use resolved types from above)
+                    for (i, param) in decl.params.iter().enumerate() {
+                        if let Some(gen_name) =
+                            self.find_generic_in_resolved_type(&param_types[i].1, &class_gen_names)
+                        {
+                            self.report_error(
+                                Self::static_method_generic_reference_error(&decl.name, &gen_name),
+                                param.typ.span,
+                            );
+                            return;
+                        }
+                    }
+
+                    // Check return type for generic references (use resolved type from above)
+                    if let Some(gen_name) =
+                        self.find_generic_in_resolved_type(&return_ty, &class_gen_names)
+                    {
+                        if let Some(return_type_expr) = &decl.return_type {
+                            self.report_error(
+                                Self::static_method_generic_reference_error(&decl.name, &gen_name),
+                                return_type_expr.span,
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
         let method_is_abstract = decl.body.as_ref().is_none_or(|body| {
             matches!(&body.node, StatementKind::Empty)
@@ -617,6 +709,7 @@ impl TypeChecker {
                 visibility: decl.properties.visibility.clone(),
                 is_constructor: decl.name == "init",
                 is_abstract: method_is_abstract,
+                is_static: decl.properties.is_static,
             },
         );
 
@@ -1227,5 +1320,80 @@ impl TypeChecker {
             map.insert(g.name.clone(), substituted);
         }
         Some(map)
+    }
+
+    /// Find the first generic parameter name referenced in a resolved type
+    fn find_generic_in_resolved_type(&self, ty: &Type, generic_names: &[&str]) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Generic(name, _, _) => {
+                if generic_names.contains(&name.as_str()) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            TypeKind::Custom(_, Some(args)) => {
+                for arg in args {
+                    if let Some(found) = self.find_generic_in_type_expression(arg, generic_names) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Find the first generic parameter name referenced in a type expression
+    fn find_generic_in_type_expression(
+        &self,
+        expr: &Expression,
+        generic_names: &[&str],
+    ) -> Option<String> {
+        match &expr.node {
+            ExpressionKind::Identifier(name, _) => {
+                if generic_names.contains(&name.as_str()) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            ExpressionKind::TypeDeclaration(inner, type_args, _, _) => {
+                // Check the base type first
+                if let ExpressionKind::Identifier(name, _) = &inner.node {
+                    if generic_names.contains(&name.as_str()) {
+                        return Some(name.clone());
+                    }
+                }
+                // Check type arguments recursively
+                if let Some(args) = type_args {
+                    for arg in args {
+                        if let Some(found) =
+                            self.find_generic_in_type_expression(arg, generic_names)
+                        {
+                            return Some(found);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Error message for a static method referencing a class generic parameter.
+    /// Static methods have no per-instantiation body, so a signature naming a
+    /// class generic has no concrete type to specialize the body to. Use a
+    /// top-level generic function instead, which gains its own type parameter
+    /// at each call site.
+    fn static_method_generic_reference_error(method_name: &str, generic_name: &str) -> String {
+        format!(
+            "Static method '{}' cannot reference class generic parameter '{}'. \
+             A static method has no per-instantiation body: only one copy of the method \
+             exists regardless of how the class is specialized, so a signature naming a \
+             class generic parameter has nothing to link against. \
+             Consider using a top-level generic function instead.",
+            method_name, generic_name
+        )
     }
 }

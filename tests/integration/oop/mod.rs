@@ -13,6 +13,7 @@ pub mod generic_class_monomorphization;
 pub mod inheritance;
 pub mod inherited_arg_count;
 pub mod invalid_targets;
+pub mod static_members;
 pub mod super_calls;
 pub mod tensor;
 pub mod traits;

@@ -26,6 +26,7 @@ use crate::ast::types::Type;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
+use crate::type_checker::context::MethodInfo;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -141,6 +142,9 @@ pub struct TypeChecker {
     /// its diagnostics emitted) later in the body pass; suppressing here avoids
     /// duplicate or premature errors from that speculative first inference.
     pub(crate) suppress_diagnostics: bool,
+    /// Maps function names to their deprecation message (if any).
+    /// Populated during declaration collection so call sites can emit warnings.
+    pub(crate) deprecated_functions: HashMap<String, String>,
 }
 
 impl Default for TypeChecker {
@@ -172,6 +176,7 @@ impl TypeChecker {
             wide_typed_int_literals: HashSet::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
+            deprecated_functions: HashMap::new(),
         }
     }
 
@@ -254,6 +259,55 @@ impl TypeChecker {
     /// Returns the type-checking warnings.
     pub fn warnings(&self) -> &[crate::error::diagnostic::Diagnostic] {
         &self.diagnostics.warnings
+    }
+
+    /// Walk the inheritance chain to find a static method, avoiding ClassDefinition clones.
+    ///
+    /// Returns `Some((defining_class_name, method_info))` if found, `None` otherwise.
+    /// Only clones the single `MethodInfo` found, never the entire class chain.
+    /// For most use cases, use the default resolver; for visibility-checked access, pass a custom resolver.
+    pub(crate) fn find_static_method_in_chain(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(String, MethodInfo)> {
+        self.find_static_method_in_chain_with_resolver(class_name, method_name, &|name| {
+            self.type_table.global_type_definitions.get(name).cloned()
+        })
+    }
+
+    /// Walk the inheritance chain to find a static method using a custom type resolver.
+    ///
+    /// The `resolver` function is called with each class name in the chain to resolve
+    /// its TypeDefinition. This allows both direct lookups and visibility-checked lookups.
+    /// Only clones the single `MethodInfo` found, never the entire class chain.
+    pub(crate) fn find_static_method_in_chain_with_resolver<F>(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        resolver: &F,
+    ) -> Option<(String, MethodInfo)>
+    where
+        F: Fn(&str) -> Option<TypeDefinition>,
+    {
+        let mut current_class_name = class_name.to_string();
+
+        loop {
+            if let Some(TypeDefinition::Class(class_def)) = resolver(&current_class_name) {
+                if let Some(method_info) = class_def.methods.get(method_name) {
+                    return Some((current_class_name, method_info.clone()));
+                }
+
+                // Move to base class if it exists
+                if let Some(base_name) = &class_def.base_class {
+                    current_class_name = base_name.clone();
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
     }
 
     /// Main entry point for type checking a program.
@@ -800,6 +854,7 @@ impl TypeChecker {
                     visibility: decl.properties.visibility.clone(),
                     is_constructor: decl.name == "init",
                     is_abstract,
+                    is_static: false,
                 },
             );
         }

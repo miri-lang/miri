@@ -10,6 +10,9 @@ pub const NON_EXHAUSTIVE_ATTRIBUTE: &str = "non_exhaustive";
 /// Marks a type whose values may not be silently discarded.
 pub const MUST_USE_ATTRIBUTE: &str = "must_use";
 
+/// Marks a declaration as deprecated with an optional migration message.
+pub const DEPRECATED_ATTRIBUTE: &str = "deprecated";
+
 /// Represents a declaration that can carry attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {

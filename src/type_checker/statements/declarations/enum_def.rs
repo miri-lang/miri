@@ -179,6 +179,7 @@ impl TypeChecker {
                         visibility: MemberVisibility::Public,
                         is_constructor: false,
                         is_abstract: false,
+                        is_static: false,
                     },
                 );
                 method_statements.push(method_stmt);

@@ -124,7 +124,7 @@ at module level are private and may change without notice.
 | `map`        | `map::ffi`                  | `miri_rt_map_new`, `miri_rt_map_free`, `miri_rt_map_len`, … |
 | `io`         | `io::ffi`                   | `miri_rt_print`, `miri_rt_println`, `miri_rt_eprint`, `miri_rt_eprintln`, `miri_rt_get_line_end` |
 | `string`     | `string::ffi`               | `miri_rt_string_new`, `miri_rt_string_free`, `miri_rt_string_len`, … |
-| `time`       | `time::ffi`                 | `miri_rt_nanotime`                                 |
+| `time`       | `time::ffi`                 | `miri_rt_nanotime`, `miri_rt_sleep_nanos`         |
 | `tuple`      | `tuple::ffi`                | `miri_rt_tuple_len`                                |
 
 All symbols are also re-exported at the crate root via `pub use {module}::ffi::*` in

@@ -19,6 +19,7 @@ pub struct FunctionProperties {
     pub is_async: bool,
     pub is_parallel: bool,
     pub is_gpu: bool,
+    pub is_static: bool,
     pub visibility: MemberVisibility,
 }
 

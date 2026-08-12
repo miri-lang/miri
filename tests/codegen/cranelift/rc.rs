@@ -52,6 +52,7 @@ fn clone_method() -> MethodInfo {
         visibility: MemberVisibility::Public,
         is_constructor: false,
         is_abstract: false,
+        is_static: false,
     }
 }
 

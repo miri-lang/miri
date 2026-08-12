@@ -225,6 +225,28 @@ impl<'source> Parser<'source> {
             mode
         };
 
+        // Check for contextual `static fn` pattern
+        if self.is_static_fn_pattern() {
+            if is_abstract_method {
+                return Err(self.error_unexpected_token(
+                    "method declaration",
+                    "static method cannot be abstract",
+                ));
+            }
+            self.eat_token(&Token::Identifier)?; // consume "static"
+
+            // Parse the remaining modifiers (async, parallel, gpu) without the static check
+            let mut properties = crate::ast::common::FunctionProperties {
+                is_async: false,
+                is_parallel: false,
+                is_gpu: false,
+                is_static: true,
+                visibility,
+            };
+            self.continue_function_modifiers(&mut properties)?;
+            return self.function_declaration_after_modifiers(effective_mode, properties);
+        }
+
         match &self.lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
                 if is_abstract_method {
@@ -333,6 +355,16 @@ impl<'source> Parser<'source> {
                 }
             }
             _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str())),
+        }
+    }
+
+    /// Checks if the lookahead is the contextual keyword "static" followed by "fn".
+    /// Used to disambiguate `static fn` from a field named `static`.
+    fn is_static_fn_pattern(&self) -> bool {
+        if let Some((Token::Identifier, span)) = &self.lookahead {
+            &self.source[span.start..span.end] == "static"
+        } else {
+            false
         }
     }
 }

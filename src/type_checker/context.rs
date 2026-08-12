@@ -176,6 +176,8 @@ pub struct MethodInfo {
     pub is_constructor: bool,
     /// Whether this method is abstract (no body).
     pub is_abstract: bool,
+    /// Whether this method is static (no implicit receiver).
+    pub is_static: bool,
 }
 
 impl MethodInfo {
@@ -401,6 +403,8 @@ pub struct Context {
     pub current_base_class: Option<String>,
     /// The type of the current class (for self expression type inference).
     pub current_class_type: Option<Type>,
+    /// Whether we are currently inside a static method (cannot use `self`).
+    pub in_static_method: bool,
     /// Escape summaries for all functions analyzed so far.
     /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
     /// Populated during escape analysis; empty until then.
@@ -426,6 +430,7 @@ impl Context {
             current_class: None,
             current_base_class: None,
             current_class_type: None,
+            in_static_method: false,
             escape_summaries: load_ffi_summaries(),
             suppress_must_use: false,
         }
