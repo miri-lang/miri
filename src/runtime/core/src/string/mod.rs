@@ -17,6 +17,7 @@ mod constructors;
 mod conversion;
 mod core;
 mod inspection;
+mod operations;
 mod transformation;
 
 pub use core::MiriString;

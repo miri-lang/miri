@@ -41,6 +41,7 @@ pub mod set;
 pub mod strings;
 pub mod structs;
 pub mod testing;
+pub mod text;
 pub mod time;
 pub mod tuple;
 pub mod type_alias;

@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod basic;
+pub mod completion;
 pub mod errors;
 pub mod integration;
 pub mod interpolation;

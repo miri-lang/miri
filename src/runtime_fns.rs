@@ -169,6 +169,14 @@ pub mod rt {
     pub const STRING_SUBSTRING: &str = "miri_rt_string_substring";
     pub const STRING_REPEAT: &str = "miri_rt_string_repeat";
     pub const STRING_CHAR_AT: &str = "miri_rt_string_char_at";
+    pub const STRING_SPLIT: &str = "miri_rt_string_split";
+    pub const STRING_JOIN: &str = "miri_rt_string_join";
+    pub const STRING_PARSE_INT: &str = "miri_rt_string_parse_int";
+    pub const STRING_PARSE_INT_STATUS: &str = "miri_rt_string_parse_int_status";
+    pub const STRING_PARSE_FLOAT: &str = "miri_rt_string_parse_float";
+    pub const STRING_PARSE_FLOAT_STATUS: &str = "miri_rt_string_parse_float_status";
+    pub const STRING_PARSE_STATUS: &str = "miri_rt_string_parse_status";
+    pub const STRING_NEXT_CHAR_BOUNDARY: &str = "miri_rt_string_next_char_boundary";
 
     // ── String conversion ────────────────────────────────────────────────────
     /// Compiler-internal: used by the codegen for int → String coercions.
@@ -214,6 +222,17 @@ pub mod rt {
     // ── Time ─────────────────────────────────────────────────────────────────
     pub const NANOTIME: &str = "miri_rt_nanotime";
     pub const SLEEP_NANOS: &str = "miri_rt_sleep_nanos";
+
+    // ── Regex ─────────────────────────────────────────────────────────────────
+    pub const REGEX_COMPILE: &str = "miri_rt_regex_compile";
+    pub const REGEX_COMPILE_STATUS: &str = "miri_rt_regex_compile_status";
+    pub const REGEX_COMPILE_MESSAGE: &str = "miri_rt_regex_compile_message";
+    pub const REGEX_MATCHES: &str = "miri_rt_regex_matches";
+    pub const REGEX_FIND: &str = "miri_rt_regex_find";
+    pub const REGEX_FIND_FROM: &str = "miri_rt_regex_find_from";
+    pub const REGEX_MATCH_START: &str = "miri_rt_regex_match_start";
+    pub const REGEX_MATCH_END: &str = "miri_rt_regex_match_end";
+    pub const REGEX_REPLACE: &str = "miri_rt_regex_replace";
 
     // ── Complete symbol table ────────────────────────────────────────────────
     //
@@ -350,6 +369,14 @@ pub mod rt {
         STRING_SUBSTRING,
         STRING_REPEAT,
         STRING_CHAR_AT,
+        STRING_SPLIT,
+        STRING_JOIN,
+        STRING_PARSE_INT,
+        STRING_PARSE_INT_STATUS,
+        STRING_PARSE_FLOAT,
+        STRING_PARSE_FLOAT_STATUS,
+        STRING_PARSE_STATUS,
+        STRING_NEXT_CHAR_BOUNDARY,
         // String conversion (compiler-internal)
         BOOL_TO_STRING,
         FLOAT_TO_STRING,
@@ -359,6 +386,16 @@ pub mod rt {
         // Time
         NANOTIME,
         SLEEP_NANOS,
+        // Regex
+        REGEX_COMPILE,
+        REGEX_COMPILE_STATUS,
+        REGEX_COMPILE_MESSAGE,
+        REGEX_MATCHES,
+        REGEX_FIND,
+        REGEX_FIND_FROM,
+        REGEX_MATCH_START,
+        REGEX_MATCH_END,
+        REGEX_REPLACE,
     ];
 }
 
