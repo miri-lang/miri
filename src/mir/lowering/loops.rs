@@ -9,7 +9,7 @@ use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
     BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
-    VariableDeclaration, WhileStatementType,
+    VariableDeclaration, WhileStatementType, ITERABLE_TRAIT_NAME,
 };
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -288,8 +288,34 @@ fn resolve_loop_elem_type(
         {
             super::resolve_type(ctx.type_checker, &args[0])
         }
+        // A class implementing `Iterable<T>` yields `T`. Falling through to the
+        // iterable's own type would give the loop variable the class's type, so a
+        // managed element would be released through the wrong drop path while its
+        // own allocation was never released.
+        TypeKind::Custom(name, _)
+            if BuiltinCollectionKind::from_name(name).is_none()
+                && name != crate::ast::types::TUPLE_TYPE_NAME =>
+        {
+            resolve_iterable_trait_element_type(ctx, name).unwrap_or_else(|| ty.clone())
+        }
         _ => ty.clone(),
     }
+}
+
+/// Resolve the element type a class yields as `Iterable<T>`, read from the trait
+/// arguments recorded on its definition. `None` when the class does not implement
+/// the trait or leaves its type argument unspecified.
+fn resolve_iterable_trait_element_type(ctx: &LoweringContext, class_name: &str) -> Option<Type> {
+    let Some(TypeDefinition::Class(class_def)) =
+        ctx.type_checker.type_definitions().get(class_name)
+    else {
+        return None;
+    };
+    class_def
+        .trait_args
+        .get(ITERABLE_TRAIT_NAME)?
+        .first()
+        .cloned()
 }
 
 /// Allocate the optional second loop variable (index, or map value), if present.
@@ -394,7 +420,7 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
         .filter(|name| {
             matches!(
                 ctx.type_checker.type_definitions().get(name),
-                Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == "Iterable")
+                Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == ITERABLE_TRAIT_NAME)
             )
         })
 }

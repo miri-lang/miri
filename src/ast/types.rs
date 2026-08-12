@@ -34,6 +34,13 @@ pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
 /// spelling. Mirrors [`CLONEABLE_TRAIT_NAME`].
 pub const ACCELERABLE_TRAIT_NAME: &str = "Accelerable";
 
+/// Canonical name of the stdlib `Iterable<T>` trait.
+///
+/// Centralized so the for-loop type checker and MIR lowering share one
+/// spelling for the trait name. Used to recognize both built-in iterables
+/// (String, Range) and user-defined classes that implement the trait.
+pub const ITERABLE_TRAIT_NAME: &str = "Iterable";
+
 /// Canonical class name for the built-in `Result<T, E>` sum type.
 ///
 /// `TypeKind::Result(ok, err)` is normalized to

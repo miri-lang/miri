@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Environment variables and command-line arguments for Miri.
+///
+/// Provides access to environment variables through the `Env` capability class
+/// and to command-line arguments through `Args`, which implements
+/// `Iterable<String>` so it works directly in a `for` loop.
+///
+/// This module holds two capability classes rather than one primary type: they
+/// share a single concern (the process's view of its environment) and splitting
+/// them would put one class in a file of its own with no other content.
+///
+/// Programs that call `Env.set` must import `system.result` BEFORE `system.os`,
+/// because a stdlib module's own `use system.result` does not make `Result`
+/// visible while that module is being checked.
+///
+/// Example:
+///     use system.result
+///     use system.os
+///     let env = Env()
+///     match env.get("PATH")
+///         Some(value): println(value)
+///         None: println("PATH not set")
+///     let args = Args()
+///     for arg in args
+///         println(arg)
+
+use system.ops
+use system.result
+
+/// Represents an environment variable operation error.
+@non_exhaustive
+public enum EnvError
+    InvalidName(String)
+    InvalidValue(String)
+    Other(String)
+
+/// Environment variable capability class. Acquire a handle with `let env = Env()`.
+public class Env
+
+    runtime "core" fn miri_rt_env_has(name String) int
+    runtime "core" fn miri_rt_env_get(name String) String
+    runtime "core" fn miri_rt_env_set(name String, value String) int
+    runtime "core" fn miri_rt_env_status() int
+    runtime "core" fn miri_rt_env_error_message() String
+
+    /// Returns the value of an environment variable, or None if it is not set.
+    ///
+    /// A variable set to the empty string returns Some(""), which is distinct
+    /// from an unset variable returning None.
+    ///
+    /// Note: the returned string is not released when the Option is destructed,
+    /// so memory grows if results are read in a loop. This is a compiler-level gap
+    /// in releasing a managed payload held inside an Option, not an Env bug; a
+    /// plain function returning `String?` leaks the same way.
+    ///
+    /// Example:
+    ///     let env = Env()
+    ///     match env.get("HOME")
+    ///         Some(home): println(home)
+    ///         None: println("HOME not set")
+    public fn get(name String) String?
+        Some(miri_rt_env_get(name)) if miri_rt_env_has(name) == 1 else None
+
+    /// Sets an environment variable for this process and its children.
+    /// Returns Ok(true) if an existing value was replaced, Ok(false) if the
+    /// variable was newly created.
+    ///
+    /// Example:
+    ///     let env = Env()
+    ///     match env.set("MY_VAR", "value")
+    ///         Result.Ok(was_replaced): println(f"replaced: {was_replaced}")
+    ///         Result.Err(e): println("error")
+    public fn set(name String, value String) Result<bool, EnvError>
+        let replaced = miri_rt_env_set(name, value)
+        let status = miri_rt_env_status()
+        match status
+            0: Result.Ok(replaced == 1)
+            1: Result.Err(EnvError.InvalidName(name))
+            2: Result.Err(EnvError.InvalidValue(value))
+            default: Result.Err(EnvError.Other(miri_rt_env_error_message()))
+
+/// Command-line arguments passed to the program, excluding the program path.
+/// Implements `Iterable<String>`, so `for arg in args` iterates the arguments.
+///
+/// Example:
+///     let args = Args()
+///     for arg in args
+///         println(arg)
+public class Args implements Iterable<String>
+
+    runtime "core" fn miri_rt_args_count() int
+    runtime "core" fn miri_rt_args_at(index int) String
+
+    /// Returns the number of arguments, excluding the program path.
+    ///
+    /// Example:
+    ///     let args = Args()
+    ///     println(f"argument count: {args.length()}")
+    public fn length() int
+        return miri_rt_args_count()
+
+    /// Returns the argument at the given 0-based index.
+    /// An out-of-range index reports a bounds error and terminates the process,
+    /// the same way array indexing does.
+    ///
+    /// Example:
+    ///     let args = Args()
+    ///     if args.length() > 0
+    ///         println(args.element_at(0))
+    public fn element_at(index int) String
+        return miri_rt_args_at(index)
+
+runtime "core" fn miri_rt_platform() String
+
+/// Returns the name of the host platform, such as "macos", "linux" or "windows".
+///
+/// This is a free function rather than a capability method because it reports a
+/// build-time constant of the runtime rather than mutable world state.
+///
+/// Example:
+///     println(platform())
+public fn platform() String
+    return miri_rt_platform()

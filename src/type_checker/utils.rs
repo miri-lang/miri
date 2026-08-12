@@ -14,9 +14,9 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
     vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
-    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
-    SET_LOWERCASE_ALIAS, WARP_CONTEXT_TYPE_NAME,
+    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME,
+    LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS,
+    RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -1575,7 +1575,8 @@ impl TypeChecker {
 
     /// Extracts the element type from an iterable type.
     ///
-    /// Supports: List<T>, Set<T>, Map<K,V>, String, Range<T>
+    /// Supports: List<T>, Set<T>, Map<K,V>, String, Range<T>, and any custom class
+    /// that implements Iterable<T>.
     pub(crate) fn get_iterable_element_type(&mut self, ty: &Type, span: Span) -> Type {
         match &ty.kind {
             TypeKind::String => make_type(TypeKind::String),
@@ -1623,6 +1624,28 @@ impl TypeChecker {
                             .unwrap_or_else(|_| Self::error_type());
                     }
                 }
+                Self::error_type()
+            }
+            TypeKind::Custom(name, _) => {
+                if let Some(TypeDefinition::Class(class_def)) =
+                    self.type_table.global_type_definitions.get(name)
+                {
+                    if let Some(trait_args) = class_def.trait_args.get(ITERABLE_TRAIT_NAME) {
+                        // A class that names its element type yields that type. One
+                        // that implements `Iterable` bare is normally rejected earlier,
+                        // because its `element_at` cannot match the trait signature;
+                        // the placeholder keeps this arm total if such a class ever
+                        // reaches here.
+                        return trait_args.first().cloned().unwrap_or_else(|| {
+                            make_type(TypeKind::Generic(
+                                "T".to_string(),
+                                None,
+                                TypeDeclarationKind::None,
+                            ))
+                        });
+                    }
+                }
+                self.report_error(format!("Type {} is not iterable", ty), span);
                 Self::error_type()
             }
             TypeKind::Error => Self::error_type(),

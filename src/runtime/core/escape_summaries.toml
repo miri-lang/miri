@@ -87,3 +87,15 @@ direct_escapes = []
 
 [miri_rt_eprintln]
 direct_escapes = []
+
+# ── Environment variable queries ──────────────────────────────────────────────
+# These read their string arguments but do not store them.
+
+[miri_rt_env_has]
+direct_escapes = []
+
+[miri_rt_env_get]
+direct_escapes = []
+
+[miri_rt_env_set]
+direct_escapes = []

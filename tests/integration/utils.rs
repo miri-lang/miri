@@ -68,6 +68,34 @@ pub fn assert_runs_with_output(code: &str, expected_output: &str) {
     }
 }
 
+/// Assert that the code successfully compiles to an executable with program arguments
+/// and prints the expected output.
+pub fn assert_runs_with_args_and_output(code: &str, args: &[&str], expected_output: &str) {
+    use crate::utils::miri_run_with_args;
+
+    let result = miri_run_with_args(code, args);
+
+    if !result.success {
+        if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
+            panic!("Memory leak detected:\n{}", result.output());
+        }
+        panic!(
+            "Expected program to compile and run successfully with args {:?}, but it failed:\n{}",
+            args,
+            result.output()
+        );
+    }
+
+    if !result.output().contains(expected_output) {
+        panic!(
+            "Expected output '{}' not found in output (with args {:?}):\n{}",
+            expected_output,
+            args,
+            result.output()
+        );
+    }
+}
+
 pub fn assert_operation_outputs(operations: &[(&str, &str)]) {
     let statements = operations
         .iter()

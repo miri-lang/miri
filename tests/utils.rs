@@ -45,8 +45,9 @@ impl CompilerResult {
     }
 }
 
-/// Execute Miri binary with given command
-fn exec_miri(command: &str, input: &str) -> CompilerResult {
+/// Execute Miri binary with given command, forwarding `program_args` to the
+/// compiled program after a `--` separator when any are given.
+fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResult {
     use std::path::PathBuf;
 
     let mut file = NamedTempFile::new().unwrap();
@@ -83,6 +84,11 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
             .arg(command)
             .arg(&path);
 
+        if !program_args.is_empty() {
+            cmd.arg("--");
+            cmd.args(program_args);
+        }
+
         // Serialize GPU program runs so only one process creates/tears down a
         // device at a time; a poisoned lock is irrelevant (it guards no state).
         let output = {
@@ -106,17 +112,22 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
 
 /// Run Miri binary with 'check' command (type-checking only)
 pub fn miri_check(input: &str) -> CompilerResult {
-    exec_miri("check", input)
+    exec_miri("check", input, &[])
 }
 
 /// Run Miri binary with 'build' command (compilation)
 pub fn miri_build(input: &str) -> CompilerResult {
-    exec_miri("build", input)
+    exec_miri("build", input, &[])
 }
 
 /// Run Miri binary with 'run' command (compilation + execution)
 pub fn miri_run(input: &str) -> CompilerResult {
-    exec_miri("run", input)
+    exec_miri("run", input, &[])
+}
+
+/// Run Miri binary with 'run' command, forwarding `args` to the compiled program.
+pub fn miri_run_with_args(input: &str, args: &[&str]) -> CompilerResult {
+    exec_miri("run", input, args)
 }
 
 /// Run a multi-file Miri project.
