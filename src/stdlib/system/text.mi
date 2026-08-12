@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Text processing operations including regular expressions.
+///
+/// Regex, Match, and RegexError are one concern: patterns are compiled once
+/// and cached in a runtime slab, then used for multiple operations. A compiled
+/// Regex retains its entry for the process lifetime (never destructed), which
+/// is acceptable because patterns are compile-once shared resources.
+/// See the Regex class doc comment for details on resource lifecycle.
+///
+/// Example:
+///     use system.text
+///     let pattern_result = Regex.compile("[0-9]+")
+///     match pattern_result
+///         Result.Ok(regex):
+///             if regex.matches("abc123")
+///                 println("found digits")
+///         Result.Err(e): println("compile error")
+
+use system.result
+use system.string
+use system.collections.list
+
+/// Represents a regex compilation or operation error.
+@non_exhaustive
+public enum RegexError
+    SyntaxError(String)
+    SizeExceeded(String)
+    Other(String)
+
+/// A match result carrying the byte range and matched text.
+///
+/// Match is a value object with private fields accessed via public methods.
+/// The start and end offsets are byte positions in the subject string,
+/// corresponding to the byte indices used by `String.substring()`.
+///
+/// Example:
+///     use system.text
+///     let result = Regex.compile("[a-z]+")
+///     match result
+///         Result.Ok(pattern):
+///             let m = pattern.find("hello 123")
+///             match m
+///                 Some(match_obj):
+///                     println(f"found '{match_obj.text()}' at {match_obj.start()}")
+///                 None: println("no match")
+///         Result.Err(e): println("error")
+public class Match
+    private var start_pos int
+    private var end_pos int
+    private var matched_text String
+
+    fn init(start int, end int, text String)
+        self.start_pos = start
+        self.end_pos = end
+        self.matched_text = text
+
+    /// Returns the start byte offset of the match (inclusive).
+    public fn start() int
+        return self.start_pos
+
+    /// Returns the end byte offset of the match (exclusive).
+    public fn end() int
+        return self.end_pos
+
+    /// Returns the matched text substring.
+    public fn text() String
+        return self.matched_text
+
+/// A compiled regular expression pattern cached in the runtime slab.
+///
+/// Regex patterns are compiled once and retained for the process lifetime.
+/// This trade-off—accepting a bounded slab leak—is justified because:
+/// (a) patterns are typically compile-once, never-destructed shared resources,
+/// (b) a Regex wrapped in Result<Regex, RegexError> cannot have a drop thunk
+///     (Result is an enum, so emit_drop_custom never recurses into the payload),
+/// (c) a destructor that never fires is worse than no destructor.
+///
+/// The handle is an opaque index into a thread-local slab; every intrinsic
+/// that accepts a handle validates bounds and fails gracefully on invalid input.
+///
+/// Example:
+///     use system.text
+///     use system.collections.list
+///     let result = Regex.compile("[0-9]+")
+///     match result
+///         Result.Ok(pattern):
+///             if pattern.matches("123"): println("all digits")
+///             let nums = pattern.find_all("a1b2c3")
+///             println(f"found {nums.length()} numbers")
+///         Result.Err(e): println("error")
+public class Regex
+
+    private var handle int
+
+    fn init(handle int)
+        self.handle = handle
+
+    runtime "core" fn miri_rt_regex_compile(pattern String) int
+    runtime "core" fn miri_rt_regex_compile_status() int
+    runtime "core" fn miri_rt_regex_compile_message() String
+    runtime "core" fn miri_rt_regex_matches(handle int, text String) bool
+    runtime "core" fn miri_rt_regex_find(handle int, text String) bool
+    runtime "core" fn miri_rt_regex_find_from(handle int, text String, start_pos int) bool
+    runtime "core" fn miri_rt_regex_match_start() int
+    runtime "core" fn miri_rt_regex_match_end() int
+    runtime "core" fn miri_rt_regex_replace(handle int, text String, replacement String) String
+    runtime "core" fn miri_rt_string_next_char_boundary(s String, byte_pos int) int
+
+    /// Compiles a regex pattern into a reusable Regex object.
+    ///
+    /// The pattern is validated at compile time. If compilation fails, returns
+    /// Err with a RegexError describing the problem.
+    ///
+    /// Example:
+    ///     use system.text
+    ///     let result = Regex.compile("[0-9]+")
+    ///     match result
+    ///         Result.Ok(pattern):
+    ///             if pattern.matches("456"): println("found digits")
+    ///         Result.Err(e): println("error")
+    public static fn compile(pattern String) Result<Regex, RegexError>
+        let handle = miri_rt_regex_compile(pattern)
+        let status = miri_rt_regex_compile_status()
+        match status
+            0: Result.Ok(Regex(handle: handle))
+            1: Result.Err(RegexError.SyntaxError(miri_rt_regex_compile_message()))
+            2: Result.Err(RegexError.SizeExceeded(miri_rt_regex_compile_message()))
+            default: Result.Err(RegexError.Other(miri_rt_regex_compile_message()))
+
+    /// Returns true if the pattern matches anywhere in the input string.
+    ///
+    /// To match an entire string, anchor the pattern with `^` and `$`, e.g., `^[0-9]+$`.
+    ///
+    /// Example:
+    ///     use system.text
+    ///     let result = Regex.compile("[0-9]+")
+    ///     match result
+    ///         Result.Ok(pattern):
+    ///             if pattern.matches("abc123")
+    ///                 println("found digits")
+    ///             else
+    ///                 println("no digits")
+    ///         Result.Err(e): println("error")
+    public fn matches(text String) bool
+        return miri_rt_regex_matches(self.handle, text)
+
+    /// Returns the first match of the pattern in the input string, or None.
+    ///
+    /// Example:
+    ///     use system.text
+    ///     let result = Regex.compile("[0-9]+")
+    ///     match result
+    ///         Result.Ok(pattern):
+    ///             let m = pattern.find("hello 123 world")
+    ///             match m
+    ///                 Some(match_obj): println(f"found: {match_obj.text()}")
+    ///                 None: println("no match")
+    ///         Result.Err(e): println("error")
+    public fn find(text String) Match?
+        if miri_rt_regex_find(self.handle, text)
+            let start = miri_rt_regex_match_start()
+            let end = miri_rt_regex_match_end()
+            let matched = text.substring(start, end)
+            Some(Match(start: start, end: end, text: matched))
+        else
+            None
+
+    /// Returns a list of all non-overlapping matches of the pattern in the input string.
+    ///
+    /// If the pattern matches zero-width strings (e.g., `a*` against `"bbb"`),
+    /// the loop advances past each empty match to ensure termination and to
+    /// respect UTF-8 boundaries. An input with no matches returns an empty list.
+    ///
+    /// Example:
+    ///     use system.text
+    ///     use system.collections.list
+    ///     let result = Regex.compile("[0-9]+")
+    ///     match result
+    ///         Result.Ok(pattern):
+    ///             let nums = pattern.find_all("a1b2c3")
+    ///             for m in nums
+    ///                 println(f"number: {m.text()}")
+    ///         Result.Err(e): println("error")
+    public fn find_all(text String) [Match]
+        let result = List<Match>()
+        let size = text.size()
+        var pos = 0
+        while pos <= size
+            if miri_rt_regex_find_from(self.handle, text, pos)
+                let start = miri_rt_regex_match_start()
+                let end = miri_rt_regex_match_end()
+                let matched = text.substring(start, end)
+                result.push(Match(start: start, end: end, text: matched))
+                if start != end
+                    pos = end
+                else if start >= size
+                    pos = size + 1
+                else
+                    pos = miri_rt_string_next_char_boundary(text, start)
+            else
+                pos = size + 1
+        return result
+
+    /// Replaces all non-overlapping matches with a literal replacement string.
+    ///
+    /// Capture-group references like `$1` are NOT supported; the replacement
+    /// is treated as a literal string. To construct a dynamic replacement,
+    /// use `find_all()` to locate matches and reconstruct the result manually.
+    ///
+    /// Example:
+    ///     use system.text
+    ///     let result = Regex.compile("[0-9]+")
+    ///     match result
+    ///         Result.Ok(pattern):
+    ///             let replaced = pattern.replace("a1b2c3", "X")
+    ///             println(replaced)
+    ///         Result.Err(e): println("error")
+    public fn replace(text String, to String) String
+        return miri_rt_regex_replace(self.handle, text, to)

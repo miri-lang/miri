@@ -36,6 +36,13 @@ public class String implements Equatable, Addable, Multiplicable, Iterable<Strin
     runtime "core" fn miri_rt_string_free(s String)
     runtime "core" fn miri_rt_string_repeat(s String, count int) String
     runtime "core" fn miri_rt_string_char_at(s String, index int) String
+    runtime "core" fn miri_rt_string_split(s String, separator String) [String]
+    runtime "core" fn miri_rt_string_join(separator String, parts [String]) String
+    runtime "core" fn miri_rt_string_parse_int(s String) int
+    runtime "core" fn miri_rt_string_parse_int_status() int
+    runtime "core" fn miri_rt_string_parse_float(s String) float
+    runtime "core" fn miri_rt_string_parse_float_status() int
+    runtime "core" fn miri_rt_string_next_char_boundary(s String, byte_pos int) int
 
     // =========================================================================
     // Constructors
@@ -137,6 +144,86 @@ public class String implements Equatable, Addable, Multiplicable, Iterable<Strin
     public fn element_at(index int) String
         return miri_rt_string_char_at(self, index)
 
+    /// Splits the string at each occurrence of the separator substring.
+    ///
+    /// Separators are removed from the result. Empty fields are preserved.
+    /// If the separator is not found, returns a list with one element: the original string.
+    /// An empty separator splits into individual characters.
+    /// An empty string splits into a list with one empty string element.
+    ///
+    /// Example:
+    ///     "a,b,c".split(",") → ["a", "b", "c"]
+    ///     "a,,b".split(",") → ["a", "", "b"]
+    ///     "abc".split("") → ["a", "b", "c"]
+    ///     "".split(",") → [""]
+    public fn split(separator String) [String]
+        return miri_rt_string_split(self, separator)
+
+    /// Joins the elements of a list with this string as the separator.
+    ///
+    /// This is the inverse of split. The receiver is the separator (Python-style).
+    /// An empty list returns an empty string.
+    /// A single-element list returns that element unchanged.
+    ///
+    /// Note: This method deviates from PRINCIPLES.md §12 R1 ("operation on T is a method on T")
+    /// because Miri's trait system cannot constrain a `List<T>` method to `T = String`.
+    /// The practical consequence: join() is a method on the separator, not on the list.
+    ///
+    /// Example:
+    ///     ",".join(["a", "b", "c"]) → "a,b,c"
+    ///     ",".join([]) → ""
+    ///     "".join(["a", "b"]) → "ab"
+    public fn join(parts [String]) String
+        return miri_rt_string_join(self, parts)
+
+    /// Parses the string as an integer.
+    ///
+    /// Returns Some(n) if the string is a valid integer in decimal notation.
+    /// Returns None if the string is empty, contains non-numeric characters (except
+    /// a leading minus sign), or the value overflows/underflows an int.
+    ///
+    /// Whitespace is NOT automatically trimmed. Use .trim() if trimming is needed.
+    ///
+    /// Example:
+    ///     "42".to_int() → Some(42)
+    ///     "-42".to_int() → Some(-42)
+    ///     "".to_int() → None
+    ///     "  42  ".to_int() → None
+    ///     "not a number".to_int() → None
+    public fn to_int() int?
+        let value = miri_rt_string_parse_int(self)
+        let status = miri_rt_string_parse_int_status()
+        if status == 0
+            Some(value)
+        else
+            None
+
+    /// Parses the string as a floating-point number.
+    ///
+    /// Returns Some(f) if the string is a valid floating-point literal in IEEE notation.
+    /// The input may include special values: "inf", "infinity", "NaN", and overflowing
+    /// magnitudes that round to infinity per IEEE 754 rules.
+    /// Returns None if the string is empty, contains non-numeric characters (except
+    /// a leading minus sign, decimal point, 'e'/'E', or special literals), or cannot
+    /// be parsed as a valid float.
+    ///
+    /// Whitespace is NOT automatically trimmed. Use .trim() if trimming is needed.
+    ///
+    /// Example:
+    ///     "3.14".to_float() → Some(3.14)
+    ///     "42".to_float() → Some(42.0)
+    ///     "-3.14".to_float() → Some(-3.14)
+    ///     "1e400".to_float() → Some(inf)
+    ///     "NaN".to_float() → Some(NaN)
+    ///     "".to_float() → None
+    ///     "  3.14  ".to_float() → None
+    public fn to_float() float?
+        let value = miri_rt_string_parse_float(self)
+        let status = miri_rt_string_parse_float_status()
+        if status == 0
+            Some(value)
+        else
+            None
 
 
     // =========================================================================
