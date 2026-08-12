@@ -71,6 +71,15 @@ pub const OPTION_TYPE_NAME: &str = "Option";
 /// stdlib method-registry lookups.
 pub const STRING_TYPE_NAME: &str = "String";
 
+/// Canonical spelling of the `Self` type keyword.
+///
+/// `Self` names the enclosing class or trait inside its own body. It is a
+/// language keyword rather than a declared type, so it never appears in
+/// `type_definitions`: any consumer that resolves type names by lookup must
+/// substitute the enclosing type first. Centralized so that substitution and
+/// the reserved-name checks share one spelling.
+pub const SELF_TYPE_NAME: &str = "Self";
+
 /// Canonical name for the built-in `Linear<T>` ownership wrapper type.
 ///
 /// `TypeKind::Linear(t)` is created by `resolve_builtin_type_alias` when

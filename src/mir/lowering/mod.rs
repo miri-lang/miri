@@ -30,7 +30,7 @@ pub mod variable;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use crate::error::lowering::LoweringError;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
@@ -171,6 +171,118 @@ pub fn lower_function_with_kernel_namer(
     }
 
     finalize_body(&mut ctx, ast_func.span)
+}
+
+/// Replace the `Self` type keyword with the enclosing type throughout `ty`.
+///
+/// `Self` is a keyword, not a declared type, so it is absent from
+/// `type_definitions`. Codegen resolves a field projection by looking the
+/// receiver's type name up in that map, and a miss falls back to pointer-sized
+/// fields at offset zero — which omits the vtable pointer that a
+/// trait-implementing class stores in its first slot. A `Self`-typed binding
+/// left unsubstituted therefore reads every field one slot early and returns
+/// wrong values with no diagnostic, so substitution happens here, before any
+/// type reaches layout.
+///
+/// Recurses through the wrappers a `Self` can nest inside (`Self?`,
+/// `List<Self>`, tuples, results, futures) so nested spellings resolve too.
+pub(crate) fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
+    let substituted_kind = match &ty.kind {
+        TypeKind::Custom(name, None) if name == SELF_TYPE_NAME => return self_type.clone(),
+        TypeKind::Custom(name, Some(args)) => TypeKind::Custom(
+            name.clone(),
+            Some(substitute_self_in_type_args(args, self_type)),
+        ),
+        TypeKind::Option(inner) => {
+            TypeKind::Option(Box::new(substitute_self_type(inner, self_type)))
+        }
+        TypeKind::Linear(inner) => {
+            TypeKind::Linear(Box::new(substitute_self_type(inner, self_type)))
+        }
+        TypeKind::Tuple(elements) => {
+            TypeKind::Tuple(substitute_self_in_type_args(elements, self_type))
+        }
+        TypeKind::Result(ok, err) => {
+            let mut both = substitute_self_in_type_args(&[*ok.clone(), *err.clone()], self_type);
+            let substituted_err = both.pop().unwrap_or_else(|| *err.clone());
+            let substituted_ok = both.pop().unwrap_or_else(|| *ok.clone());
+            TypeKind::Result(Box::new(substituted_ok), Box::new(substituted_err))
+        }
+        TypeKind::Future(inner) => TypeKind::Future(Box::new(
+            substitute_self_in_type_args(std::slice::from_ref(inner), self_type)
+                .pop()
+                .unwrap_or_else(|| *inner.clone()),
+        )),
+
+        // A `Self` spelled inside a function type would have to be rewritten
+        // through the parameter list, which this substitution does not walk. A
+        // function-typed binding is not a class instance, so it never reaches
+        // field layout, which is what makes an unsubstituted `Self` dangerous.
+        TypeKind::Function(_) => return ty.clone(),
+
+        // The parser-only collection spellings are normalized to `Custom` with
+        // type arguments before MIR lowering runs, so their element types are
+        // substituted through the `Custom` arm above.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            return ty.clone()
+        }
+
+        // A generic parameter is resolved by generic substitution, a metatype
+        // names a type rather than holding a value, and `Custom(name, None)`
+        // that is not `Self` is an ordinary named type. None of these can
+        // contain a nested `Self` to rewrite.
+        TypeKind::Generic(_, _, _) | TypeKind::Meta(_) | TypeKind::Custom(_, None) => {
+            return ty.clone()
+        }
+
+        // Scalars, strings, pointers and the empty types hold no nested type.
+        // Listed rather than matched with `_` so that adding a type-carrying
+        // variant fails to compile here instead of silently skipping
+        // substitution — an unsubstituted `Self` reads fields at the wrong
+        // offsets with no diagnostic.
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error => return ty.clone(),
+    };
+    Type::new(substituted_kind, ty.span)
+}
+
+/// Substitute `Self` inside type-argument expressions, preserving each
+/// argument's expression id and span so the MIR type cache keeps resolving it.
+/// Arguments that do not wrap a type (a value generic's size literal) pass
+/// through untouched.
+fn substitute_self_in_type_args(args: &[Expression], self_type: &Type) -> Vec<Expression> {
+    args.iter()
+        .map(|arg| {
+            let ExpressionKind::Type(inner, is_nullable) = &arg.node else {
+                return arg.clone();
+            };
+            let mut substituted = arg.clone();
+            substituted.node = ExpressionKind::Type(
+                Box::new(substitute_self_type(inner, self_type)),
+                *is_nullable,
+            );
+            substituted
+        })
+        .collect()
 }
 
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters
@@ -645,7 +757,7 @@ fn lower_class_method_impl(
 
     let ret_ty = ret_type_expr.as_deref().map_or_else(
         || Type::new(TypeKind::Void, ast_method.span),
-        |e| apply_generic_sub(&resolve_type(tc, e), subs),
+        |e| substitute_self_type(&apply_generic_sub(&resolve_type(tc, e), subs), &self_type),
     );
 
     let execution_model = resolve_execution_model(props);
@@ -661,6 +773,10 @@ fn lower_class_method_impl(
     );
     let mut ctx = LoweringContext::new(body, tc, is_release);
     ctx.use_kernel_namer(kernel_namer);
+    // `Self` inside this body names the class being lowered. Recorded so that a
+    // declared type spelling `Self` resolves to the class's real layout instead
+    // of falling through codegen's unknown-type path.
+    ctx.self_type = Some(self_type.clone());
     // Carry the instantiation substitution so an intrinsic element read typed
     // `T` (e.g. `self.items.element_at(0)`) resolves to the concrete
     // instantiation type instead of the pointer-width fallback.
@@ -685,7 +801,7 @@ fn lower_class_method_impl(
     // _1: self parameter (instance methods only; the class instance, registered in variable_map).
     // Static methods skip this slot entirely.
     if has_self {
-        ctx.push_param("self".to_string(), self_type, ast_method.span);
+        ctx.push_param("self".to_string(), self_type.clone(), ast_method.span);
     }
 
     // Remaining explicit parameters (registered in variable_map).
@@ -697,7 +813,10 @@ fn lower_class_method_impl(
         out_params.push(false); // self is never `out`
     }
     for param in params.iter() {
-        let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
+        let param_ty = substitute_self_type(
+            &apply_generic_sub(&resolve_type(tc, &param.typ), subs),
+            &self_type,
+        );
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }

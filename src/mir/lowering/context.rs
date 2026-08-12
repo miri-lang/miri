@@ -77,6 +77,12 @@ pub struct LoweringContext<'a> {
     /// a `T`-typed intrinsic element read (e.g. `self.items.element_at(0)`) to
     /// the instantiation's concrete type instead of the pointer-width fallback.
     pub generic_subs: HashMap<String, Type>,
+    /// Type that the `Self` keyword names inside the body being lowered: the
+    /// enclosing class when lowering a class method, `None` for a free
+    /// function. `Self` is absent from `type_definitions`, so a declared type
+    /// that still spells it resolves to no layout at all and reads fields at
+    /// the wrong offsets; consult this before a declared type becomes a local.
+    pub self_type: Option<Type>,
     /// Per-compilation allocator of deterministic kernel-name indices. Shared
     /// across every body lowered in one compilation (and inherited by nested
     /// lambda/block contexts) so kernel names are unique within the build and
@@ -118,11 +124,23 @@ impl<'a> LoweringContext<'a> {
             source,
             source_path,
             generic_subs: HashMap::new(),
+            self_type: None,
             kernel_namer: new_shared_kernel_namer(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
         ctx
+    }
+
+    /// Resolve the `Self` keyword in `ty` against the enclosing class.
+    ///
+    /// Returns `ty` unchanged outside a class body, where `Self` is not a
+    /// legal spelling and the type checker has already rejected it.
+    pub fn resolve_self_in(&self, ty: &Type) -> Type {
+        match &self.self_type {
+            Some(self_type) => super::substitute_self_type(ty, self_type),
+            None => ty.clone(),
+        }
     }
 
     /// Share `namer` with this context so kernel names are allocated from the
