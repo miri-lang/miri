@@ -128,6 +128,21 @@ impl TypeChecker {
             call_id,
         );
 
+        // Warn if calling a deprecated function
+        if callable {
+            if let Some(func_name) = Self::call_func_name(func) {
+                if let Some(reason) = self.deprecated_functions.get(func_name) {
+                    self.report_warning(
+                        "W0006",
+                        "Deprecated Function".to_string(),
+                        format!("function '{}' is deprecated: {}", func_name, reason),
+                        span,
+                        None,
+                    );
+                }
+            }
+        }
+
         if context.in_gpu_function && callable {
             self.check_gpu_call_types(func, &positional_args, context);
         }

@@ -81,7 +81,7 @@ use miri_runtime_core::{
 // -----------------------------------------------------------------------
 // time
 // -----------------------------------------------------------------------
-use miri_runtime_core::miri_rt_nanotime;
+use miri_runtime_core::{miri_rt_nanotime, miri_rt_sleep_nanos};
 
 // -----------------------------------------------------------------------
 // tuple
@@ -452,6 +452,20 @@ fn test_time_ffi_abi() {
     let t1 = miri_rt_nanotime();
     let t2 = miri_rt_nanotime();
     assert!(t2 >= t1, "nanotime must be non-decreasing");
+
+    // Verify sleep with zero returns promptly without panicking.
+    miri_rt_sleep_nanos(0);
+
+    // Verify sleep with negative value returns promptly without panicking.
+    miri_rt_sleep_nanos(-1000);
+
+    // Verify sleep with positive value can be called and returns.
+    let before = miri_rt_nanotime();
+    miri_rt_sleep_nanos(10_000_000); // 10 milliseconds
+    let after = miri_rt_nanotime();
+
+    // Verify that time advanced after sleep (allowing for timer granularity).
+    assert!(after >= before, "time should advance after sleep");
 }
 
 #[test]

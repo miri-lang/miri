@@ -284,3 +284,28 @@ fn main()
         "abstract method",
     );
 }
+
+#[test]
+fn test_abstract_class_with_static_and_abstract_instance_methods() {
+    assert_runs_with_output(
+        r#"
+abstract class Base
+    public static fn create_value() int
+        42
+
+    abstract fn get_doubled() int
+
+class Derived extends Base
+    fn get_doubled() int
+        Base.create_value() * 2
+
+fn main()
+    let static_result = Base.create_value()
+    let d = Derived()
+    let instance_result = d.get_doubled()
+    println(f"{static_result}")
+    println(f"{instance_result}")
+    "#,
+        "42\n84",
+    );
+}

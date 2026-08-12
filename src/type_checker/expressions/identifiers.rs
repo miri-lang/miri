@@ -328,6 +328,11 @@ impl TypeChecker {
     ///
     /// `self` refers to the current class instance. It can only be used inside a class method.
     pub(crate) fn infer_self(&mut self, span: Span, context: &Context) -> Type {
+        if context.in_static_method {
+            self.report_error("'self' cannot be used in static methods".to_string(), span);
+            return ast_factory::make_type(TypeKind::Error);
+        }
+
         if let Some(class_type) = &context.current_class_type {
             class_type.clone()
         } else {

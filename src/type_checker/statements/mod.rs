@@ -149,6 +149,20 @@ impl TypeChecker {
         }
     }
 
+    /// Collects deprecation information from function attributes.
+    /// If a function is marked with `@deprecated("reason")`, the reason is stored
+    /// for emission as a warning at call sites.
+    fn collect_deprecated_function(&mut self, func_name: &str, attributes: &[Attribute]) {
+        for attribute in attributes {
+            if attribute.name == crate::ast::DEPRECATED_ATTRIBUTE {
+                if let Some(reason) = &attribute.argument {
+                    self.deprecated_functions
+                        .insert(func_name.to_string(), reason.clone());
+                }
+            }
+        }
+    }
+
     /// Checks a statement for type correctness.
     ///
     /// This method handles variable declarations, control flow, function declarations,
@@ -185,18 +199,22 @@ impl TypeChecker {
             StatementKind::Break => self.check_break(context, statement.span),
             StatementKind::Continue => self.check_continue(context, statement.span),
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
-            StatementKind::FunctionDeclaration(decl) => self.check_function_declaration(
-                FunctionDeclarationInfo {
-                    name: &decl.name,
-                    generics: &decl.generics,
-                    params: &decl.params,
-                    return_type: &decl.return_type,
-                    body: decl.body.as_ref().map(|b| b.as_ref()),
-                    properties: &decl.properties,
-                    span: statement.span,
-                },
-                context,
-            ),
+            StatementKind::FunctionDeclaration(decl) => {
+                // Collect deprecation information before checking the function
+                self.collect_deprecated_function(&decl.name, &decl.attributes);
+                self.check_function_declaration(
+                    FunctionDeclarationInfo {
+                        name: &decl.name,
+                        generics: &decl.generics,
+                        params: &decl.params,
+                        return_type: &decl.return_type,
+                        body: decl.body.as_ref().map(|b| b.as_ref()),
+                        properties: &decl.properties,
+                        span: statement.span,
+                    },
+                    context,
+                );
+            }
             StatementKind::Struct(name, generics, fields, methods, vis, traits) => {
                 self.check_struct(name, generics, fields, methods, vis, traits, context)
             }

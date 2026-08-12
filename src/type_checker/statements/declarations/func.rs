@@ -127,8 +127,10 @@ impl TypeChecker {
 
         let previous_in_function = context.in_function;
         let previous_in_async = context.in_async_function;
+        let previous_in_static_method = context.in_static_method;
         context.in_function = true;
         context.in_async_function = properties.is_async;
+        context.in_static_method = properties.is_static;
 
         // Store the function body for GPU callability analysis
         if let Some(body_stmt) = body {
@@ -169,6 +171,7 @@ impl TypeChecker {
         context.in_gpu_function = previous_in_gpu;
         context.in_function = previous_in_function;
         context.in_async_function = previous_in_async;
+        context.in_static_method = previous_in_static_method;
         context.loop_depth = old_loop_depth;
         context.gpu_for_depth = old_gpu_for_depth;
         context.exit_scope();

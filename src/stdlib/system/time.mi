@@ -1,19 +1,183 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-/// Time-related operations for Miri.
+/// Time-related operations including duration measurement, instant snapshots,
+/// and sleep capabilities. Duration, Instant, and Clock are one concern:
+/// measuring and waiting on monotonic time via a single monotonic reference.
+/// The zero point is arbitrary; only differences between instants are meaningful.
 
 runtime "core" fn miri_rt_nanotime() int
+runtime "core" fn miri_rt_sleep_nanos(nanos int)
 
-/// Returns the current time in nanoseconds since an arbitrary starting point.
+/// A span of time measured in nanoseconds.
 ///
-/// This can be used to measure the execution time of code fragments.
+/// Durations are constructed via static factory methods and accessed via
+/// accessor methods. All methods truncate toward zero when converting between units.
+///
+/// Overflow Behavior: Each constructor multiplies its input by a fixed factor:
+/// from_nanos(n) is n * 1 (no scaling); from_micros(n) is n * 1_000;
+/// from_millis(n) is n * 1_000_000; from_seconds(n) is n * 1_000_000_000.
+/// The result is stored internally as a signed 64-bit nanosecond count.
+/// Multiplication that overflows wraps in two's complement; accessor methods
+/// then truncate the stored value toward zero.
 ///
 /// Example:
 ///     use system.time
-///     let start = nanotime()
-///     // code to measure
-///     let end = nanotime()
-///     println(f"Elapsed: {end - start} ns")
+///     let d = Duration.from_millis(500)
+///     println(f"{d.as_millis()}")
+public class Duration
+    private var nanos int
+
+    fn init(nanos int)
+        self.nanos = nanos
+
+    /// Constructs a Duration from nanoseconds.
+    ///
+    /// Example:
+    ///     let d = Duration.from_nanos(1_000_000)
+    ///     println(f"{d.as_nanos()}")
+    public static fn from_nanos(n int) Duration
+        return Duration(nanos: n)
+
+    /// Constructs a Duration from microseconds.
+    ///
+    /// Example:
+    ///     let d = Duration.from_micros(100)
+    ///     println(f"{d.as_micros()}")
+    public static fn from_micros(n int) Duration
+        return Duration(nanos: n * 1_000)
+
+    /// Constructs a Duration from milliseconds.
+    ///
+    /// Example:
+    ///     let d = Duration.from_millis(1000)
+    ///     println(f"{d.as_millis()}")
+    public static fn from_millis(n int) Duration
+        return Duration(nanos: n * 1_000_000)
+
+    /// Constructs a Duration from seconds.
+    ///
+    /// Example:
+    ///     let d = Duration.from_seconds(2)
+    ///     println(f"{d.as_seconds()}")
+    public static fn from_seconds(n int) Duration
+        return Duration(nanos: n * 1_000_000_000)
+
+    /// Returns the total nanoseconds in this duration.
+    ///
+    /// Example:
+    ///     let d = Duration.from_millis(1)
+    ///     println(f"{d.as_nanos()}")
+    public fn as_nanos() int
+        return self.nanos
+
+    /// Returns the total microseconds in this duration, truncating toward zero.
+    ///
+    /// Example:
+    ///     let d = Duration.from_nanos(1_500_000)
+    ///     println(f"{d.as_micros()}")
+    public fn as_micros() int
+        return self.nanos / 1_000
+
+    /// Returns the total milliseconds in this duration, truncating toward zero.
+    ///
+    /// Example:
+    ///     let d = Duration.from_nanos(1_500_000_000)
+    ///     println(f"{d.as_millis()}")
+    public fn as_millis() int
+        return self.nanos / 1_000_000
+
+    /// Returns the total seconds in this duration, truncating toward zero.
+    ///
+    /// Example:
+    ///     let d = Duration.from_seconds(5)
+    ///     println(f"{d.as_seconds()}")
+    public fn as_seconds() int
+        return self.nanos / 1_000_000_000
+
+
+/// A point on the monotonic clock.
+///
+/// Instants are created via Clock.now() and allow measuring elapsed time
+/// from that snapshot to the current moment via the elapsed() method.
+///
+/// Example:
+///     let clock = Clock()
+///     let start = clock.now()
+///     let end = clock.now()
+///     let d = start.elapsed(clock)
+public class Instant
+    private var nanos int
+
+    fn init(nanos int)
+        self.nanos = nanos
+
+    /// Returns the time elapsed from this instant to the current time.
+    ///
+    /// The `clock` parameter provides access to the monotonic clock as a capability,
+    /// allowing measurement of time elapsed in the calling context.
+    ///
+    /// Example:
+    ///     let clock = Clock()
+    ///     let before = clock.now()
+    ///     clock.sleep(Duration.from_millis(10))
+    ///     let elapsed = before.elapsed(clock)
+    public fn elapsed(clock Clock) Duration
+        let now = clock.now()
+        let elapsed_nanos = now.nanos - self.nanos
+        return Duration.from_nanos(elapsed_nanos)
+
+
+/// A capability class that provides access to monotonic time and sleep.
+///
+/// Clock() constructs a handle to the monotonic clock, enabling reading time
+/// and sleeping. All time measurements are relative to an arbitrary but stable
+/// zero point established at program start.
+///
+/// Example:
+///     let clock = Clock()
+///     let t1 = clock.now()
+///     clock.sleep(Duration.from_millis(5))
+///     let t2 = clock.now()
+public class Clock
+    /// Returns the current instant on the monotonic clock.
+    ///
+    /// Example:
+    ///     let clock = Clock()
+    ///     let now = clock.now()
+    ///     println("got instant")
+    public fn now() Instant
+        let current_nanos = miri_rt_nanotime()
+        return Instant(nanos: current_nanos)
+
+    /// Sleeps for the specified duration.
+    ///
+    /// Zero and negative durations return immediately without sleeping.
+    ///
+    /// Example:
+    ///     let clock = Clock()
+    ///     clock.sleep(Duration.from_millis(10))
+    ///     println("done sleeping")
+    public fn sleep(d Duration)
+        miri_rt_sleep_nanos(d.as_nanos())
+
+
+/// Returns the current time in nanoseconds since an arbitrary starting point.
+///
+/// This function is deprecated. Use Clock and Instant for time measurement instead.
+///
+/// Example:
+///     let t1 = nanotime()
+///     let t2 = nanotime()
+///     println(f"{t2 >= t1}")
+///
+/// Deprecated since 0.6.0-beta.4. Use `Clock` and `Instant` instead:
+///     let clock = Clock()
+///     let start = clock.now()
+///     let elapsed = start.elapsed(clock)
+///     println(f"Elapsed: {elapsed.as_nanos()} ns")
+///
+/// Will be removed in 0.8.0.
+@deprecated("acquire a Clock and use clock.now() with Instant.elapsed(clock)")
 public fn nanotime() int
     return miri_rt_nanotime()

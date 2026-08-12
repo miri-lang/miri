@@ -650,9 +650,15 @@ fn lower_class_method_impl(
 
     let execution_model = resolve_execution_model(props);
 
-    // arg_count = 1 (self) + explicit params; the allocator is counted below but
-    // not added to variable_map.
-    let body = Body::new(params.len() + 1, ast_method.span, execution_model);
+    // For instance methods: arg_count = 1 (self) + explicit params.
+    // For static methods: arg_count = explicit params (no self).
+    // The allocator is counted below but not added to variable_map.
+    let has_self = !props.is_static;
+    let body = Body::new(
+        params.len() + if has_self { 1 } else { 0 },
+        ast_method.span,
+        execution_model,
+    );
     let mut ctx = LoweringContext::new(body, tc, is_release);
     ctx.use_kernel_namer(kernel_namer);
     // Carry the instantiation substitution so an intrinsic element read typed
@@ -676,14 +682,20 @@ fn lower_class_method_impl(
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_method.span));
 
-    // _1: self parameter (the class instance, registered in variable_map)
-    ctx.push_param("self".to_string(), self_type, ast_method.span);
+    // _1: self parameter (instance methods only; the class instance, registered in variable_map).
+    // Static methods skip this slot entirely.
+    if has_self {
+        ctx.push_param("self".to_string(), self_type, ast_method.span);
+    }
 
-    // Remaining explicit parameters (registered in variable_map). ABI param 0
-    // is `self` (never `out`); explicit params follow at 1..=N. The allocator
-    // is appended below as a non-out ABI param.
+    // Remaining explicit parameters (registered in variable_map).
+    // For instance methods, ABI param 0 is `self` (never `out`); explicit params follow at 1..=N.
+    // For static methods, explicit params start at 0.
+    // The allocator is appended below as a non-out ABI param.
     let mut out_params = Vec::with_capacity(params.len() + 2);
-    out_params.push(false);
+    if has_self {
+        out_params.push(false); // self is never `out`
+    }
     for param in params.iter() {
         let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);

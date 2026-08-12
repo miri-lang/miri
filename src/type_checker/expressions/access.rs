@@ -1144,6 +1144,18 @@ impl TypeChecker {
             .get(prop_name)
             .cloned()
             .map(|method_info| {
+                // Reject calling static methods on instances
+                if method_info.is_static {
+                    self.report_error(
+                        format!(
+                            "Static method '{}' cannot be called on an instance. Use '{}.{}()' instead.",
+                            prop_name, search_class_def.name, prop_name
+                        ),
+                        span,
+                    );
+                    return make_type(TypeKind::Error);
+                }
+
                 if !self.check_member_visibility(
                     &method_info.visibility,
                     &search_class_def.name,
@@ -1662,6 +1674,69 @@ impl TypeChecker {
         if let Some(TypeDefinition::Enum(def)) = &def_opt {
             return self
                 .infer_member_enum_variant_from_meta(name, prop_name, inner_type, def, span);
+        }
+
+        if let Some(TypeDefinition::Class(_)) = &def_opt {
+            // Walk the inheritance chain to find the static method using visibility-checked resolution
+            let resolver = |name: &str| self.resolve_visible_type(name, context).cloned();
+            if let Some((defining_class_name, method_info)) =
+                self.find_static_method_in_chain_with_resolver(name, prop_name, &resolver)
+            {
+                if method_info.is_static {
+                    // Check visibility
+                    if !self.check_member_visibility(
+                        &method_info.visibility,
+                        &defining_class_name,
+                        context.current_class.as_deref(),
+                        None, // No receiver object for static method access
+                    ) {
+                        self.report_error(
+                            format!(
+                                "Static method '{}' is {} and cannot be accessed",
+                                prop_name,
+                                match method_info.visibility {
+                                    MemberVisibility::Private => "Private",
+                                    MemberVisibility::Protected => "Protected",
+                                    _ => "inaccessible",
+                                }
+                            ),
+                            span,
+                        );
+                        return make_type(TypeKind::Error);
+                    }
+
+                    // Build the function type for the static method (no receiver)
+                    let params = method_info
+                        .params
+                        .iter()
+                        .map(|(param_name, ty)| Parameter {
+                            name: param_name.clone(),
+                            typ: Box::new(self.create_type_expression(ty.clone())),
+                            guard: None,
+                            default_value: None,
+                            is_out: false,
+                            residency: None,
+                        })
+                        .collect();
+
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params,
+                        return_type: Some(Box::new(
+                            self.create_type_expression(method_info.return_type.clone()),
+                        )),
+                    })));
+                } else {
+                    self.report_error(
+                        format!(
+                            "Cannot call instance method '{}' on type (did you mean to create an instance?)",
+                            prop_name
+                        ),
+                        span,
+                    );
+                    return make_type(TypeKind::Error);
+                }
+            }
         }
 
         self.report_error(

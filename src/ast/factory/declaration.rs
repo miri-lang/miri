@@ -216,6 +216,7 @@ impl FunctionBuilder {
                 is_async: false,
                 is_parallel: false,
                 is_gpu: false,
+                is_static: false,
                 visibility: MemberVisibility::Public,
             },
         }
@@ -260,6 +261,12 @@ impl FunctionBuilder {
     /// Marks the function as a GPU kernel.
     pub fn set_gpu(mut self) -> Self {
         self.properties.is_gpu = true;
+        self
+    }
+
+    /// Marks the function as static.
+    pub fn set_static(mut self) -> Self {
+        self.properties.is_static = true;
         self
     }
 

@@ -12,7 +12,7 @@ use super::super::Parser;
 use super::class::BodyMode;
 
 impl<'source> Parser<'source> {
-    /// Parses function modifier tokens (`async`, `parallel`, `gpu`) and validates
+    /// Parses function modifier tokens (`async`, `parallel`, `gpu`, `static`) and validates
     /// that the resulting combination is legal.
     pub(crate) fn function_modifiers(
         &mut self,
@@ -22,8 +22,15 @@ impl<'source> Parser<'source> {
             is_async: false,
             is_parallel: false,
             is_gpu: false,
+            is_static: false,
             visibility,
         };
+
+        // Check for contextual `static` keyword (only valid in class context)
+        if self.is_contextual_static_keyword() {
+            self.eat_token(&Token::Identifier)?;
+            properties.is_static = true;
+        }
 
         while self.lookahead_is_function_modifier() {
             match &self.lookahead {
@@ -41,7 +48,7 @@ impl<'source> Parser<'source> {
                 }
                 _ => {
                     return Err(self.error_unexpected_lookahead_token(
-                        "function modifier (async, parallel or gpu)",
+                        "function modifier (async, parallel, gpu or static)",
                     ));
                 }
             }
@@ -61,6 +68,24 @@ impl<'source> Parser<'source> {
                 SyntaxErrorKind::InvalidModifierCombination {
                     combination: "async parallel".to_string(),
                     reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+        if properties.is_static && properties.is_async {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "static async".to_string(),
+                    reason: "Static methods cannot be async.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+        if properties.is_static && properties.is_gpu {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "static gpu".to_string(),
+                    reason: "Static methods cannot be GPU kernels.".to_string(),
                 },
                 self.current_token_span(),
             ));
@@ -332,6 +357,16 @@ impl<'source> Parser<'source> {
     fn is_contextual_host_keyword(&self) -> bool {
         if let Some((Token::Identifier, span)) = &self.lookahead {
             &self.source[span.start..span.end] == "host"
+        } else {
+            false
+        }
+    }
+
+    /// Checks if the lookahead is the contextual keyword "static" in function-declaration position.
+    /// "static" is only treated as a method modifier here; elsewhere it's a regular identifier.
+    fn is_contextual_static_keyword(&self) -> bool {
+        if let Some((Token::Identifier, span)) = &self.lookahead {
+            &self.source[span.start..span.end] == "static"
         } else {
             false
         }

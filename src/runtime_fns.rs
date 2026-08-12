@@ -213,6 +213,7 @@ pub mod rt {
 
     // ── Time ─────────────────────────────────────────────────────────────────
     pub const NANOTIME: &str = "miri_rt_nanotime";
+    pub const SLEEP_NANOS: &str = "miri_rt_sleep_nanos";
 
     // ── Complete symbol table ────────────────────────────────────────────────
     //
@@ -357,6 +358,7 @@ pub mod rt {
         UINT_TO_STRING,
         // Time
         NANOTIME,
+        SLEEP_NANOS,
     ];
 }
 

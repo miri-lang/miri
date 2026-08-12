@@ -7,7 +7,9 @@
 //! user-defined attributes and no expansion. An unrecognized attribute is a
 //! hard error rather than a silently ignored annotation.
 
-use crate::ast::{Attribute, AttributeTarget, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE};
+use crate::ast::{
+    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE,
+};
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
 /// Registry entry describing where one attribute may appear and what it carries.
@@ -30,6 +32,12 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         valid_on: &[AttributeTarget::Enum],
         takes_argument: false,
     },
+    AttributeSpec {
+        name: DEPRECATED_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: true,
+    }, // Note: class/enum deprecation would require a call-site hook at
+       // instantiation, which is not yet implemented. This is fail-closed for v1.
 ];
 
 /// Returns every attribute a declaration of this kind accepts, for diagnostics.
@@ -160,5 +168,31 @@ mod tests {
         ];
         let errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn rejects_deprecated_without_argument() {
+        let attributes = [attribute(DEPRECATED_ATTRIBUTE, None)];
+        let errors = validate_attributes(&attributes, AttributeTarget::Function);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind.properties().code, "E0114");
+    }
+
+    #[test]
+    fn accepts_deprecated_with_argument_on_function() {
+        let attributes = [attribute(DEPRECATED_ATTRIBUTE, Some("use X instead"))];
+        assert!(validate_attributes(&attributes, AttributeTarget::Function).is_empty());
+    }
+
+    #[test]
+    fn rejects_deprecated_on_class_and_enum() {
+        let attributes = [attribute(DEPRECATED_ATTRIBUTE, Some("reason"))];
+        let class_errors = validate_attributes(&attributes, AttributeTarget::Class);
+        assert_eq!(class_errors.len(), 1);
+        assert_eq!(class_errors[0].kind.properties().code, "E0113");
+
+        let enum_errors = validate_attributes(&attributes, AttributeTarget::Enum);
+        assert_eq!(enum_errors.len(), 1);
+        assert_eq!(enum_errors[0].kind.properties().code, "E0113");
     }
 }

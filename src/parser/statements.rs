@@ -649,6 +649,7 @@ impl<'source> Parser<'source> {
             is_async: false,
             is_parallel: false,
             is_gpu: true,
+            is_static: false,
             visibility,
         };
         self.continue_function_modifiers(&mut properties)?;
@@ -683,7 +684,7 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    fn continue_function_modifiers(
+    pub(crate) fn continue_function_modifiers(
         &mut self,
         properties: &mut FunctionProperties,
     ) -> Result<(), SyntaxError> {

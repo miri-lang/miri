@@ -55,6 +55,14 @@ pub fn lower_call(
         }
     }
 
+    if let ExpressionKind::Member(obj, method) = &func.node {
+        if let Some(op) =
+            try_lower_static_method_call(ctx, span, call_expr_id, obj, method, args, dest.as_ref())?
+        {
+            return Ok(op);
+        }
+    }
+
     if let ExpressionKind::Member(obj, prop) = &func.node {
         if let Some(op) =
             try_lower_kernel_launch(ctx, span, call_expr_id, obj, prop, args, dest.clone())?
@@ -126,6 +134,76 @@ fn try_lower_module_alias_call(
         }
     }
     lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest.cloned())
+}
+
+/// Lower a call to a static method on a class: `Duration.from_millis(ms)`.
+fn try_lower_static_method_call(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    obj_expr: &Expression,
+    method_expr: &Expression,
+    args: &[Expression],
+    dest: Option<&Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    // Static method calls have the form ClassName.method_name(args)
+    // where ClassName is an identifier (type name), not an instance
+    let ExpressionKind::Identifier(class_name, _) = &obj_expr.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
+        return Ok(None);
+    };
+
+    // Walk the inheritance chain to find the static method
+    let Some((defining_class_name, method_info)) = ctx
+        .type_checker
+        .find_static_method_in_chain(class_name, method_name.as_str())
+    else {
+        return Ok(None);
+    };
+
+    // Only accept static methods
+    if !method_info.is_static {
+        return Ok(None);
+    }
+
+    // Static method call with no receiver
+    let mut arg_ops = lower_plain_args(ctx, args)?;
+    push_allocator_arg(ctx, &mut arg_ops);
+
+    let return_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
+
+    // Construct the mangled function name using the defining class: DefiningClass_method_name
+    let mut mangled = String::with_capacity(defining_class_name.len() + 1 + method_name.len());
+    mangled.push_str(&defining_class_name);
+    mangled.push('_');
+    mangled.push_str(method_name);
+
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(mangled),
+    }));
+
+    // Build out_args from method_info with no receiver offset (static methods have no self).
+    let out_args = build_method_out_args_with_offset(&method_info, args.len(), arg_ops.len(), 0);
+
+    emit_call_terminator(
+        ctx,
+        func_op,
+        arg_ops,
+        out_args,
+        Vec::new(), // arg_handles
+        destination,
+        *span,
+    );
+    Ok(Some(result_op))
 }
 
 /// Lower a `system.math` intrinsic call to a `MathIntrinsic` rvalue.
@@ -226,10 +304,22 @@ pub(super) fn build_method_out_args(
     user_arg_count: usize,
     total_call_args: usize,
 ) -> Vec<bool> {
+    build_method_out_args_with_offset(method_info, user_arg_count, total_call_args, 1)
+}
+
+/// Build out-parameter flags for a method call, accounting for receiver offset.
+/// For instance methods, `receiver_offset` is 1 (self is at slot 0).
+/// For static methods, `receiver_offset` is 0 (no self).
+pub(super) fn build_method_out_args_with_offset(
+    method_info: &MethodInfo,
+    user_arg_count: usize,
+    total_call_args: usize,
+    receiver_offset: usize,
+) -> Vec<bool> {
     let mut flags = vec![false; total_call_args];
     for i in 0..user_arg_count {
         if method_info.is_param_out(i) {
-            flags[1 + i] = true;
+            flags[receiver_offset + i] = true;
         }
     }
     flags

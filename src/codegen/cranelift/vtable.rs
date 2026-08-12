@@ -121,7 +121,10 @@ impl<'a> FunctionTranslator<'a> {
         for ancestor in abstract_chain.iter().rev() {
             if let Some(TypeDefinition::Class(cd)) = type_definitions.get(*ancestor) {
                 for (method_name, method_info) in &cd.methods {
-                    if !method_info.is_constructor && !seen.contains(method_name.as_str()) {
+                    if !method_info.is_constructor
+                        && !method_info.is_static
+                        && !seen.contains(method_name.as_str())
+                    {
                         seen.insert(method_name.as_str());
                         vtable_methods.push(method_name.as_str());
                     }
