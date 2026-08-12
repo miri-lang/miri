@@ -33,6 +33,11 @@ pub struct ModuleLoader {
     /// full visibility (transitive types included) is restricted to this set so
     /// ordinary user re-imports keep their own-types-only visibility.
     pub implicitly_preloaded_modules: HashSet<String>,
+    /// Type names a program declared itself instead of taking them from the
+    /// shadowable prelude tier, whose module was therefore never loaded.
+    /// Importing a module that needs one of these names is a conflict: it was
+    /// written against the stdlib type, not the program's.
+    pub user_shadowed_types: HashSet<String>,
     /// Stack of modules currently being loaded (used to detect circular imports).
     pub loading_stack: Vec<String>,
     /// Maps module alias names to their full module paths.
@@ -64,11 +69,28 @@ impl ModuleLoader {
             loaded_modules: HashSet::new(),
             module_visibility: HashMap::new(),
             implicitly_preloaded_modules: HashSet::new(),
+            user_shadowed_types: HashSet::new(),
             loading_stack: Vec::new(),
             module_aliases: HashMap::new(),
             source_dir: None,
             current_source_override: None,
             pre_registered_types: HashSet::new(),
         }
+    }
+
+    /// Names the module at `module_path` exposes that the program declared
+    /// itself, sorted for a stable diagnostic order. Empty unless the module has
+    /// been loaded, which is when its exposed names are known.
+    pub fn shadowed_names_exposed_by(&self, module_path: &str) -> Vec<String> {
+        let Some(names) = self.module_visibility.get(module_path) else {
+            return Vec::new();
+        };
+        let mut conflicts: Vec<String> = names
+            .iter()
+            .filter(|name| self.user_shadowed_types.contains(*name))
+            .cloned()
+            .collect();
+        conflicts.sort();
+        conflicts
     }
 }

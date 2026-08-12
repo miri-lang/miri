@@ -262,6 +262,7 @@ impl TypeChecker {
         self.load_prelude(&mut context);
 
         self.run_pass_collect_type_shells(program);
+        self.load_shadowable_prelude(&mut context);
         self.run_pass_collect_declarations(program, &mut context);
         self.run_pass_check_bodies(program, &mut context);
         self.run_pass_escape_summaries(program, &mut context);

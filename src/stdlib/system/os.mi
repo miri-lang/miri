@@ -11,12 +11,7 @@
 /// share a single concern (the process's view of its environment) and splitting
 /// them would put one class in a file of its own with no other content.
 ///
-/// Programs that call `Env.set` must import `system.result` BEFORE `system.os`,
-/// because a stdlib module's own `use system.result` does not make `Result`
-/// visible while that module is being checked.
-///
 /// Example:
-///     use system.result
 ///     use system.os
 ///     let env = Env()
 ///     match env.get("PATH")
