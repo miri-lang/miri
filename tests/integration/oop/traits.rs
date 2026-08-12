@@ -748,3 +748,122 @@ class Tally implements Counter
         "does not match trait",
     );
 }
+
+#[test]
+fn test_self_typed_param_reads_correct_fields_in_trait_class() {
+    // A parameter declared `Self` must resolve to the concrete class before
+    // codegen. A trait-implementing class carries a vtable pointer at offset 0,
+    // so a field projection computed against an unresolved `Self` reads one slot
+    // early and silently returns the vtable pointer instead of the first field.
+    assert_runs_with_output(
+        r#"
+trait Sameable
+    public fn same(other Self) bool
+
+class Pair implements Sameable
+    var a int
+    var b int
+
+    fn init(a int, b int)
+        self.a = a
+        self.b = b
+
+    public fn same(other Self) bool
+        return self.a == other.a and self.b == other.b
+
+fn main()
+    let x = Pair(a: 5, b: 7)
+    let y = Pair(a: 5, b: 7)
+    let z = Pair(a: 5, b: 9)
+    println(f"{x.same(y)} {x.same(z)}")
+    "#,
+        "true false",
+    );
+}
+
+#[test]
+fn test_self_typed_param_field_values_match_concrete_spelling() {
+    // `other Self` and `other Pair` must observe identical field values; the
+    // two spellings differing is the silent-wrong-data signature of an
+    // unresolved `Self` reaching field layout.
+    assert_runs_with_output(
+        r#"
+trait Sameable
+    public fn via_self(other Self) int
+
+class Pair implements Sameable
+    var a int
+
+    fn init(a int)
+        self.a = a
+
+    public fn via_self(other Self) int
+        return other.a
+
+    public fn via_concrete(other Pair) int
+        return other.a
+
+fn main()
+    let x = Pair(a: 1)
+    let y = Pair(a: 42)
+    println(f"{x.via_self(y)} {x.via_concrete(y)}")
+    "#,
+        "42 42",
+    );
+}
+
+#[test]
+fn test_self_typed_return_value_carries_class_layout() {
+    // A `Self` return type resolves to the concrete class, so fields read off
+    // the returned value land at the class's real offsets.
+    assert_runs_with_output(
+        r#"
+trait Doubler
+    public fn doubled() Self
+
+class Counter implements Doubler
+    var n int
+
+    fn init(n int)
+        self.n = n
+
+    public fn doubled() Self
+        return Counter(n: self.n * 2)
+
+fn main()
+    let c = Counter(n: 21)
+    let d = c.doubled()
+    println(f"{d.n}")
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_self_typed_local_declaration_resolves_to_class() {
+    // The `Self` spelling must resolve wherever a declared type establishes a
+    // local's layout, not only in parameter position.
+    assert_runs_with_output(
+        r#"
+trait Sameable
+    public fn same(other Self) bool
+
+class Pair implements Sameable
+    var a int
+
+    fn init(a int)
+        self.a = a
+
+    public fn same(other Self) bool
+        let alias Self = other
+        return alias.a == self.a
+
+fn main()
+    let x = Pair(a: 5)
+    let y = Pair(a: 5)
+    let z = Pair(a: 6)
+    println(f"{x.same(y)} {x.same(z)}")
+    "#,
+        "true false",
+    );
+}

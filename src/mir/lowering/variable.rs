@@ -236,7 +236,7 @@ fn resolve_decl_init<'d>(
     span: &Span,
 ) -> Result<(Type, Option<&'d Expression>, Option<Operand>), LoweringError> {
     if let Some(type_expr) = &decl.typ {
-        let ty = resolve_type(ctx.type_checker, type_expr);
+        let ty = ctx.resolve_self_in(&resolve_type(ctx.type_checker, type_expr));
         return Ok((ty, decl.initializer.as_deref(), None));
     }
     let Some(init_expr) = decl.initializer.as_deref() else {
