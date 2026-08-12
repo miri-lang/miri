@@ -43,6 +43,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::type_checker::attributes::{DeprecatedKind, Deprecation};
 use crate::type_checker::context::{
     AliasDefinition, Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
@@ -149,18 +150,62 @@ impl TypeChecker {
         }
     }
 
-    /// Collects deprecation information from function attributes.
-    /// If a function is marked with `@deprecated("reason")`, the reason is stored
-    /// for emission as a warning at call sites.
-    fn collect_deprecated_function(&mut self, func_name: &str, attributes: &[Attribute]) {
+    /// Records a declaration marked `@deprecated("reason")` so its use sites can
+    /// warn. `kind` selects the noun the warning uses.
+    pub(crate) fn collect_deprecated_declaration(
+        &mut self,
+        name: &str,
+        kind: DeprecatedKind,
+        attributes: &[Attribute],
+    ) {
         for attribute in attributes {
             if attribute.name == crate::ast::DEPRECATED_ATTRIBUTE {
                 if let Some(reason) = &attribute.argument {
-                    self.deprecated_functions
-                        .insert(func_name.to_string(), reason.clone());
+                    self.deprecated_declarations.insert(
+                        name.to_string(),
+                        Deprecation {
+                            kind,
+                            reason: reason.clone(),
+                        },
+                    );
                 }
             }
         }
+    }
+
+    /// Emits the use-site warning if `name` denotes a `@deprecated` declaration.
+    /// Shared by every use site so the wording and warning code stay in one
+    /// place as more kinds gain deprecation hooks.
+    pub(crate) fn warn_if_deprecated(&mut self, name: &str, span: Span) {
+        let Some(deprecation) = self.deprecated_declarations.get(name) else {
+            return;
+        };
+        let (title, message) = (
+            deprecation.kind.warning_title(),
+            format!(
+                "{} '{}' is deprecated: {}",
+                deprecation.kind.noun(),
+                name,
+                deprecation.reason
+            ),
+        );
+        self.report_warning("W0006", title, message, span, None);
+    }
+
+    /// Records a `@deprecated` type declaration under its declared name. A name
+    /// expression that does not resolve to a type name belongs to a malformed
+    /// declaration, which the declaration's own check reports.
+    fn collect_deprecated_type(
+        &mut self,
+        name_expr: &Expression,
+        kind: DeprecatedKind,
+        attributes: &[Attribute],
+    ) {
+        let Ok(name) = self.extract_type_name(name_expr) else {
+            return;
+        };
+        let name = name.to_string();
+        self.collect_deprecated_declaration(&name, kind, attributes);
     }
 
     /// Checks a statement for type correctness.
@@ -201,7 +246,11 @@ impl TypeChecker {
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
             StatementKind::FunctionDeclaration(decl) => {
                 // Collect deprecation information before checking the function
-                self.collect_deprecated_function(&decl.name, &decl.attributes);
+                self.collect_deprecated_declaration(
+                    &decl.name,
+                    DeprecatedKind::Function,
+                    &decl.attributes,
+                );
                 self.check_function_declaration(
                     FunctionDeclarationInfo {
                         name: &decl.name,
@@ -219,19 +268,27 @@ impl TypeChecker {
                 self.check_struct(name, generics, fields, methods, vis, traits, context)
             }
             StatementKind::Enum(name, generics, variants, methods, vis, attributes) => {
+                self.collect_deprecated_type(name, DeprecatedKind::Enum, attributes);
                 self.check_enum(name, generics, variants, methods, attributes, vis, context)
             }
-            StatementKind::Class(class_data) => self.check_class(
-                &class_data.name,
-                &class_data.generics,
-                &class_data.base_class,
-                &class_data.traits,
-                &class_data.body,
-                &class_data.visibility,
-                context,
-                statement.span,
-                class_data.is_abstract,
-            ),
+            StatementKind::Class(class_data) => {
+                self.collect_deprecated_type(
+                    &class_data.name,
+                    DeprecatedKind::Class,
+                    &class_data.attributes,
+                );
+                self.check_class(
+                    &class_data.name,
+                    &class_data.generics,
+                    &class_data.base_class,
+                    &class_data.traits,
+                    &class_data.body,
+                    &class_data.visibility,
+                    context,
+                    statement.span,
+                    class_data.is_abstract,
+                )
+            }
             StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
                 name,
                 generics,

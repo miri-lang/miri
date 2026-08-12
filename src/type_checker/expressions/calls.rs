@@ -128,18 +128,12 @@ impl TypeChecker {
             call_id,
         );
 
-        // Warn if calling a deprecated function
+        // Warn when the call target is deprecated. A class instantiation is a
+        // call whose target resolves to a meta type, so this covers construction
+        // of a deprecated class as well as a call to a deprecated function.
         if callable {
-            if let Some(func_name) = Self::call_func_name(func) {
-                if let Some(reason) = self.deprecated_functions.get(func_name) {
-                    self.report_warning(
-                        "W0006",
-                        "Deprecated Function".to_string(),
-                        format!("function '{}' is deprecated: {}", func_name, reason),
-                        span,
-                        None,
-                    );
-                }
+            if let Some(name) = Self::call_func_name(func) {
+                self.warn_if_deprecated(name, span);
             }
         }
 
