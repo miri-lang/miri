@@ -31,6 +31,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 pub(crate) mod attributes;
+
+use crate::type_checker::attributes::Deprecation;
 pub mod builtins;
 mod compatibility;
 pub mod context;
@@ -142,9 +144,11 @@ pub struct TypeChecker {
     /// its diagnostics emitted) later in the body pass; suppressing here avoids
     /// duplicate or premature errors from that speculative first inference.
     pub(crate) suppress_diagnostics: bool,
-    /// Maps function names to their deprecation message (if any).
-    /// Populated during declaration collection so call sites can emit warnings.
-    pub(crate) deprecated_functions: HashMap<String, String>,
+    /// Maps the name of each `@deprecated` declaration to what it is and why it
+    /// was deprecated. Populated during declaration collection so that use
+    /// sites — a call, an instantiation, an enum-variant reference — can emit
+    /// warnings.
+    pub(crate) deprecated_declarations: HashMap<String, Deprecation>,
 }
 
 impl Default for TypeChecker {
@@ -176,7 +180,7 @@ impl TypeChecker {
             wide_typed_int_literals: HashSet::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
-            deprecated_functions: HashMap::new(),
+            deprecated_declarations: HashMap::new(),
         }
     }
 

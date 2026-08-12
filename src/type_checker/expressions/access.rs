@@ -1672,6 +1672,9 @@ impl TypeChecker {
         let def_opt = self.resolve_visible_type(name, context).cloned();
 
         if let Some(TypeDefinition::Enum(def)) = &def_opt {
+            // Naming a variant is the use site of an enum, so a deprecated enum
+            // warns here rather than at a call.
+            self.warn_if_deprecated(name, span);
             return self
                 .infer_member_enum_variant_from_meta(name, prop_name, inner_type, def, span);
         }

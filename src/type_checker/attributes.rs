@@ -12,6 +12,44 @@ use crate::ast::{
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
+/// What a `@deprecated` declaration is, and the reason its author gave.
+///
+/// The kind selects the noun the use-site warning uses, so a deprecated class
+/// does not report itself as a deprecated function.
+#[derive(Debug, Clone)]
+pub(crate) struct Deprecation {
+    pub kind: DeprecatedKind,
+    pub reason: String,
+}
+
+/// The kind of declaration a deprecation applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeprecatedKind {
+    Function,
+    Class,
+    Enum,
+}
+
+impl DeprecatedKind {
+    /// The noun used to describe this kind in a diagnostic.
+    pub fn noun(self) -> &'static str {
+        match self {
+            DeprecatedKind::Function => "function",
+            DeprecatedKind::Class => "class",
+            DeprecatedKind::Enum => "enum",
+        }
+    }
+
+    /// Warning title for a use of a declaration of this kind.
+    pub fn warning_title(self) -> String {
+        match self {
+            DeprecatedKind::Function => "Deprecated Function".to_string(),
+            DeprecatedKind::Class => "Deprecated Class".to_string(),
+            DeprecatedKind::Enum => "Deprecated Enum".to_string(),
+        }
+    }
+}
+
 /// Registry entry describing where one attribute may appear and what it carries.
 pub(crate) struct AttributeSpec {
     pub name: &'static str,
@@ -34,10 +72,13 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     },
     AttributeSpec {
         name: DEPRECATED_ATTRIBUTE,
-        valid_on: &[AttributeTarget::Function],
+        valid_on: &[
+            AttributeTarget::Function,
+            AttributeTarget::Class,
+            AttributeTarget::Enum,
+        ],
         takes_argument: true,
-    }, // Note: class/enum deprecation would require a call-site hook at
-       // instantiation, which is not yet implemented. This is fail-closed for v1.
+    },
 ];
 
 /// Returns every attribute a declaration of this kind accepts, for diagnostics.
@@ -185,14 +226,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_deprecated_on_class_and_enum() {
+    fn accepts_deprecated_with_argument_on_class_and_enum() {
         let attributes = [attribute(DEPRECATED_ATTRIBUTE, Some("reason"))];
+        assert!(validate_attributes(&attributes, AttributeTarget::Class).is_empty());
+        assert!(validate_attributes(&attributes, AttributeTarget::Enum).is_empty());
+    }
+
+    #[test]
+    fn rejects_deprecated_without_argument_on_class_and_enum() {
+        let attributes = [attribute(DEPRECATED_ATTRIBUTE, None)];
         let class_errors = validate_attributes(&attributes, AttributeTarget::Class);
         assert_eq!(class_errors.len(), 1);
-        assert_eq!(class_errors[0].kind.properties().code, "E0113");
+        assert_eq!(class_errors[0].kind.properties().code, "E0114");
 
         let enum_errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(enum_errors.len(), 1);
-        assert_eq!(enum_errors[0].kind.properties().code, "E0113");
+        assert_eq!(enum_errors[0].kind.properties().code, "E0114");
     }
 }
