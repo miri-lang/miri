@@ -7,6 +7,7 @@ use crate::ast::attributes::Attribute;
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::{Expression, ExpressionKind, LambdaData};
 use crate::ast::statement::{ClassData, FunctionDeclarationData, Statement, StatementKind};
+use crate::error::syntax::Span;
 
 /// Creates a function parameter.
 pub fn parameter(
@@ -287,6 +288,7 @@ impl FunctionBuilder {
         stmt(StatementKind::FunctionDeclaration(Box::new(
             FunctionDeclarationData {
                 name: self.name,
+                name_span: Span::new(0, 0),
                 generics: self.generic_types,
                 params: self.parameters,
                 return_type: self.return_type,
@@ -302,6 +304,7 @@ impl FunctionBuilder {
         stmt(StatementKind::FunctionDeclaration(Box::new(
             FunctionDeclarationData {
                 name: self.name,
+                name_span: Span::new(0, 0),
                 generics: self.generic_types,
                 params: self.parameters,
                 return_type: self.return_type,
@@ -351,6 +354,7 @@ pub fn function_declaration(
     stmt(StatementKind::FunctionDeclaration(Box::new(
         FunctionDeclarationData {
             name: name.into(),
+            name_span: Span::new(0, 0),
             generics: generic_types,
             params: parameters,
             return_type,
@@ -372,6 +376,7 @@ pub fn abstract_function_declaration(
     stmt(StatementKind::FunctionDeclaration(Box::new(
         FunctionDeclarationData {
             name: name.into(),
+            name_span: Span::new(0, 0),
             generics: generic_types,
             params: parameters,
             return_type,

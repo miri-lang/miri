@@ -592,14 +592,11 @@ impl TypeChecker {
         // Check for duplicate method names (instance + static)
         if let Some(existing) = methods.get(&decl.name) {
             if existing.is_static != decl.properties.is_static {
-                // Use a more specific span from the method declaration.
-                // Prefer the first parameter's type span if available (where "self"
-                // or the first parameter would be), then the return type, then fall
-                // back to the statement span.
-                let error_span = if !decl.params.is_empty() {
-                    decl.params[0].typ.span
-                } else if let Some(ref ret) = decl.return_type {
-                    ret.span
+                // Point at the method's own name. Programmatically built
+                // declarations carry no name span, so they fall back to the
+                // statement.
+                let error_span = if decl.name_span.end > decl.name_span.start {
+                    decl.name_span
                 } else {
                     stmt.span
                 };
