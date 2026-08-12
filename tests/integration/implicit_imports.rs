@@ -171,6 +171,202 @@ fn main()
 }
 
 #[test]
+fn test_result_available_without_use() {
+    // `Result` comes from the prelude, so returning and matching one needs no
+    // `use system.result`.
+    assert_runs_with_output(
+        r#"
+fn divide(a int, b int) Result<int, String>
+    if b == 0
+        return Result.Err("division by zero")
+    return Result.Ok(a / b)
+fn main()
+    match divide(10, 2)
+        Result.Ok(value): println(f"{value}")
+        Result.Err(message): println(message)
+        "#,
+        "5",
+    );
+}
+
+#[test]
+fn test_user_enum_shadows_prelude_result() {
+    // A shadowable prelude name does not reserve the name: the program's own
+    // `Result` wins, variants and all, and the stdlib module is not loaded.
+    assert_runs_with_output(
+        r#"
+enum Result
+    Yes
+    No
+fn main()
+    match Result.Yes
+        Result.Yes: println("yes")
+        Result.No: println("no")
+        "#,
+        "yes",
+    );
+}
+
+#[test]
+fn test_user_class_shadows_prelude_result() {
+    // The declaration wins over a prelude name of a different kind: the stdlib's
+    // `Result` is an enum, the program's is a class.
+    assert_runs_with_output(
+        r#"
+class Result
+    fn tag() int
+        return 8
+fn main()
+    let r = Result()
+    println(f"{r.tag()}")
+        "#,
+        "8",
+    );
+}
+
+#[test]
+fn test_user_struct_shadows_prelude_result() {
+    assert_runs_with_output(
+        r#"
+struct Result
+    value int
+fn main()
+    let r = Result(4)
+    println(f"{r.value}")
+        "#,
+        "4",
+    );
+}
+
+#[test]
+fn test_user_trait_shadows_prelude_result() {
+    assert_runs_with_output(
+        r#"
+trait Result
+    fn tag() int
+class Marker implements Result
+    fn tag() int
+        return 6
+fn main()
+    let m = Marker()
+    println(f"{m.tag()}")
+        "#,
+        "6",
+    );
+}
+
+#[test]
+fn test_shadowing_a_prelude_type_leaves_the_rest_intact() {
+    // Taking over one preloaded name must not disturb the rest of the preload:
+    // string methods and the collection literals still resolve.
+    assert_runs_with_output(
+        r#"
+enum Result
+    Yes
+fn main()
+    let text = "abc"
+    let items = [1, 2, 3]
+    println(f"{text.length()} {items.length()}")
+        "#,
+        "3 3",
+    );
+}
+
+#[test]
+fn test_redeclaring_a_shadowed_prelude_name_errors() {
+    // The shadow is spent by the first declaration; a second one is an ordinary
+    // duplicate and must still be rejected.
+    assert_compiler_error(
+        r#"
+enum Result
+    Yes
+enum Result
+    No
+fn main()
+    println("unreachable")
+        "#,
+        "Type 'Result' is already defined",
+    );
+}
+
+#[test]
+fn test_type_the_stdlib_builds_on_is_not_shadowable() {
+    // `Iterable` is implemented by the preloaded stdlib types, so it is loaded
+    // eagerly and its name stays reserved. Only the shadowable tier can be
+    // skipped in favour of a program's own declaration.
+    assert_compiler_error(
+        r#"
+enum Iterable
+    First
+fn main()
+    println("unreachable")
+        "#,
+        "Type 'Iterable' is already defined",
+    );
+}
+
+#[test]
+fn test_collection_backing_name_is_not_shadowable() {
+    // The literal backings are preloaded for `[1, 2, 3]` to resolve, so their
+    // names are reserved even though user code cannot refer to them.
+    assert_compiler_error(
+        r#"
+class List
+    fn tag() int
+        return 1
+        "#,
+        "Type 'List' is already defined",
+    );
+}
+
+#[test]
+fn test_string_name_is_not_shadowable() {
+    // `String` comes from the eager tier, which the rest of the stdlib is
+    // written against, so it is reserved too.
+    assert_compiler_error(
+        r#"
+class String
+    fn tag() int
+        return 1
+        "#,
+        "Type 'String' is already defined",
+    );
+}
+
+#[test]
+fn test_importing_the_module_that_defines_a_shadowed_type_errors() {
+    // Declaring the type and importing it are contradictory instructions, so the
+    // import reports the conflict instead of silently keeping the declaration.
+    assert_compiler_error(
+        r#"
+use system.result
+enum Result
+    Yes
+fn main()
+    println("unreachable")
+        "#,
+        "Type 'Result' is declared in this program and also provided by 'system.result'",
+    );
+}
+
+#[test]
+fn test_importing_a_module_that_uses_a_shadowed_type_errors() {
+    // `system.fs` is written against the stdlib `Result`. The conflict is named
+    // at the import, in the user's file, rather than left to surface as
+    // signature failures inside library source.
+    assert_compiler_error(
+        r#"
+use system.fs
+enum Result
+    Yes
+fn main()
+    let fs = Fs()
+        "#,
+        "Type 'Result' is declared in this program and also provided by 'system.fs'",
+    );
+}
+
+#[test]
 fn test_unimported_array_constructor_suggests_import() {
     // The sized-array constructor takes a different parse/type path than the
     // bare collection identifier; it must surface the same import hint instead

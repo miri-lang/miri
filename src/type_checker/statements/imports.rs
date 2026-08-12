@@ -84,6 +84,8 @@ impl TypeChecker {
         };
 
         if self.modules.loaded_modules.contains(&abs_path_str) {
+            let shadowed = self.modules.shadowed_names_exposed_by(&path_str);
+            self.report_shadowed_type_conflicts(&shadowed, &path_str, path.span);
             self.restore_visibility_for_module(&path_str, &import_kind);
             self.replay_module_visibility(&path_str, &import_kind);
             return;
@@ -110,6 +112,11 @@ impl TypeChecker {
                 }
             };
 
+        if self.report_shadowed_module_conflicts(&module_ast, &path_str, path.span) {
+            self.modules.loading_stack.retain(|m| m != &abs_path_str);
+            return;
+        }
+
         let visible_before_load: HashSet<String> = self.type_table.visible_type_names.clone();
         self.process_loaded_module(
             &path_str,
@@ -126,6 +133,103 @@ impl TypeChecker {
 
         self.modules.loading_stack.retain(|m| m != &abs_path_str);
         self.modules.loaded_modules.insert(abs_path_str);
+    }
+
+    /// Reports each name that user code both declared and imported, returning
+    /// whether any conflict was found.
+    ///
+    /// A program that declares a shadowable prelude type keeps its own, so the
+    /// module that would have provided it was never loaded. Importing a module
+    /// that needs that name is therefore contradictory: it was written against
+    /// the stdlib type. Naming the conflict at the import — before the module is
+    /// checked — keeps it to one actionable diagnostic in the program's own file
+    /// instead of a cascade of failures inside library source.
+    ///
+    /// A module conflicts when it declares a shadowed name itself or depends on a
+    /// module that provides one.
+    fn report_shadowed_module_conflicts(
+        &mut self,
+        module_ast: &Program,
+        path_str: &str,
+        span: Span,
+    ) -> bool {
+        if self.modules.user_shadowed_types.is_empty() {
+            return false;
+        }
+
+        let mut conflicts: Vec<String> = Vec::new();
+        for statement in &module_ast.body {
+            match &statement.node {
+                StatementKind::Use(dep_path, _) => {
+                    conflicts.extend(self.shadowed_names_needed_by(dep_path));
+                }
+                StatementKind::Class(_)
+                | StatementKind::Struct(..)
+                | StatementKind::Enum(..)
+                | StatementKind::Trait(..) => {
+                    if let Some(name) = self.declared_type_name(statement) {
+                        if self.modules.user_shadowed_types.contains(&name) {
+                            conflicts.push(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        conflicts.sort();
+        conflicts.dedup();
+        self.report_shadowed_type_conflicts(&conflicts, path_str, span)
+    }
+
+    /// Shadowed names a dependency brings in: those an already-loaded dependency
+    /// exposes (which include the ones its own dependencies contributed) and
+    /// those a not-yet-loaded dependency declares itself.
+    fn shadowed_names_needed_by(&mut self, dep_path: &Expression) -> Vec<String> {
+        let Some((dep_path_str, _)) = Self::extract_import_path_with_kind(dep_path) else {
+            return Vec::new();
+        };
+        let mut names = self.modules.shadowed_names_exposed_by(&dep_path_str);
+        if !self.modules.module_visibility.contains_key(&dep_path_str) {
+            names.extend(
+                self.declared_type_names_of_module(dep_path)
+                    .into_iter()
+                    .filter(|name| self.modules.user_shadowed_types.contains(name)),
+            );
+        }
+        names
+    }
+
+    /// Reports `names` as declared-and-imported conflicts of the module at
+    /// `path_str`, returning whether there were any.
+    fn report_shadowed_type_conflicts(
+        &mut self,
+        names: &[String],
+        path_str: &str,
+        span: Span,
+    ) -> bool {
+        for name in names {
+            self.report_error(
+                format!(
+                    "Type '{}' is declared in this program and also provided by '{}'. \
+                     Rename the declaration.",
+                    name, path_str
+                ),
+                span,
+            );
+        }
+        !names.is_empty()
+    }
+
+    /// The type name a top-level declaration introduces, if the statement is one.
+    fn declared_type_name(&self, statement: &Statement) -> Option<String> {
+        let name_expr = match &statement.node {
+            StatementKind::Class(class_data) => &class_data.name,
+            StatementKind::Struct(name_expr, ..)
+            | StatementKind::Enum(name_expr, ..)
+            | StatementKind::Trait(name_expr, ..) => name_expr,
+            _ => return None,
+        };
+        self.extract_type_name(name_expr).ok().map(String::from)
     }
 
     /// Records the full set of type names a module's load exposes, so a later
@@ -713,8 +817,8 @@ impl TypeChecker {
 
     /// Loads the implicit prelude before the user's code is type-checked.
     ///
-    /// There are two tiers, both sourced from stdlib so the compiler hardcodes no
-    /// stdlib type or module names:
+    /// There are three tiers, all sourced from stdlib so the compiler hardcodes
+    /// no stdlib type or module names:
     ///
     /// - `system/prelude.mi` — re-exported by name: its modules' symbols (e.g.
     ///   `println`, `String`) are available unqualified, mirroring Rust's
@@ -725,6 +829,10 @@ impl TypeChecker {
     ///   user has not named them, so writing `Array<…>(…)` must still require an
     ///   explicit `use system.collections.array`. Their names are dropped from
     ///   `visible_type_names` after loading; only the definitions remain.
+    /// - `system/prelude_shadowable.mi` — re-exported by name like the first
+    ///   tier, but skipped for any module whose types the program declares
+    ///   itself. Loaded separately by [`load_shadowable_prelude`] after the
+    ///   program's own type names are known.
     ///
     /// Loading happens at clean type-checker state (before any user expression),
     /// which is required: the collection modules pull a trait web whose default
@@ -759,37 +867,104 @@ impl TypeChecker {
             .extend(newly_loaded);
     }
 
+    /// Loads the shadowable prelude tier, skipping any module whose types the
+    /// program declares itself.
+    ///
+    /// Runs after the type-shell pass, so `global_type_definitions` already holds
+    /// the program's own declarations and a collision is visible before the module
+    /// is loaded. Skipping rather than replacing is what makes the tier safe: a
+    /// loaded module's methods are compiled against the definitions it was checked
+    /// with, so replacing one of its types afterwards would leave that code
+    /// building values of a layout that no longer exists.
+    ///
+    /// A skipped name is recorded in `user_shadowed_types` so that importing a
+    /// module which needs it — the module the program shadowed, or any module
+    /// written against it — reports the conflict instead of failing inside
+    /// library source.
+    pub(crate) fn load_shadowable_prelude(&mut self, context: &mut Context) {
+        let Some(imports) = Self::prelude_file_imports("prelude_shadowable.mi") else {
+            return;
+        };
+
+        for (path_expr, _) in imports {
+            let declared = self.declared_type_names_of_module(&path_expr);
+            let shadowed: Vec<String> = declared
+                .into_iter()
+                .filter(|name| self.type_table.global_type_definitions.contains_key(name))
+                .collect();
+
+            if shadowed.is_empty() {
+                self.check_use(&path_expr, &None, context);
+            } else {
+                self.modules.user_shadowed_types.extend(shadowed);
+            }
+        }
+    }
+
+    /// The type names a module declares at its top level, without type-checking
+    /// it. Parsing alone is enough to see the names, and it must stay that way:
+    /// the module is not loaded when the program shadows one of them.
+    fn declared_type_names_of_module(&mut self, path_expr: &Expression) -> Vec<String> {
+        let Some((path_str, _)) = Self::extract_import_path_with_kind(path_expr) else {
+            return Vec::new();
+        };
+        let Some(file_path) = self.resolve_module_path(&path_str, path_expr.span) else {
+            return Vec::new();
+        };
+        let Some((_, module_ast)) =
+            self.load_and_parse_module(&file_path, &path_str, path_expr.span)
+        else {
+            return Vec::new();
+        };
+        module_ast
+            .body
+            .iter()
+            .filter_map(|statement| self.declared_type_name(statement))
+            .collect()
+    }
+
     /// Parses one stdlib prelude file under `system/` and runs each of its
     /// top-level `use` statements as a normal import. Loading them at top level
     /// (rather than nested under a single synthetic import) keeps each module's
     /// own symbols past the visibility filter.
     fn load_prelude_file(&mut self, file_name: &str, context: &mut Context) {
+        let Some(imports) = Self::prelude_file_imports(file_name) else {
+            return;
+        };
+        for (path_expr, alias_expr) in imports {
+            self.check_use(&path_expr, &alias_expr, context);
+        }
+    }
+
+    /// The imports a prelude file lists, or `None` when the file is absent or
+    /// unparseable — a silent no-op that keeps isolated tests without a stdlib
+    /// tree compiling.
+    #[allow(clippy::type_complexity)]
+    fn prelude_file_imports(
+        file_name: &str,
+    ) -> Option<Vec<(Box<Expression>, Option<Box<Expression>>)>> {
         let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
 
         let file_path = stdlib_base.join("system").join(file_name);
-        if !file_path.exists() {
-            return;
-        }
-
-        let source = match fs::read_to_string(&file_path) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+        let source = fs::read_to_string(file_path).ok()?;
 
         let mut lexer = Lexer::new(&source);
         let mut parser = Parser::new(&mut lexer, &source);
-        let ast = match parser.parse() {
-            Ok(a) => a,
-            Err(_) => return,
-        };
+        let ast = parser.parse().ok()?;
 
-        for stmt in &ast.body {
-            if let StatementKind::Use(path_expr, alias_expr) = &stmt.node {
-                self.check_use(path_expr, alias_expr, context);
-            }
-        }
+        Some(
+            ast.body
+                .iter()
+                .filter_map(|stmt| match &stmt.node {
+                    StatementKind::Use(path_expr, alias_expr) => {
+                        Some((path_expr.clone(), alias_expr.clone()))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     /// Returns the stdlib module path that defines `type_name`, or `None` if

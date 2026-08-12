@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Shadowable prelude: loaded automatically before every Miri program, unless
+/// the program declares a type of the same name.
+///
+/// These modules are re-exported by name like `prelude.mi`, so their types need
+/// no `use`. The difference is what happens on a collision: a program that
+/// declares its own `Result` keeps it, and the module here is not loaded at all.
+///
+/// A module belongs here only when nothing else in the stdlib depends on the
+/// types it declares. Skipping a module the rest of the stdlib is written
+/// against would leave that code without the type it was checked with, so those
+/// modules stay in `prelude.mi`, where their names are reserved.
+use system.result

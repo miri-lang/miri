@@ -6,12 +6,7 @@
 /// Provides file and directory operations through a capability class.
 /// Error handling uses the `FsError` enum.
 ///
-/// Note: programs using this module must import `system.result` BEFORE
-/// `system.fs`, because a stdlib module's own `use system.result` does not make
-/// `Result` visible while that module is being checked.
-///
 /// Example:
-///     use system.result
 ///     use system.fs
 ///     let fs = Fs()
 ///     match fs.read_file("/tmp/data.txt")
