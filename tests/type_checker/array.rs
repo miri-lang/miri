@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{type_checker_error_test, type_checker_test, type_checker_vars_type_test};
-use miri::ast::factory::{type_array, type_f32, type_int, type_string, type_tuple};
+use miri::ast::factory::{type_array, type_float, type_int, type_string, type_tuple};
 
 #[test]
 fn test_array_variable_definitions() {
@@ -17,7 +17,7 @@ fn test_array_variable_definitions() {
             ("a1", type_array(type_int(), 3)),
             ("a2", type_array(type_string(), 3)),
             ("a3", type_array(type_int(), 3)),
-            ("a4", type_array(type_f32(), 3)),
+            ("a4", type_array(type_float(), 3)),
         ],
     )
 }

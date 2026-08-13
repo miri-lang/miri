@@ -39,6 +39,7 @@ pub mod context;
 pub(crate) mod diagnostics;
 pub mod escape_analysis;
 pub mod expressions;
+pub(crate) mod float_literals;
 mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;

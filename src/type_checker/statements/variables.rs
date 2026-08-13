@@ -397,7 +397,16 @@ impl TypeChecker {
         }
 
         let inferred_type = if let Some(init) = &decl.initializer {
-            self.infer_expression(init, context)
+            // A gpu-resident initializer is checked against the device's scalar
+            // widths: its values are uploaded to a buffer a kernel reads, so an
+            // unconstrained float literal in it takes the device default, not
+            // the host one.
+            let outer_resident = context.in_gpu_resident_initializer;
+            context.in_gpu_resident_initializer =
+                outer_resident || decl.residency == BindingResidency::Gpu;
+            let inferred = self.infer_expression(init, context);
+            context.in_gpu_resident_initializer = outer_resident;
+            inferred
         } else if let Some(type_expr) = &decl.typ {
             self.resolve_type_expression(type_expr, context)
         } else {
@@ -411,6 +420,12 @@ impl TypeChecker {
         // If both type annotation and initializer exist, check compatibility
         if let (Some(type_expr), Some(init)) = (&decl.typ, &decl.initializer) {
             let declared_type = self.resolve_type_expression(type_expr, context);
+            // The annotation is a declared width, so a literal initializer takes
+            // it before the two are compared — `let x f32 = 3.14` narrows rather
+            // than reporting an f64 the source never asked for.
+            let inferred_type = self
+                .narrow_float_literals(init, &declared_type, &inferred_type, context)
+                .unwrap_or(inferred_type);
             if !self.are_compatible(&declared_type, &inferred_type, context) {
                 // Check for list literal compatibility (e.g. [1] -> [i16])
                 let mut compatible = false;

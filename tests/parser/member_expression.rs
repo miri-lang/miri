@@ -3,7 +3,7 @@
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    assign, binary, call, expression_statement, float32_literal_expression, identifier, index,
+    assign, binary, call, expression_statement, float64_literal_expression, identifier, index,
     int_literal_expression, lhs_index, lhs_member, member, string_literal_expression,
 };
 use miri::ast::{AssignmentOp, BinaryOp};
@@ -65,7 +65,7 @@ obj.a.b['prop'][0] = 1.0
                 int_literal_expression(0),
             ),
             AssignmentOp::Assign,
-            float32_literal_expression(1.0),
+            float64_literal_expression(1.0),
         ))],
     );
 }

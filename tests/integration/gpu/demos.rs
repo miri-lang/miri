@@ -15,6 +15,13 @@
 // Planned demos awaiting completion of math-intrinsic result-width narrowing
 // (f64 result into f32 buffers):
 // - map_normalize: normalizes a GPU buffer by the Euclidean norm.
+//
+// The `red_sum_milli` checksums are host-side reductions over the read-back
+// frame, so they are stated at the width the host accumulates in. When an
+// untyped float literal became f64, the `var total = 0.0` accumulators in the
+// demos widened with it and the sums moved in their low digits. The device
+// output did not change: pinning an accumulator back to `f32` reproduces the
+// previous checksum of each demo exactly.
 
 use super::device::assert_gpu_runs_with_output;
 
@@ -103,7 +110,7 @@ fn demo_tiled_matmul() {
 )]
 fn demo_linear_regression() {
     let source = include_str!("../../../examples/gpu/linear_regression.mi");
-    assert_gpu_runs_with_output(source, "W: 0 -> 1.7  B: 0 -> 0.8  MSE: 21.0");
+    assert_gpu_runs_with_output(source, "W: 0 -> 1.7000000000000002  B: 0 -> 0.8  MSE: 21.0");
 }
 
 /// neural_net: a single dense layer (2 → 3) with ReLU, one thread per neuron.
@@ -151,7 +158,7 @@ fn demo_neural_net_mlp() {
 )]
 fn demo_game_of_life_web() {
     let source = include_str!("../../../examples/gpu/web/game_of_life.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=172274064");
+    assert_gpu_runs_with_output(source, "red_sum_milli=170721356");
 }
 
 /// mandelbrot_web: interactive pan/zoom Mandelbrot, a faithful port of the
@@ -169,7 +176,7 @@ fn demo_game_of_life_web() {
 )]
 fn demo_mandelbrot_web() {
     let source = include_str!("../../../examples/gpu/web/mandelbrot.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=336563072");
+    assert_gpu_runs_with_output(source, "red_sum_milli=335842575");
 }
 
 /// raymarch_web: interactive ray marcher, a faithful port of the reference
@@ -206,7 +213,7 @@ fn demo_raymarch_web() {
 )]
 fn demo_blackhole_web() {
     let source = include_str!("../../../examples/gpu/web/blackhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=117803200");
+    assert_gpu_runs_with_output(source, "red_sum_milli=117766922");
 }
 
 /// wormhole_web: a traversable Morris–Thorne wormhole rendered by integrating one
@@ -225,7 +232,7 @@ fn demo_blackhole_web() {
 )]
 fn demo_wormhole_web() {
     let source = include_str!("../../../examples/gpu/web/wormhole.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=106794584");
+    assert_gpu_runs_with_output(source, "red_sum_milli=106806036");
 }
 
 /// particles_web: 1,048,576 particles advected through a two-octave curl-noise

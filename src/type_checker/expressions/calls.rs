@@ -1532,6 +1532,19 @@ impl TypeChecker {
                     param_type.clone()
                 };
 
+                // The parameter declares a width, so a literal argument takes it
+                // before the two are compared. An `out` argument is a variable
+                // rather than a literal, so it never narrows.
+                let arg_type = if param.is_out {
+                    arg_type
+                } else {
+                    arg_expr
+                        .and_then(|e| {
+                            self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
+                        })
+                        .unwrap_or(arg_type)
+                };
+
                 if param.is_out {
                     self.validate_out_parameter(
                         &param.name,
@@ -2203,6 +2216,12 @@ impl TypeChecker {
                 {
                     continue;
                 }
+                // The field declares a width, so a literal initializer takes it.
+                let arg_type = arg_expr
+                    .and_then(|e| {
+                        self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
+                    })
+                    .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                     self.report_error(
                         format!(
@@ -2275,6 +2294,13 @@ impl TypeChecker {
             };
 
             if let Some(arg_type) = arg_type {
+                // A field's declared width narrows its literal initializer, the
+                // same way a function parameter's does.
+                let arg_type = arg_expr
+                    .and_then(|e| {
+                        self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
+                    })
+                    .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                     self.report_error(
                         format!(
@@ -2355,6 +2381,12 @@ impl TypeChecker {
                     field_type.clone()
                 };
 
+                // The field declares a width, so a literal initializer takes it.
+                let arg_type = arg_expr
+                    .and_then(|e| {
+                        self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
+                    })
+                    .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                     self.report_error(
                         format!(

@@ -28,9 +28,10 @@ println(f\"{w.length()}\")
 
 #[test]
 fn value_generic_class_rejects_layout_incompatible_element_width() {
-    // Literal `[1.5, 2.5, 3.5]` is `Array<f32, 3>`. Declaring the field as
-    // `Array<float, 3>` (= F64 storage) would put a 4-byte-stride buffer
-    // beneath an 8-byte-stride reader. The field-type check refuses it.
+    // `d` is a value with `float` (F64) storage, so it does not narrow the way
+    // a literal would. Binding it to an `Array<f32, 3>` field would put an
+    // 8-byte-stride buffer beneath a 4-byte-stride reader. The field-type check
+    // refuses it.
     assert_compiler_error(
         "
 use system.collections.array
@@ -38,7 +39,8 @@ use system.collections.array
 class Wrap<T, Size>
     var data Array<T, Size>
 
-let w = Wrap<float, 3>(data: [1.5, 2.5, 3.5])
+let d Array<float,3> = [1.5, 2.5, 3.5]
+let w = Wrap<f32, 3>(data: d)
 ",
         "Type mismatch for field 'data'",
     );

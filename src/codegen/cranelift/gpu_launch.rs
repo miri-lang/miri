@@ -567,6 +567,16 @@ fn convert_scalar_for_uniform(
                 Ok(value)
             }
         }
+        // `float` is the host default (f64); the device has no f64, so the
+        // value narrows on upload the same way `int` reduces to i32 above.
+        TypeKind::Float => {
+            let val_ty = builder.func.dfg.value_type(value);
+            if val_ty == cl_types::F64 {
+                Ok(builder.ins().fdemote(cl_types::F32, value))
+            } else {
+                Ok(value)
+            }
+        }
         TypeKind::F32 => Ok(value),
         // Unsupported scalar types
         TypeKind::I8
@@ -580,7 +590,6 @@ fn convert_scalar_for_uniform(
         | TypeKind::U64
         | TypeKind::U128
         | TypeKind::F16
-        | TypeKind::Float
         | TypeKind::F64
         | TypeKind::String
         | TypeKind::Identifier

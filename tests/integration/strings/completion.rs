@@ -329,7 +329,6 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "untyped decimal literals are parsed as f32 by default, so 3.14 becomes an f32 literal; when compared as f64 equality, the f32 bits widened to f64 give 3.140000104904175, not 3.14"]
 fn test_string_to_float_literal_width_tripwire() {
     assert_runs_with_output(
         r#"

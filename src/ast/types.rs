@@ -785,7 +785,11 @@ pub fn inline_element_payload(name: &str, scalar: &TypeKind) -> Option<i64> {
 /// ensuring consistency across the pipeline (web manifest generation) and
 /// codegen (WGSL type emission). The mapping respects Miri's type narrowing:
 /// - Narrower integer types map to i32/u32 (WGSL minimum widths)
-/// - Miri's default int/float map to i64/f64
+/// - Miri's defaults (`int`, `float`) marshal to the browser-portable widths,
+///   since a value crossing to the device is bound by what the device has: the
+///   host keeps i64/f64 and narrows on upload. A width the source asked for by
+///   name is never silently changed, so explicit `i64`/`f64` map to themselves
+///   and are gated host-side instead.
 ///
 /// # Returns
 /// A static string slice (never allocates) naming the WGSL scalar, or `None`
@@ -796,10 +800,11 @@ pub fn wgsl_scalar_name(kind: &TypeKind) -> Option<&'static str> {
         TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
         TypeKind::F16 => Some("f16"),
         TypeKind::F32 => Some("f32"),
-        TypeKind::Int => Some("i32"), // Browser-portable: no i64
-        TypeKind::I64 => Some("i64"), // Explicit i64 still uses i64
+        TypeKind::Int => Some("i32"),   // Browser-portable: no i64
+        TypeKind::Float => Some("f32"), // Browser-portable: no f64
+        TypeKind::I64 => Some("i64"),   // Explicit i64 still uses i64
         TypeKind::U64 => Some("u64"),
-        TypeKind::Float | TypeKind::F64 => Some("f64"),
+        TypeKind::F64 => Some("f64"), // Explicit f64 still uses f64
         _ => None,
     }
 }

@@ -350,7 +350,11 @@ fn scalar_type_to_wgsl(ty: &TypeKind) -> Result<WgslScalar, CodegenError> {
         TypeKind::Int => Ok(WgslScalar::I32),
         TypeKind::Boolean => Ok(WgslScalar::U32),
         TypeKind::F32 => Ok(WgslScalar::F32),
-        TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
+        // Miri's defaults marshal to the device's widths on upload, the same
+        // way `int` does above; an explicitly named `f64` keeps its width and
+        // is gated host-side.
+        TypeKind::Float => Ok(WgslScalar::F32),
+        TypeKind::F64 => Ok(WgslScalar::F64),
         // Unsupported scalar types
         TypeKind::I8
         | TypeKind::I16
@@ -2168,14 +2172,23 @@ fn render_integer(i: &IntegerLiteral, ty: &TypeKind) -> String {
 /// resolved Miri type so a literal feeding an `f64` storage element keeps
 /// its width through naga's type checker.
 fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
-    let body = match f {
-        FloatLiteral::F32(bits) => format!("{:?}", f32::from_bits(*bits)),
-        FloatLiteral::F64(bits) => format!("{:?}", f64::from_bits(*bits)),
+    let value = match f {
+        FloatLiteral::F32(bits) => f32::from_bits(*bits) as f64,
+        FloatLiteral::F64(bits) => f64::from_bits(*bits),
     };
+    // Each arm renders the digits at the width the literal resolved to, not the
+    // width it was stored at: a source literal always arrives as f64, so
+    // printing its f64 digits under an `f32` type would hand naga more
+    // precision than the constant actually has. `Float` is the host default,
+    // which marshals to f32 on the device — the same rule `wgsl_scalar_name`
+    // applies to a captured scalar, so a literal and the binding it feeds
+    // cannot disagree on width.
+    let narrowed = || format!("{:?}", value as f32);
     match ty {
-        TypeKind::F16 => format!("{}h", body), // `h` suffix → f16 literal (needs `enable f16;`)
-        TypeKind::F32 => body,
-        TypeKind::Float | TypeKind::F64 => format!("{}lf", body),
+        // `h` suffix → f16 literal (needs `enable f16;`)
+        TypeKind::F16 => format!("{}h", narrowed()),
+        TypeKind::F32 | TypeKind::Float => narrowed(),
+        TypeKind::F64 => format!("{:?}lf", value),
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -2205,7 +2218,9 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
-        | TypeKind::Linear(_) => body,
+        // A float constant recorded under a non-float type has no width to
+        // render at, so it keeps its own digits and takes no suffix.
+        | TypeKind::Linear(_) => format!("{:?}", value),
     }
 }
 
