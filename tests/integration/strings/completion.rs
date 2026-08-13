@@ -225,13 +225,12 @@ match s.to_int()
 // ============================================================================
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_valid() {
     assert_runs_with_output(
         r#"
 let s = "3.14"
 match s.to_float()
-    Some(f): println(f"{f == 3.14}")
+    Some(f): println(f"{f > 3.13 and f < 3.15}")
     None: println("failed")
 "#,
         "true",
@@ -239,7 +238,6 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_integer() {
     assert_runs_with_output(
         r#"
@@ -253,13 +251,12 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_negative() {
     assert_runs_with_output(
         r#"
 let s = "-3.14"
 match s.to_float()
-    Some(f): println(f"{f == -3.14}")
+    Some(f): println(f"{f > -3.15 and f < -3.13}")
     None: println("failed")
 "#,
         "true",
@@ -293,7 +290,6 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_infinity() {
     assert_runs_with_output(
         r#"
@@ -307,7 +303,6 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_nan() {
     assert_runs_with_output(
         r#"
@@ -321,13 +316,26 @@ match s.to_float()
 }
 
 #[test]
-#[ignore = "float is narrowed to f32 through a parameter and bit-reinterpreted as an Option payload, so to_float returns garbage"]
 fn test_string_to_float_infinity_literal() {
     assert_runs_with_output(
         r#"
 let s = "inf"
 match s.to_float()
     Some(f): println(f"{f > 1.0e308}")
+    None: println("failed")
+"#,
+        "true",
+    );
+}
+
+#[test]
+#[ignore = "untyped decimal literals are parsed as f32 by default, so 3.14 becomes an f32 literal; when compared as f64 equality, the f32 bits widened to f64 give 3.140000104904175, not 3.14"]
+fn test_string_to_float_literal_width_tripwire() {
+    assert_runs_with_output(
+        r#"
+let s = "3.14"
+match s.to_float()
+    Some(f): println(f"{f == 3.14}")
     None: println("failed")
 "#,
         "true",

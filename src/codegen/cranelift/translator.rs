@@ -417,12 +417,17 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
     /// Read a value from a place.
+    ///
+    /// When `expected_ty` is Some and the place has a Field projection that would
+    /// normally load as `ptr_type` (e.g., enum or Option payload), use the expected type's
+    /// Cranelift width instead. This prevents field-type erasure for payloads.
     pub(crate) fn read_place(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         place: &Place,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected_ty: Option<&Type>,
     ) -> Result<Value, CodegenError> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
@@ -462,8 +467,72 @@ impl<'a> FunctionTranslator<'a> {
                             .ins()
                             .load(ptr_type, MemFlags::new(), value, offset as i32);
                     } else {
-                        let (offset, field_ty) =
+                        let (offset, mut field_ty) =
                             layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
+                        // When loading an enum or Option payload field with a known destination
+                        // type, use that type instead of ptr_ty to avoid field-type erasure.
+                        // For enums, field_layout always returns ptr_ty; for Options,
+                        // Field(0) also returns ptr_ty. Use expected_ty when available.
+                        // This is especially important for generic enums like Result<T,E>
+                        // where the binding type is resolved but the aggregate definition is generic.
+                        let should_use_expected_ty = if expected_ty.is_some() {
+                            match &base_type.kind {
+                                TypeKind::Option(_) => true,
+                                TypeKind::Custom(name, _) => type_definitions
+                                    .get(name)
+                                    .map(|def| {
+                                        matches!(
+                                            def,
+                                            crate::type_checker::context::TypeDefinition::Enum(_)
+                                        )
+                                    })
+                                    .unwrap_or(false),
+                                // Generic type parameters (from type substitution in match bindings)
+                                // also need the expected type to resolve to concrete types
+                                TypeKind::Generic(_, _, _) => true,
+                                TypeKind::Int
+                                | TypeKind::I8
+                                | TypeKind::I16
+                                | TypeKind::I32
+                                | TypeKind::I64
+                                | TypeKind::I128
+                                | TypeKind::U8
+                                | TypeKind::U16
+                                | TypeKind::U32
+                                | TypeKind::U64
+                                | TypeKind::U128
+                                | TypeKind::Float
+                                | TypeKind::F16
+                                | TypeKind::F32
+                                | TypeKind::F64
+                                | TypeKind::String
+                                | TypeKind::Boolean
+                                | TypeKind::Identifier
+                                | TypeKind::RawPtr
+                                | TypeKind::List(_)
+                                | TypeKind::Array(_, _)
+                                | TypeKind::Map(_, _)
+                                | TypeKind::Tuple(_)
+                                | TypeKind::Set(_)
+                                | TypeKind::Result(_, _)
+                                | TypeKind::Future(_)
+                                | TypeKind::Function(_)
+                                | TypeKind::Meta(_)
+                                | TypeKind::Void
+                                | TypeKind::Error
+                                | TypeKind::Linear(_) => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if should_use_expected_ty {
+                            if let Some(expected) = expected_ty {
+                                field_ty = crate::codegen::cranelift::types::translate_type_kind(
+                                    &expected.kind,
+                                    ptr_type,
+                                );
+                            }
+                        }
                         value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
                     }
                 }
