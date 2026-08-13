@@ -84,7 +84,7 @@ fn get_key<T>(key T) T
 
 { \"a\": 1.2 }[get_key<String>(\"a\")]
 ",
-        type_f32(),
+        type_float(),
     );
 }
 

@@ -23,8 +23,8 @@ fn test_list_variable_definitions() {
             ("l1", type_array(type_int(), 3)),
             ("l2", type_array(type_string(), 3)),
             ("l3", type_array(type_int(), 3)),
-            ("l4", type_array(type_f32(), 3)),
-            ("l5", type_array(type_f32(), 3)),
+            ("l4", type_array(type_float(), 3)),
+            ("l5", type_array(type_float(), 3)),
         ],
     )
 }

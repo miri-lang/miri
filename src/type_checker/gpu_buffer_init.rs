@@ -228,10 +228,12 @@ fn infer_elem_type_from_type(kind: &TypeKind) -> String {
 
 fn infer_elem_type_from_literal(elem: &Expression) -> String {
     match &elem.node {
-        ExpressionKind::Literal(Literal::Float(float_lit)) => match float_lit {
-            FloatLiteral::F32(_) => "f32".to_string(),
-            FloatLiteral::F64(_) => "f64".to_string(),
-        },
+        // A buffer element is read by a kernel, so a float literal takes the
+        // device's float width rather than the host's — the shader has no f64
+        // to widen it into.
+        ExpressionKind::Literal(Literal::Float(_)) => {
+            infer_elem_type_from_type(&crate::type_checker::float_literals::gpu_float_width())
+        }
         // Integer literals are `int` (Miri default), which maps to i32 for
         // browser portability. The host keeps i64; marshalling narrows to i32
         // for the device and widens on readback.

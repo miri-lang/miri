@@ -101,7 +101,7 @@ impl TypeChecker {
                 self.report_error(
                     format!(
                         "'gpu forall' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
-                         Supported types are: int/i32, i16, i8, bool, and f32. Unsupported: i64, f64, String.",
+                         Supported types are: int/i32, i16, i8, bool, float, and f32. Unsupported: i64, f64, String.",
                         name, ty
                     ),
                     span,
@@ -445,6 +445,10 @@ fn check_captured_identifier(
     }
 }
 
+/// Miri's defaults `int` and `float` are capturable because they marshal to
+/// the device's widths on upload — the same narrowing `wgsl_scalar_name`
+/// applies. A width the source named explicitly is not narrowed behind the
+/// programmer's back, so `i64`/`f64` stay unsupported here.
 fn is_supported_scalar_capture(kind: &crate::ast::types::TypeKind) -> bool {
     use crate::ast::types::TypeKind;
     matches!(
@@ -454,6 +458,7 @@ fn is_supported_scalar_capture(kind: &crate::ast::types::TypeKind) -> bool {
             | TypeKind::I16
             | TypeKind::I8
             | TypeKind::Boolean
+            | TypeKind::Float
             | TypeKind::F32
     )
 }

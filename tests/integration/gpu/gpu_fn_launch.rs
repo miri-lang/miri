@@ -51,7 +51,7 @@ gpu fn my_kernel(a Array<f32,4>)
     let x = 1
 
 fn main()
-    let a = [1.0, 2.0, 3.0, 4.0]
+    let a Array<f32,4> = [1.0, 2.0, 3.0, 4.0]
     my_kernel(a).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
 ",
         "host-resident",

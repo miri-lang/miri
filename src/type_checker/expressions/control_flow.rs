@@ -432,7 +432,7 @@ impl TypeChecker {
         {
             return;
         }
-        let lit_type = self.infer_literal(lit);
+        let lit_type = self.infer_literal(lit, context);
         if !self.are_compatible(subject_type, &lit_type, context) {
             self.report_error(
                 format!(

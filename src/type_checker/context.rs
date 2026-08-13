@@ -393,6 +393,11 @@ pub struct Context {
     pub gpu_for_depth: usize,
     /// Whether we are currently inside a GPU function.
     pub in_gpu_function: bool,
+    /// Whether we are currently checking the initializer of a gpu-resident
+    /// binding (`gpu let` / `gpu var`). The initializer is written in host
+    /// scope but its values land in a device buffer, so the device's scalar
+    /// widths apply to it — see [`crate::type_checker::float_literals`].
+    pub in_gpu_resident_initializer: bool,
     /// Whether we are currently inside any function.
     pub in_function: bool,
     /// Whether we are currently inside an async function.
@@ -425,6 +430,7 @@ impl Context {
             loop_depth: 0,
             gpu_for_depth: 0,
             in_gpu_function: false,
+            in_gpu_resident_initializer: false,
             in_function: false,
             in_async_function: false,
             current_class: None,

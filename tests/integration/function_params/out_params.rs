@@ -171,7 +171,9 @@ fn main()
 
 #[test]
 fn test_out_param_float_writeback() {
-    // f32 out param — exercises the float stack-slot path in codegen.
+    // f32 out param — exercises the float stack-slot path in codegen. An `out`
+    // argument aliases the caller's storage, so its width must match the
+    // parameter exactly; `n` is declared `f32` rather than left to the default.
     assert_runs_with_output(
         r#"
 
@@ -179,7 +181,7 @@ fn double(x out f32)
     x = x * 2.0
 
 fn main()
-    var n = 3.5
+    var n f32 = 3.5
     double(n)
     println(f"{n}")
 "#,

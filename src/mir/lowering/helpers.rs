@@ -308,7 +308,6 @@ fn variant_payload_types(
     let declared = enum_def.variants.get(variant_name.as_str())?;
     let type_args = enum_instantiation_args(&ctx.body.local_decls[subject_local.0].ty.kind);
     Some(substitute_variant_field_types(
-        ctx,
         declared,
         type_args.as_deref(),
         enum_def,
@@ -338,16 +337,15 @@ fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
 /// representation.
 ///
 /// Substitution recovers a payload's *storage width*, which only differs from
-/// the pointer-sized default for scalars. A reference-counted payload is
-/// pointer-sized under either spelling, so naming it concretely would change
-/// nothing about the load while making the bound local reference-counted — and
-/// a generic enum's drop path reads its payload kinds straight off the
-/// declaration, where they are still type parameters, so it would never emit
-/// the matching release. Those payloads therefore keep the generic spelling.
-/// TODO: substitute them too once generic enums get per-instantiation drop
-/// thunks, the way generic classes already do in `codegen::cranelift::rc`.
+/// the pointer-sized default for scalars, and its *ownership*: a payload named
+/// concretely as a reference-counted type makes the bound local managed, so
+/// Perceus retains it at the bind. That retain is what balances the release the
+/// enum's drop path emits for the same field once it resolves the instantiation
+/// (`codegen::cranelift::rc::enum_variants_with_managed_fields`). Both sides
+/// read the same instantiation arguments, so a payload is managed at the bind
+/// exactly when it is released at the drop; substituting on only one side
+/// leaks (no release) or double-frees (release without retain).
 fn substitute_variant_field_types(
-    ctx: &LoweringContext,
     declared: &[Type],
     type_args: Option<&[Expression]>,
     enum_def: &crate::type_checker::context::EnumDefinition,
@@ -360,11 +358,7 @@ fn substitute_variant_field_types(
                 type_args,
                 enum_def.generics.as_ref(),
             );
-            if ctx.is_perceus_managed(&substituted) {
-                ty.clone()
-            } else {
-                Type::new(substituted, ty.span)
-            }
+            Type::new(substituted, ty.span)
         })
         .collect()
 }

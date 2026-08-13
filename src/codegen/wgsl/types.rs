@@ -44,12 +44,13 @@ impl WgslScalar {
 
 /// Map a scalar MIR/AST type kind to its WGSL scalar representation.
 ///
-/// For browser portability (WebGPU/Tint has no 64-bit int support),
-/// Miri's default `Int` maps to WGSL `i32` (not i64). The runtime marshals
-/// host i64 buffers ↔ device i32 buffers at launch/readback boundaries.
-/// Fixed-width types keep their declared widths (`I32` → `i32`, `I64` → `i64`
-/// for CPU-only code). Default `Float` still maps to WGSL `f64`.
-/// Not all browsers support WGSL f64; F32 buffers stay f32 unchanged.
+/// For browser portability (WebGPU/Tint has 64-bit support for neither ints
+/// nor floats), Miri's defaults map to the widths the device has: `Int` to
+/// WGSL `i32` and `Float` to `f32`. The runtime marshals host i64/f64 values ↔
+/// device i32/f32 at launch/readback boundaries. A width the source named
+/// explicitly keeps it (`I32` → `i32`, `I64` → `i64`, `F64` → `f64` for
+/// CPU-only code) and is rejected at the launch site rather than silently
+/// narrowed.
 ///
 /// Returns `Err(CodegenError::Internal)` for non-scalar inputs; callers wrap
 /// pointer/buffer types in `array<T>` themselves.
@@ -61,9 +62,10 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Boolean => Ok(WgslScalar::Bool),
         TypeKind::Int => Ok(WgslScalar::I32), // Browser-portable: no i64
+        TypeKind::Float => Ok(WgslScalar::F32), // Browser-portable: no f64
         TypeKind::I64 => Ok(WgslScalar::I64), // Explicit i64 still uses i64
         TypeKind::U64 => Ok(WgslScalar::U64),
-        TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
+        TypeKind::F64 => Ok(WgslScalar::F64), // Explicit f64 still uses f64
         // Atomic<u32> and Atomic<i32> unwrap to their inner scalar types
         TypeKind::Custom(name, Some(args)) if name == crate::ast::types::ATOMIC_TYPE_NAME => {
             if args.len() == 1 {
@@ -366,12 +368,15 @@ mod tests {
         assert_eq!(wgsl_scalar(&TypeKind::U64), WgslScalar::U64);
     }
 
+    /// A width named in the source is emitted as itself; `float` is the host
+    /// default rather than a named width, so it marshals to the device's f32
+    /// the same way `int` marshals to i32.
     #[test]
     fn test_float_kinds_keep_their_declared_widths() {
         assert_eq!(wgsl_scalar(&TypeKind::F16), WgslScalar::F16);
         assert_eq!(wgsl_scalar(&TypeKind::F32), WgslScalar::F32);
         assert_eq!(wgsl_scalar(&TypeKind::F64), WgslScalar::F64);
-        assert_eq!(wgsl_scalar(&TypeKind::Float), WgslScalar::F64);
+        assert_eq!(wgsl_scalar(&TypeKind::Float), WgslScalar::F32);
     }
 
     #[test]

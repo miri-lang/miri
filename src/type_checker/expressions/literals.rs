@@ -90,12 +90,20 @@ impl TypeChecker {
         }
     }
 
-    pub(crate) fn infer_literal(&self, lit: &Literal) -> Type {
+    /// A float literal is width-less in the source, so — like an integer
+    /// literal, which is always `Int` here — it infers as the target's default
+    /// float width and takes a narrower one only from a context that declares
+    /// it. The `F32` spelling appears only on literals the compiler synthesizes
+    /// itself (a reduce identity, a frame uniform), which choose their width
+    /// deliberately and keep it.
+    pub(crate) fn infer_literal(&self, lit: &Literal, context: &Context) -> Type {
         match lit {
             Literal::Integer(_) => ast_factory::make_type(TypeKind::Int),
             Literal::Float(f) => match f {
                 FloatLiteral::F32(_) => ast_factory::make_type(TypeKind::F32),
-                FloatLiteral::F64(_) => ast_factory::make_type(TypeKind::F64),
+                FloatLiteral::F64(_) => ast_factory::make_type(
+                    crate::type_checker::float_literals::default_float_literal_width(context),
+                ),
             },
             Literal::Boolean(_) => ast_factory::make_type(TypeKind::Boolean),
             Literal::String(_) => ast_factory::make_type(TypeKind::String),

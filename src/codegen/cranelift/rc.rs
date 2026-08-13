@@ -649,7 +649,8 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Drop a custom struct/class/enum: dispatch through the type-specific
     /// `__drop_TypeName` thunk when it carries managed fields or a user-defined
-    /// drop hook; otherwise free the RC block directly.
+    /// drop hook; otherwise, for enums, emit field drops inline and free the RC
+    /// block, or just free the block for non-enums.
     fn emit_drop_custom(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -659,6 +660,11 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
+        // Extract Type arguments from Expression arguments for generic enums.
+        // This enables resolution of generic variant fields to their concrete
+        // kinds so managed fields are correctly identified.
+        let concrete_args = Self::extract_type_args_from_exprs(type_args);
+
         // A generic class instantiated at a recorded set of type arguments
         // dispatches to its per-instantiation drop thunk (`__drop_Box__String`)
         // so a managed field is DecRef'd and a scalar field skipped, each per
@@ -676,9 +682,38 @@ impl<'a> FunctionTranslator<'a> {
             || Self::type_has_user_drop(name, type_ctx.type_definitions);
         if needs_thunk {
             Self::call_drop_thunk(builder, ctx, &thunk_target, ptr, type_ctx.ptr_type)
+        } else if concrete_args.is_some() {
+            // For generic enums (concrete_args available) without a thunk, emit field
+            // drops inline using resolved type arguments so that generic variant
+            // fields become their concrete kinds and are correctly identified as managed.
+            if let Some(TypeDefinition::Enum(_)) = type_ctx.type_definitions.get(name) {
+                Self::emit_struct_drop(
+                    builder,
+                    ctx,
+                    name,
+                    concrete_args.as_deref(),
+                    ptr,
+                    type_ctx,
+                )?;
+            }
+            Self::call_libc_free(builder, ctx, header_ptr)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
         }
+    }
+
+    /// Extract Type arguments from Expression type arguments.
+    /// Returns `None` if no args or extraction fails; `Some(Vec)` otherwise.
+    fn extract_type_args_from_exprs(type_args: Option<&[Expression]>) -> Option<Vec<Type>> {
+        let args = type_args?;
+        let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
+        for arg in args {
+            let ExpressionKind::Type(ty, _) = &arg.node else {
+                return None;
+            };
+            concrete.push((**ty).clone());
+        }
+        Some(concrete)
     }
 
     /// The `__drop_` suffix to call for a Custom type: the mangled
@@ -825,7 +860,7 @@ impl<'a> FunctionTranslator<'a> {
                 )
             }
             TypeDefinition::Enum(enum_def) => {
-                Self::emit_enum_drop(builder, ctx, enum_def, payload_ptr, type_ctx)
+                Self::emit_enum_drop(builder, ctx, enum_def, inst_args, payload_ptr, type_ctx)
             }
             TypeDefinition::Class(class_def) => {
                 use crate::type_checker::context::collect_class_fields_all;
@@ -904,10 +939,21 @@ impl<'a> FunctionTranslator<'a> {
     /// Drop an enum payload. Reads the discriminant at offset 0 and, for each
     /// variant that carries managed fields, emits a guarded block that
     /// DecRefs the variant's fields when the discriminant matches.
+    ///
+    /// For generic enums, `inst_args` provides the concrete type arguments so
+    /// that generic variant fields can be resolved to their concrete kinds. A
+    /// bare-generic field (`value T`) in a generic-enum variant is resolved to
+    /// the argument at the parameter's declared position: a managed one (like
+    /// `String`) joins the DecRef set at that kind, a scalar one (like `float`)
+    /// is skipped. The shared bare-name thunk (inst_args = None) is only reached
+    /// as a collection element's decref helper; there the direct drop already
+    /// routed through the mangled thunk, so an unresolvable generic field is
+    /// skipped here.
     fn emit_enum_drop(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         enum_def: &EnumDefinition,
+        inst_args: Option<&[Type]>,
         payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
@@ -916,7 +962,9 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .load(ptr_type, MemFlags::new(), payload_ptr, 0);
 
-        for (variant_idx, managed_fields) in Self::enum_variants_with_managed_fields(enum_def) {
+        for (variant_idx, managed_fields) in
+            Self::enum_variants_with_managed_fields(enum_def, inst_args, type_ctx)
+        {
             Self::emit_enum_variant_drop_guard(
                 builder,
                 ctx,
@@ -934,8 +982,14 @@ impl<'a> FunctionTranslator<'a> {
     /// enum variant carrying at least one managed field. Variants without
     /// managed fields are filtered out so the caller only emits guarded
     /// blocks when there is decref work to do.
+    ///
+    /// For generic enums, resolves generic-parameter fields to their concrete
+    /// kinds using `inst_args` so that a managed type argument (like `String`)
+    /// is correctly identified as managed.
     pub fn enum_variants_with_managed_fields(
         enum_def: &EnumDefinition,
+        inst_args: Option<&[Type]>,
+        type_ctx: &TypeCtx,
     ) -> Vec<(usize, Vec<(usize, TypeKind)>)> {
         enum_def
             .variants
@@ -945,8 +999,27 @@ impl<'a> FunctionTranslator<'a> {
                 let managed: Vec<(usize, TypeKind)> = fields
                     .iter()
                     .enumerate()
-                    .filter(|(_, ty)| is_field_managed(&ty.kind))
-                    .map(|(fi, ty)| (fi, ty.kind.clone()))
+                    .filter_map(|(fi, ty)| {
+                        let kind = &ty.kind;
+                        // Resolve generic-parameter fields to their concrete kind.
+                        if enum_def.generics.is_some()
+                            && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
+                        {
+                            if let Some(concrete) = Self::generic_field_concrete_kind_for_enum(
+                                enum_def, kind, inst_args,
+                            ) {
+                                if is_field_managed(&concrete) {
+                                    return Some((fi, concrete));
+                                }
+                            }
+                            return None;
+                        }
+                        if is_field_managed(kind) {
+                            Some((fi, kind.clone()))
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
                 if managed.is_empty() {
                     None
@@ -955,6 +1028,32 @@ impl<'a> FunctionTranslator<'a> {
                 }
             })
             .collect()
+    }
+
+    /// Resolve a generic enum's bare-generic field to its concrete kind for one
+    /// instantiation.
+    ///
+    /// Similar to `generic_field_concrete_kind` for classes, but works with
+    /// enum generic parameters. When the field is a bare generic parameter
+    /// (`value T`), it is resolved to the argument at the parameter's declared
+    /// position. Returns `None` when the field is not a bare generic, or when
+    /// no per-instantiation arguments are available (the shared bare-name thunk),
+    /// so the caller skips the field.
+    fn generic_field_concrete_kind_for_enum(
+        enum_def: &EnumDefinition,
+        field_kind: &TypeKind,
+        inst_args: Option<&[Type]>,
+    ) -> Option<TypeKind> {
+        let gen_name = if let TypeKind::Generic(name, _, _) = field_kind {
+            name.as_str()
+        } else if let TypeKind::Custom(name, None) = field_kind {
+            name.as_str()
+        } else {
+            return None;
+        };
+        let generics = enum_def.generics.as_ref()?;
+        let param_idx = generics.iter().position(|g| g.name == gen_name)?;
+        inst_args?.get(param_idx).map(|t| t.kind.clone())
     }
 
     /// Emit `if disc == variant_idx { decref each managed field }`. Caller

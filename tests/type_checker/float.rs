@@ -4,30 +4,32 @@
 use super::utils::*;
 use miri::ast::factory::*;
 
+/// A bare float literal has the default float width whatever its magnitude —
+/// how many digits were written no longer selects a type.
 #[test]
 fn test_float_literals() {
     type_checker_exprs_type_test(vec![
-        ("1.5", type_f32()),
-        ("0.0", type_f32()),
-        ("-1.5", type_f32()),
-        ("1.1234567890123456789", type_f64()), // High precision forces F64
+        ("1.5", type_float()),
+        ("0.0", type_float()),
+        ("-1.5", type_float()),
+        ("1.1234567890123456789", type_float()),
     ]);
 }
 
 #[test]
 fn test_float_arithmetic_expressions() {
     type_checker_exprs_type_test(vec![
-        ("1.0 + 2.0", type_f32()),
-        ("1.0 - 2.0", type_f32()),
-        ("1.0 * 2.0", type_f32()),
-        ("1.0 / 2.0", type_f32()),
-        ("1.0 % 2.0", type_f32()),
+        ("1.0 + 2.0", type_float()),
+        ("1.0 - 2.0", type_float()),
+        ("1.0 * 2.0", type_float()),
+        ("1.0 / 2.0", type_float()),
+        ("1.0 % 2.0", type_float()),
     ]);
 }
 
 #[test]
 fn test_float_unary_expressions() {
-    type_checker_exprs_type_test(vec![("-1.0", type_f32())]);
+    type_checker_exprs_type_test(vec![("-1.0", type_float())]);
 }
 
 #[test]
@@ -60,7 +62,11 @@ let x = 1.5 + 2.5
 let y = x / 2.0
 let z = y * 3.0
 ",
-        vec![("x", type_f32()), ("y", type_f32()), ("z", type_f32())],
+        vec![
+            ("x", type_float()),
+            ("y", type_float()),
+            ("z", type_float()),
+        ],
     );
 }
 
@@ -105,18 +111,14 @@ let x = 1.0 + true
     );
 }
 
+/// An integer literal does not stand in for a float. A float literal of any
+/// precision does, narrowing to the declared width, so only the integer case
+/// is a mismatch here.
 #[test]
 fn test_explicit_type_mismatch() {
     type_checker_error_test(
         "
 let x f32 = 1
-",
-        "Type mismatch for variable 'x'",
-    );
-
-    type_checker_error_test(
-        "
-let x f32 = 1.1234567890123456789
 ",
         "Type mismatch for variable 'x'",
     );
@@ -129,7 +131,7 @@ fn test_float_assignment_operators() {
 var x = 1.0
 x += 2.0
 ",
-        vec![("x", type_f32())],
+        vec![("x", type_float())],
     );
 }
 
@@ -144,21 +146,39 @@ x += 1
     );
 }
 
+/// Arithmetic over declared `f64` bindings stays `f64`. The width comes from
+/// the declarations, since a literal alone no longer forces one.
 #[test]
 fn test_f64_arithmetic() {
-    // Using high precision literals to force F64
-    let f64_val = "1.1234567890123456789";
-    type_checker_exprs_type_test(vec![
-        (&format!("{} + {}", f64_val, f64_val), type_f64()),
-        (&format!("{} - {}", f64_val, f64_val), type_f64()),
-        (&format!("{} * {}", f64_val, f64_val), type_f64()),
-        (&format!("{} / {}", f64_val, f64_val), type_f64()),
-    ]);
+    type_checker_vars_type_test(
+        "
+let a f64 = 1.1234567890123456789
+let b f64 = 2.0
+let sum = a + b
+let diff = a - b
+let prod = a * b
+let quot = a / b
+",
+        vec![
+            ("sum", type_f64()),
+            ("diff", type_f64()),
+            ("prod", type_f64()),
+            ("quot", type_f64()),
+        ],
+    );
 }
 
+/// Two float *values* of different widths do not mix — only literals adapt.
 #[test]
 fn test_f32_f64_mismatch() {
-    type_checker_error_test("1.0 + 1.1234567890123456789", "Type mismatch");
+    type_checker_error_test(
+        "
+let a f32 = 1.0
+let b f64 = 2.0
+let c = a + b
+",
+        "Type mismatch",
+    );
 }
 
 #[test]
@@ -170,7 +190,7 @@ fn test_float_bitwise_invalid() {
 
 #[test]
 fn test_float_unary_plus() {
-    type_checker_expr_type_test("+1.0", type_f32());
+    type_checker_expr_type_test("+1.0", type_float());
 }
 
 #[test]
@@ -187,7 +207,7 @@ let x = add(1.0, 2.0)
 
 #[test]
 fn test_float_list() {
-    type_checker_expr_type_test("[1.0, 2.0, 3.0]", type_array(type_f32(), 3));
+    type_checker_expr_type_test("[1.0, 2.0, 3.0]", type_array(type_float(), 3));
 }
 
 #[test]

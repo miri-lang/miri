@@ -11,11 +11,13 @@
 //! a skipped managed field leaks, a mangled name that disagrees with the
 //! thunk-generation site drops through to the wrong layout.
 
+use cranelift_frontend::Variable;
 use miri::ast::types::{
     Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, CLONEABLE_TRAIT_NAME, STRING_TYPE_NAME,
     VEC3_TYPE_NAME,
 };
 use miri::ast::MemberVisibility;
+use miri::codegen::cranelift::translator::TypeCtx;
 use miri::codegen::cranelift::{mangle_class_instantiation, FunctionTranslator};
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
@@ -98,6 +100,23 @@ fn alias_to(kind: TypeKind) -> TypeDefinition {
         template: ty(kind),
         generics: None,
     })
+}
+
+fn minimal_type_ctx<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    captures: &'a HashMap<miri::mir::Local, Vec<Type>>,
+    out_ptrs: &'a HashMap<miri::mir::Local, Variable>,
+    instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
+) -> TypeCtx<'a> {
+    use cranelift_codegen::ir::types;
+    TypeCtx {
+        local_types: &[],
+        type_definitions: type_defs,
+        ptr_type: types::I64,
+        closure_capture_ast_types: captures,
+        out_param_ptr_vars: out_ptrs,
+        generic_class_instantiations: instantiations,
+    }
 }
 
 #[test]
@@ -368,9 +387,14 @@ fn test_only_variants_carrying_managed_fields_are_collected() {
         ("Labelled", vec![TypeKind::String, TypeKind::Int]),
         ("Sized", vec![TypeKind::Int]),
     ]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
 
     assert_eq!(
-        FunctionTranslator::enum_variants_with_managed_fields(&shape),
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
         vec![(1, vec![(0, TypeKind::String)])],
     );
 }
@@ -378,9 +402,14 @@ fn test_only_variants_carrying_managed_fields_are_collected() {
 #[test]
 fn test_managed_field_index_is_the_position_within_its_variant() {
     let shape = enum_def([("Tagged", vec![TypeKind::Int, TypeKind::String])]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
 
     assert_eq!(
-        FunctionTranslator::enum_variants_with_managed_fields(&shape),
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
         vec![(0, vec![(1, TypeKind::String)])],
         "the DecRef offset is derived from the field's index inside the variant"
     );
@@ -389,8 +418,15 @@ fn test_managed_field_index_is_the_position_within_its_variant() {
 #[test]
 fn test_enum_of_scalar_variants_collects_nothing() {
     let shape = enum_def([("A", vec![TypeKind::Int]), ("B", vec![TypeKind::F64])]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
 
-    assert!(FunctionTranslator::enum_variants_with_managed_fields(&shape).is_empty());
+    assert!(
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
+    );
 }
 
 #[test]
@@ -401,8 +437,15 @@ fn test_inline_value_fields_are_not_collected_as_managed() {
         "Inline",
         vec![custom(VEC3_TYPE_NAME), custom(ATOMIC_TYPE_NAME)],
     )]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
 
-    assert!(FunctionTranslator::enum_variants_with_managed_fields(&shape).is_empty());
+    assert!(
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
+    );
 }
 
 #[test]
@@ -541,9 +584,14 @@ fn test_managed_class_field_survives_as_managed_in_a_variant() {
     // A user class field inside an enum variant is a pointer and must be
     // DecRef'd, unlike the inline value wrappers above.
     let shape = enum_def([("Wrapped", vec![custom("Widget")])]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
 
     assert_eq!(
-        FunctionTranslator::enum_variants_with_managed_fields(&shape),
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
         vec![(0, vec![(0, custom("Widget"))])],
     );
 }

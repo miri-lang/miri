@@ -57,28 +57,6 @@ fn strip_underscores(s: &str) -> Cow<'_, str> {
     }
 }
 
-fn format_with_input_precision(value: f32, input: &str) -> String {
-    if input.contains('e') || input.contains('E') {
-        let significand = input.split(['e', 'E']).next().unwrap_or("");
-        let decimal_digits = significand.split('.').nth(1).unwrap_or("").len();
-        format!("{:.1$e}", value, decimal_digits)
-    } else {
-        let decimal_digits = input.split('.').nth(1).unwrap_or("").len();
-        format!("{:.1$}", value, decimal_digits)
-    }
-}
-
-fn normalize_float_str(s: &str) -> String {
-    let s = s.to_lowercase();
-    if let Some((base, exp)) = s.split_once('e') {
-        let base = base.trim_end_matches('0').trim_end_matches('.');
-        let exp = exp.trim_start_matches('+');
-        format!("{}e{}", base, exp)
-    } else {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    }
-}
-
 impl<'source> Parser<'source> {
     /*
         Literal
@@ -176,6 +154,13 @@ impl<'source> Parser<'source> {
             : FLOAT
             ;
     */
+    /// A source float literal always carries the full precision of what was
+    /// written. The width it ends up at is a typing decision, made later from
+    /// the context that consumes the literal (`TypeChecker::infer_literal` and
+    /// the narrowing in `type_checker::float_literals`), so the parser must not
+    /// pre-round the value: a literal narrowed to `f32` here could never be
+    /// widened back, which is what made `3.14` reach an `f64` parameter as
+    /// 3.140000104904175.
     pub(crate) fn float_literal(&mut self) -> Result<Literal, SyntaxError> {
         let token = self.eat_token(&Token::Float)?;
         let err = SyntaxError::new(
@@ -184,12 +169,6 @@ impl<'source> Parser<'source> {
         );
         let raw = &self.source[token.1.start..token.1.end];
         let str_value = strip_underscores(raw);
-        let f32_value = str_value.parse::<f32>().map_err(|_| err.clone())?;
-        let f32_str = format_with_input_precision(f32_value, &str_value);
-
-        if normalize_float_str(&str_value) == normalize_float_str(&f32_str) {
-            return Ok(ast::float32_literal(f32_value));
-        }
 
         let f64_value = str_value.parse::<f64>().map_err(|_| err.clone())?;
         if f64_value.is_nan() {
