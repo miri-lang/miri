@@ -82,12 +82,11 @@ fn main()
 }
 
 #[test]
-#[ignore = "Result<T,E> payloads are corrupted; the payload type at the load site is the unsubstituted generic parameter T from enum_def.variants rather than the concrete instantiation type. Fix requires type parameter substitution in src/mir/lowering/helpers.rs (outside codegen scope)."]
 fn test_result_float_payload() {
     assert_runs_with_output(
         r#"
 fn main()
-    let res_ok = Result.Ok(0.5 as f64)
+    let res_ok = Result.Ok(0.5)
     match res_ok
         Result.Ok(v): println(f"{v}")
         Result.Err(_): println("error")
@@ -98,6 +97,137 @@ fn main()
         Result.Err(e): println(f"{e}")
         "#,
         "0.5\n42",
+    );
+}
+
+/// A `Result` whose ok-type is declared wider than the constructed literal.
+/// The return annotation fixes `T` at `f64` while `0.5` is an `f32` literal,
+/// so the payload must be widened on the store side to match the width the
+/// match arm loads.
+#[test]
+fn test_result_float_payload_declared_wider() {
+    assert_runs_with_output(
+        r#"
+fn wide() Result<f64, int>
+    return Result.Ok(0.5)
+
+fn main()
+    match wide()
+        Result.Ok(v): println(f"{v}")
+        Result.Err(e): println("error")
+        "#,
+        "0.5",
+    );
+}
+
+#[test]
+fn test_result_err_float_payload() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let res = Result.Err(0.5)
+    match res
+        Result.Ok(v): println("ok")
+        Result.Err(e): println(f"{e}")
+        "#,
+        "0.5",
+    );
+}
+
+#[test]
+fn test_generic_enum_float_payload() {
+    assert_runs_with_output(
+        r#"
+public enum Box<T>
+    Val(T)
+
+fn main()
+    let b = Box.Val(0.5)
+    match b
+        Box.Val(v): println(f"{v}")
+        "#,
+        "0.5",
+    );
+}
+
+#[test]
+fn test_generic_enum_multi_param_payload() {
+    assert_runs_with_output(
+        r#"
+public enum Two<A, B>
+    Pair(A, B)
+
+fn main()
+    let t = Two.Pair(0.5, 7)
+    match t
+        Two.Pair(a, b): println(f"{a} {b}")
+        "#,
+        "0.5 7",
+    );
+}
+
+/// Constructed inside a generic function, matched at a concrete instantiation.
+/// The construction site cannot resolve `T`, so no store-side coercion runs
+/// there; the payload must still round-trip.
+#[test]
+fn test_generic_enum_float_payload_through_generic_fn() {
+    assert_runs_with_output(
+        r#"
+public enum Box<T>
+    Val(T)
+
+fn boxed<T>(x T) Box<T>
+    return Box.Val(x)
+
+fn main()
+    match boxed(0.5)
+        Box.Val(v): println(f"{v}")
+        "#,
+        "0.5",
+    );
+}
+
+#[test]
+fn test_result_int_payload_regression() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let res = Result.Ok(7)
+    match res
+        Result.Ok(v): println(f"{v}")
+        Result.Err(e): println("error")
+        "#,
+        "7",
+    );
+}
+
+#[test]
+fn test_result_string_payload_regression() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let res = Result.Ok("hi")
+    match res
+        Result.Ok(v): println(f"{v}")
+        Result.Err(e): println("error")
+        "#,
+        "hi",
+    );
+}
+
+#[test]
+fn test_generic_enum_string_payload_regression() {
+    assert_runs_with_output(
+        r#"
+public enum Box<T>
+    Val(T)
+
+fn main()
+    let b = Box.Val("hi")
+    match b
+        Box.Val(v): println(f"{v}")
+        "#,
+        "hi",
     );
 }
 

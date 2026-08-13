@@ -241,27 +241,7 @@ pub fn bind_pattern(
             // For enum variant destructuring, extract associated values.
             // The aggregate is (discriminant, val1, val2, ...), so bindings use Field(i+1).
 
-            // Resolve the concrete field types from the enum definition so that the
-            // bound locals are typed correctly (e.g. `int` instead of `void`).
-            let field_types: Option<Vec<Type>> =
-                if let Pattern::Member(type_pattern, variant_name) = parent.as_ref() {
-                    if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                            ctx.type_checker
-                                .type_table
-                                .global_type_definitions
-                                .get(type_name)
-                        {
-                            enum_def.variants.get(variant_name.as_str()).cloned()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+            let field_types = variant_payload_types(ctx, parent, subject_local);
 
             for (i, binding) in bindings.iter().enumerate() {
                 if let Pattern::Identifier(name) = binding {
@@ -295,6 +275,98 @@ pub fn bind_pattern(
         _ => {}
     }
     Ok(())
+}
+
+/// The payload types a variant pattern binds, so the bound locals are typed
+/// from the enum definition (e.g. `int` rather than `void`) instead of
+/// defaulting to a pointer slot.
+///
+/// A generic enum spells its payloads as type parameters, so they are resolved
+/// through the subject's instantiation arguments — otherwise a `Result<f64, E>`
+/// payload would be typed `T` and read back at pointer width instead of the
+/// float width it was stored at. Returns `None` when the pattern does not name
+/// a known enum variant.
+fn variant_payload_types(
+    ctx: &LoweringContext,
+    parent: &Pattern,
+    subject_local: crate::mir::Local,
+) -> Option<Vec<Type>> {
+    let Pattern::Member(type_pattern, variant_name) = parent else {
+        return None;
+    };
+    let Pattern::Identifier(type_name) = type_pattern.as_ref() else {
+        return None;
+    };
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(type_name)
+    else {
+        return None;
+    };
+    let declared = enum_def.variants.get(variant_name.as_str())?;
+    let type_args = enum_instantiation_args(&ctx.body.local_decls[subject_local.0].ty.kind);
+    Some(substitute_variant_field_types(
+        ctx,
+        declared,
+        type_args.as_deref(),
+        enum_def,
+    ))
+}
+
+/// The type arguments of an enum instantiation, in the order the enum declares
+/// its parameters.
+///
+/// The type checker normalizes `Result<T, E>` to `TypeKind::Custom`, but the
+/// dedicated `TypeKind::Result` spelling also reaches lowering, so both forms
+/// are recognized. Any other type carries no enum instantiation arguments.
+fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
+    if let TypeKind::Custom(_, Some(args)) = kind {
+        Some(args.clone())
+    } else if let TypeKind::Result(ok_ty, err_ty) = kind {
+        Some(vec![(**ok_ty).clone(), (**err_ty).clone()])
+    } else {
+        None
+    }
+}
+
+/// Resolve a variant's declared payload types against an instantiation's type
+/// arguments, so a payload spelled as a type parameter takes the concrete type
+/// bound at the match site. A payload that stays generic (no arguments known,
+/// as inside a generic function body) is left alone and keeps its pointer-sized
+/// representation.
+///
+/// Substitution recovers a payload's *storage width*, which only differs from
+/// the pointer-sized default for scalars. A reference-counted payload is
+/// pointer-sized under either spelling, so naming it concretely would change
+/// nothing about the load while making the bound local reference-counted — and
+/// a generic enum's drop path reads its payload kinds straight off the
+/// declaration, where they are still type parameters, so it would never emit
+/// the matching release. Those payloads therefore keep the generic spelling.
+/// TODO: substitute them too once generic enums get per-instantiation drop
+/// thunks, the way generic classes already do in `codegen::cranelift::rc`.
+fn substitute_variant_field_types(
+    ctx: &LoweringContext,
+    declared: &[Type],
+    type_args: Option<&[Expression]>,
+    enum_def: &crate::type_checker::context::EnumDefinition,
+) -> Vec<Type> {
+    declared
+        .iter()
+        .map(|ty| {
+            let substituted = crate::type_checker::generics::substitute_generic_field_kind(
+                &ty.kind,
+                type_args,
+                enum_def.generics.as_ref(),
+            );
+            if ctx.is_perceus_managed(&substituted) {
+                ty.clone()
+            } else {
+                Type::new(substituted, ty.span)
+            }
+        })
+        .collect()
 }
 
 /// Returns true when two MirTypes have the same outer constructor, ignoring inner type args.

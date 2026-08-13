@@ -1086,7 +1086,7 @@ impl<'a> FunctionTranslator<'a> {
                                     // Monomorphize a generic-parameter field to its
                                     // concrete type argument (scalar `T` at its real
                                     // width); concrete fields pass through unchanged.
-                                    crate::codegen::cranelift::layout::substitute_generic_field_kind(
+                                    crate::type_checker::generics::substitute_generic_field_kind(
                                         &field_type,
                                         type_args_opt.as_deref(),
                                         def.generics.as_ref(),
