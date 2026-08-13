@@ -10,7 +10,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 libc = "0.2"
 once_cell = "1.18"
-regex = "1.10"
+regex = "1.13.1"
 
 [features]
 default = []

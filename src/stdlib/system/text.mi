@@ -92,6 +92,10 @@ public class Match
 ///         Result.Err(e): println("error")
 public class Regex
 
+    /// The slab handle for the underlying compiled regex. This must remain field 0.
+    /// The compiler reads this via Field projection in match_expr.rs when lowering
+    /// regex predicate patterns. Changing the field order or adding fields before
+    /// it will cause pattern matching to read garbage handles.
     private var handle int
 
     fn init(handle int)
@@ -100,6 +104,7 @@ public class Regex
     runtime "core" fn miri_rt_regex_compile(pattern String) int
     runtime "core" fn miri_rt_regex_compile_status() int
     runtime "core" fn miri_rt_regex_compile_message() String
+    runtime "core" fn miri_rt_regex_from_validated_pattern(pattern String) int
     runtime "core" fn miri_rt_regex_matches(handle int, text String) bool
     runtime "core" fn miri_rt_regex_find(handle int, text String) bool
     runtime "core" fn miri_rt_regex_find_from(handle int, text String, start_pos int) bool
@@ -128,6 +133,18 @@ public class Regex
             1: Result.Err(RegexError.SyntaxError(miri_rt_regex_compile_message()))
             2: Result.Err(RegexError.SizeExceeded(miri_rt_regex_compile_message()))
             default: Result.Err(RegexError.Other(miri_rt_regex_compile_message()))
+
+    /// Constructs a Regex from a pattern the compiler has already validated.
+    ///
+    /// This method is called by the compiler when lowering regex literals (`re"pattern"`).
+    /// Because the compiler validated the pattern, a failure here indicates a
+    /// version mismatch between the compiler's and runtime's regex crate versions.
+    /// In that case, the runtime aborts with a diagnostic message.
+    ///
+    /// User code should call `compile()` instead, which returns a Result.
+    static fn from_validated_pattern(pattern String) Regex
+        let handle = miri_rt_regex_from_validated_pattern(pattern)
+        Regex(handle: handle)
 
     /// Returns true if the pattern matches anywhere in the input string.
     ///

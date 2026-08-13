@@ -8,20 +8,25 @@
 //! slab to avoid recompilation overhead.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::string::MiriString;
 
 thread_local! {
-    static REGEX_STATE: RefCell<RegexState> = const { RefCell::new(RegexState {
+    static REGEX_STATE: RefCell<RegexState> = RefCell::new(RegexState {
         slab: Vec::new(),
+        pattern_cache: HashMap::new(),
         compile_status: 0,
         compile_message: None,
         match_result: (0, 0),
-    }) };
+    });
 }
 
 struct RegexState {
     slab: Vec<regex::Regex>,
+    /// Maps compiled pattern strings to their slab handles.
+    /// Used to avoid recompiling the same pattern repeatedly.
+    pattern_cache: HashMap<String, i64>,
     compile_status: i64,
     compile_message: Option<String>,
     match_result: (i64, i64),
@@ -58,23 +63,32 @@ fn set_match_result(start: i64, end: i64) {
 /// Returns a handle (index into the slab) if successful.
 /// On error, returns -1 and sets the compile status and message.
 /// Status codes: 0 = success, 1 = syntax error, 2 = size exceeded, 3 = other error.
+/// If the pattern has already been compiled, returns the cached handle.
 ///
 /// # Safety
 /// - `pattern` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_compile(pattern: *const MiriString) -> i64 {
     let pattern_str = if pattern.is_null() {
-        ""
+        "".to_string()
     } else {
-        (*pattern).as_str()
+        (*pattern).as_str().to_string()
     };
 
-    match regex::Regex::new(pattern_str) {
+    // Check cache first
+    let cached = REGEX_STATE.with(|state| state.borrow().pattern_cache.get(&pattern_str).copied());
+    if let Some(cached_handle) = cached {
+        set_compile_success();
+        return cached_handle;
+    }
+
+    match regex::Regex::new(&pattern_str) {
         Ok(regex) => {
             let handle = REGEX_STATE.with(|state| {
                 let mut s = state.borrow_mut();
                 let handle = s.slab.len() as i64;
                 s.slab.push(regex);
+                s.pattern_cache.insert(pattern_str, handle);
                 handle
             });
             set_compile_success();
@@ -116,6 +130,62 @@ pub extern "C" fn miri_rt_regex_compile_message() -> *mut MiriString {
         Some(msg) => crate::string::into_raw_ptr(MiriString::from_str(msg)),
         None => std::ptr::null_mut(),
     })
+}
+
+/// Compiles a regex pattern that the compiler has already validated.
+///
+/// This function is called by MIR lowering when constructing regex literals.
+/// Because the compiler validated the pattern at compile time, a failure
+/// here indicates a version mismatch between the compiler's and runtime's
+/// regex crate versions. In that case, the runtime aborts with a diagnostic.
+///
+/// Patterns are cached to avoid recompilation across multiple evaluations
+/// (e.g. inside a loop).
+///
+/// # Safety
+/// - `pattern` must be a valid `MiriString` pointer or null.
+///
+/// # Panics
+/// If the pattern fails to compile, indicating a compiler/runtime version mismatch.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_regex_from_validated_pattern(pattern: *const MiriString) -> i64 {
+    let pattern_str = if pattern.is_null() {
+        ""
+    } else {
+        (*pattern).as_str()
+    };
+
+    // Check cache first without allocating a String unless a miss occurs.
+    let cached = REGEX_STATE.with(|state| {
+        state
+            .borrow()
+            .pattern_cache
+            .iter()
+            .find(|(k, _)| k.as_str() == pattern_str)
+            .map(|(_, &handle)| handle)
+    });
+    if let Some(cached_handle) = cached {
+        return cached_handle;
+    }
+
+    // Pattern not cached, so allocate and compile.
+    let pattern_string = pattern_str.to_string();
+    match regex::Regex::new(&pattern_string) {
+        Ok(regex) => REGEX_STATE.with(|state| {
+            let mut s = state.borrow_mut();
+            let handle = s.slab.len() as i64;
+            s.slab.push(regex);
+            s.pattern_cache.insert(pattern_string, handle);
+            handle
+        }),
+        Err(e) => {
+            panic!(
+                "Regex pattern validation mismatch: compiler and runtime regex versions disagree. \
+                 Pattern '{}' compiled successfully at type-check time but failed at runtime: {}",
+                pattern_str, e
+            );
+        }
+    }
 }
 
 /// Tests if the regex matches anywhere in the input string.
@@ -280,7 +350,8 @@ pub unsafe extern "C" fn miri_rt_regex_replace(
 pub mod ffi {
     pub use super::{
         miri_rt_regex_compile, miri_rt_regex_compile_message, miri_rt_regex_compile_status,
-        miri_rt_regex_find, miri_rt_regex_find_from, miri_rt_regex_match_end,
-        miri_rt_regex_match_start, miri_rt_regex_matches, miri_rt_regex_replace,
+        miri_rt_regex_find, miri_rt_regex_find_from, miri_rt_regex_from_validated_pattern,
+        miri_rt_regex_match_end, miri_rt_regex_match_start, miri_rt_regex_matches,
+        miri_rt_regex_replace,
     };
 }
