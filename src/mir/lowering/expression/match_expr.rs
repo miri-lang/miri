@@ -200,16 +200,12 @@ pub(crate) fn lower_match_expr(
     let ExpressionKind::Match(subject, branches) = &expr.node else {
         unreachable!()
     };
-    // Lower the subject expression
-    let subject_op = lower_expression(ctx, subject, None)?;
-
-    // Store subject in a temp so we can reference it multiple times
-    let subject_ty = resolve_type(ctx.type_checker, subject);
-    let subject_local = ctx.push_temp(subject_ty.clone(), subject.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(subject_local), Rvalue::Use(subject_op)),
-        span: subject.span,
-    });
+    let subject_info = lower_match_subject(ctx, subject)?;
+    let MatchSubject {
+        local: subject_local,
+        ty: ref subject_ty,
+        ..
+    } = subject_info;
 
     // Use dest if provided (DPS), otherwise create a temp
     let result_ty = resolve_type(ctx.type_checker, expr);
@@ -342,5 +338,64 @@ pub(crate) fn lower_match_expr(
     }
 
     ctx.set_current_block(join_bb);
+    release_subject_temps(ctx, &subject_info, subject.span);
     Ok(Operand::Copy(Place::new(result_local)))
+}
+
+/// The temp a match dispatches on, plus what is needed to release it again.
+struct MatchSubject {
+    /// Temp holding the subject value, readable once per arm.
+    local: crate::mir::Local,
+    /// The subject's resolved type.
+    ty: Type,
+    /// Local backing the operand that was assigned into `local`, if the subject
+    /// lowered to a place rather than a constant.
+    source_local: Option<crate::mir::Local>,
+    /// Local count before the subject was lowered, separating locals the
+    /// subject allocated here from ones that already existed.
+    watermark: usize,
+}
+
+/// Lower a match subject into a temp so every arm can read it.
+fn lower_match_subject(
+    ctx: &mut LoweringContext,
+    subject: &Expression,
+) -> Result<MatchSubject, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let subject_op = lower_expression(ctx, subject, None)?;
+    let source_local = match &subject_op {
+        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+        Operand::Constant(_) => None,
+    };
+    let ty = resolve_type(ctx.type_checker, subject);
+    let local = ctx.push_temp(ty.clone(), subject.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(subject_op)),
+        span: subject.span,
+    });
+    Ok(MatchSubject {
+        local,
+        ty,
+        source_local,
+        watermark,
+    })
+}
+
+/// Release what the match held on to once every arm has read from it: the
+/// subject temp, which was reference-counted when the subject operand was
+/// assigned into it, and then the operand's own local if the subject expression
+/// allocated it here. Without the second drop, matching directly on an
+/// expression that allocates — `match make_result()` — never releases what it
+/// returned, so an enum's payload outlives the match.
+fn release_subject_temps(
+    ctx: &mut LoweringContext,
+    subject: &MatchSubject,
+    span: crate::error::syntax::Span,
+) {
+    ctx.emit_temp_drop(subject.local, 0, span);
+    if let Some(source_local) = subject.source_local {
+        if source_local != subject.local {
+            ctx.emit_temp_drop(source_local, subject.watermark, span);
+        }
+    }
 }

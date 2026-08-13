@@ -805,7 +805,7 @@ impl<'a> FunctionTranslator<'a> {
                 if (i > 0 || matches!(kind, AggregateKind::Option))
                     && payload_field_idx < decl_types.len()
                 {
-                    if let Some(decl_ty) = decl_types.get(payload_field_idx) {
+                    if let Some(Some(decl_ty)) = decl_types.get(payload_field_idx) {
                         val = Self::coerce_value_to_declared_type(builder, val, decl_ty, ptr_type)?;
                     }
                 }
@@ -835,38 +835,62 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Resolve the declared field types for an aggregate kind.
-    /// For non-generic enums, returns the variant field types.
-    /// For Option, extracts the inner type from expected_ty and returns it as a single-element vector.
-    /// Returns None for generic enums, Option without expected_ty, and other aggregate kinds.
+    /// Resolve the declared payload types for an aggregate kind, one entry per
+    /// payload field.
+    ///
+    /// An entry is `None` when the payload has no statically known width — a
+    /// generic enum constructed inside a generic function body, where the type
+    /// parameter is not bound at this site. Those fields keep the value's own
+    /// width, matching the pointer-sized slot the match arm will read them back
+    /// at. Returns `None` for aggregate kinds that carry no declared payload
+    /// types at all.
     fn resolve_declared_field_types_for_aggregate(
         kind: &AggregateKind,
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-    ) -> Option<Vec<crate::ast::types::Type>> {
+    ) -> Option<Vec<Option<crate::ast::types::Type>>> {
         match kind {
             AggregateKind::Enum(enum_name, variant_name) => {
-                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
                     type_ctx.type_definitions.get(enum_name.as_ref())
-                {
-                    if enum_def.generics.is_none()
-                        || enum_def
-                            .generics
-                            .as_ref()
-                            .map(|g| g.is_empty())
-                            .unwrap_or(true)
-                    {
-                        enum_def.variants.get(variant_name.as_ref()).cloned()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                else {
+                    return None;
+                };
+                let declared = enum_def.variants.get(variant_name.as_ref())?;
+                // A generic enum spells its payloads as type parameters; bind
+                // them to the arguments of the type this aggregate is assigned
+                // to, so the store width matches what the match arm loads.
+                let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
+                Some(
+                    declared
+                        .iter()
+                        .map(|ty| {
+                            let kind = crate::type_checker::generics::substitute_generic_field_kind(
+                                &ty.kind,
+                                type_args.as_deref(),
+                                enum_def.generics.as_ref(),
+                            );
+                            // A payload with no bound type argument has no known
+                            // width, and a reference-counted one is
+                            // pointer-sized whatever it is named. Both keep the
+                            // value's own representation, matching the width
+                            // the match arm reads them back at.
+                            if crate::type_checker::generics::is_generic_parameter_kind(
+                                &kind,
+                                enum_def.generics.as_ref(),
+                            ) || crate::codegen::cranelift::translator::is_field_managed(&kind)
+                            {
+                                None
+                            } else {
+                                Some(crate::ast::types::Type::new(kind, ty.span))
+                            }
+                        })
+                        .collect(),
+                )
             }
             AggregateKind::Option => expected_ty.and_then(|ty| {
                 if let TypeKind::Option(inner) = &ty.kind {
-                    Some(vec![(**inner).clone()])
+                    Some(vec![Some((**inner).clone())])
                 } else {
                     None
                 }
@@ -880,6 +904,20 @@ impl<'a> FunctionTranslator<'a> {
             | AggregateKind::List
             | AggregateKind::Map
             | AggregateKind::Set => None,
+        }
+    }
+
+    /// The type arguments of an enum instantiation, in the order the enum
+    /// declares its parameters. The type checker normalizes `Result<T, E>` to
+    /// `TypeKind::Custom`, but the dedicated `TypeKind::Result` spelling also
+    /// reaches codegen, so both forms are recognized.
+    fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<crate::ast::Expression>> {
+        if let TypeKind::Custom(_, Some(args)) = kind {
+            Some(args.clone())
+        } else if let TypeKind::Result(ok_ty, err_ty) = kind {
+            Some(vec![(**ok_ty).clone(), (**err_ty).clone()])
+        } else {
+            None
         }
     }
 

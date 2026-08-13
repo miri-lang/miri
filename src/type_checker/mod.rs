@@ -40,7 +40,7 @@ pub(crate) mod diagnostics;
 pub mod escape_analysis;
 pub mod expressions;
 mod function_analysis;
-mod generics;
+pub(crate) mod generics;
 mod gpu_buffer_init;
 pub(crate) mod module_loader;
 mod operators;

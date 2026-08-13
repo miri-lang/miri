@@ -38,6 +38,69 @@ thread_local! {
     static SUBSTITUTION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Resolve a declared field type through an instantiation's type arguments.
+///
+/// A field typed as a bare generic parameter (`TypeKind::Generic("T", …)` or
+/// `TypeKind::Custom("T", None)`) is replaced by the concrete type argument at
+/// the parameter's declaration position, so a `Box<float>` field lays out at
+/// the concrete scalar width instead of a pointer slot. Fields with a concrete
+/// type, or an unresolved generic (no matching argument), are returned
+/// unchanged — callers that must distinguish the two use
+/// [`is_generic_parameter_kind`] on the result.
+///
+/// Used for class and struct fields during layout, and for enum variant
+/// payloads on both sides of the store/load pair.
+pub(crate) fn substitute_generic_field_kind(
+    field_kind: &TypeKind,
+    type_args: Option<&[Expression]>,
+    def_generics: Option<&Vec<GenericDefinition>>,
+) -> TypeKind {
+    // Only a bare generic-parameter spelling can be substituted; a concrete
+    // field type is returned unchanged.
+    let Some(param_name) = generic_parameter_name(field_kind) else {
+        return field_kind.clone();
+    };
+    let (Some(generics), Some(args)) = (def_generics, type_args) else {
+        return field_kind.clone();
+    };
+    let Some(pos) = generics.iter().position(|g| g.name == param_name) else {
+        return field_kind.clone();
+    };
+    if let Some(ExpressionKind::Type(ty, _)) = args.get(pos).map(|a| &a.node) {
+        ty.kind.clone()
+    } else {
+        field_kind.clone()
+    }
+}
+
+/// Returns true when `kind` still names a generic parameter of `def_generics`,
+/// i.e. [`substitute_generic_field_kind`] could not resolve it to a concrete
+/// type. Such a type has no known width, so callers must fall back to the
+/// pointer-sized representation rather than coercing to it.
+pub(crate) fn is_generic_parameter_kind(
+    kind: &TypeKind,
+    def_generics: Option<&Vec<GenericDefinition>>,
+) -> bool {
+    let Some(param_name) = generic_parameter_name(kind) else {
+        return false;
+    };
+    def_generics
+        .map(|generics| generics.iter().any(|g| g.name == param_name))
+        .unwrap_or(false)
+}
+
+/// The parameter name a bare generic-parameter type spelling refers to, or
+/// `None` for any concrete type.
+pub(crate) fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
+    if let TypeKind::Generic(name, _, _) = kind {
+        Some(name.as_str())
+    } else if let TypeKind::Custom(name, None) = kind {
+        Some(name.as_str())
+    } else {
+        None
+    }
+}
+
 /// Wrap a value-generic argument expression as a sentinel `Type` so it can
 /// share the `HashMap<String, Type>` mapping used for type generics.
 pub(crate) fn value_generic_marker_type(expr: Expression) -> Type {
