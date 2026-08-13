@@ -122,7 +122,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
-        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
@@ -168,7 +168,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let place_kind = Self::resolve_projected_type_kind(place, type_ctx);
-        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
         Self::emit_decref_value(builder, ctx, &place_kind, ptr, type_ctx)
     }
 
@@ -184,7 +184,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
         let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
-        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
@@ -218,17 +218,32 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
 
+        // Compute destination type for potential use in operand translation.
         let dest_ty = &type_ctx.local_types[place.local.0];
-
-        // Compute destination type: if place has projections (e.g., v.x), use the projected
-        // type (e.g., f32); otherwise use the base local type.
         let dest_kind_to_cast = if place.projection.is_empty() {
             dest_ty.kind.clone()
         } else {
             Self::resolve_projected_type_kind(place, type_ctx)
         };
+
+        // Pass the destination type when translating Rvalue::Use and Rvalue::Aggregate
+        // so field loads and aggregate payloads can resolve to the correct width for
+        // enum/Option payloads.
+        let expected_ty_for_rvalue = if matches!(rvalue, Rvalue::Use(_) | Rvalue::Aggregate(..)) {
+            Some(dest_ty as &_)
+        } else {
+            None
+        };
+
+        let mut value = Self::translate_rvalue(
+            builder,
+            ctx,
+            rvalue,
+            locals,
+            type_ctx,
+            expected_ty_for_rvalue,
+        )?;
 
         let dest_cl_ty = translate_type_kind(&dest_kind_to_cast, ptr_type);
         let val_ty = builder.func.dfg.value_type(value);
@@ -431,7 +446,7 @@ impl<'a> FunctionTranslator<'a> {
         blocks: &HashMap<BasicBlock, Block>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx)?;
+        let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx, None)?;
         let disc_ty = builder.func.dfg.value_type(disc_val);
 
         if targets.is_empty() {
@@ -602,7 +617,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut out_arg_slots: Vec<(cranelift_codegen::ir::Value, Local)> = Vec::new();
 
         for (i, arg) in args.iter().enumerate() {
-            let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+            let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
             let val_ty = builder.func.dfg.value_type(val);
             let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
                 builder.ins().sextend(ptr_type, val)
@@ -783,7 +798,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
-        let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
+        let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx, None)?;
         let fn_ptr = builder
             .ins()
             .load(ptr_type, MemFlags::new(), closure_ptr, 0);

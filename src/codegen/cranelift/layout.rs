@@ -439,6 +439,13 @@ fn struct_aggregate_size(struct_def: &StructDefinition, ptr_ty: CraneliftType) -
 /// Size of an enum aggregate: a ptr-sized discriminant followed by the
 /// largest variant payload. Each payload field uses a pointer-sized slot to
 /// match the convention in [`field_layout`].
+///
+/// TODO: Payload slots are ptr-sized, so payloads wider than a pointer (e.g. I128)
+/// overflow their slot on the STORE side. A wider load cannot fix a store overflow.
+/// If I128 payloads are ever needed, increase slot width for fields > ptr_size.
+/// Note: coerce_value_to_declared_type in translate_rvalue.rs deliberately skips
+/// coercion for declared types wider than ptr_type, preserving the pre-diff behavior
+/// for those cases until the slot width is widened.
 fn enum_aggregate_size(enum_def: &EnumDefinition, ptr_size: u32) -> u32 {
     let max_payload = enum_def
         .variants

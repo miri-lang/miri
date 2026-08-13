@@ -69,12 +69,16 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Translate a MIR rvalue to a Cranelift value.
+    ///
+    /// When `expected_ty` is Some, it is passed to operand translation for
+    /// Rvalue::Use to resolve enum/Option field load widths.
     pub(crate) fn translate_rvalue(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         rvalue: &Rvalue,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
 
@@ -83,7 +87,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_allocate(builder, ctx, size_op, align_op, locals, type_ctx)
             }
             Rvalue::Use(operand) => {
-                Self::translate_operand(builder, ctx, operand, locals, type_ctx)
+                Self::translate_operand(builder, ctx, operand, locals, type_ctx, expected_ty)
             }
 
             Rvalue::BinaryOp(op, lhs, rhs) => {
@@ -91,12 +95,12 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::UnaryOp(op, operand) => {
-                let val = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
+                let val = Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)?;
                 Self::translate_unop(builder, *op, val)
             }
 
             Rvalue::Ref(place) => {
-                let value = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+                let value = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
                 let val_ty = builder.func.dfg.value_type(value);
                 let size = val_ty.bytes();
                 let align = size; // Simplification for scalars
@@ -107,12 +111,18 @@ impl<'a> FunctionTranslator<'a> {
                 Ok(addr)
             }
 
-            Rvalue::Aggregate(kind, operands) => {
-                Self::translate_aggregate(builder, ctx, kind, operands, locals, type_ctx)
-            }
+            Rvalue::Aggregate(kind, operands) => Self::translate_aggregate(
+                builder,
+                ctx,
+                kind,
+                operands,
+                locals,
+                type_ctx,
+                expected_ty,
+            ),
 
             Rvalue::Cast(operand, ty) => {
-                let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
+                let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)?;
                 let dest_ty = translate_type(ty, ptr_type);
                 let src_ty = builder.func.dfg.value_type(value);
                 // Signedness follows the integer side of the cast: the source for
@@ -164,8 +174,8 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
 
-        let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx)?;
-        let align = Self::translate_operand(builder, ctx, align_op, locals, type_ctx)?;
+        let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx, None)?;
+        let align = Self::translate_operand(builder, ctx, align_op, locals, type_ctx, None)?;
 
         // Layout: [padding][malloc_ptr][RC][payload...]
         //
@@ -233,8 +243,8 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
 
-        let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-        let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+        let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
+        let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
         let is_unsigned =
             Self::operand_is_unsigned(lhs, type_ctx) || Self::operand_is_unsigned(rhs, type_ctx);
         Self::translate_binop(builder, ctx, op, lhs_val, rhs_val, is_unsigned)
@@ -254,8 +264,8 @@ impl<'a> FunctionTranslator<'a> {
         let lhs_kind = Self::operand_type_kind(lhs, type_ctx);
         match lhs_kind {
             TypeKind::Tuple(element_exprs) => {
-                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
+                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
                 Ok(Some(Self::translate_tuple_equality(
                     builder,
                     ctx,
@@ -271,8 +281,8 @@ impl<'a> FunctionTranslator<'a> {
                 else {
                     return Ok(None);
                 };
-                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
+                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
                 Ok(Some(Self::translate_struct_equality(
                     builder, lhs_val, rhs_val, lhs_kind, def, type_ctx,
                 )?))
@@ -313,6 +323,8 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Translate an `Rvalue::Aggregate` to a Cranelift value.
+    /// `expected_ty` is the destination type at the assignment site, used to resolve
+    /// Option<T> inner types and generic type parameters for payload field coercion.
     pub(crate) fn translate_aggregate(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -320,6 +332,7 @@ impl<'a> FunctionTranslator<'a> {
         operands: &[Operand],
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
         // Handle closure allocation separately.
         if let AggregateKind::Closure(lambda_name, fn_type) = kind {
@@ -344,7 +357,15 @@ impl<'a> FunctionTranslator<'a> {
                 builder, ctx, kind, operands, locals, type_ctx,
             );
         }
-        Self::build_struct_like_aggregate(builder, ctx, kind, operands, locals, type_ctx)
+        Self::build_struct_like_aggregate(
+            builder,
+            ctx,
+            kind,
+            operands,
+            locals,
+            type_ctx,
+            expected_ty,
+        )
     }
 
     /// Build a heap-allocated `Array`, `List`, `Map`, or `Set` aggregate from `operands`.
@@ -362,7 +383,7 @@ impl<'a> FunctionTranslator<'a> {
         // Translate all element operands
         let translated: Vec<Value> = operands
             .iter()
-            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
 
         // Determine element size from the first operand (all are homogeneous).
@@ -714,6 +735,7 @@ impl<'a> FunctionTranslator<'a> {
         operands: &[Operand],
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
@@ -734,12 +756,12 @@ impl<'a> FunctionTranslator<'a> {
                 | AggregateKind::Option
         );
         if operands.len() == 1 && !needs_pointer_layout {
-            return Self::translate_operand(builder, ctx, &operands[0], locals, type_ctx);
+            return Self::translate_operand(builder, ctx, &operands[0], locals, type_ctx, None);
         }
 
         let translated: Vec<Value> = operands
             .iter()
-            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
 
         let tuple_header = if is_tuple { ptr_size as u32 } else { 0 };
@@ -753,7 +775,7 @@ impl<'a> FunctionTranslator<'a> {
             &translated,
             tuple_header + vtable_header_size,
             is_tuple,
-            matches!(kind, AggregateKind::Enum(_, _)),
+            matches!(kind, AggregateKind::Enum(_, _) | AggregateKind::Option),
             ptr_size as u32,
         )?;
 
@@ -766,7 +788,28 @@ impl<'a> FunctionTranslator<'a> {
         if let Some(class_name) = vtable_class_name {
             Self::store_vtable_pointer(builder, ctx, &class_name, payload_ptr, ptr_type)?;
         }
-        for (i, val) in translated.into_iter().enumerate() {
+
+        // Resolve declared field types for payload coercion.
+        let declared_field_types =
+            Self::resolve_declared_field_types_for_aggregate(kind, type_ctx, expected_ty);
+
+        for (i, mut val) in translated.into_iter().enumerate() {
+            if let Some(ref decl_types) = declared_field_types {
+                let payload_field_idx = if matches!(kind, AggregateKind::Option) {
+                    i
+                } else if i > 0 {
+                    i - 1
+                } else {
+                    i
+                };
+                if (i > 0 || matches!(kind, AggregateKind::Option))
+                    && payload_field_idx < decl_types.len()
+                {
+                    if let Some(decl_ty) = decl_types.get(payload_field_idx) {
+                        val = Self::coerce_value_to_declared_type(builder, val, decl_ty, ptr_type)?;
+                    }
+                }
+            }
             let store_offset = Self::store_offset_i32(field_offsets[i] as i64)?;
             builder
                 .ins()
@@ -789,6 +832,75 @@ impl<'a> FunctionTranslator<'a> {
             Some(class_name.clone())
         } else {
             None
+        }
+    }
+
+    /// Resolve the declared field types for an aggregate kind.
+    /// For non-generic enums, returns the variant field types.
+    /// For Option, extracts the inner type from expected_ty and returns it as a single-element vector.
+    /// Returns None for generic enums, Option without expected_ty, and other aggregate kinds.
+    fn resolve_declared_field_types_for_aggregate(
+        kind: &AggregateKind,
+        type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
+    ) -> Option<Vec<crate::ast::types::Type>> {
+        match kind {
+            AggregateKind::Enum(enum_name, variant_name) => {
+                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                    type_ctx.type_definitions.get(enum_name.as_ref())
+                {
+                    if enum_def.generics.is_none()
+                        || enum_def
+                            .generics
+                            .as_ref()
+                            .map(|g| g.is_empty())
+                            .unwrap_or(true)
+                    {
+                        enum_def.variants.get(variant_name.as_ref()).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            AggregateKind::Option => expected_ty.and_then(|ty| {
+                if let TypeKind::Option(inner) = &ty.kind {
+                    Some(vec![(**inner).clone()])
+                } else {
+                    None
+                }
+            }),
+            AggregateKind::Tuple
+            | AggregateKind::Struct(_)
+            | AggregateKind::Class(_)
+            | AggregateKind::FormattedString
+            | AggregateKind::Closure(_, _)
+            | AggregateKind::Array
+            | AggregateKind::List
+            | AggregateKind::Map
+            | AggregateKind::Set => None,
+        }
+    }
+
+    /// Coerce a value to its declared type, handling width mismatches for floats and ints.
+    /// If the declared type is wider than ptr_type, skip coercion to prevent store overflow:
+    /// enum payload slots are ptr-sized, so widening would write past the slot boundary.
+    fn coerce_value_to_declared_type(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        declared_ty: &crate::ast::types::Type,
+        ptr_type: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
+        let decl_cl_ty =
+            crate::codegen::cranelift::types::translate_type_kind(&declared_ty.kind, ptr_type);
+        let val_cl_ty = builder.func.dfg.value_type(value);
+        let ptr_bytes = ptr_type.bytes();
+        if decl_cl_ty != val_cl_ty && decl_cl_ty.bytes() <= ptr_bytes {
+            let is_unsigned = Self::is_unsigned_type_kind(&declared_ty.kind);
+            Self::cast_value_with_sign(builder, value, val_cl_ty, decl_cl_ty, is_unsigned)
+        } else {
+            Ok(value)
         }
     }
 
@@ -921,7 +1033,7 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(builder.ins().iconst(ptr_type, 0));
         };
 
-        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         // Handle null pointer (empty/uninitialized)
         let is_null = builder.ins().icmp_imm(IntCC::Equal, ptr, 0);
@@ -962,7 +1074,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
             arg_values.push(Self::translate_operand(
-                builder, ctx, arg, locals, type_ctx,
+                builder, ctx, arg, locals, type_ctx, None,
             )?);
         }
         if arg_values.is_empty() {
@@ -1401,16 +1513,20 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Translate an operand to a Cranelift value.
+    ///
+    /// When `expected_ty` is Some, it is used by `read_place` to resolve
+    /// the correct load width for enum/Option field projections.
     pub(crate) fn translate_operand(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         operand: &Operand,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
-                Self::read_place(builder, ctx, place, locals, type_ctx)
+                Self::read_place(builder, ctx, place, locals, type_ctx, expected_ty)
             }
 
             Operand::Constant(constant) => {
@@ -1589,7 +1705,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let capture_vals: Vec<Value> = capture_ops
             .iter()
-            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
 
         let payload_ptr =
