@@ -44,9 +44,10 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, REGEX_TYPE_NAME};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
@@ -90,6 +91,52 @@ impl TypeChecker {
         }
     }
 
+    /// Validates a regex literal by checking flags and compiling the pattern.
+    pub(crate) fn check_regex_literal(&mut self, lit: &Literal, span: Span, context: &Context) {
+        let Literal::Regex(token) = lit else {
+            return;
+        };
+
+        if context.in_gpu_function {
+            self.report_error(
+                "Regex literals cannot be used inside a GPU function; use Regex.compile() at host level and pass it as a parameter"
+                    .to_string(),
+                span,
+            );
+            return;
+        }
+
+        if token.global {
+            let error = TypeError::new(
+                TypeErrorKind::InvalidRegexLiteral {
+                    reason: "Regex literal does not support the 'g' flag; use find_all() for global matching"
+                        .to_string(),
+                },
+                span,
+            );
+            self.report_typed_error(error);
+            return;
+        }
+
+        let pattern = build_regex_pattern(
+            &token.body,
+            token.ignore_case,
+            token.multiline,
+            token.dot_all,
+            token.unicode,
+        );
+
+        if let Err(e) = regex::Regex::new(&pattern) {
+            let error = TypeError::new(
+                TypeErrorKind::InvalidRegexLiteral {
+                    reason: format!("{}", e),
+                },
+                span,
+            );
+            self.report_typed_error(error);
+        }
+    }
+
     /// A float literal is width-less in the source, so — like an integer
     /// literal, which is always `Int` here — it infers as the target's default
     /// float width and takes a narrower one only from a context that declares
@@ -108,7 +155,9 @@ impl TypeChecker {
             Literal::Boolean(_) => ast_factory::make_type(TypeKind::Boolean),
             Literal::String(_) => ast_factory::make_type(TypeKind::String),
             Literal::Identifier(_) => ast_factory::make_type(TypeKind::Identifier),
-            Literal::Regex(_) => ast_factory::make_type(TypeKind::Custom("Regex".into(), None)),
+            Literal::Regex(_) => {
+                ast_factory::make_type(TypeKind::Custom(REGEX_TYPE_NAME.into(), None))
+            }
             Literal::None => ast_factory::make_type(TypeKind::Option(Box::new(
                 ast_factory::make_type(TypeKind::Void),
             ))),
@@ -161,5 +210,39 @@ impl TypeChecker {
                 | TypeKind::F64
                 | TypeKind::Error
         )
+    }
+}
+
+/// Builds a regex pattern string from a body and flags.
+///
+/// Maps regex flags to inline prefixes: `i` → `(?i)`, `m` → `(?m)`, `s` → `(?s)`, `u` → `(?u)`.
+/// Combined flags are merged into a single group (e.g., `(?im)` for both ignore_case and multiline).
+/// This function is shared by the type checker (to validate patterns) and MIR lowering (to construct Regex values).
+pub(crate) fn build_regex_pattern(
+    body: &str,
+    ignore_case: bool,
+    multiline: bool,
+    dot_all: bool,
+    unicode: bool,
+) -> String {
+    let mut prefix = String::new();
+
+    if ignore_case {
+        prefix.push('i');
+    }
+    if multiline {
+        prefix.push('m');
+    }
+    if dot_all {
+        prefix.push('s');
+    }
+    if unicode {
+        prefix.push('u');
+    }
+
+    if prefix.is_empty() {
+        body.to_string()
+    } else {
+        format!("(?{}){}", prefix, body)
     }
 }

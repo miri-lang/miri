@@ -71,6 +71,19 @@ pub const OPTION_TYPE_NAME: &str = "Option";
 /// stdlib method-registry lookups.
 pub const STRING_TYPE_NAME: &str = "String";
 
+/// Canonical class name for the built-in `Regex` compiled pattern type.
+///
+/// Regex literals (`re"pattern"`) are typed as `TypeKind::Custom(REGEX_TYPE_NAME, None)`.
+/// Centralized so the type checker, MIR lowering, and method dispatch share
+/// one spelling instead of scattering `"Regex"` string literals.
+pub const REGEX_TYPE_NAME: &str = "Regex";
+
+/// Canonical method name for constructing a Regex from a compile-time-validated pattern.
+///
+/// Called by MIR lowering when lowering regex literals to construct the Regex value.
+/// Not `public`; documented as the compiler's internal entry point for already-validated patterns.
+pub const REGEX_FROM_VALIDATED_PATTERN_METHOD: &str = "from_validated_pattern";
+
 /// Canonical spelling of the `Self` type keyword.
 ///
 /// `Self` names the enclosing class or trait inside its own body. It is a

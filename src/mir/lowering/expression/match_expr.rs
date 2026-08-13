@@ -16,6 +16,191 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{bind_pattern, literal_to_u128, lower_to_local, resolve_type};
 
+/// Classify a pattern into switch-able, predicate-based, or catch-all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PatternKind {
+    Switch,
+    Predicate,
+    CatchAll,
+}
+
+fn classify_pattern(pattern: &Pattern) -> PatternKind {
+    match pattern {
+        Pattern::Literal(lit) => match lit {
+            crate::ast::literal::Literal::String(_) => PatternKind::Predicate,
+            crate::ast::literal::Literal::Float(_) => PatternKind::Predicate,
+            _ => {
+                if literal_to_u128(lit).is_some() {
+                    PatternKind::Switch
+                } else {
+                    PatternKind::CatchAll
+                }
+            }
+        },
+        Pattern::Regex(_) => PatternKind::Predicate,
+        Pattern::Default | Pattern::Identifier(_) | Pattern::Tuple(_) => PatternKind::CatchAll,
+        _ => PatternKind::Switch,
+    }
+}
+
+fn arm_has_only_predicate_patterns(branch: &crate::ast::pattern::MatchBranch) -> bool {
+    branch
+        .patterns
+        .iter()
+        .any(|p| classify_pattern(p) == PatternKind::Predicate)
+}
+
+/// Test a simple predicate pattern (String or Float) and assign the boolean result.
+fn emit_simple_predicate_test(
+    ctx: &mut LoweringContext,
+    pattern: &Pattern,
+    subject_local: crate::mir::Local,
+    pattern_span: &crate::error::syntax::Span,
+    result_local: crate::mir::Local,
+) -> Result<(), LoweringError> {
+    match pattern {
+        Pattern::Literal(crate::ast::literal::Literal::String(s)) => {
+            let subject_op = Operand::Copy(Place::new(subject_local));
+            let string_const = Operand::Constant(Box::new(crate::mir::Constant {
+                span: *pattern_span,
+                ty: Type::new(TypeKind::String, *pattern_span),
+                literal: crate::ast::literal::Literal::String(s.clone()),
+            }));
+
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(result_local),
+                    Rvalue::BinaryOp(
+                        crate::mir::BinOp::Eq,
+                        Box::new(subject_op),
+                        Box::new(string_const),
+                    ),
+                ),
+                span: *pattern_span,
+            });
+        }
+        Pattern::Literal(crate::ast::literal::Literal::Float(float_lit)) => {
+            use crate::ast::literal::FloatLiteral;
+            let subject_op = Operand::Copy(Place::new(subject_local));
+            let float_ty = match float_lit {
+                FloatLiteral::F32(_) => Type::new(TypeKind::F32, *pattern_span),
+                FloatLiteral::F64(_) => Type::new(TypeKind::F64, *pattern_span),
+            };
+            let float_const = Operand::Constant(Box::new(crate::mir::Constant {
+                span: *pattern_span,
+                ty: float_ty,
+                literal: crate::ast::literal::Literal::Float(float_lit.clone()),
+            }));
+
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(result_local),
+                    Rvalue::BinaryOp(
+                        crate::mir::BinOp::Eq,
+                        Box::new(subject_op),
+                        Box::new(float_const),
+                    ),
+                ),
+                span: *pattern_span,
+            });
+        }
+        _ => {
+            unreachable!("Only String and Float patterns should reach here")
+        }
+    }
+
+    Ok(())
+}
+
+/// Test a regex predicate pattern and branch to appropriate targets.
+/// Uses method dispatch to call .matches(), avoiding hardcoded stdlib assumptions.
+fn emit_regex_predicate_test(
+    ctx: &mut LoweringContext,
+    pattern: &Pattern,
+    subject_local: crate::mir::Local,
+    pattern_span: &crate::error::syntax::Span,
+    match_bb: crate::mir::BasicBlock,
+    fail_bb: crate::mir::BasicBlock,
+) -> Result<(), LoweringError> {
+    let Pattern::Regex(regex_token) = pattern else {
+        unreachable!()
+    };
+
+    use crate::mir::lowering::expression::literal_expr::lower_regex_from_token;
+    use crate::runtime_fns::rt;
+
+    // Materialize the Regex using the standard path.
+    // Allocate a temp destination so the call ABI is consistent regardless of type resolution.
+    let regex_ty = Type::new(
+        TypeKind::Custom(crate::ast::types::REGEX_TYPE_NAME.into(), None),
+        *pattern_span,
+    );
+    let regex_temp = ctx.push_temp(regex_ty, *pattern_span);
+    let regex_dest = Place::new(regex_temp);
+
+    let _regex_op =
+        lower_regex_from_token(ctx, regex_token, *pattern_span, 0, Some(regex_dest.clone()))?;
+
+    // Extract the handle from the Regex object (Field 0) and call the runtime function.
+    // This is the matches() method implementation from the Regex class.
+    // INVARIANT: Regex.handle must remain field 0; see src/stdlib/system/text.mi line 95.
+    let mut handle_place = regex_dest.clone();
+    handle_place.projection.push(PlaceElem::Field(0));
+
+    let handle_local = ctx.push_temp(Type::new(TypeKind::Int, *pattern_span), *pattern_span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(handle_local),
+            Rvalue::Use(Operand::Copy(handle_place)),
+        ),
+        span: *pattern_span,
+    });
+
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: *pattern_span,
+        ty: Type::new(TypeKind::Identifier, *pattern_span),
+        literal: crate::ast::literal::Literal::Identifier(rt::REGEX_MATCHES.to_string()),
+    }));
+
+    let bool_ty = Type::new(TypeKind::Boolean, *pattern_span);
+    let result_temp = ctx.push_temp(bool_ty, *pattern_span);
+    let continuation_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![
+                Operand::Copy(Place::new(handle_local)),
+                Operand::Copy(Place::new(subject_local)),
+            ],
+            out_args: vec![],
+            arg_handles: vec![],
+            destination: Place::new(result_temp),
+            target: Some(continuation_bb),
+        },
+        *pattern_span,
+    ));
+
+    ctx.set_current_block(continuation_bb);
+
+    // Emit drop for the regex_temp after the call completes but before we branch.
+    // regex_temp is a managed Regex object and must be DecRef'd.
+    // Note: result_temp (bool) is a scalar and will be read in the SwitchInt terminator,
+    // so we don't drop it here; MIR allows unused scalars to be implicitly dropped.
+    ctx.emit_temp_drop(regex_temp, 0, *pattern_span);
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(result_temp)),
+            targets: vec![(Discriminant::bool_true(), match_bb)],
+            otherwise: fail_bb,
+        },
+        *pattern_span,
+    ));
+
+    Ok(())
+}
+
 /// Lower guard condition and emit branching to appropriate successor or fallback.
 fn emit_guard_and_branch(
     ctx: &mut LoweringContext,
@@ -182,14 +367,89 @@ fn compute_pattern_discriminants(
                 *otherwise_bb = Some(branch_bb);
             }
         }
-        Pattern::Regex(_) => {
-            if otherwise_bb.is_none() {
-                *otherwise_bb = Some(branch_bb);
+        Pattern::Regex(_) => {}
+    }
+
+    arm_discrs
+}
+
+/// Emit all predicate test blocks that form a chain for pattern alternatives.
+/// Each predicate arm's patterns are tested in order; if a pattern matches,
+/// the branch is entered. If it fails, the next pattern (if any) is tested,
+/// and only the last pattern's failure leaves the arm entirely.
+#[allow(clippy::too_many_arguments)]
+fn emit_predicate_test_chain(
+    ctx: &mut LoweringContext,
+    subject_local: crate::mir::Local,
+    expr_span: &crate::error::syntax::Span,
+    predicate_arm_indices: &[usize],
+    predicate_test_blocks: &[crate::mir::BasicBlock],
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
+    otherwise_bb: Option<crate::mir::BasicBlock>,
+    join_bb: crate::mir::BasicBlock,
+) -> Result<(), crate::error::lowering::LoweringError> {
+    for (test_idx, arm_idx) in predicate_arm_indices.iter().enumerate() {
+        let test_bb = predicate_test_blocks[test_idx];
+        let (branch_bb, branch, _) = &branch_blocks[*arm_idx];
+
+        ctx.set_current_block(test_bb);
+
+        let next_target = if test_idx + 1 < predicate_test_blocks.len() {
+            predicate_test_blocks[test_idx + 1]
+        } else {
+            otherwise_bb.unwrap_or(join_bb)
+        };
+
+        // Collect all predicate patterns in this arm to chain them together.
+        let predicate_patterns: Vec<_> = branch
+            .patterns
+            .iter()
+            .filter(|p| classify_pattern(p) == PatternKind::Predicate)
+            .collect();
+
+        for (pattern_idx, pattern) in predicate_patterns.iter().enumerate() {
+            let pattern_fail_target = if pattern_idx + 1 < predicate_patterns.len() {
+                ctx.new_basic_block()
+            } else {
+                next_target
+            };
+
+            if matches!(pattern, Pattern::Regex(_)) {
+                emit_regex_predicate_test(
+                    ctx,
+                    pattern,
+                    subject_local,
+                    expr_span,
+                    *branch_bb,
+                    pattern_fail_target,
+                )?;
+            } else {
+                let bool_ty = Type::new(TypeKind::Boolean, *expr_span);
+                let test_result = ctx.push_temp(bool_ty, *expr_span);
+                emit_simple_predicate_test(ctx, pattern, subject_local, expr_span, test_result)?;
+                ctx.emit_temp_drop(test_result, 0, *expr_span);
+
+                ctx.set_terminator(Terminator::new(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::new(test_result)),
+                        targets: vec![(Discriminant::bool_true(), *branch_bb)],
+                        otherwise: pattern_fail_target,
+                    },
+                    *expr_span,
+                ));
+            }
+
+            if pattern_idx + 1 < predicate_patterns.len() {
+                ctx.set_current_block(pattern_fail_target);
             }
         }
     }
 
-    arm_discrs
+    Ok(())
 }
 
 pub(crate) fn lower_match_expr(
@@ -221,8 +481,9 @@ pub(crate) fn lower_match_expr(
     // Collect literal patterns for SwitchInt.
     // branch_blocks stores (block, branch, discriminants) where discriminants is
     // non-empty for arms with specific literal/enum patterns and empty for catch-all
-    // arms (identifier, default, tuple, regex).  The discriminants are used when
-    // computing guard-failure targets (see second pass below).
+    // arms (identifier, default, tuple). Predicate arms (string/float/regex literals)
+    // are tested separately. The discriminants are used when computing guard-failure
+    // targets (see second pass below).
     //
     // IMPORTANT: only the *first* arm that covers a given discriminant value is
     // registered in switch_targets.  Subsequent arms with the same discriminant
@@ -262,8 +523,25 @@ pub(crate) fn lower_match_expr(
         branch_blocks.push((branch_bb, branch, arm_discrs));
     }
 
-    // Set otherwise to join if no default pattern
-    let otherwise_target = otherwise_bb.unwrap_or(join_bb);
+    // Find arms with only predicate patterns, to set up predicate test chain
+    let mut predicate_arm_indices: Vec<usize> = Vec::new();
+    let mut predicate_test_blocks: Vec<crate::mir::BasicBlock> = Vec::new();
+    for (idx, (_bb, branch, _discrs)) in branch_blocks.iter().enumerate() {
+        if arm_has_only_predicate_patterns(branch) {
+            predicate_arm_indices.push(idx);
+            predicate_test_blocks.push(ctx.new_basic_block());
+        }
+    }
+
+    // Determine the target for the switch's otherwise:
+    // - First predicate test block if one exists
+    // - Otherwise default pattern if one exists
+    // - Otherwise join_bb
+    let otherwise_target = if !predicate_test_blocks.is_empty() {
+        predicate_test_blocks[0]
+    } else {
+        otherwise_bb.unwrap_or(join_bb)
+    };
 
     // For enum types, we need to extract the discriminant (Field 0) to switch on
     let switch_discr = if let TypeKind::Custom(type_name, _) = &subject_ty.kind {
@@ -306,6 +584,18 @@ pub(crate) fn lower_match_expr(
         },
         expr.span,
     ));
+
+    // Emit predicate test blocks for all predicate arms
+    emit_predicate_test_chain(
+        ctx,
+        subject_local,
+        &expr.span,
+        &predicate_arm_indices,
+        &predicate_test_blocks,
+        &branch_blocks,
+        otherwise_bb,
+        join_bb,
+    )?;
 
     // Lower each branch body
     for (arm_idx, (branch_bb, branch, this_discrs)) in branch_blocks.iter().enumerate() {

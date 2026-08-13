@@ -1596,7 +1596,8 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_identifier_literal(builder, ctx, name, constant, ptr_type)
             }
             Literal::Regex(_) => Err(CodegenError::Internal(
-                "Regex constants not supported in codegen".to_string(),
+                "Regex literal reached codegen; MIR lowering must replace all regex literals with calls to Regex.from_validated_pattern()"
+                    .to_string(),
             )),
         }
     }

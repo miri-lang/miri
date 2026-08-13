@@ -80,6 +80,10 @@ pub enum TypeErrorKind {
     AttributeArgumentExtra {
         name: String,
     },
+    /// E0115: Invalid regex literal (malformed pattern or invalid flags)
+    InvalidRegexLiteral {
+        reason: String,
+    },
     /// A syntax/parse error that originated in an imported module, preserved
     /// with its original error code and title rather than being downgraded to
     /// a generic "Type Error".
@@ -194,6 +198,10 @@ impl TypeErrorKind {
                 ErrorProperties::simple("E0114", "Attribute Argument Extra")
                     .with_message(format!("Attribute @{} does not take an argument", name))
                     .with_help(format!("Remove the argument: @{}", name))
+            }
+            Self::InvalidRegexLiteral { reason } => {
+                ErrorProperties::simple("E0115", "Invalid Regex Literal")
+                    .with_message(format!("Invalid regex literal: {}", reason))
             }
             Self::ParseError {
                 code,

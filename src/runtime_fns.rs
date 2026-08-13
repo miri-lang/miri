@@ -227,6 +227,7 @@ pub mod rt {
     pub const REGEX_COMPILE: &str = "miri_rt_regex_compile";
     pub const REGEX_COMPILE_STATUS: &str = "miri_rt_regex_compile_status";
     pub const REGEX_COMPILE_MESSAGE: &str = "miri_rt_regex_compile_message";
+    pub const REGEX_FROM_VALIDATED_PATTERN: &str = "miri_rt_regex_from_validated_pattern";
     pub const REGEX_MATCHES: &str = "miri_rt_regex_matches";
     pub const REGEX_FIND: &str = "miri_rt_regex_find";
     pub const REGEX_FIND_FROM: &str = "miri_rt_regex_find_from";
@@ -390,6 +391,7 @@ pub mod rt {
         REGEX_COMPILE,
         REGEX_COMPILE_STATUS,
         REGEX_COMPILE_MESSAGE,
+        REGEX_FROM_VALIDATED_PATTERN,
         REGEX_MATCHES,
         REGEX_FIND,
         REGEX_FIND_FROM,
