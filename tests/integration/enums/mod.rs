@@ -11,3 +11,4 @@ pub mod generic_enum_leaks;
 pub mod managed;
 pub mod matching;
 pub mod methods;
+pub mod statics;

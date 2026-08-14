@@ -848,3 +848,49 @@ fn use_conn(conn Conn) int:
         );
     }
 }
+
+/// A match subject is copied, never moved, out of the local it came from.
+///
+/// `release_subject_temps` releases both the subject temp and the local that
+/// backed it. That is only balanced if reading the subject retained it: a move
+/// would leave one allocation with two `DecRef`s against it, freeing a live
+/// value the moment the match ended.
+#[test]
+fn test_match_subject_from_named_local_is_retained() {
+    let body = lowered_with_rc(
+        r#"
+fn probe(seed String) int
+    let value = Some(seed + "!")
+    match value
+        Some(text): text.length()
+        None: 0
+"#,
+        "probe",
+    );
+
+    let statements = all_statements(&body);
+    let subject_assign = statements
+        .iter()
+        .position(|statement| match statement {
+            StatementKind::Assign(_, Rvalue::Use(Operand::Copy(place)))
+            | StatementKind::Assign(_, Rvalue::Use(Operand::Move(place))) => {
+                place.projection.is_empty() && place.local == Local(2)
+            }
+            _ => false,
+        })
+        .expect("the subject local should be read into the match temp");
+
+    match &statements[subject_assign] {
+        StatementKind::Assign(_, Rvalue::Use(Operand::Copy(_))) => {}
+        other => panic!("match subject must be copied, not moved: {:?}", other),
+    }
+
+    assert!(
+        matches!(
+            &statements[subject_assign - 1],
+            StatementKind::IncRef(place) if place.local == Local(2) && place.projection.is_empty()
+        ),
+        "the copy into the match temp must be retained, got {:?}",
+        &statements[subject_assign - 1]
+    );
+}

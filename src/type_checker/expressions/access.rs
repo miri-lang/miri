@@ -1672,8 +1672,65 @@ impl TypeChecker {
         let def_opt = self.resolve_visible_type(name, context).cloned();
 
         if let Some(TypeDefinition::Enum(def)) = &def_opt {
-            // Naming a variant is the use site of an enum, so a deprecated enum
-            // warns here rather than at a call.
+            // First try to resolve as a variant (variants take precedence)
+            if def.variants.contains_key(prop_name) {
+                // Naming a variant is the use site of an enum, so a deprecated enum
+                // warns here rather than at a call.
+                self.warn_if_deprecated(name, span);
+                return self
+                    .infer_member_enum_variant_from_meta(name, prop_name, inner_type, def, span);
+            }
+
+            // Then try to resolve as a static method
+            if let Some(method_info) = def.methods.get(prop_name) {
+                if method_info.is_static {
+                    // Check visibility
+                    if !self.check_member_visibility(
+                        &method_info.visibility,
+                        name,
+                        context.current_class.as_deref(),
+                        None,
+                    ) {
+                        self.report_error(
+                            format!(
+                                "Static method '{}' is {} and cannot be accessed",
+                                prop_name,
+                                match method_info.visibility {
+                                    MemberVisibility::Private => "Private",
+                                    MemberVisibility::Protected => "Protected",
+                                    _ => "inaccessible",
+                                }
+                            ),
+                            span,
+                        );
+                        return make_type(TypeKind::Error);
+                    }
+
+                    // Build the function type for the static method (no receiver)
+                    let params = method_info
+                        .params
+                        .iter()
+                        .map(|(param_name, ty)| Parameter {
+                            name: param_name.clone(),
+                            typ: Box::new(self.create_type_expression(ty.clone())),
+                            guard: None,
+                            default_value: None,
+                            is_out: false,
+                            residency: None,
+                        })
+                        .collect();
+
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params,
+                        return_type: Some(Box::new(
+                            self.create_type_expression(method_info.return_type.clone()),
+                        )),
+                    })));
+                }
+            }
+
+            // No variant or static method found
             self.warn_if_deprecated(name, span);
             return self
                 .infer_member_enum_variant_from_meta(name, prop_name, inner_type, def, span);

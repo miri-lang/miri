@@ -13,6 +13,13 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
     /// Moves the value out of the place.
+    ///
+    /// Reference counting does not honour this: the source local is still
+    /// released when its scope ends, so a move of a managed place hands the
+    /// value on without retaining it and leaves one allocation carrying two
+    /// releases. Consumers that release what they receive must read the place
+    /// by [`Operand::Copy`] instead — several lowering seams normalize to
+    /// `Copy` for exactly this reason.
     Move(Place),
     /// Copies the value from the place.
     Copy(Place),
