@@ -19,6 +19,7 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
     runtime "core" fn miri_rt_list_set(l Self, index int, item T) bool
     runtime "core" fn miri_rt_list_insert(l Self, index int, item T) bool
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
+    runtime "core" fn miri_rt_list_take_at(l Self, index int) bool
     runtime "core" fn miri_rt_list_clear(l Self)
     runtime "core" fn miri_rt_list_reverse(l Self)
     runtime "core" fn miri_rt_list_sort(l Self)
@@ -53,9 +54,12 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
         miri_rt_list_insert(self, index, item)
 
     /// Removes and returns the element at the given index.
+    ///
+    /// The element leaves the list owned by the caller: reading it out and then
+    /// releasing it here would free the value this returns.
     public fn remove_at(index int) T
         let item = self[index]
-        miri_rt_list_remove(self, index)
+        miri_rt_list_take_at(self, index)
         return item
 
     /// Removes the first occurrence of the given item from the list.

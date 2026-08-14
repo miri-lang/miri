@@ -128,6 +128,28 @@ impl MiriMap {
         }
     }
 
+    /// Raises the count of a key the map is about to hand to a caller.
+    ///
+    /// Everything a map returns is owned by whoever receives it: the caller
+    /// releases it when its binding goes out of scope, the same as any other
+    /// value a function returns. Handing out the map's own reference instead
+    /// would let that release free an entry the map still holds.
+    unsafe fn hand_out_key(&self, key_ptr: usize) -> usize {
+        if self.key_drop_fn != 0 && self.key_size > 0 && key_ptr != 0 {
+            crate::rc::incref(key_ptr as *mut u8);
+        }
+        key_ptr
+    }
+
+    /// Raises the count of a value the map is about to hand to a caller, on the
+    /// same contract as [`MiriMap::hand_out_key`].
+    unsafe fn hand_out_value(&self, val_ptr: usize) -> usize {
+        if self.val_drop_fn != 0 && self.value_size > 0 && val_ptr != 0 {
+            crate::rc::incref(val_ptr as *mut u8);
+        }
+        val_ptr
+    }
+
     /// Finds the slot for a given key (for lookup or insertion).
     /// Returns (slot_index, found) where found indicates if the key was found.
     unsafe fn find_slot(&self, key: *const u8) -> (usize, bool) {
@@ -538,7 +560,7 @@ pub mod ffi {
             return 0;
         }
         // Read the stored value as usize (matches how values are stored via set)
-        *(result as *const usize)
+        map.hand_out_value(*(result as *const usize))
     }
 
     /// Gets the value for a key, aborting if the key is not found.
@@ -558,6 +580,9 @@ pub mod ffi {
             eprintln!("Runtime error: map key not found");
             std::process::abort();
         }
+        // Indexing reads through to the entry the map still owns: `m[k]` is
+        // consumed in place by the expression around it, which never releases
+        // what it read. Raising the count here would strand it instead.
         *(result as *const usize)
     }
 
@@ -662,6 +687,11 @@ pub mod ffi {
     ///
     /// This enables iteration over map keys via `element_at`.
     /// Returns 0 if the index is out of bounds.
+    ///
+    /// A managed key is handed out with its count already raised: the caller
+    /// owns what it receives and releases it when the binding goes out of
+    /// scope. Returning the map's own reference instead would let one pass of a
+    /// loop free a key the map still holds.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_key_at(ptr: *const MiriMap, nth: usize) -> usize {
@@ -673,8 +703,7 @@ pub mod ffi {
         for i in 0..map.capacity {
             if *map.states.add(i) == SLOT_OCCUPIED {
                 if count == nth {
-                    let key_ptr = map.keys.add(i * map.key_size);
-                    return *(key_ptr as *const usize);
+                    return map.hand_out_key(*(map.keys.add(i * map.key_size) as *const usize));
                 }
                 count += 1;
             }
@@ -684,7 +713,8 @@ pub mod ffi {
 
     /// Returns the value at the nth occupied slot (0-based sequential index).
     ///
-    /// This enables `for k, v in map` iteration.
+    /// This enables `for k, v in map` iteration. A managed value is handed out
+    /// owned, on the same contract as [`MiriMap::miri_rt_map_key_at`].
     /// Returns 0 if the index is out of bounds.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
@@ -697,8 +727,8 @@ pub mod ffi {
         for i in 0..map.capacity {
             if *map.states.add(i) == SLOT_OCCUPIED {
                 if count == nth {
-                    let val_ptr = map.values.add(i * map.value_size);
-                    return *(val_ptr as *const usize);
+                    return map
+                        .hand_out_value(*(map.values.add(i * map.value_size) as *const usize));
                 }
                 count += 1;
             }

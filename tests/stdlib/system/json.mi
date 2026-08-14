@@ -1,0 +1,247 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.json`: the value model, parsing, serialization, the
+// accessors, and the position carried by every parse failure.
+//
+// Object members live in a hash map, so their order in `to_string` is not the
+// order they were written in. Every check over an object with more than one
+// member therefore reads members back by key instead of comparing text.
+
+use system.json
+use system.result
+use system.string
+use system.testing
+
+fn parsed(source String) Json
+    match Json.parse(source)
+        Result.Ok(document): document
+        Result.Err(_): Json.Null
+
+fn round_trip(source String) String
+    parsed(source).to_string()
+
+/// The line and column of a failure, as `line:column`, or `ok` when the source
+/// parsed. `JsonError` is `@non_exhaustive`, so this match carries a default
+/// arm even though it lists every variant that exists today.
+fn failure_position(source String) String
+    match Json.parse(source)
+        Result.Ok(_): "ok"
+        Result.Err(reason)
+            match reason
+                JsonError.UnexpectedCharacter(_, line, column): f"{line}:{column}"
+                JsonError.UnexpectedEnd(line, column): f"{line}:{column}"
+                JsonError.UnterminatedString(line, column): f"{line}:{column}"
+                JsonError.InvalidEscape(_, line, column): f"{line}:{column}"
+                JsonError.InvalidNumber(_, line, column): f"{line}:{column}"
+                JsonError.TrailingData(line, column): f"{line}:{column}"
+                JsonError.DepthExceeded(line, column): f"{line}:{column}"
+                default: "unknown"
+
+/// The name of the failure variant, or `ok` when the source parsed.
+fn failure_kind(source String) String
+    match Json.parse(source)
+        Result.Ok(_): "ok"
+        Result.Err(reason)
+            match reason
+                JsonError.UnexpectedCharacter(_, _, _): "UnexpectedCharacter"
+                JsonError.UnexpectedEnd(_, _): "UnexpectedEnd"
+                JsonError.UnterminatedString(_, _): "UnterminatedString"
+                JsonError.InvalidEscape(_, _, _): "InvalidEscape"
+                JsonError.InvalidNumber(_, _, _): "InvalidNumber"
+                JsonError.TrailingData(_, _): "TrailingData"
+                JsonError.DepthExceeded(_, _): "DepthExceeded"
+                default: "unknown"
+
+fn member_text(document Json, key String) String
+    match document.get(key)
+        Some(member): member.to_string()
+        None: "absent"
+
+fn element_text(document Json, index int) String
+    match document.at(index)
+        Some(member): member.to_string()
+        None: "absent"
+
+fn test_scalars_round_trip()
+    assert_eq(round_trip("null"), "null")
+    assert_eq(round_trip("true"), "true")
+    assert_eq(round_trip("false"), "false")
+    assert_eq(round_trip("\"text\""), "\"text\"")
+
+fn test_number_keeps_its_lexeme()
+    assert_eq(round_trip("1"), "1", "an integer does not gain a fraction")
+    assert_eq(round_trip("-0.5"), "-0.5")
+    assert_eq(round_trip("2.5e10"), "2.5e10", "the exponent is kept as written")
+    assert_eq(round_trip("123456789012345678901"), "123456789012345678901",
+        "a number wider than a float survives the trip")
+
+fn test_whitespace_around_a_document_is_allowed()
+    assert_eq(round_trip("  \n\t [1] \n "), "[1]")
+
+fn test_arrays_round_trip()
+    assert_eq(round_trip("[]"), "[]")
+    assert_eq(round_trip("[1,2,3]"), "[1,2,3]")
+    assert_eq(round_trip("[ 1 , 2 ]"), "[1,2]", "whitespace between elements is dropped")
+    assert_eq(round_trip("[[1],[2,[3]]]"), "[[1],[2,[3]]]")
+    assert_eq(round_trip("[null,true,\"a\"]"), "[null,true,\"a\"]")
+
+fn test_single_member_object_round_trips_verbatim()
+    assert_eq(round_trip("{}"), "{}")
+    assert_eq(round_trip("{\"a\":1}"), "{\"a\":1}")
+    assert_eq(round_trip("{ \"a\" : [1,2] }"), "{\"a\":[1,2]}")
+    assert_eq(round_trip("{\"a\":{\"b\":{\"c\":null}}}"), "{\"a\":{\"b\":{\"c\":null}}}")
+
+fn test_nested_structure_survives_a_reparse()
+    let source = "{\"name\":\"miri\",\"tags\":[1,2],\"meta\":{\"ok\":true},\"none\":null}"
+    let once = parsed(source)
+    let twice = parsed(once.to_string())
+    assert_eq(member_text(twice, "name"), "\"miri\"")
+    assert_eq(member_text(twice, "tags"), "[1,2]")
+    assert_eq(member_text(twice, "meta"), "{\"ok\":true}")
+    assert_eq(member_text(twice, "none"), "null")
+    assert_eq(twice.to_string(), once.to_string(), "serialization is stable across a reparse")
+
+fn test_repeated_key_keeps_the_last_value()
+    assert_eq(round_trip("{\"a\":1,\"a\":2}"), "{\"a\":2}")
+
+fn test_object_keys_compare_by_content()
+    let document = parsed("{\"ab\":7}")
+    assert_eq(member_text(document, "a" + "b"), "7",
+        "a key built at runtime finds the member")
+    assert_eq(member_text(document, "ac"), "absent")
+
+fn test_as_string()
+    assert_eq(parsed("\"hi\"").as_string() ?? "none", "hi")
+    assert_eq(parsed("1").as_string() ?? "none", "none")
+    assert_eq(parsed("null").as_string() ?? "none", "none")
+
+fn test_as_int()
+    assert_eq(parsed("42").as_int() ?? 0, 42)
+    assert_eq(parsed("-7").as_int() ?? 0, -7)
+    assert_eq(parsed("2.5").as_int() ?? 0, 0, "a fractional number is not an int")
+    assert_eq(parsed("true").as_int() ?? 0, 0)
+
+fn test_as_float()
+    assert_eq(parsed("2.5").as_float() ?? 0.0, 2.5)
+    assert_eq(parsed("3").as_float() ?? 0.0, 3.0, "an integer lexeme reads as a float")
+    assert_eq(parsed("\"2.5\"").as_float() ?? 0.0, 0.0, "a string is not a number")
+
+fn test_as_bool()
+    assert(parsed("true").as_bool() ?? false)
+    assert(not (parsed("false").as_bool() ?? true))
+    assert(not (parsed("0").as_bool() ?? false), "a number is not a bool")
+
+fn test_get_on_non_objects()
+    assert_eq(member_text(parsed("[1]"), "a"), "absent")
+    assert_eq(member_text(parsed("null"), "a"), "absent")
+    assert_eq(member_text(parsed("{\"a\":1}"), "b"), "absent")
+
+fn test_at_indexes_arrays()
+    let document = parsed("[10,20,30]")
+    assert_eq(element_text(document, 0), "10")
+    assert_eq(element_text(document, 2), "30")
+    assert_eq(element_text(document, 3), "absent")
+    assert_eq(element_text(document, -1), "absent")
+    assert_eq(element_text(parsed("{\"a\":1}"), 0), "absent", "an object has no positions")
+
+fn test_escapes_decode()
+    assert_eq(parsed("\"a\\nb\"").as_string() ?? "", "a\nb")
+    assert_eq(parsed("\"a\\tb\"").as_string() ?? "", "a\tb")
+    assert_eq(parsed("\"a\\\"b\"").as_string() ?? "", "a\"b")
+    assert_eq(parsed("\"a\\\\b\"").as_string() ?? "", "a\\b")
+    assert_eq(parsed("\"a\\/b\"").as_string() ?? "", "a/b")
+
+fn test_unicode_escapes_decode()
+    assert_eq(parsed("\"\\u0041\"").as_string() ?? "", "A")
+    assert_eq(parsed("\"\\u00e9\"").as_string() ?? "", "é")
+    assert_eq(parsed("\"\\ud83d\\ude00\"").as_string() ?? "", "😀",
+        "a surrogate pair decodes to one scalar")
+
+fn test_serialization_escapes_what_it_must()
+    assert_eq(parsed("\"a\\nb\"").to_string(), "\"a\\nb\"")
+    assert_eq(parsed("\"a\\\"b\"").to_string(), "\"a\\\"b\"")
+    assert_eq(parsed("\"a\\u0001b\"").to_string(), "\"a\\u0001b\"",
+        "a control character is written as a unicode escape")
+    assert_eq(parsed("\"é\"").to_string(), "\"é\"", "a printable non-ASCII scalar is written as itself")
+
+fn test_empty_input_reports_the_start()
+    assert_eq(failure_kind(""), "UnexpectedEnd")
+    assert_eq(failure_position(""), "1:1")
+
+fn test_unterminated_string_reports_its_opening_quote()
+    assert_eq(failure_kind("\"abc"), "UnterminatedString")
+    assert_eq(failure_position("\"abc"), "1:1")
+
+fn test_trailing_data_is_rejected()
+    assert_eq(failure_kind("1 2"), "TrailingData")
+    assert_eq(failure_position("1 2"), "1:3")
+    assert_eq(failure_kind("{} []"), "TrailingData")
+
+fn test_bad_number_is_rejected()
+    assert_eq(failure_kind("01"), "InvalidNumber")
+    assert_eq(failure_kind("-"), "InvalidNumber")
+    assert_eq(failure_kind("1."), "InvalidNumber")
+    assert_eq(failure_kind("1e"), "InvalidNumber")
+
+fn test_bad_escape_is_rejected()
+    assert_eq(failure_kind("\"\\q\""), "InvalidEscape")
+    assert_eq(failure_kind("\"\\u00zz\""), "InvalidEscape")
+    assert_eq(failure_kind("\"\\ud83d\""), "InvalidEscape", "a lone high surrogate is invalid")
+
+fn test_structural_errors_are_rejected()
+    assert_eq(failure_kind("{"), "UnexpectedEnd")
+    assert_eq(failure_kind("[1,]"), "UnexpectedCharacter")
+    assert_eq(failure_kind("{\"a\" 1}"), "UnexpectedCharacter")
+    assert_eq(failure_kind("{a:1}"), "UnexpectedCharacter")
+    assert_eq(failure_kind("tru"), "UnexpectedEnd", "a keyword cut short ran out of input")
+
+fn test_position_counts_lines()
+    assert_eq(failure_position("[\n  1,\n  ?\n]"), "3:3",
+        "the column restarts at each newline")
+
+fn nested_source(depth int, open String, close String) String
+    var out = ""
+    var index = 0
+    while index < depth
+        out = out + open
+        index = index + 1
+    out = out + "1"
+    index = 0
+    while index < depth
+        out = out + close
+        index = index + 1
+    out
+
+fn test_deep_nesting_is_bounded()
+    assert_eq(failure_kind(nested_source(200, "[", "]")), "ok",
+        "nesting within the limit parses")
+    assert_eq(failure_kind(nested_source(1100, "[", "]")), "DepthExceeded")
+
+fn main()
+    test_scalars_round_trip()
+    test_number_keeps_its_lexeme()
+    test_whitespace_around_a_document_is_allowed()
+    test_arrays_round_trip()
+    test_single_member_object_round_trips_verbatim()
+    test_nested_structure_survives_a_reparse()
+    test_repeated_key_keeps_the_last_value()
+    test_object_keys_compare_by_content()
+    test_as_string()
+    test_as_int()
+    test_as_float()
+    test_as_bool()
+    test_get_on_non_objects()
+    test_at_indexes_arrays()
+    test_escapes_decode()
+    test_unicode_escapes_decode()
+    test_serialization_escapes_what_it_must()
+    test_empty_input_reports_the_start()
+    test_unterminated_string_reports_its_opening_quote()
+    test_trailing_data_is_rejected()
+    test_bad_number_is_rejected()
+    test_bad_escape_is_rejected()
+    test_structural_errors_are_rejected()
+    test_position_counts_lines()
+    test_deep_nesting_is_bounded()
+    println("system.json: OK")

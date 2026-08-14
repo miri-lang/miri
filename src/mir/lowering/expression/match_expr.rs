@@ -466,6 +466,12 @@ pub(crate) fn lower_match_expr(
         ty: ref subject_ty,
         ..
     } = subject_info;
+    // The subject outlives every arm, so a scope wrapping the whole match owns
+    // it. An arm that leaves through `return`, `break`, or `continue` never
+    // reaches the join block, and the scope walk those exits run is then the
+    // only thing that still releases what the match was dispatching on.
+    ctx.push_scope();
+    register_subject_temps(ctx, &subject_info);
 
     // Use dest if provided (DPS), otherwise create a temp
     let result_ty = resolve_type(ctx.type_checker, expr);
@@ -614,12 +620,17 @@ pub(crate) fn lower_match_expr(
         // Lower branch body and assign result to result_local
         lower_to_local(ctx, &branch.body, result_local, &result_ty)?;
 
-        // Goto join if body didn't terminate (e.g., with return)
-        if ctx.body.basic_blocks[ctx.current_block.0]
+        // The arm's scope closes on every exit. An arm that already terminated
+        // — with `return`, `break`, or `continue` — released its bindings on
+        // the way out, so `pop_scope` emits nothing for it, but the scope still
+        // has to leave the stack: leaving it there makes every later
+        // `pop_scope` close one level too shallow, and the outermost scope's
+        // bindings are then never released at all.
+        let arm_terminated = ctx.body.basic_blocks[ctx.current_block.0]
             .terminator
-            .is_none()
-        {
-            ctx.pop_scope(expr.span);
+            .is_some();
+        ctx.pop_scope(expr.span);
+        if !arm_terminated {
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::Goto { target: join_bb },
                 expr.span,
@@ -628,7 +639,7 @@ pub(crate) fn lower_match_expr(
     }
 
     ctx.set_current_block(join_bb);
-    release_subject_temps(ctx, &subject_info, subject.span);
+    ctx.pop_scope(subject.span);
     Ok(Operand::Copy(Place::new(result_local)))
 }
 
@@ -680,21 +691,21 @@ fn lower_match_subject(
     })
 }
 
-/// Release what the match held on to once every arm has read from it: the
-/// subject temp, which was reference-counted when the subject operand was
-/// assigned into it, and then the operand's own local if the subject expression
-/// allocated it here. Without the second drop, matching directly on an
-/// expression that allocates — `match make_result()` — never releases what it
-/// returned, so an enum's payload outlives the match.
-fn release_subject_temps(
-    ctx: &mut LoweringContext,
-    subject: &MatchSubject,
-    span: crate::error::syntax::Span,
-) {
-    ctx.emit_temp_drop(subject.local, 0, span);
+/// Hand the match's scope what it has to release once every arm is done with
+/// it: the subject temp, which was reference-counted when the subject operand
+/// was assigned into it, and then the operand's own local if the subject
+/// expression allocated it here. Without the second one, matching directly on
+/// an expression that allocates — `match make_result()` — never releases what
+/// it returned, so an enum's payload outlives the match. A source local from
+/// before the subject was lowered is a binding with a scope of its own and is
+/// left to it.
+///
+/// The scope releases these in reverse, so the subject temp goes first.
+fn register_subject_temps(ctx: &mut LoweringContext, subject: &MatchSubject) {
     if let Some(source_local) = subject.source_local {
-        if source_local != subject.local {
-            ctx.emit_temp_drop(source_local, subject.watermark, span);
+        if source_local != subject.local && source_local.0 >= subject.watermark {
+            ctx.register_scope_temp(source_local);
         }
     }
+    ctx.register_scope_temp(subject.local);
 }

@@ -580,14 +580,35 @@ pub mod ffi {
         }
     }
 
-    /// Removes the element at the given index.
+    /// Removes the element at the given index and releases it.
     /// Returns true (1) if successful, false (0) if the index was out of bounds.
     ///
     /// If `elem_drop_fn` is set, calls it on the removed element pointer so that
-    /// managed elements have their RC decremented on removal.
+    /// managed elements have their RC decremented on removal. Use
+    /// `miri_rt_list_take_at` where the element is handed to a caller instead.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
+        remove_at_index(ptr, index, true)
+    }
+
+    /// Removes the element at the given index without releasing it, handing the
+    /// list's own reference to the caller.
+    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    ///
+    /// A caller that reads the element out and then removes it holds a pointer
+    /// the list is about to drop: releasing it here would free the value while
+    /// that read is still live. Transferring the reference instead leaves the
+    /// element with exactly one owner, the caller, which releases it as usual.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_take_at(ptr: *mut MiriList, index: usize) -> u8 {
+        remove_at_index(ptr, index, false)
+    }
+
+    /// Drop the element at `index` out of the list, releasing it only when the
+    /// list still owns it after the removal.
+    unsafe fn remove_at_index(ptr: *mut MiriList, index: usize, release_element: bool) -> u8 {
         if ptr.is_null() {
             return 0;
         }
@@ -596,8 +617,7 @@ pub mod ffi {
             return 0;
         }
 
-        // DecRef the element being removed if managed.
-        if list.elem_drop_fn != 0 {
+        if release_element && list.elem_drop_fn != 0 {
             let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(list.elem_drop_fn);
             let slot = list.data.add(index * list.elem_size) as *const usize;
             let elem_ptr = *slot;
