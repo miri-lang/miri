@@ -366,7 +366,13 @@ pub(super) fn emit_virtual_method_call(
     if let Some(local) = obj_temp_local {
         ctx.emit_temp_drop(local, obj_watermark, span);
     }
-    super::dispatch::emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
+    super::dispatch::emit_method_arg_drops(
+        ctx,
+        &call_args[1..],
+        arg_watermark,
+        destination.local,
+        span,
+    );
     Ok(Some(op.clone()))
 }
 
@@ -418,7 +424,13 @@ pub(super) fn emit_static_method_call(
     if let Some(local) = obj_temp_local {
         ctx.emit_temp_drop(local, obj_watermark, span);
     }
-    super::dispatch::emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
+    super::dispatch::emit_method_arg_drops(
+        ctx,
+        &call_args[1..],
+        arg_watermark,
+        destination.local,
+        span,
+    );
     Ok(Some(op.clone()))
 }
 
@@ -506,6 +518,7 @@ pub(super) fn try_lower_method_call(
         ctx,
         ResolvedMethod {
             span,
+            call_expr_id,
             obj,
             obj_ty: &obj_ty,
             class_name: &class_name,
@@ -538,6 +551,9 @@ fn resolve_method_receiver(
 /// A method call whose receiver type and target method have been resolved.
 struct ResolvedMethod<'a> {
     span: &'a Span,
+    /// Expression id of the whole call, used to read the concrete type the type
+    /// checker inferred for its result.
+    call_expr_id: usize,
     obj: &'a Expression,
     obj_ty: &'a Type,
     class_name: &'a str,
@@ -554,10 +570,7 @@ fn emit_resolved_method_call(
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     let mono = resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info);
-    let return_ty = match &mono {
-        Some((_, concrete_return)) => concrete_return.clone(),
-        None => m.method_info.return_type.clone(),
-    };
+    let return_ty = call_result_type(ctx, &m, &mono);
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
         prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
@@ -599,6 +612,27 @@ fn emit_resolved_method_call(
         obj_watermark,
         *m.span,
     )
+}
+
+/// The type to give the local that receives a method call's result.
+///
+/// A generic method declares its result in the class's own parameters — `V?`
+/// for `Map<String, Node>.get` — and a local typed that way tells Perceus
+/// nothing about what it holds, so the result is never released. The type
+/// checker already inferred the concrete type at this call site; the declared
+/// return type is the fallback for a call it did not record.
+fn call_result_type(
+    ctx: &LoweringContext,
+    m: &ResolvedMethod,
+    mono: &Option<(String, Type)>,
+) -> Type {
+    if let Some(inferred) = ctx.type_checker.get_type(m.call_expr_id) {
+        return ctx.resolve_self_in(inferred);
+    }
+    match mono {
+        Some((_, concrete_return)) => concrete_return.clone(),
+        None => m.method_info.return_type.clone(),
+    }
 }
 
 /// Resolve a generic-class method call to its per-instantiation monomorphized

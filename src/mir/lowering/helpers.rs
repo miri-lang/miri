@@ -134,6 +134,14 @@ pub fn literal_to_u128(lit: &crate::ast::literal::Literal) -> Option<u128> {
     }
 }
 
+/// Whether a pattern name discards its match rather than naming it.
+///
+/// A discard binds nothing: giving it a local would put several same-named
+/// entries in one scope, and only the last of them would ever be released.
+fn is_discard(name: &str) -> bool {
+    name == "_"
+}
+
 /// Bind pattern variables to the subject value.
 pub fn bind_pattern(
     ctx: &mut LoweringContext,
@@ -142,7 +150,7 @@ pub fn bind_pattern(
     span: &crate::error::syntax::Span,
 ) -> Result<(), LoweringError> {
     match pattern {
-        Pattern::Identifier(name) => {
+        Pattern::Identifier(name) if !is_discard(name) => {
             // Create a new local for the bound variable
             let ty = ctx.body.local_decls[subject_local.0].ty.clone();
             let var_local = ctx.push_local(name.clone(), ty, *span);
@@ -174,6 +182,9 @@ pub fn bind_pattern(
 
             for (i, p) in patterns.iter().enumerate() {
                 if let Pattern::Identifier(name) = p {
+                    if is_discard(name) {
+                        continue;
+                    }
                     let elem_ty = element_types
                         .get(i)
                         .cloned()
@@ -214,7 +225,10 @@ pub fn bind_pattern(
                 }
             };
             if is_option_some {
-                if let Some(Pattern::Identifier(name)) = bindings.first() {
+                if let Some(Pattern::Identifier(name)) = bindings
+                    .first()
+                    .filter(|first| !matches!(first, Pattern::Identifier(n) if is_discard(n)))
+                {
                     let subject_ty = ctx.body.local_decls[subject_local.0].ty.clone();
                     // The inner type is the boxed value
                     let inner_ty = if let TypeKind::Option(inner) = &subject_ty.kind {
@@ -245,6 +259,9 @@ pub fn bind_pattern(
 
             for (i, binding) in bindings.iter().enumerate() {
                 if let Pattern::Identifier(name) = binding {
+                    if is_discard(name) {
+                        continue;
+                    }
                     // Use the actual field type from the enum definition; fall back to
                     // Void only if the definition cannot be resolved (should not happen
                     // after a successful type check).

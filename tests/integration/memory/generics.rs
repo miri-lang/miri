@@ -555,3 +555,66 @@ fn main()
         "original\noriginal",
     );
 }
+
+/// A generic method declares its result in the class's own type parameters, so
+/// the local that receives it has to be typed with what the call site actually
+/// produced. Typed `V?` instead of `Node?`, the local says nothing about
+/// holding a managed value and the result is never released.
+#[test]
+fn test_match_on_a_generic_method_result_releases_it() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+enum Node
+    Number(String)
+    Nothing
+
+fn describe(nodes {String: Node}, key String) String
+    match nodes.get(key)
+        Some(_): "present"
+        None: "absent"
+
+fn main()
+    var nodes = Map<String, Node>()
+    nodes.set("a" + "b", Node.Number("1" + "2"))
+    println(describe(nodes, "a" + "b"))
+"#,
+        "present",
+    );
+}
+
+/// The same call feeding a chain of reads: every one of them takes the payload
+/// out of the same result, and the result is released exactly once.
+#[test]
+fn test_repeated_generic_method_results_stay_balanced() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+enum Node
+    Number(String)
+    Nothing
+
+fn lexeme(node Node) String
+    match node
+        Node.Number(text): text
+        Node.Nothing: "none"
+
+fn main()
+    var nodes = Map<String, Node>()
+    nodes.set("a" + "b", Node.Number("1" + "2"))
+    var index = 0
+    var seen = 0
+    while index < 50
+        match nodes.get("a" + "b")
+            Some(node)
+                seen = seen + lexeme(node).length()
+            None
+                seen = seen
+        index = index + 1
+    println(f"{seen}")
+"#,
+        "100",
+    );
+}

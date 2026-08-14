@@ -7,8 +7,9 @@ use miri::mir::StatementKind;
 
 #[test]
 fn test_match_literal_patterns() {
-    // Match generates a switchInt with targets for each literal pattern
-    // Each branch assigns its result directly to the result local (_3)
+    // Match generates a switchInt with targets for each literal pattern.
+    // Each branch assigns its result directly to the result local, and the
+    // catch-all arm binds nothing — a discard names no value to release.
     mir_snapshot_test(
         r#"
 fn main()
@@ -22,7 +23,6 @@ fn main()
             let _0: String;
             let _1: int; // x
             let _2: int;
-            let _3: int; // _
 
             bb0: {
                 StorageLive(_1);
@@ -47,10 +47,7 @@ fn main()
             }
 
             bb4: {
-                StorageLive(_3);
-                _3 = _2;
                 _0 = const String("other");
-                StorageDead(_3);
                 goto bb1;
             }
         "#,

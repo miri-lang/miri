@@ -284,12 +284,20 @@ public enum Json
         parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
         None
 
+    /// Records a failure at the cursor. Input that ran out is reported as an
+    /// end rather than as a character, so `{` alone names the real problem.
+    private static fn fail_unexpected(parser JsonParser, code int)
+        if code < 0
+            parser.fail(JsonError.UnexpectedEnd(parser.line_number(), parser.column_number()))
+        else
+            parser.fail(JsonError.UnexpectedCharacter(Json.describe(code), parser.line_number(), parser.column_number()))
+
     private static fn keyword(parser JsonParser, word String, value Json) Json?
         var index = 0
         while index < word.length()
             let expected = word.code_at(index) ?? -1
             if parser.peek() != expected
-                parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+                Json.fail_unexpected(parser, parser.peek())
                 return None
             parser.advance()
             index = index + 1
@@ -333,7 +341,7 @@ public enum Json
         while building
             parser.skip_whitespace()
             if parser.peek() != 34
-                parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+                Json.fail_unexpected(parser, parser.peek())
                 return None
             // The map is mutated here rather than in a helper: handing it to one
             // would copy it, and the member would be stored into the copy.
@@ -358,7 +366,7 @@ public enum Json
     private static fn member_value(parser JsonParser, depth int) Json?
         parser.skip_whitespace()
         if parser.peek() != 58
-            parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+            Json.fail_unexpected(parser, parser.peek())
             return None
         parser.advance()
         Json.value(parser, depth + 1)

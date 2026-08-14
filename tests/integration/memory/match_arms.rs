@@ -350,3 +350,166 @@ println(f"{entries.length()}")
         "300",
     );
 }
+
+/// An arm that returns leaves the match through a different exit than the
+/// arms that fall through to the join. Both exits have to unwind the same
+/// number of scopes, or every binding the enclosing scopes still hold is
+/// released one level too shallow and the outermost one is never released
+/// at all.
+#[test]
+fn test_return_from_a_nested_arm_keeps_outer_scopes_balanced() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn key_for(index int) String?
+    Some(f"key_{index}")
+
+fn value_for(index int) int?
+    Some(index)
+
+fn collect() Map<String, int>?
+    var entries = Map<String, int>()
+    match key_for(0)
+        Some(key)
+            match value_for(7)
+                Some(value)
+                    entries.set(key, value)
+                None
+                    return None
+        None
+            return None
+    Some(entries)
+
+fn main()
+    match collect()
+        Some(entries): println(f"{entries.length()}")
+        None: println("none")
+"#,
+        "1",
+    );
+}
+
+/// The same shape driven by a loop: the imbalance compounds per iteration, so
+/// what leaks one allocation once leaks one per pass here.
+#[test]
+fn test_return_from_a_nested_arm_in_a_loop_stays_balanced() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn key_for(index int) String?
+    Some(f"key_{index}")
+
+fn value_for(index int) int?
+    Some(index)
+
+fn collect(count int) Map<String, int>?
+    var entries = Map<String, int>()
+    var index = 0
+    while index < count
+        match key_for(index)
+            Some(key)
+                match value_for(index)
+                    Some(value)
+                        entries.set(key, value)
+                    None
+                        return None
+            None
+                return None
+        index = index + 1
+    Some(entries)
+
+fn main()
+    match collect(50)
+        Some(entries): println(f"{entries.length()}")
+        None: println("none")
+"#,
+        "50",
+    );
+}
+
+/// An arm that exits with `return` leaves the match through a path the join
+/// block never sees, so the subject the match copied to dispatch on has to be
+/// released on the way out as well — otherwise the value being matched on
+/// outlives every reference to it.
+#[test]
+fn test_return_from_an_arm_releases_the_match_subject() {
+    assert_runs_with_output(
+        r#"
+enum Tag
+    Named(String)
+    Empty
+
+fn label(tag Tag) String?
+    match tag
+        Tag.Named(text)
+            return None
+        default: None
+
+fn main()
+    let tag = Tag.Named("a" + "b")
+    match label(tag)
+        Some(text): println(text)
+        None: println("none")
+"#,
+        "none",
+    );
+}
+
+/// The subject that leaks here is the *call result* the match dispatches on:
+/// nothing but the match owns it, so an arm leaving early strands the whole
+/// value, payload included.
+#[test]
+fn test_return_from_an_arm_releases_a_call_result_subject() {
+    assert_runs_with_output(
+        r#"
+enum Tag
+    Named(String)
+    Empty
+
+fn tagged(text String) Tag: Tag.Named(text + "!")
+
+fn label(seed String) String?
+    match tagged(seed)
+        Tag.Named(text)
+            return None
+        default: None
+
+fn main()
+    match label("a" + "b")
+        Some(text): println(text)
+        None: println("none")
+"#,
+        "none",
+    );
+}
+
+/// `break` leaves the match the same way `return` does, and a loop makes the
+/// imbalance visible only if the subject is released once per pass.
+#[test]
+fn test_break_from_an_arm_releases_the_match_subject() {
+    assert_runs_with_output(
+        r#"
+enum Tag
+    Named(String)
+    Empty
+
+fn tagged(index int) Tag: Tag.Named(f"tag_{index}")
+
+fn main()
+    var index = 0
+    var seen = 0
+    while index < 50
+        match tagged(index)
+            Tag.Named(text)
+                seen = seen + 1
+                if seen == 50
+                    break
+            default: seen = seen
+        index = index + 1
+    println(f"{seen}")
+"#,
+        "50",
+    );
+}

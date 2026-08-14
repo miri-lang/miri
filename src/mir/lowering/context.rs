@@ -19,6 +19,11 @@ use std::rc::Rc;
 pub struct ScopeData {
     pub introduced: Vec<Rc<str>>,
     pub shadowed: HashMap<Rc<str>, Local>,
+    /// Unnamed locals this scope releases alongside its bindings. A temp holds
+    /// a value no name refers to, so nothing else can release it; giving the
+    /// scope that job is what makes it survive an early exit, where only the
+    /// scope walk runs.
+    pub owned_temps: Vec<Local>,
 }
 
 impl ScopeData {
@@ -27,6 +32,7 @@ impl ScopeData {
             // Most scopes introduce only a few variables
             introduced: Vec::with_capacity(4),
             shadowed: HashMap::with_capacity(4),
+            owned_temps: Vec::new(),
         }
     }
 }
@@ -249,6 +255,13 @@ impl<'a> LoweringContext<'a> {
                 }
             }
 
+            let owned_temps = std::mem::take(&mut scope.owned_temps);
+            if block_is_live {
+                for local in owned_temps.into_iter().rev() {
+                    self.emit_managed_temp_dead(local, span);
+                }
+            }
+
             // Restore shadowed variables
             for (name, local) in scope.shadowed.drain() {
                 self.variable_map.insert(name, local);
@@ -260,6 +273,31 @@ impl<'a> LoweringContext<'a> {
 
             // Return to pool
             self.scope_pool.push(scope);
+        }
+    }
+
+    /// Hand a temp to the innermost scope, which releases it on every exit
+    /// path — falling out of the scope, `return`, `break`, or `continue`.
+    ///
+    /// Without an enclosing scope the temp has no owner and is left alone, the
+    /// same way a temp behaves everywhere else in lowering.
+    pub fn register_scope_temp(&mut self, local: Local) {
+        if let Some(scope) = self.scope_stack.last_mut() {
+            scope.owned_temps.push(local);
+        }
+    }
+
+    /// Emit `StorageDead` for a temp whose type Perceus reference-counts.
+    ///
+    /// An unmanaged temp needs no release, and marking one dead only adds a
+    /// statement no pass reads.
+    fn emit_managed_temp_dead(&mut self, local: Local, span: Span) {
+        let kind = self.body.local_decls[local.0].ty.kind.clone();
+        if self.is_perceus_managed(&kind) {
+            self.push_statement(crate::mir::Statement {
+                kind: StatementKind::StorageDead(Place::new(local)),
+                span,
+            });
         }
     }
 
@@ -285,6 +323,7 @@ impl<'a> LoweringContext<'a> {
         // Collect the locals to drop first (avoiding a simultaneous mutable +
         // immutable borrow of `self`), then emit statements in a second pass.
         let mut to_drop: Vec<Local> = Vec::new();
+        let mut temps_to_drop: Vec<Local> = Vec::new();
         let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
 
         for scope in self.scope_stack.iter().rev() {
@@ -295,6 +334,7 @@ impl<'a> LoweringContext<'a> {
                     to_drop.push(local);
                 }
             }
+            temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
 
             // Simulate the pop: restore shadowed bindings and remove fresh
             // introductions, so the next (outer) scope sees the right locals.
@@ -314,6 +354,9 @@ impl<'a> LoweringContext<'a> {
                 span,
             });
         }
+        for local in temps_to_drop {
+            self.emit_managed_temp_dead(local, span);
+        }
     }
 
     /// Emits `StorageDead` for all named locals introduced in scopes that were
@@ -326,6 +369,7 @@ impl<'a> LoweringContext<'a> {
     /// the normal `pop_scope` path running.
     pub fn emit_break_cleanup(&mut self, loop_scope_depth: usize, span: Span) {
         let mut to_drop: Vec<Local> = Vec::new();
+        let mut temps_to_drop: Vec<Local> = Vec::new();
         let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
 
         for scope in self.scope_stack[loop_scope_depth..].iter().rev() {
@@ -334,6 +378,7 @@ impl<'a> LoweringContext<'a> {
                     to_drop.push(local);
                 }
             }
+            temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
             for (name, &local) in &scope.shadowed {
                 effective.insert(name.clone(), local);
             }
@@ -349,6 +394,9 @@ impl<'a> LoweringContext<'a> {
                 kind: StatementKind::StorageDead(Place::new(local)),
                 span,
             });
+        }
+        for local in temps_to_drop {
+            self.emit_managed_temp_dead(local, span);
         }
     }
 

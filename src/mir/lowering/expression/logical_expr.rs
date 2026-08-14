@@ -196,8 +196,19 @@ fn lower_null_coalesce(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let inner_ty = coalesce_inner_type(ctx, lhs, expr);
-    let result_local = ctx.push_temp(inner_ty.clone(), expr.span);
+    // Write straight into the destination when there is one. Routing through a
+    // temp first would retain the payload once for the temp and once again for
+    // the destination, and the temp has no scope to release its share in.
+    let result_local = match &dest {
+        Some(place) if place.projection.is_empty() => place.local,
+        Some(_) | None => ctx.push_temp(inner_ty.clone(), expr.span),
+    };
+    let watermark = ctx.body.local_decls.len();
     let lhs_op = lower_expression(ctx, lhs, None)?;
+    let lhs_local = match &lhs_op {
+        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+        Operand::Constant(_) => None,
+    };
     let is_none_local = emit_none_comparison(ctx, &lhs_op, &inner_ty, expr);
 
     let rhs_bb = ctx.new_basic_block();
@@ -216,7 +227,42 @@ fn lower_null_coalesce(
     emit_logical_rhs(ctx, rhs, result_local, rhs_bb, final_bb, expr)?;
 
     ctx.set_current_block(final_bb);
-    Ok(finish_logical_result(ctx, result_local, dest, expr))
+    release_coalesce_operand(ctx, lhs_local, watermark, expr);
+    Ok(finish_coalesce_result(ctx, result_local, dest, expr))
+}
+
+/// Release the Option the operator read from, once both branches have run.
+///
+/// Only a local the left-hand expression allocated here is released: one that
+/// predates the expression belongs to an enclosing scope, which releases it at
+/// its own end. Reading the payload in the Some branch retained it, so the
+/// result keeps a reference of its own past this point.
+fn release_coalesce_operand(
+    ctx: &mut LoweringContext,
+    lhs_local: Option<crate::mir::Local>,
+    watermark: usize,
+    expr: &Expression,
+) {
+    if let Some(local) = lhs_local {
+        ctx.emit_temp_drop(local, watermark, expr.span);
+    }
+}
+
+/// Return the coalesced value. A destination that the result was written into
+/// directly needs no copy; one carrying a projection is assigned here.
+fn finish_coalesce_result(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    dest: Option<Place>,
+    expr: &Expression,
+) -> Operand {
+    match dest {
+        Some(place) if place.local == result_local && place.projection.is_empty() => {
+            Operand::Copy(place)
+        }
+        Some(place) => finish_logical_result(ctx, result_local, Some(place), expr),
+        None => Operand::Copy(Place::new(result_local)),
+    }
 }
 
 /// The inner type `T` of `Option<T>` for the coalesce result temp; the lhs type

@@ -552,3 +552,61 @@ fn main()
         "0",
     );
 }
+
+/// `remove_at` hands the element to the caller, so the list gives up its own
+/// reference instead of releasing it: releasing it would free the value the
+/// call returns, and reading the result back would read freed memory.
+#[test]
+fn test_removed_element_is_usable_after_remove_at() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var words = List(["al" + "pha", "be" + "ta"])
+    let taken = words.remove_at(0)
+    println(taken)
+    println(f"{words.length()}")
+"#,
+        "alpha\n1",
+    );
+}
+
+/// The same on a list of lists, where the removed element carries its own
+/// managed contents: those have to survive the removal too.
+#[test]
+fn test_removed_nested_list_is_usable_after_remove_at() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var rows = List([[1, 2, 3], [4, 5, 6]])
+    let taken = rows.remove_at(0)
+    println(f"{taken.length()}")
+    println(f"{rows.length()}")
+"#,
+        "3\n1",
+    );
+}
+
+/// A removed element the caller drops on the floor is released exactly once:
+/// the list no longer owns it, so nothing else will.
+#[test]
+fn test_discarded_removed_element_is_released_once() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var index = 0
+    while index < 50
+        var words = List(["al" + "pha", "be" + "ta"])
+        words.remove_at(0)
+        words.remove_at(0)
+        index = index + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}

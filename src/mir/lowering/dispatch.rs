@@ -375,22 +375,25 @@ pub(super) fn build_method_out_args_with_offset(
     flags
 }
 
-/// Release temporary closure arguments after a method call.
-pub(super) fn emit_closure_arg_drops(
+/// Release the argument temporaries a method call created.
+///
+/// A managed argument built at the call site — a concatenation, another call's
+/// result — lives in a temp that belongs to no scope, and a parameter is a
+/// borrow the callee never releases, so the call site is the only place that
+/// can drop it. Locals below the watermark existed before the arguments were
+/// lowered and belong to their own scope; the destination is the call's result
+/// and outlives it.
+pub(super) fn emit_method_arg_drops(
     ctx: &mut LoweringContext,
     args: &[Operand],
     watermark: usize,
+    dest_local: Local,
     span: Span,
 ) {
     for op in args {
         if let Operand::Copy(p) | Operand::Move(p) = op {
-            let local = p.local;
-            if local.0 >= watermark {
-                let is_closure =
-                    matches!(ctx.body.local_decls[local.0].ty.kind, TypeKind::Function(_));
-                if is_closure {
-                    ctx.emit_temp_drop(local, watermark, span);
-                }
+            if p.local != dest_local {
+                ctx.emit_temp_drop(p.local, watermark, span);
             }
         }
     }

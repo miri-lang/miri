@@ -92,6 +92,7 @@ macro_rules! mi_suite_test {
 }
 
 mi_suite_test!(test_system_io, "io.mi");
+mi_suite_test!(test_system_json, "json.mi");
 mi_suite_test!(test_system_string, "string.mi");
 mi_suite_test!(test_system_math, "math.mi");
 mi_suite_test!(test_system_ops, "ops.mi");
@@ -146,6 +147,7 @@ fn collect_mi_files_recursive(root: &Path, base: &Path) -> Vec<String> {
 fn every_mi_file_is_wired() {
     let wired = [
         "io.mi",
+        "json.mi",
         "string.mi",
         "math.mi",
         "ops.mi",
