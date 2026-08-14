@@ -51,6 +51,15 @@ impl<'source> Parser<'source> {
         ))
     }
 
+    /// Checks if the current lookahead is the contextual `static` keyword.
+    fn is_contextual_static_before_fn(&self) -> bool {
+        if let Some((Token::Identifier, span)) = &self.lookahead {
+            &self.source[span.start..span.end] == "static"
+        } else {
+            false
+        }
+    }
+
     /// Parses an enum body containing variant declarations and optionally method declarations.
     fn enum_body(&mut self) -> Result<(Vec<Expression>, Vec<Statement>), SyntaxError> {
         let mut variants = vec![];
@@ -74,25 +83,35 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
-                        match &self.lookahead {
-                            Some((Token::Fn, _))
-                            | Some((Token::Async, _))
-                            | Some((Token::Gpu, _)) => {
-                                let stmt = self.function_declaration(MemberVisibility::Public)?;
-                                methods.push(stmt);
-                            }
-                            Some((Token::Public, _)) => {
-                                self.eat_token(&Token::Public)?;
-                                let stmt = self.function_declaration(MemberVisibility::Public)?;
-                                methods.push(stmt);
-                            }
-                            Some((Token::Private, _)) => {
-                                self.eat_token(&Token::Private)?;
-                                let stmt = self.function_declaration(MemberVisibility::Private)?;
-                                methods.push(stmt);
-                            }
-                            _ => {
-                                variants.push(self.enum_value_expression()?);
+                        // Check for contextual `static` keyword followed by function keywords
+                        if self.is_contextual_static_before_fn() {
+                            // Don't consume the token; let function_declaration handle parsing `static`
+                            let stmt = self.function_declaration(MemberVisibility::Public)?;
+                            methods.push(stmt);
+                        } else {
+                            match &self.lookahead {
+                                Some((Token::Fn, _))
+                                | Some((Token::Async, _))
+                                | Some((Token::Gpu, _)) => {
+                                    let stmt =
+                                        self.function_declaration(MemberVisibility::Public)?;
+                                    methods.push(stmt);
+                                }
+                                Some((Token::Public, _)) => {
+                                    self.eat_token(&Token::Public)?;
+                                    let stmt =
+                                        self.function_declaration(MemberVisibility::Public)?;
+                                    methods.push(stmt);
+                                }
+                                Some((Token::Private, _)) => {
+                                    self.eat_token(&Token::Private)?;
+                                    let stmt =
+                                        self.function_declaration(MemberVisibility::Private)?;
+                                    methods.push(stmt);
+                                }
+                                _ => {
+                                    variants.push(self.enum_value_expression()?);
+                                }
                             }
                         }
                         self.try_eat_expression_end()?;

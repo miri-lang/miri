@@ -136,7 +136,7 @@ fn try_lower_module_alias_call(
     lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest.cloned())
 }
 
-/// Lower a call to a static method on a class: `Duration.from_millis(ms)`.
+/// Lower a call to a static method on a class or enum: `Duration.from_millis(ms)` or `MyEnum.create()`.
 fn try_lower_static_method_call(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -146,28 +146,78 @@ fn try_lower_static_method_call(
     args: &[Expression],
     dest: Option<&Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    // Static method calls have the form ClassName.method_name(args)
-    // where ClassName is an identifier (type name), not an instance
-    let ExpressionKind::Identifier(class_name, _) = &obj_expr.node else {
+    // Static method calls have the form TypeName.method_name(args)
+    // where TypeName is an identifier (type name), not an instance
+    let ExpressionKind::Identifier(type_name, _) = &obj_expr.node else {
         return Ok(None);
     };
     let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
         return Ok(None);
     };
 
-    // Walk the inheritance chain to find the static method
-    let Some((defining_class_name, method_info)) = ctx
+    // Try to find the static method in a class inheritance chain first
+    if let Some((defining_class_name, method_info)) = ctx
         .type_checker
-        .find_static_method_in_chain(class_name, method_name.as_str())
-    else {
-        return Ok(None);
-    };
-
-    // Only accept static methods
-    if !method_info.is_static {
-        return Ok(None);
+        .find_static_method_in_chain(type_name, method_name.as_str())
+    {
+        if method_info.is_static {
+            return lower_static_method_impl(
+                ctx,
+                span,
+                call_expr_id,
+                &defining_class_name,
+                method_name,
+                args,
+                dest,
+                &method_info,
+            );
+        }
     }
 
+    // Try to find the static method on an enum
+    if let Some(enum_def) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(type_name)
+        .and_then(|def| {
+            if let crate::type_checker::context::TypeDefinition::Enum(enum_def) = def {
+                Some(enum_def.clone())
+            } else {
+                None
+            }
+        })
+    {
+        if let Some(method_info) = enum_def.methods.get(method_name) {
+            if method_info.is_static {
+                return lower_static_method_impl(
+                    ctx,
+                    span,
+                    call_expr_id,
+                    type_name,
+                    method_name,
+                    args,
+                    dest,
+                    method_info,
+                );
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_static_method_impl(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    defining_type_name: &str,
+    method_name: &str,
+    args: &[Expression],
+    dest: Option<&Place>,
+    method_info: &crate::type_checker::context::MethodInfo,
+) -> Result<Option<Operand>, LoweringError> {
     // Static method call with no receiver
     let mut arg_ops = lower_plain_args(ctx, args)?;
     push_allocator_arg(ctx, &mut arg_ops);
@@ -179,9 +229,9 @@ fn try_lower_static_method_call(
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
 
-    // Construct the mangled function name using the defining class: DefiningClass_method_name
-    let mut mangled = String::with_capacity(defining_class_name.len() + 1 + method_name.len());
-    mangled.push_str(&defining_class_name);
+    // Construct the mangled function name: DefiningType_method_name
+    let mut mangled = String::with_capacity(defining_type_name.len() + 1 + method_name.len());
+    mangled.push_str(defining_type_name);
     mangled.push('_');
     mangled.push_str(method_name);
 
@@ -192,7 +242,7 @@ fn try_lower_static_method_call(
     }));
 
     // Build out_args from method_info with no receiver offset (static methods have no self).
-    let out_args = build_method_out_args_with_offset(&method_info, args.len(), arg_ops.len(), 0);
+    let out_args = build_method_out_args_with_offset(method_info, args.len(), arg_ops.len(), 0);
 
     emit_call_terminator(
         ctx,

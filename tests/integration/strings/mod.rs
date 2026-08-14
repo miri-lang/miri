@@ -10,3 +10,4 @@ pub mod integration;
 pub mod interpolation;
 pub mod methods;
 pub mod rc;
+pub mod unicode;

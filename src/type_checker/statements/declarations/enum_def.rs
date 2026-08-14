@@ -61,7 +61,8 @@ impl TypeChecker {
         let variant_map = self.collect_enum_variants(variants, context);
 
         // Collect method signatures
-        let (method_map, method_statements) = self.collect_enum_methods(methods, context);
+        let (method_map, method_statements) =
+            self.collect_enum_methods(methods, &variant_map, context);
 
         let generic_defs_opt = if generic_defs.is_empty() {
             None
@@ -150,6 +151,7 @@ impl TypeChecker {
     fn collect_enum_methods<'a>(
         &mut self,
         methods: &'a [Statement],
+        variants: &BTreeMap<String, Vec<Type>>,
         context: &mut Context,
     ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut method_map: BTreeMap<String, MethodInfo> = BTreeMap::new();
@@ -170,16 +172,54 @@ impl TypeChecker {
                     make_type(TypeKind::Void)
                 };
 
+                // Check for collision with variant names if this is a static method
+                if decl.properties.is_static && variants.contains_key(&decl.name) {
+                    self.report_error(
+                        format!(
+                            "Static method '{}' has the same name as an enum variant - collision between static method and variant",
+                            decl.name
+                        ),
+                        method_stmt.span,
+                    );
+                    continue;
+                }
+
+                // Validate static method constraints
+                if decl.properties.is_static {
+                    if decl.properties.is_async {
+                        self.report_error(
+                            "Static methods cannot be async".to_string(),
+                            method_stmt.span,
+                        );
+                        continue;
+                    }
+                    if decl.properties.is_gpu {
+                        self.report_error(
+                            "Static methods cannot be GPU kernels".to_string(),
+                            method_stmt.span,
+                        );
+                        continue;
+                    }
+                    // Reject `self` as a parameter in static methods
+                    if !decl.params.is_empty() && decl.params[0].name == "self" {
+                        self.report_error(
+                            "Static methods cannot have a 'self' parameter".to_string(),
+                            method_stmt.span,
+                        );
+                        continue;
+                    }
+                }
+
                 method_map.insert(
                     decl.name.clone(),
                     MethodInfo {
                         params,
                         is_out_flags,
                         return_type,
-                        visibility: MemberVisibility::Public,
+                        visibility: decl.properties.visibility.clone(),
                         is_constructor: false,
                         is_abstract: false,
-                        is_static: false,
+                        is_static: decl.properties.is_static,
                     },
                 );
                 method_statements.push(method_stmt);

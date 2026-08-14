@@ -209,3 +209,107 @@ fn main()
         "129",
     );
 }
+
+/// Matching on a variable holding an enum must not release its payload twice.
+///
+/// The match reads the subject into a temp and releases both when it ends, so
+/// reading it has to retain it. Without that, one allocation carries two
+/// releases and the heap is corrupted after enough iterations — a single
+/// iteration usually survives, which is why this loops.
+#[test]
+fn test_match_on_named_enum_local_releases_payload_once() {
+    assert_runs_with_output(
+        r#"
+var index = 0
+var total = 0
+while index < 300
+    let value = Some(f"{index}")
+    match value
+        Some(text): total = total + text.length()
+        None: total = total + 0
+    index = index + 1
+println(f"{total}")
+"#,
+        "790",
+    );
+}
+
+/// The same release path, for a user-declared enum carrying an allocated
+/// string rather than an `Option`.
+#[test]
+fn test_match_on_named_user_enum_local_releases_payload_once() {
+    assert_runs_with_output(
+        r#"
+enum Token
+    Word(String)
+    Empty
+
+var index = 0
+var total = 0
+while index < 300
+    let token = Token.Word(f"{index}")
+    match token
+        Token.Word(text): total = total + text.length()
+        Token.Empty: total = total + 0
+    index = index + 1
+println(f"{total}")
+"#,
+        "790",
+    );
+}
+
+/// An arm binding that is returned must outlive the arm that bound it.
+///
+/// The binding is released when the arm's scope ends, so handing it to the
+/// result has to retain it. Moving it there instead frees the value the caller
+/// receives.
+#[test]
+fn test_returned_arm_binding_outlives_the_match() {
+    assert_runs_with_output(
+        r#"
+enum Token
+    Word(String)
+    Empty
+
+fn text_of(token Token) String
+    match token
+        Token.Word(text): text
+        Token.Empty: ""
+
+var index = 0
+var total = 0
+while index < 300
+    total = total + text_of(Token.Word(f"{index}")).length()
+    index = index + 1
+println(f"{total}")
+"#,
+        "790",
+    );
+}
+
+/// A match-arm binding handed to a callee that stores it is released too early.
+///
+/// The binding reaches the call as a move, so nothing retains it, yet the arm's
+/// scope still releases it when the arm ends. The collection is left holding a
+/// freed string, which reads back empty instead of crashing.
+///
+/// The same call with a temporary key — `m.set("alpha" + "!", 1)` — is correct,
+/// which is what isolates this to the binding rather than to `set`.
+#[test]
+#[ignore = "arm binding passed to a callee is released while the callee still holds it"]
+fn test_arm_binding_stored_by_callee_survives_the_arm() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+var entries = Map<String, int>()
+match Some("alpha" + "!")
+    Some(key)
+        entries.set(key, 1)
+    None: println("none")
+for stored in entries
+    println(stored)
+"#,
+        "alpha!",
+    );
+}

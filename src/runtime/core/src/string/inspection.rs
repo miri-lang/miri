@@ -131,3 +131,27 @@ pub unsafe extern "C" fn miri_rt_string_data(ptr: *const MiriString) -> *const u
     }
     (*ptr).data
 }
+
+/// Returns the Unicode scalar value (code point) at a CHARACTER index.
+///
+/// Returns the code point (0-0x10FFFF) on success, or -1 if the string is null,
+/// the index is negative, or the index is out of range. The caller should check
+/// for -1 to determine if the result is valid.
+///
+/// Takes and returns `isize` rather than a fixed width because Miri's `int`
+/// lowers to the platform pointer type.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_code_at(ptr: *const MiriString, index: isize) -> isize {
+    if ptr.is_null() || index < 0 {
+        return -1;
+    }
+    let s = (*ptr).as_str();
+    match s.chars().nth(index as usize) {
+        Some(ch) => ch as isize,
+        None => -1,
+    }
+}

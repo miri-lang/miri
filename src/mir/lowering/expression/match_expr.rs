@@ -652,7 +652,16 @@ fn lower_match_subject(
     subject: &Expression,
 ) -> Result<MatchSubject, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let subject_op = lower_expression(ctx, subject, None)?;
+    let lowered = lower_expression(ctx, subject, None)?;
+    // Read the subject by copy even where the expression lowered to a move.
+    // `release_subject_temps` releases the temp *and* the local that backed it,
+    // which only balances if reading the subject retained it. A move leaves one
+    // allocation with two releases against it, freeing a value the arms and the
+    // enclosing scope both still hold.
+    let subject_op = match lowered {
+        Operand::Move(place) => Operand::Copy(place),
+        already_copied => already_copied,
+    };
     let source_local = match &subject_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
         Operand::Constant(_) => None,

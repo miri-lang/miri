@@ -403,7 +403,17 @@ fn assign_expr_to_local(
     target_local: crate::mir::Local,
 ) -> Result<(), LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let operand = lower_expression(ctx, expr, None)?;
+    let lowered = lower_expression(ctx, expr, None)?;
+    // A local that already existed before this expression — a match-arm binding
+    // or an enclosing variable — is released when its scope ends, and moving out
+    // of it does not cancel that release. Read it by copy so the value handed to
+    // `target_local` is retained rather than freed out from under the target.
+    let operand = match lowered {
+        Operand::Move(place) if place.local.0 < watermark && place.projection.is_empty() => {
+            Operand::Copy(place)
+        }
+        already_usable => already_usable,
+    };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand.clone())),
         span: expr.span,

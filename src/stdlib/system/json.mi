@@ -1,0 +1,650 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// JSON values, parsing and serialization.
+///
+/// `Json` models the six kinds of JSON value. Parsing is strict: the input must
+/// be exactly one value, optionally surrounded by whitespace.
+///
+/// A number keeps the lexeme it was written with rather than a decoded numeric
+/// value, so an integer wider than a float's exact range survives a round trip
+/// and `1` never comes back as `1.0`. `as_int` and `as_float` decode on demand.
+///
+/// Object members live in a `Map`, which does not preserve the order they were
+/// written in, and a repeated key keeps the value that appeared last.
+///
+/// Example:
+///     use system.json
+///
+///     match Json.parse("{\"count\": 42}")
+///         Result.Ok(document)
+///             match document.get("count")
+///                 Some(value): println(f"{value.as_int() ?? 0}")
+///                 None: println("no count")
+///         Result.Err(_): println("not valid json")
+
+use system.result
+use system.string
+use system.collections.list
+use system.collections.map
+
+/// Why a JSON document could not be parsed.
+///
+/// Every variant carries the line and column where the problem was found, both
+/// counted from 1.
+///
+/// Example:
+///     match Json.parse("{")
+///         Result.Ok(_): println("parsed")
+///         Result.Err(error)
+///             match error
+///                 JsonError.UnexpectedEnd(line, column): println(f"ended at {line}:{column}")
+///                 default: println("other problem")
+@non_exhaustive
+public enum JsonError
+    UnexpectedCharacter(String, int, int)
+    UnexpectedEnd(int, int)
+    UnterminatedString(int, int)
+    InvalidEscape(String, int, int)
+    InvalidNumber(String, int, int)
+    TrailingData(int, int)
+    DepthExceeded(int, int)
+
+/// A cursor over the source text, tracking position for diagnostics.
+///
+/// The first failure is retained; later ones are ignored, so the reported
+/// position is where the document actually went wrong.
+class JsonParser
+    private var source String
+    private var position int
+    private var line int
+    private var column int
+    private var error JsonError?
+
+    fn init(source String)
+        self.source = source
+        self.position = 0
+        self.line = 1
+        self.column = 1
+        self.error = None
+
+    /// The code point under the cursor, or -1 at the end of the input.
+    public fn peek() int
+        self.source.code_at(self.position) ?? -1
+
+    /// Whether any input remains.
+    public fn has_more() bool
+        self.position < self.source.length()
+
+    /// Moves past the current character, keeping line and column current.
+    public fn advance()
+        let current = self.source.code_at(self.position) ?? -1
+        if current >= 0
+            self.position = self.position + 1
+            if current == 10
+                self.line = self.line + 1
+                self.column = 1
+            else
+                self.column = self.column + 1
+
+    /// Consumes the current character and returns it.
+    public fn take() String
+        let current = self.peek()
+        self.advance()
+        String.from_code_point(current) ?? ""
+
+    /// Moves past spaces, tabs, carriage returns and newlines.
+    public fn skip_whitespace()
+        var scanning = true
+        while scanning
+            let current = self.peek()
+            if current == 32 or current == 9 or current == 10 or current == 13
+                self.advance()
+            else
+                scanning = false
+
+    public fn line_number() int
+        self.line
+
+    public fn column_number() int
+        self.column
+
+    /// Records a failure unless one was already recorded.
+    public fn fail(reason JsonError)
+        if self.has_failed() == false
+            self.error = Some(reason)
+
+    public fn has_failed() bool
+        match self.error
+            Some(_): true
+            None: false
+
+    public fn failure() JsonError?
+        self.error
+
+/// A JSON value.
+///
+/// Example:
+///     use system.json
+///
+///     let document = Json.parse("[1, true, null]")
+///     match document
+///         Result.Ok(value): println(value.to_string())
+///         Result.Err(_): println("not valid json")
+public enum Json
+    Object({String: Json})
+    Array([Json])
+    Text(String)
+    Number(String)
+    Bool(bool)
+    Null
+
+    /// Parses one complete JSON document.
+    ///
+    /// The input must hold exactly one value; anything after it other than
+    /// whitespace is reported as trailing data.
+    ///
+    /// Example:
+    ///     match Json.parse("{\"ok\": true}")
+    ///         Result.Ok(document): println(document.to_string())
+    ///         Result.Err(_): println("not valid json")
+    public static fn parse(source String) Result<Json, JsonError>
+        var parser = JsonParser(source)
+        match Json.value(parser, 0)
+            Some(document): Json.parse_tail(parser, document)
+            None: Json.parse_failure(parser)
+
+    private static fn parse_failure(parser JsonParser) Result<Json, JsonError>
+        match parser.failure()
+            Some(reason): Result.Err(reason)
+            None: Result.Err(JsonError.UnexpectedEnd(parser.line_number(), parser.column_number()))
+
+    private static fn parse_tail(parser JsonParser, document Json) Result<Json, JsonError>
+        parser.skip_whitespace()
+        if parser.has_more()
+            return Result.Err(JsonError.TrailingData(parser.line_number(), parser.column_number()))
+        Result.Ok(document)
+
+    /// Renders the value as compact JSON text, without added whitespace.
+    ///
+    /// Object members are emitted in the backing map's order, which is not the
+    /// order they were parsed in.
+    ///
+    /// Example:
+    ///     println(Json.Array(List([Json.Bool(true), Json.Null])).to_string())
+    public fn to_string() String
+        match self
+            Json.Null: "null"
+            Json.Bool(flag): Json.boolean_text(flag)
+            Json.Number(lexeme): lexeme
+            Json.Text(text): Json.quoted(text)
+            Json.Array(items): Json.array_text(items)
+            Json.Object(fields): Json.object_text(fields)
+
+    /// The text of a string value, or None for any other kind.
+    ///
+    /// Example:
+    ///     println(Json.Text("hi").as_string() ?? "not text")
+    public fn as_string() String?
+        match self
+            Json.Text(text): Some(text)
+            default: None
+
+    /// The value of a number that is written as an integer.
+    ///
+    /// Returns None for a non-number, and for a number with a fraction or an
+    /// exponent.
+    ///
+    /// Example:
+    ///     println(f"{Json.Number(\"42\").as_int() ?? 0}")
+    public fn as_int() int?
+        match self
+            Json.Number(lexeme): lexeme.to_int()
+            default: None
+
+    /// The value of a number as a float.
+    ///
+    /// Example:
+    ///     println(f"{Json.Number(\"2.5\").as_float() ?? 0.0}")
+    public fn as_float() float?
+        match self
+            Json.Number(lexeme): lexeme.to_float()
+            default: None
+
+    /// The value of a boolean, or None for any other kind.
+    ///
+    /// Example:
+    ///     println(f"{Json.Bool(true).as_bool() ?? false}")
+    public fn as_bool() bool?
+        match self
+            Json.Bool(flag): Some(flag)
+            default: None
+
+    /// The member stored under a key, or None if this is not an object or the
+    /// key is absent.
+    ///
+    /// Example:
+    ///     match Json.parse("{\"a\": 1}")
+    ///         Result.Ok(document)
+    ///             match document.get("a")
+    ///                 Some(value): println(value.to_string())
+    ///                 None: println("absent")
+    ///         Result.Err(_): println("not valid json")
+    public fn get(key String) Json?
+        match self
+            Json.Object(fields): fields.get(key)
+            default: None
+
+    /// The element at a position, or None if this is not an array or the index
+    /// is outside it.
+    ///
+    /// Example:
+    ///     match Json.parse("[10, 20]")
+    ///         Result.Ok(document)
+    ///             match document.at(1)
+    ///                 Some(value): println(value.to_string())
+    ///                 None: println("absent")
+    ///         Result.Err(_): println("not valid json")
+    public fn at(index int) Json?
+        match self
+            Json.Array(items)
+                if index < 0
+                    return None
+                if index >= items.length()
+                    return None
+                return Some(items.element_at(index))
+            default: None
+
+    private static fn max_depth() int
+        1024
+
+    private static fn value(parser JsonParser, depth int) Json?
+        if depth > Json.max_depth()
+            parser.fail(JsonError.DepthExceeded(parser.line_number(), parser.column_number()))
+            return None
+        parser.skip_whitespace()
+        let current = parser.peek()
+        if current < 0
+            parser.fail(JsonError.UnexpectedEnd(parser.line_number(), parser.column_number()))
+            return None
+        if current == 123
+            return Json.object_value(parser, depth)
+        if current == 91
+            return Json.array_value(parser, depth)
+        if current == 34
+            return Json.text_value(parser)
+        if current == 45 or Json.is_digit(current)
+            return Json.number_value(parser)
+        if current == 116
+            return Json.keyword(parser, "true", Json.Bool(true))
+        if current == 102
+            return Json.keyword(parser, "false", Json.Bool(false))
+        if current == 110
+            return Json.keyword(parser, "null", Json.Null)
+        parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
+        None
+
+    private static fn keyword(parser JsonParser, word String, value Json) Json?
+        var index = 0
+        while index < word.length()
+            let expected = word.code_at(index) ?? -1
+            if parser.peek() != expected
+                parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+                return None
+            parser.advance()
+            index = index + 1
+        Some(value)
+
+    private static fn text_value(parser JsonParser) Json?
+        match Json.string_body(parser)
+            Some(text): Some(Json.Text(text))
+            None: None
+
+    private static fn array_value(parser JsonParser, depth int) Json?
+        parser.advance()
+        var items = List<Json>()
+        parser.skip_whitespace()
+        if parser.peek() == 93
+            parser.advance()
+            return Some(Json.Array(items))
+        var building = true
+        while building
+            match Json.value(parser, depth + 1)
+                Some(item)
+                    items.push(item)
+                None
+                    return None
+            parser.skip_whitespace()
+            let separator = Json.separator(parser, 93)
+            if separator < 0
+                return None
+            if separator == 0
+                building = false
+        Some(Json.Array(items))
+
+    private static fn object_value(parser JsonParser, depth int) Json?
+        parser.advance()
+        var fields = Map<String, Json>()
+        parser.skip_whitespace()
+        if parser.peek() == 125
+            parser.advance()
+            return Some(Json.Object(fields))
+        var building = true
+        while building
+            parser.skip_whitespace()
+            if parser.peek() != 34
+                parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+                return None
+            // The map is mutated here rather than in a helper: handing it to one
+            // would copy it, and the member would be stored into the copy.
+            match Json.string_body(parser)
+                Some(key)
+                    match Json.member_value(parser, depth)
+                        Some(member)
+                            fields.set(key, member)
+                        None
+                            return None
+                None
+                    return None
+            parser.skip_whitespace()
+            let separator = Json.separator(parser, 125)
+            if separator < 0
+                return None
+            if separator == 0
+                building = false
+        Some(Json.Object(fields))
+
+    /// Reads the colon and the value that follow an object member's key.
+    private static fn member_value(parser JsonParser, depth int) Json?
+        parser.skip_whitespace()
+        if parser.peek() != 58
+            parser.fail(JsonError.UnexpectedCharacter(Json.describe(parser.peek()), parser.line_number(), parser.column_number()))
+            return None
+        parser.advance()
+        Json.value(parser, depth + 1)
+
+    /// Reads the separator after a collection element: 1 to continue, 0 when
+    /// the closing character was consumed, -1 when the input was invalid.
+    private static fn separator(parser JsonParser, closing int) int
+        let current = parser.peek()
+        if current == 44
+            parser.advance()
+            parser.skip_whitespace()
+            if parser.peek() == closing
+                parser.fail(JsonError.UnexpectedCharacter(Json.describe(closing), parser.line_number(), parser.column_number()))
+                return -1
+            return 1
+        if current == closing
+            parser.advance()
+            return 0
+        if current < 0
+            parser.fail(JsonError.UnexpectedEnd(parser.line_number(), parser.column_number()))
+            return -1
+        parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
+        -1
+
+    private static fn string_body(parser JsonParser) String?
+        let open_line = parser.line_number()
+        let open_column = parser.column_number()
+        parser.advance()
+        var out = ""
+        var reading = true
+        while reading
+            let current = parser.peek()
+            if current < 0
+                parser.fail(JsonError.UnterminatedString(open_line, open_column))
+                return None
+            if current == 34
+                parser.advance()
+                reading = false
+            else
+                if current == 92
+                    match Json.escape_sequence(parser)
+                        Some(piece)
+                            out = out + piece
+                        None
+                            return None
+                else
+                    if current < 32
+                        parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
+                        return None
+                    out = out + parser.take()
+        Some(out)
+
+    private static fn escape_sequence(parser JsonParser) String?
+        let line = parser.line_number()
+        let column = parser.column_number()
+        parser.advance()
+        let current = parser.peek()
+        if current < 0
+            parser.fail(JsonError.UnterminatedString(line, column))
+            return None
+        if current == 117
+            parser.advance()
+            return Json.unicode_escape(parser, line, column)
+        parser.advance()
+        let decoded = Json.simple_escape(current)
+        if decoded.is_empty()
+            parser.fail(JsonError.InvalidEscape(Json.describe(current), line, column))
+            return None
+        Some(decoded)
+
+    /// Decodes a one-character escape, returning an empty string if the
+    /// character does not introduce one.
+    private static fn simple_escape(code int) String
+        if code == 34
+            return "\""
+        if code == 92
+            return "\\"
+        if code == 47
+            return "/"
+        if code == 98
+            return String.from_code_point(8) ?? ""
+        if code == 102
+            return String.from_code_point(12) ?? ""
+        if code == 110
+            return "\n"
+        if code == 114
+            return "\r"
+        if code == 116
+            return "\t"
+        ""
+
+    private static fn unicode_escape(parser JsonParser, line int, column int) String?
+        match Json.hex_quad(parser, line, column)
+            Some(high): Json.scalar_from_units(parser, high, line, column)
+            None: None
+
+    private static fn scalar_from_units(parser JsonParser, high int, line int, column int) String?
+        if Json.is_surrogate(high) == false
+            return Json.single_scalar(parser, high, line, column)
+        if high > 56319
+            parser.fail(JsonError.InvalidEscape(Json.unit_text(high), line, column))
+            return None
+        if parser.peek() != 92
+            parser.fail(JsonError.InvalidEscape(Json.unit_text(high), line, column))
+            return None
+        parser.advance()
+        if parser.peek() != 117
+            parser.fail(JsonError.InvalidEscape(Json.unit_text(high), line, column))
+            return None
+        parser.advance()
+        match Json.hex_quad(parser, line, column)
+            Some(low): Json.combine_surrogates(parser, high, low, line, column)
+            None: None
+
+    private static fn combine_surrogates(parser JsonParser, high int, low int, line int, column int) String?
+        if low < 56320 or low > 57343
+            parser.fail(JsonError.InvalidEscape(Json.unit_text(low), line, column))
+            return None
+        Json.single_scalar(parser, 65536 + (high - 55296) * 1024 + (low - 56320), line, column)
+
+    private static fn single_scalar(parser JsonParser, code int, line int, column int) String?
+        match String.from_code_point(code)
+            Some(character): Some(character)
+            None: Json.invalid_scalar(parser, code, line, column)
+
+    private static fn invalid_scalar(parser JsonParser, code int, line int, column int) String?
+        parser.fail(JsonError.InvalidEscape(Json.unit_text(code), line, column))
+        None
+
+    private static fn hex_quad(parser JsonParser, line int, column int) int?
+        var value = 0
+        var index = 0
+        while index < 4
+            let current = parser.peek()
+            if Json.is_hex_digit(current) == false
+                parser.fail(JsonError.InvalidEscape(Json.describe(current), line, column))
+                return None
+            value = value * 16 + Json.hex_value(current)
+            parser.advance()
+            index = index + 1
+        Some(value)
+
+    private static fn number_value(parser JsonParser) Json?
+        let line = parser.line_number()
+        let column = parser.column_number()
+        var lexeme = ""
+        if parser.peek() == 45
+            lexeme = lexeme + parser.take()
+        let leading = parser.peek()
+        if Json.is_digit(leading) == false
+            parser.fail(JsonError.InvalidNumber(lexeme, line, column))
+            return None
+        if leading == 48
+            lexeme = lexeme + parser.take()
+            if Json.is_digit(parser.peek())
+                parser.fail(JsonError.InvalidNumber(lexeme, line, column))
+                return None
+        else
+            while Json.is_digit(parser.peek())
+                lexeme = lexeme + parser.take()
+        match Json.fraction(parser, lexeme, line, column)
+            Some(with_fraction): Json.number_exponent(parser, with_fraction, line, column)
+            None: None
+
+    private static fn number_exponent(parser JsonParser, lexeme String, line int, column int) Json?
+        match Json.exponent(parser, lexeme, line, column)
+            Some(complete): Some(Json.Number(complete))
+            None: None
+
+    private static fn fraction(parser JsonParser, lexeme String, line int, column int) String?
+        if parser.peek() != 46
+            return Some(lexeme)
+        var out = lexeme + parser.take()
+        if Json.is_digit(parser.peek()) == false
+            parser.fail(JsonError.InvalidNumber(out, line, column))
+            return None
+        while Json.is_digit(parser.peek())
+            out = out + parser.take()
+        Some(out)
+
+    private static fn exponent(parser JsonParser, lexeme String, line int, column int) String?
+        let marker = parser.peek()
+        if marker != 101 and marker != 69
+            return Some(lexeme)
+        var out = lexeme + parser.take()
+        if parser.peek() == 43 or parser.peek() == 45
+            out = out + parser.take()
+        if Json.is_digit(parser.peek()) == false
+            parser.fail(JsonError.InvalidNumber(out, line, column))
+            return None
+        while Json.is_digit(parser.peek())
+            out = out + parser.take()
+        Some(out)
+
+    private static fn boolean_text(flag bool) String
+        if flag
+            return "true"
+        "false"
+
+    private static fn array_text(items [Json]) String
+        var out = "["
+        var index = 0
+        while index < items.length()
+            if index > 0
+                out = out + ","
+            out = out + items.element_at(index).to_string()
+            index = index + 1
+        out + "]"
+
+    private static fn object_text(fields {String: Json}) String
+        var out = "{"
+        var written = 0
+        for key in fields
+            if written > 0
+                out = out + ","
+            out = out + Json.quoted(key) + ":"
+            match fields.get(key)
+                Some(member)
+                    out = out + member.to_string()
+                None
+                    out = out + "null"
+            written = written + 1
+        out + "}"
+
+    private static fn quoted(text String) String
+        var out = "\""
+        var index = 0
+        while index < text.length()
+            out = out + Json.escaped_character(text.code_at(index) ?? 0)
+            index = index + 1
+        out + "\""
+
+    private static fn escaped_character(code int) String
+        if code == 34
+            return "\\\""
+        if code == 92
+            return "\\\\"
+        if code == 10
+            return "\\n"
+        if code == 13
+            return "\\r"
+        if code == 9
+            return "\\t"
+        if code == 8
+            return "\\b"
+        if code == 12
+            return "\\f"
+        if code < 32
+            return "\\u" + Json.unit_digits(code)
+        String.from_code_point(code) ?? ""
+
+    private static fn unit_text(code int) String
+        "u" + Json.unit_digits(code)
+
+    private static fn unit_digits(code int) String
+        let first = Json.hex_digit((code / 4096) % 16)
+        let second = Json.hex_digit((code / 256) % 16)
+        let third = Json.hex_digit((code / 16) % 16)
+        first + second + third + Json.hex_digit(code % 16)
+
+    private static fn hex_digit(value int) String
+        if value < 10
+            return String.from_code_point(48 + value) ?? "0"
+        String.from_code_point(87 + value) ?? "0"
+
+    private static fn describe(code int) String
+        if code < 0
+            return "end of input"
+        String.from_code_point(code) ?? ""
+
+    private static fn is_digit(code int) bool
+        code >= 48 and code <= 57
+
+    private static fn is_hex_digit(code int) bool
+        if Json.is_digit(code)
+            return true
+        if code >= 97 and code <= 102
+            return true
+        code >= 65 and code <= 70
+
+    private static fn hex_value(code int) int
+        if Json.is_digit(code)
+            return code - 48
+        if code >= 97 and code <= 102
+            return code - 87
+        code - 55
+
+    private static fn is_surrogate(code int) bool
+        code >= 55296 and code <= 57343

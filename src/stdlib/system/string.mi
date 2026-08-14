@@ -43,6 +43,8 @@ public class String implements Equatable, Addable, Multiplicable, Iterable<Strin
     runtime "core" fn miri_rt_string_parse_float(s String) float
     runtime "core" fn miri_rt_string_parse_float_status() int
     runtime "core" fn miri_rt_string_next_char_boundary(s String, byte_pos int) int
+    runtime "core" fn miri_rt_string_code_at(s String, index int) int
+    runtime "core" fn miri_rt_string_from_code_point(code int) String
 
     // =========================================================================
     // Constructors
@@ -225,6 +227,43 @@ public class String implements Equatable, Addable, Multiplicable, Iterable<Strin
         else
             None
 
+    /// Returns the Unicode scalar value (code point) at a character index.
+    ///
+    /// The index is a CHARACTER index, not a byte index, consistent with `length()` and `element_at()`.
+    /// Returns None if the index is negative or >= length().
+    ///
+    /// Example:
+    ///     "hello".code_at(0) → Some(104)  // 'h'
+    ///     "café".code_at(3) → Some(233)   // 'é'
+    ///     "hello".code_at(10) → None
+    ///     "hello".code_at(-1) → None
+    public fn code_at(index int) int?
+        let code = miri_rt_string_code_at(self, index)
+        if code < 0
+            None
+        else
+            Some(code)
+
+    /// Constructs a string from a Unicode scalar value (code point).
+    ///
+    /// Returns Some(s) if the code point is valid (non-negative, not a surrogate, <= 0x10FFFF).
+    /// Returns None for invalid code points.
+    ///
+    /// Example:
+    ///     String.from_code_point(65) → Some("A")
+    ///     String.from_code_point(233) → Some("é")
+    ///     String.from_code_point(0xD800) → None  // Surrogate
+    ///     String.from_code_point(0x110000) → None  // Above max
+    ///     String.from_code_point(-1) → None
+    public static fn from_code_point(code int) String?
+        // The intrinsic signals an invalid scalar value with an empty string.
+        // That is unambiguous: every valid scalar value, including 0, encodes
+        // to at least one byte.
+        let s = miri_rt_string_from_code_point(code)
+        if s.is_empty()
+            None
+        else
+            Some(s)
 
     // =========================================================================
     // Internal

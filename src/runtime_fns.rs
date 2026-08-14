@@ -177,6 +177,8 @@ pub mod rt {
     pub const STRING_PARSE_FLOAT_STATUS: &str = "miri_rt_string_parse_float_status";
     pub const STRING_PARSE_STATUS: &str = "miri_rt_string_parse_status";
     pub const STRING_NEXT_CHAR_BOUNDARY: &str = "miri_rt_string_next_char_boundary";
+    pub const STRING_CODE_AT: &str = "miri_rt_string_code_at";
+    pub const STRING_FROM_CODE_POINT: &str = "miri_rt_string_from_code_point";
 
     // ── String conversion ────────────────────────────────────────────────────
     /// Compiler-internal: used by the codegen for int → String coercions.
@@ -378,6 +380,8 @@ pub mod rt {
         STRING_PARSE_FLOAT_STATUS,
         STRING_PARSE_STATUS,
         STRING_NEXT_CHAR_BOUNDARY,
+        STRING_CODE_AT,
+        STRING_FROM_CODE_POINT,
         // String conversion (compiler-internal)
         BOOL_TO_STRING,
         FLOAT_TO_STRING,

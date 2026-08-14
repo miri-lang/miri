@@ -249,6 +249,29 @@ unsafe fn transform_str_ref(
     into_raw_ptr(MiriString::from_str(result))
 }
 
+/// Creates a string from a Unicode scalar value (code point).
+///
+/// Returns a new string containing the single character represented by the code point.
+/// Returns an empty string if the code point is invalid (negative, surrogate, or > 0x10FFFF).
+///
+/// Takes `isize` rather than a fixed width because Miri's `int` lowers to the
+/// platform pointer type.
+#[no_mangle]
+pub extern "C" fn miri_rt_string_from_code_point(code: isize) -> *mut MiriString {
+    // Check for invalid code points: must be in range [0, 0x10FFFF] and not a surrogate
+    if !(0..=0x10FFFF).contains(&code) || (0xD800..=0xDFFF).contains(&code) {
+        return miri_rt_string_new();
+    }
+
+    if let Some(ch) = char::from_u32(code as u32) {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        into_raw_ptr(MiriString::from_str(encoded))
+    } else {
+        miri_rt_string_new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::constructors::miri_rt_string_free;
