@@ -641,6 +641,23 @@ pub mod ffi {
         }
     }
 
+    /// Sets the key kind, selecting how keys are hashed and compared.
+    ///
+    /// A map literal passes its key kind to `miri_rt_map_new`, but a map built
+    /// by an empty constructor has no key operands to derive it from, so codegen
+    /// supplies it here from the declared key type.
+    ///
+    /// # Safety
+    /// - `ptr` must be a valid pointer to a `MiriMap`, or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_key_kind(ptr: *mut MiriMap, key_kind: usize) {
+        if ptr.is_null() {
+            return;
+        }
+        (*ptr).key_kind = key_kind;
+    }
+
     /// Returns the key at the nth occupied slot (0-based sequential index).
     ///
     /// This enables iteration over map keys via `element_at`.

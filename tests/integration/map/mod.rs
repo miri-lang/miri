@@ -13,4 +13,5 @@ pub mod iteration;
 pub mod length;
 pub mod methods;
 pub mod rc_aliasing;
+pub mod string_keys;
 pub mod type_errors;

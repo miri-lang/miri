@@ -99,6 +99,8 @@ pub mod rt {
     pub const MAP_SET_KEY_DROP_FN: &str = "miri_rt_map_set_key_drop_fn";
     /// Compiler-internal: registers the value clone function, not in stdlib.
     pub const MAP_SET_VAL_CLONE_FN: &str = "miri_rt_map_set_val_clone_fn";
+    /// Compiler-internal: selects how keys are hashed and compared, not in stdlib.
+    pub const MAP_SET_KEY_KIND: &str = "miri_rt_map_set_key_kind";
     pub const MAP_CLONE: &str = "miri_rt_map_clone";
     /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
     pub const MAP_COW: &str = "miri_rt_map_cow";
@@ -300,6 +302,7 @@ pub mod rt {
         MAP_SET_VAL_DROP_FN,
         MAP_SET_KEY_DROP_FN,
         MAP_SET_VAL_CLONE_FN,
+        MAP_SET_KEY_KIND,
         MAP_DECREF_ELEMENT,
         // Set
         SET_NEW,
