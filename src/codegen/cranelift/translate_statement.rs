@@ -258,6 +258,103 @@ impl<'a> FunctionTranslator<'a> {
                 Self::apply_empty_set_init(builder, ctx, dest_ty, value, type_ctx)?;
             }
         }
+        if let Rvalue::Aggregate(AggregateKind::Map, ops) = rvalue {
+            if ops.is_empty() {
+                Self::apply_empty_map_init(builder, ctx, dest_ty, value, type_ctx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// After an empty `Map<K,V>()` constructor: derive the key and value types
+    /// from the destination annotation and register the key kind plus the drop
+    /// and clone callbacks.
+    ///
+    /// A map literal takes all of this from its key and value operands, which an
+    /// empty constructor does not have. Without the key kind the runtime hashes
+    /// and compares a string key by its pointer, so two equal strings become two
+    /// entries; without the drop callbacks the map never releases the references
+    /// its callers donate.
+    fn apply_empty_map_init(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        dest_ty: &crate::ast::types::Type,
+        map_ptr: cranelift_codegen::ir::Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let Some((key_expr, value_expr)) = FunctionTranslator::map_key_value_exprs(&dest_ty.kind)
+        else {
+            return Ok(());
+        };
+        Self::register_map_key_callbacks(builder, ctx, key_expr, map_ptr, type_ctx)?;
+        Self::register_map_value_callbacks_for_type(builder, ctx, value_expr, map_ptr, type_ctx)?;
+        Ok(())
+    }
+
+    /// Registers the key kind and key drop callback for a string-keyed map.
+    fn register_map_key_callbacks(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        key_expr: &Expression,
+        map_ptr: cranelift_codegen::ir::Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ExpressionKind::Type(key_ty, _) = &key_expr.node else {
+            return Ok(());
+        };
+        if !matches!(key_ty.kind, TypeKind::String) {
+            return Ok(());
+        }
+
+        let key_kind_val = builder
+            .ins()
+            .iconst(ptr_type, FunctionTranslator::MANAGED_STRING_KEY_KIND);
+        FunctionTranslator::call_rt_map_set_key_kind(builder, ctx, map_ptr, key_kind_val)?;
+
+        let drop_fn_addr =
+            FunctionTranslator::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
+        FunctionTranslator::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)?;
+        Ok(())
+    }
+
+    /// Registers the value drop and clone callbacks for a managed value type.
+    fn register_map_value_callbacks_for_type(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        value_expr: &Expression,
+        map_ptr: cranelift_codegen::ir::Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ExpressionKind::Type(value_ty, _) = &value_expr.node else {
+            return Ok(());
+        };
+        if FunctionTranslator::is_unresolved_generic_elem(&value_ty.kind, type_ctx.type_definitions)
+        {
+            return Ok(());
+        }
+
+        if let Some(drop_addr) = FunctionTranslator::elem_decref_addr_for_kind(
+            builder,
+            ctx,
+            &value_ty.kind,
+            ptr_type,
+            type_ctx,
+        )? {
+            FunctionTranslator::call_rt_map_set_val_drop_fn(builder, ctx, map_ptr, drop_addr)?;
+        }
+
+        let shape = FunctionTranslator::classify_element_shape(&value_ty.kind);
+        if let Some(clone_addr) = FunctionTranslator::elem_clone_addr_for_shape(
+            builder,
+            ctx,
+            shape,
+            type_ctx.type_definitions,
+            ptr_type,
+        )? {
+            FunctionTranslator::call_rt_map_set_val_clone_fn(builder, ctx, map_ptr, clone_addr)?;
+        }
         Ok(())
     }
 

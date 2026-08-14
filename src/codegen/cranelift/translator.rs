@@ -1046,6 +1046,28 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_map_set_key_kind(map_ptr, key_kind)`.
+    pub(crate) fn call_rt_map_set_key_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        key_kind: Value,
+    ) -> Result<(), CodegenError> {
+        let pt = builder.func.dfg.value_type(map_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::MAP_SET_KEY_KIND,
+                param_types: &[pt, pt],
+                return_types: &[],
+                args: &[map_ptr, key_kind],
+            },
+        )?;
+        Ok(())
+    }
+
     /// Returns the address of `miri_rt_string_decref_element` as a ptr-sized integer.
     pub(crate) fn get_rt_string_decref_element_addr(
         builder: &mut FunctionBuilder,

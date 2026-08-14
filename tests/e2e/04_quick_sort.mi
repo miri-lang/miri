@@ -8,30 +8,32 @@ use system.time
 use system.collections.list
 
 
+// The list is sorted through the parameter itself, using `set` rather than
+// index assignment. Rebinding it to a local first would make the local an
+// independent copy on the first write, so the sort would be discarded when the
+// function returns.
 fn partition(arr List<int>, low int, high int) int
-    var a = arr
-    let pivot = a[high]
+    let pivot = arr[high]
     var i = low - 1
     var j = low
     while j < high
         if arr[j] <= pivot
             i += 1
-            let temp = a[i]
-            a[i] = a[j]
-            a[j] = temp
+            let temp = arr[i]
+            arr.set(i, arr[j])
+            arr.set(j, temp)
         j += 1
-    
-    let temp = a[i + 1]
-    a[i + 1] = a[high]
-    a[high] = temp
+
+    let temp = arr[i + 1]
+    arr.set(i + 1, arr[high])
+    arr.set(high, temp)
     return i + 1
 
 fn quick_sort(arr List<int>, low int, high int)
-    var a = arr
     if low < high
-        let pivot_idx = partition(a, low, high)
-        quick_sort(a, low, pivot_idx - 1)
-        quick_sort(a, pivot_idx + 1, high)
+        let pivot_idx = partition(arr, low, high)
+        quick_sort(arr, low, pivot_idx - 1)
+        quick_sort(arr, pivot_idx + 1, high)
 
 fn main()
     let data = List<int>([10, 80, 30, 90, 40, 50, 70])

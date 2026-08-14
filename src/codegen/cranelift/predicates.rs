@@ -116,6 +116,60 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
+    /// Value of `MiriMap::key_kind` selecting content-based hashing and
+    /// comparison for string keys. Mirrors the runtime's encoding, where the
+    /// default `0` means the key is a value type compared by its raw bytes.
+    pub(crate) const MANAGED_STRING_KEY_KIND: i64 = 1;
+
+    /// Extracts the key and value expressions from a Map TypeKind.
+    ///
+    /// Mirrors [`Self::set_elem_expr`]: a map written as a type literal carries
+    /// its arguments in `TypeKind::Map`, while one that reached codegen through
+    /// a generic instantiation carries them as `Custom` type arguments.
+    pub(crate) fn map_key_value_exprs(kind: &TypeKind) -> Option<(&Expression, &Expression)> {
+        match kind {
+            TypeKind::Map(k, v) => Some((k, v)),
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
+            {
+                Some((args.first()?, args.get(1)?))
+            }
+            TypeKind::Custom(_, _)
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => None,
+        }
+    }
+
     /// Core implementation: resolves the element `TypeKind` from a collection
     /// kind (Array, List, Tuple, or the post-normalization `Custom` forms).
     /// Returns `None` when the base kind is not a collection, when type

@@ -502,6 +502,34 @@ fn emit_map_set_call(
     dummy_dest
 }
 
+/// Lower the receiver of an indexed assignment, taking an exclusive copy first
+/// when the collection shares its buffer.
+///
+/// Writing through an index mutates in place, so without this a second binding
+/// to the same collection sees the write. The equivalent `set` method already
+/// goes through the same check; `Array` is fixed-size and has no CoW intrinsic,
+/// so it is left alone.
+fn lower_index_assign_receiver(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    span: crate::error::syntax::Span,
+) -> Result<Operand, LoweringError> {
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let Some(obj_ty) = ctx.type_checker.get_type(obj.id).cloned() else {
+        return Ok(obj_op);
+    };
+    let Some(cow_name) = obj_ty
+        .kind
+        .as_builtin_collection()
+        .and_then(crate::runtime_fns::cow_fn)
+    else {
+        return Ok(obj_op);
+    };
+    Ok(crate::mir::lowering::method_dispatch::emit_cow_check(
+        ctx, obj_op, &obj_ty, cow_name, span,
+    ))
+}
+
 fn assign_to_index_map(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -510,7 +538,7 @@ fn assign_to_index_map(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_op = lower_expression(ctx, idx, None)?;
 
     let val_ty = val.ty(&ctx.body).clone();
@@ -546,7 +574,7 @@ fn assign_to_index_array(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let obj_operand = lower_expression(ctx, obj, None)?;
+    let obj_operand = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let index_operand = lower_expression(ctx, idx, None)?;

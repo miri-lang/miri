@@ -287,16 +287,13 @@ println(f"{total}")
     );
 }
 
-/// A match-arm binding handed to a callee that stores it is released too early.
+/// A match-arm binding handed to a container that stores it stays alive.
 ///
-/// The binding reaches the call as a move, so nothing retains it, yet the arm's
-/// scope still releases it when the arm ends. The collection is left holding a
-/// freed string, which reads back empty instead of crashing.
-///
-/// The same call with a temporary key — `m.set("alpha" + "!", 1)` — is correct,
-/// which is what isolates this to the binding rather than to `set`.
+/// The arm's scope releases the binding when the arm ends, so the container
+/// needs a reference of its own. Lowering donates one at the call site; without
+/// it the map is left holding a freed string that reads back empty rather than
+/// crashing.
 #[test]
-#[ignore = "arm binding passed to a callee is released while the callee still holds it"]
 fn test_arm_binding_stored_by_callee_survives_the_arm() {
     assert_runs_with_output(
         r#"
@@ -311,5 +308,45 @@ for stored in entries
     println(stored)
 "#,
         "alpha!",
+    );
+}
+
+/// The same guarantee for `Set.add`, which donates its element the same way.
+#[test]
+fn test_arm_binding_stored_in_a_set_survives_the_arm() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+var entries = Set<String>()
+match Some("beta" + "!")
+    Some(element)
+        entries.add(element)
+    None: println("none")
+for stored in entries
+    println(stored)
+"#,
+        "beta!",
+    );
+}
+
+/// Storing an arm binding repeatedly must neither leak nor double-free.
+#[test]
+fn test_arm_binding_stored_in_a_loop_stays_balanced() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+var entries = Map<String, int>()
+var index = 0
+while index < 300
+    match Some(f"key_{index}")
+        Some(key)
+            entries.set(key, index)
+        None: println("none")
+    index = index + 1
+println(f"{entries.length()}")
+"#,
+        "300",
     );
 }

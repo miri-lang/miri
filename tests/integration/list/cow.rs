@@ -219,3 +219,57 @@ fn main()
         "3\n4",
     );
 }
+
+/// Writing through an index must take an exclusive copy first, exactly as the
+/// `set` method does. Without the check the write lands in the shared buffer
+/// and the original binding sees it.
+#[test]
+fn test_list_index_write_copies_before_mutating_an_alias() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+var original = List([1])
+var alias = original
+alias[0] = 9
+println(f"{original.element_at(0)}")
+println(f"{alias.element_at(0)}")
+"#,
+        "1\n9",
+    );
+}
+
+/// A compound index assignment reads and writes the element, so it needs the
+/// same exclusive copy.
+#[test]
+fn test_list_compound_index_write_copies_before_mutating_an_alias() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+var original = List([1])
+var alias = original
+alias[0] += 9
+println(f"{original.element_at(0)}")
+println(f"{alias.element_at(0)}")
+"#,
+        "1\n10",
+    );
+}
+
+/// The copy must only happen when the buffer is actually shared — an unaliased
+/// list still mutates in place.
+#[test]
+fn test_list_index_write_still_mutates_when_unshared() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+var items = List([1, 2])
+items[0] = 9
+println(f"{items.element_at(0)}")
+println(f"{items.length()}")
+"#,
+        "9\n2",
+    );
+}

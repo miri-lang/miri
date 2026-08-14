@@ -606,6 +606,115 @@ fn lower_list_push(
     Ok(Some(Operand::Copy(Place::new(dummy_dest))))
 }
 
+/// Donate a reference to a value a container is about to take ownership of.
+///
+/// Reading the operand by copy makes Perceus retain it into the temp, and the
+/// temp is what the container stores. A temporary that only existed to produce
+/// the value is then released, so the net effect is one reference handed over:
+/// the caller keeps releasing whatever it already owned, and the container
+/// releases the donated one through its drop callback.
+fn donate_operand_to_container(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    span: Span,
+) -> (Operand, Option<Local>) {
+    let src = operand_src_local(&op);
+    let copied = move_to_copy(op);
+    let ty = copied.ty(&ctx.body).clone();
+    let local = store_operand_temp(ctx, copied, ty, span);
+    (Operand::Copy(Place::new(local)), src)
+}
+
+/// Lower map.set(key, value) to miri_rt_map_set.
+///
+/// The stdlib method would forward its parameters, which are borrowed, into an
+/// intrinsic that takes ownership of them, leaving the map holding references it
+/// does not own. Lowering the call here donates both instead, matching
+/// `lower_list_push`.
+fn lower_map_set(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    key_arg: &Expression,
+    value_arg: &Expression,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::MAP_COW, *span);
+
+    let key_op = lower_expression(ctx, key_arg, None)?;
+    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_arg.span);
+    let value_op = lower_expression(ctx, value_arg, None)?;
+    let (value_op, value_src) = donate_operand_to_container(ctx, value_op, value_arg.span);
+
+    let func_op = runtime_fn_operand(rt::MAP_SET, *span);
+    let target_bb = ctx.new_basic_block();
+    let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, key_op, value_op],
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(dummy_dest),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(src) = key_src {
+        ctx.emit_temp_drop(src, watermark, key_arg.span);
+    }
+    if let Some(src) = value_src {
+        ctx.emit_temp_drop(src, watermark, value_arg.span);
+    }
+    Ok(Some(Operand::Copy(Place::new(dummy_dest))))
+}
+
+/// Lower set.add(element) to miri_rt_set_add, donating the stored element.
+///
+/// Mirrors [`lower_map_set`]; the intrinsic reports whether the element was
+/// newly inserted, so the call keeps its boolean result.
+fn lower_set_add(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    elem_arg: &Expression,
+    dest: Option<Place>,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::SET_COW, *span);
+
+    let elem_op = lower_expression(ctx, elem_arg, None)?;
+    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_arg.span);
+
+    // The intrinsic reports whether the element was newly inserted, so the
+    // result has to land in the caller's destination when it asked for one.
+    let destination = dest
+        .unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span)));
+    let func_op = runtime_fn_operand(rt::SET_ADD, *span);
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, elem_op],
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: destination.clone(),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(src) = elem_src {
+        ctx.emit_temp_drop(src, watermark, elem_arg.span);
+    }
+    Ok(Some(Operand::Copy(destination)))
+}
+
 /// Lower list.insert(index, item) to miri_rt_list_insert.
 fn lower_list_insert(
     ctx: &mut LoweringContext,
@@ -742,6 +851,14 @@ pub(super) fn try_lower_collection_intrinsic(
         )
     {
         return lower_collection_set(ctx, obj, obj_ty, &args[0], &args[1], builtin, span);
+    }
+
+    if args.len() == 2 && method_name == "set" && builtin == Some(BuiltinCollectionKind::Map) {
+        return lower_map_set(ctx, obj, obj_ty, &args[0], &args[1], span);
+    }
+
+    if args.len() == 1 && method_name == "add" && builtin == Some(BuiltinCollectionKind::Set) {
+        return lower_set_add(ctx, obj, obj_ty, &args[0], dest, span);
     }
 
     // Try GPU reduce on array with 2 args (init, fold). Only a gpu-resident
