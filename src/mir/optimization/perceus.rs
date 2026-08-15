@@ -202,7 +202,7 @@ impl Perceus {
         // 3. If we are creating a collection or calling a math intrinsic,
         // increment the RC of every managed element/operand.
         if let Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) = rvalue {
-            if self.handle_aggregate(operands, stmt.span, ctx, new_stmts) {
+            if self.handle_aggregate(operands, stmt.span, ctx, lhs, new_stmts) {
                 changed = true;
             }
         }
@@ -283,6 +283,12 @@ impl Perceus {
         dest: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
     ) -> bool {
+        // An inline element slot copies the source's bytes and keeps no pointer
+        // to it, so the write takes no reference.
+        if writes_inline_element(ctx, dest) {
+            return false;
+        }
+
         // Direct managed place?
         if is_place_managed(
             source,
@@ -304,13 +310,22 @@ impl Perceus {
     }
 
     /// Handles RC for operands inside an aggregate (like a List or Map).
+    ///
+    /// A container that stores its elements inline copies the operand's bytes
+    /// instead of keeping its pointer, so it takes no reference and the operand
+    /// must not be retained — the temporary that built the element is then freed
+    /// at its own `StorageDead`.
     fn handle_aggregate(
         &self,
         operands: &[Operand],
         span: Span,
         ctx: &PerceusContext,
+        lhs: &Place,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
+        if stores_elements_inline(ctx, lhs) {
+            return false;
+        }
         let mut changed = false;
         for op in operands {
             let place = match op {
@@ -450,11 +465,21 @@ fn is_place_managed(
             // For Index projections, extract the element type from the collection.
             // MirType stores element types as resolved MirType values — no AST
             // expression nodes to inspect.
-            PlaceElem::Index(_) => match current {
-                MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => *elem,
-                MirType::Map(_, v) => *v,
-                _ => return false,
-            },
+            PlaceElem::Index(_) => {
+                let element = match current {
+                    MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => *elem,
+                    MirType::Map(_, v) => *v,
+                    _ => return false,
+                };
+                // A vector element lives inline in the collection's buffer, so
+                // indexing yields an interior address rather than a pointer to
+                // an allocation of its own. Retaining or releasing it would
+                // reach into the buffer's bytes.
+                if is_inline_vector(&element) {
+                    return false;
+                }
+                element
+            }
             PlaceElem::Field(i) => match &current {
                 // Option<T>.Field(0) → the inner type T
                 MirType::Option(inner) if *i == 0 => *inner.clone(),
@@ -492,4 +517,35 @@ fn is_place_managed(
     }
 
     current.is_managed(unmanaged_type_names, type_params)
+}
+
+/// Whether the destination of an aggregate is an array or list whose elements
+/// are stored inline, laid out at their std430 stride rather than as pointers.
+fn stores_elements_inline(ctx: &PerceusContext, lhs: &Place) -> bool {
+    if !lhs.projection.is_empty() {
+        return false;
+    }
+    holds_inline_elements(&ctx.local_decls[lhs.local.0].mir_ty)
+}
+
+/// Whether `dest` names one inline element of an array or list, as `arr[i]`
+/// does for a vector element.
+fn writes_inline_element(ctx: &PerceusContext, dest: &Place) -> bool {
+    matches!(dest.projection.last(), Some(PlaceElem::Index(_)))
+        && holds_inline_elements(&ctx.local_decls[dest.local.0].mir_ty)
+}
+
+/// Whether `ty` is a collection that lays its elements out inline.
+fn holds_inline_elements(ty: &MirType) -> bool {
+    match ty {
+        MirType::Array(elem) | MirType::List(elem) => is_inline_vector(elem),
+        _ => false,
+    }
+}
+
+/// Whether `ty` is a vector type. A vector is stored inline wherever a
+/// collection lays its elements out at their std430 stride, so it is the one
+/// managed type whose element position holds bytes rather than a pointer.
+fn is_inline_vector(ty: &MirType) -> bool {
+    matches!(ty, MirType::Custom(name) if crate::ast::types::vec_dim(name.as_str()).is_some())
 }

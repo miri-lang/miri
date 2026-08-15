@@ -200,12 +200,14 @@ impl MirType {
             // generic placeholders or reserved names.
             // Also exclude unresolved collection class names (e.g. Custom("List"))
             // that appear in stdlib method signatures.
+            // A vector binding holds its own allocation, the same as any other
+            // struct — only a vector stored *inside* a collection buffer is
+            // inline bytes, and `is_place_managed` excludes that position.
             MirType::Custom(name) => {
                 name != "Self"
                     && !unmanaged_type_names.contains(name.as_str())
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
-                    && crate::ast::types::vec_dim(name.as_str()).is_none()
                     && name != crate::ast::types::ATOMIC_TYPE_NAME
             }
             // All other types (primitives) are not managed.

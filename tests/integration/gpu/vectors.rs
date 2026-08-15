@@ -141,6 +141,23 @@ fn main()
     assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
 }
 
+/// Binding an element to a local copies it: a vector is a value type, so
+/// mutating the binding must leave the array element it came from untouched.
+#[test]
+fn cpu_vec3_array_element_bound_to_local_is_a_copy() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    var v = arr[0]
+    v.x = 99.0
+    println(f'{arr[0].x} {v.x}')
+";
+    assert_runs_with_output(source, "1.0 99.0");
+}
+
 /// Integer vector arrays preserve their explicit component width: `[Vec2<i32>(..)]`
 /// keeps `i32` (not the literal default `Int`), so inline storage is detected and
 /// each component reads back correctly across distinct elements.
