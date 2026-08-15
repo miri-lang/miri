@@ -90,7 +90,7 @@ fn collect_owned_managed_locals(body: &Body, env_captures: &HashSet<Local>) -> H
                 && !env_captures.contains(&Local(*i))
                 && decl
                     .mir_ty
-                    .is_managed(&body.auto_copy_types, &body.type_params)
+                    .is_managed(&body.unmanaged_type_names, &body.type_params)
         })
         .map(|(i, _)| Local(i))
         .collect()
@@ -106,7 +106,7 @@ fn collect_managed_param_locals(body: &Body) -> HashSet<Local> {
                 && *i <= body.arg_count
                 && decl
                     .mir_ty
-                    .is_managed(&body.auto_copy_types, &body.type_params)
+                    .is_managed(&body.unmanaged_type_names, &body.type_params)
         })
         .map(|(i, _)| Local(i))
         .collect()

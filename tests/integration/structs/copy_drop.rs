@@ -25,6 +25,78 @@ fn main()
 }
 
 #[test]
+fn test_auto_copy_struct_mutation_does_not_alias() {
+    // The defining property of an auto-copy struct: assignment produces an
+    // independent value, so mutating the copy must leave the original alone.
+    // Reading both copies is not enough to prove this — an aliased pointer
+    // reads identically. Only a mutation separates a copy from an alias.
+    assert_runs_with_output(
+        r#"
+
+struct Point
+    x int
+    y int
+
+fn main()
+    var a = Point(x: 1, y: 2)
+    var b = a
+    b.x = 99
+    println(f"{a.x}")
+    println(f"{b.x}")
+    "#,
+        "1\n99",
+    );
+}
+
+#[test]
+fn test_auto_copy_struct_mutation_in_callee_does_not_alias() {
+    // Passing an auto-copy struct to a function hands over a copy: mutating
+    // the parameter must not be visible to the caller.
+    assert_runs_with_output(
+        r#"
+
+struct Point
+    x int
+    y int
+
+fn bump(p Point) int
+    var copy = p
+    copy.x = 99
+    copy.x
+
+fn main()
+    let a = Point(x: 1, y: 2)
+    let seen = bump(p: a)
+    println(f"{seen}")
+    println(f"{a.x}")
+    "#,
+        "99\n1",
+    );
+}
+
+#[test]
+fn test_auto_copy_struct_does_not_leak() {
+    // An auto-copy struct is a value: constructing one in a loop must not
+    // accumulate heap allocations. The leak counter does not see these blocks,
+    // so this needs the heap guard to be meaningful.
+    assert_heap_guard_ok(
+        r#"
+
+struct Point
+    x int
+    y int
+
+fn main()
+    var i = 0
+    while i < 50
+        let p = Point(x: i, y: i)
+        i = i + 1
+    println("done")
+    "#,
+    );
+}
+
+#[test]
 fn test_auto_copy_struct_pass_to_function() {
     // Auto-copy struct: passing to a function copies — original still usable.
     assert_runs_with_output(

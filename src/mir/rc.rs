@@ -12,7 +12,17 @@ use std::collections::HashSet;
 /// Returns `true` if a type is managed (heap-allocated, needs RC).
 ///
 /// Managed types are: Option, List, Array, Map, Set, Tuple, and Custom types
-/// that are NOT in the auto-copy set and NOT generic type parameters.
+/// that are NOT generic type parameters.
+///
+/// Auto-copy classification deliberately does not appear here. Whether a value
+/// is copied bitwise on assignment is a question about assignment; whether its
+/// storage must be released is a question about allocation. Every aggregate is
+/// heap-allocated, so every aggregate needs releasing — an auto-copy struct that
+/// was excluded here was allocated with nothing to free it.
+///
+/// `unmanaged_type_names` contains custom names that never denote a heap object
+/// — type aliases resolving to an unmanaged type, which reach MIR still wearing
+/// the alias name (`type Meters is int` arrives as `Custom("Meters")`).
 ///
 /// `type_params` contains the names of in-scope generic type parameters
 /// (e.g. `{"T", "K", "V"}` for a function `fn foo<T, K, V>(...)`).
@@ -20,7 +30,7 @@ use std::collections::HashSet;
 /// placeholder — never a concrete heap object, so never managed.
 pub fn is_managed_type(
     kind: &TypeKind,
-    auto_copy_types: &HashSet<String>,
+    unmanaged_type_names: &HashSet<String>,
     type_params: &HashSet<String>,
 ) -> bool {
     match kind {
@@ -39,9 +49,8 @@ pub fn is_managed_type(
             // Exclude generic placeholders that appear as Custom types (e.g. when
             // the type checker stores Custom("T", None) for a generic param reference).
             // Also exclude "Self" — a reserved keyword, never a user-defined type.
-            // Auto-copy types use bitwise copy, no RC.
             if name == "Self"
-                || auto_copy_types.contains(name.as_str())
+                || unmanaged_type_names.contains(name.as_str())
                 || type_params.contains(name.as_str())
             {
                 return false;

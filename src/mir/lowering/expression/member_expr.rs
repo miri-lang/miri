@@ -17,7 +17,6 @@ use crate::mir::{
 use std::rc::Rc;
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{ensure_place, resolve_type};
 
 /// Returns the kernel-context field name in `<kernel>.<field>` intermediate
@@ -74,6 +73,9 @@ fn lower_tuple_field_access(
 }
 
 /// Lower a field access on a struct or class type.
+///
+/// A field holding an aggregate that assigns bitwise is rebuilt rather than
+/// referenced, so `var inner = outer.part` gives `inner` storage of its own.
 fn lower_custom_field_access(
     ctx: &mut LoweringContext,
     mut place: Place,
@@ -82,6 +84,13 @@ fn lower_custom_field_access(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     place.projection.push(PlaceElem::Field(idx));
+
+    let field_ty = resolve_type(ctx.type_checker, expr);
+    if let Some(operand) =
+        super::value_copy::copy_value_aggregate(ctx, &place, &field_ty, dest.clone(), expr.span)?
+    {
+        return Ok(operand);
+    }
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -409,7 +418,7 @@ pub(crate) fn lower_member_expr(
         }
     }
 
-    let obj_operand = lower_expression(ctx, obj, None)?;
+    let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
 
     if let Some(result) = try_gpu_intrinsic(ctx, &obj_operand, prop, expr, dest.clone())? {
         return Ok(result);

@@ -150,7 +150,7 @@ fn sync_closure_captures(
     if let Some(old_caps) = ctx.body.closure_capture_types.get(&local).cloned() {
         for (cap_idx, cap_ty) in old_caps.iter().enumerate() {
             if crate::mir::types::MirType::from_type_kind(&cap_ty.kind)
-                .is_managed(&ctx.body.auto_copy_types, &ctx.body.type_params)
+                .is_managed(&ctx.body.unmanaged_type_names, &ctx.body.type_params)
             {
                 ctx.push_statement(crate::mir::Statement {
                     kind: MirStatementKind::DecRef(Place {
@@ -269,7 +269,7 @@ fn assign_to_member(
 ) -> Result<Operand, LoweringError> {
     if let ExpressionKind::Member(obj, prop) = &member_expr.node {
         let val = lower_expression(ctx, rhs, None)?;
-        let obj_operand = lower_expression(ctx, obj, None)?;
+        let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
         let obj_ty = ctx
             .type_checker
             .get_type(obj.id)

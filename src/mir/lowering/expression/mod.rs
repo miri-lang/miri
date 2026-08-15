@@ -42,6 +42,7 @@ pub mod testing_intrinsic;
 pub mod tuple_expr;
 pub mod type_expr;
 pub mod unary_expr;
+pub mod value_copy;
 
 pub fn lower_expression(
     ctx: &mut LoweringContext,
