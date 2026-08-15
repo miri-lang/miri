@@ -227,6 +227,32 @@ fn emit_void_runtime_call(
     ctx.set_current_block(after_bb);
 }
 
+/// The type an alias name ultimately stands for.
+///
+/// A declared type reaches lowering spelled the way it was written, so
+/// `type Meters is int` arrives as `Custom("Meters")`. Left that way, every
+/// decision that follows reads an opaque name rather than the type behind it:
+/// the coercion the initializer needs, the storage the value gets, and whether
+/// it is reference counted. Aliases may chain, so the walk continues until it
+/// reaches a type that is not itself an alias; a cycle stops it and yields the
+/// type as written.
+fn resolve_alias_target(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
+    let mut current = ty.clone();
+    let mut visited = std::collections::HashSet::new();
+    while let TypeKind::Custom(name, _) = &current.kind {
+        if !visited.insert(name.clone()) {
+            return ty.clone();
+        }
+        let Some(crate::type_checker::context::TypeDefinition::Alias(alias)) =
+            tc.type_definitions().get(name.as_str())
+        else {
+            break;
+        };
+        current = alias.template.clone();
+    }
+    current
+}
+
 /// Resolves a declaration's type and initializer operand. Returns the
 /// variable type, the initializer expression (borrowed from `decl`), and an
 /// already-lowered operand when type inference forced an early lowering.
@@ -236,7 +262,8 @@ fn resolve_decl_init<'d>(
     span: &Span,
 ) -> Result<(Type, Option<&'d Expression>, Option<Operand>), LoweringError> {
     if let Some(type_expr) = &decl.typ {
-        let ty = ctx.resolve_self_in(&resolve_type(ctx.type_checker, type_expr));
+        let declared = resolve_type(ctx.type_checker, type_expr);
+        let ty = ctx.resolve_self_in(&resolve_alias_target(ctx.type_checker, &declared));
         return Ok((ty, decl.initializer.as_deref(), None));
     }
     let Some(init_expr) = decl.initializer.as_deref() else {
