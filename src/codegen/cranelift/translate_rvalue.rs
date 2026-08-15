@@ -985,7 +985,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Heap-allocate `[malloc_ptr][RC][payload]` for an aggregate, traps on OOM,
     /// and returns the payload pointer (past the 2-slot header). RC is initialized
     /// to 1.
-    fn alloc_aggregate_payload(
+    pub(crate) fn alloc_aggregate_payload(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr_type: cl_types::Type,
