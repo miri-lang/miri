@@ -3,6 +3,7 @@
 
 use crate::mir::utils::{mir_lower_code, mir_snapshot_test};
 use miri::ast::types::TypeKind;
+use miri::mir::types::MirType;
 
 #[test]
 fn test_lower_variable_declaration() {
@@ -129,5 +130,27 @@ fn main()
         matches!(declared, TypeKind::Option(inner) if matches!(inner.kind, TypeKind::Option(_))),
         "the declared optional must carry its payload type: {:?}",
         declared
+    );
+}
+
+#[test]
+fn test_declared_nullable_element_stays_managed() {
+    // `int?` and `Option<int>` name the same type, so a collection declared with
+    // either must classify its elements the same way. Dropping the nullable
+    // spelling leaves the element looking like a bare integer, and the block
+    // behind each `Some` is never released.
+    let body = mir_lower_code(
+        r#"
+use system.collections.list
+
+fn main()
+    let e List<int?> = List([Some(1)])
+"#,
+    );
+
+    assert_eq!(
+        body.local_decls[1].mir_ty,
+        MirType::List(Box::new(MirType::Option(Box::new(MirType::Int)))),
+        "a nullable element type must survive into the MIR type"
     );
 }
