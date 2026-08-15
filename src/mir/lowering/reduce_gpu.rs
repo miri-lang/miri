@@ -1132,6 +1132,10 @@ fn emit_reduce_gpu_launch(
         span,
     ));
     ctx.set_current_block(after_bb);
+    // The grid and block dimensions are allocations of their own, read by the
+    // launch and dead once it returns.
+    ctx.emit_temp_drop(grid_local, 0, span);
+    ctx.emit_temp_drop(block_local, 0, span);
 
     if !dest_is_gpu_resident {
         emit_void_runtime_call(

@@ -923,6 +923,10 @@ fn assemble_gpu_launch_terminator(
         span,
     ));
     ctx.set_current_block(after_bb);
+    // The grid and block dimensions are allocations of their own, read by the
+    // launch and dead once it returns.
+    ctx.emit_temp_drop(params.grid_local, 0, span);
+    ctx.emit_temp_drop(params.block_local, 0, span);
     Ok(())
 }
 
