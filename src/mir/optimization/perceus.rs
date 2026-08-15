@@ -189,27 +189,14 @@ impl Perceus {
             }
         }
 
-        // 2b. Moving from a parameter creates a new managed local that will
-        // eventually get DecRef'd at StorageDead.  Since the caller does NOT
-        // IncRef before the call (borrow semantics), the move-from-param must
-        // IncRef to keep the shared allocation alive.  Without this, the
-        // StorageDead DecRef on the destination local would prematurely free
-        // the caller's allocation.
-        if let Some(param_place) = get_move_from_param_place(rvalue, ctx.arg_count) {
-            if is_place_managed(
-                &param_place,
-                ctx.local_decls,
-                ctx.unmanaged_type_names,
-                ctx.field_types,
-                ctx.type_params,
-                ctx.closure_capture_types,
-            ) {
-                new_stmts.push(Statement {
-                    kind: StatementKind::IncRef(param_place),
-                    span: stmt.span,
-                });
-                changed = true;
-            }
+        // 2b. A move out of a parameter is retained so that the release the
+        // destination eventually performs balances it.
+        if let Some(param_place) = self.move_from_param_to_retain(ctx, rvalue, lhs) {
+            new_stmts.push(Statement {
+                kind: StatementKind::IncRef(param_place),
+                span: stmt.span,
+            });
+            changed = true;
         }
 
         // 3. If we are creating a collection or calling a math intrinsic,
@@ -254,6 +241,38 @@ impl Perceus {
             return true;
         }
         false
+    }
+
+    /// The parameter that a move-from-parameter assignment must retain, if any.
+    ///
+    /// A caller does not IncRef before a call (borrow semantics), so moving a
+    /// parameter into a local that Perceus later DecRefs at its `StorageDead`
+    /// must IncRef first, or that DecRef frees the caller's allocation while the
+    /// caller still holds it.
+    ///
+    /// The retain is only correct when the destination is itself managed. A
+    /// destination that is not — a cast to `Self`, to a generic parameter, or to
+    /// a raw pointer — is never DecRef'd, because both the `StorageDead` release
+    /// and this retain are decided by the same managed-type predicate. Retaining
+    /// into one of those strands the reference and leaks the parameter's value.
+    fn move_from_param_to_retain(
+        &self,
+        ctx: &PerceusContext,
+        rvalue: &Rvalue,
+        lhs: &Place,
+    ) -> Option<Place> {
+        let param_place = get_move_from_param_place(rvalue, ctx.arg_count)?;
+        let is_managed = |place: &Place| {
+            is_place_managed(
+                place,
+                ctx.local_decls,
+                ctx.unmanaged_type_names,
+                ctx.field_types,
+                ctx.type_params,
+                ctx.closure_capture_types,
+            )
+        };
+        (is_managed(&param_place) && is_managed(lhs)).then_some(param_place)
     }
 
     /// Determines if a source value being copied needs an IncRef.
