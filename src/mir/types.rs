@@ -219,7 +219,10 @@ impl MirType {
     /// (e.g. `[T]`, `[T; N]`, `{K: V}`) as [`Expression`] nodes rather than
     /// [`Type`] nodes.  This helper handles the two common forms:
     ///
-    /// - `ExpressionKind::Type(ty, _)` — a fully-formed type node; recurse.
+    /// - `ExpressionKind::Type(ty, is_nullable)` — a fully-formed type node;
+    ///   recurse, wrapping in [`MirType::Option`] when the node is nullable.
+    ///   `int?` and `Option<int>` name one type, and an element that loses the
+    ///   nullable half looks like a bare value the pass need not release.
     /// - `ExpressionKind::Identifier(name, _)` — a bare name like `"String"`,
     ///   `"MyClass"`, or a generic parameter; mapped to `Custom(name)`.
     ///
@@ -230,7 +233,14 @@ impl MirType {
     /// [`Type`]: crate::ast::types::Type
     fn from_expr(expr: &crate::ast::expression::Expression) -> Self {
         match &expr.node {
-            crate::ast::expression::ExpressionKind::Type(ty, _) => Self::from_type_kind(&ty.kind),
+            crate::ast::expression::ExpressionKind::Type(ty, is_nullable) => {
+                let resolved = Self::from_type_kind(&ty.kind);
+                if *is_nullable {
+                    MirType::Option(Box::new(resolved))
+                } else {
+                    resolved
+                }
+            }
             crate::ast::expression::ExpressionKind::Identifier(name, _) => {
                 // A bare identifier in element-type position is a type name.
                 // Store it as Custom(name) and let `is_managed` resolve it at

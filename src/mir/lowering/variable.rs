@@ -267,11 +267,44 @@ fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty: &Type) -> 
     let TypeKind::Custom(name, Some(args)) = &resolved.kind else {
         return resolved;
     };
-    if name != crate::ast::types::OPTION_TYPE_NAME || args.len() != 1 {
-        return resolved;
+    if name == crate::ast::types::OPTION_TYPE_NAME && args.len() == 1 {
+        let payload = canonical_declared_type(tc, &resolve_type(tc, &args[0]));
+        return Type::new(TypeKind::Option(Box::new(payload)), resolved.span);
     }
-    let payload = canonical_declared_type(tc, &resolve_type(tc, &args[0]));
-    Type::new(TypeKind::Option(Box::new(payload)), resolved.span)
+    let canonical_args = args
+        .iter()
+        .map(|arg| canonical_type_argument(tc, arg))
+        .collect();
+    Type::new(
+        TypeKind::Custom(name.clone(), Some(canonical_args)),
+        resolved.span,
+    )
+}
+
+/// One type argument of a declared generic type, in canonical form.
+///
+/// A type argument reaches lowering as an expression, and the nullable half of
+/// `int?` rides on that expression rather than on the type inside it. Readers
+/// that take the inner type alone — the element-drop path among them — then see
+/// a bare `int` and treat the element as a value with nothing to release.
+/// Folding the flag into the type is what makes `[int?]` and `[Option<int>]`
+/// the single type they are meant to be. Arguments that are not types, such as
+/// the size in `[T; N]`, are carried through untouched.
+fn canonical_type_argument(tc: &crate::type_checker::TypeChecker, arg: &Expression) -> Expression {
+    let ExpressionKind::Type(ty, is_nullable) = &arg.node else {
+        return arg.clone();
+    };
+    let inner = canonical_declared_type(tc, ty);
+    let canonical = if *is_nullable {
+        Type::new(TypeKind::Option(Box::new(inner)), ty.span)
+    } else {
+        inner
+    };
+    Expression::new(
+        arg.id,
+        ExpressionKind::Type(Box::new(canonical), false),
+        arg.span,
+    )
 }
 
 /// Resolves a declaration's type and initializer operand. Returns the
