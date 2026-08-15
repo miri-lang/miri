@@ -130,6 +130,39 @@ pub fn miri_run_with_args(input: &str, args: &[&str]) -> CompilerResult {
     exec_miri("run", input, args)
 }
 
+/// Run Miri binary with 'run' command with an additional environment variable.
+/// Sets both the standard variables and the provided extra variable.
+pub fn miri_run_with_env(input: &str, env_var: &str, env_value: &str) -> CompilerResult {
+    use std::path::PathBuf;
+
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "{}", input).unwrap();
+    let path = file.path().to_str().unwrap().to_string();
+
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+
+    let mut cmd = miri_cmd();
+    cmd.env("RUST_BACKTRACE", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
+        .env(env_var, env_value)
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .arg("run")
+        .arg(&path);
+
+    let output = cmd.output().unwrap();
+
+    CompilerResult {
+        success: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
 /// Run a multi-file Miri project.
 ///
 /// `files` is a slice of `(relative_path, content)` pairs. The first file is

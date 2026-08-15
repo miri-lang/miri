@@ -52,3 +52,13 @@ runtime "core" fn miri_rt_test_simulate_closure_leak()
 /// when the process exits. Use in tests that verify the detector fires.
 public fn simulate_closure_leak()
     miri_rt_test_simulate_closure_leak()
+
+runtime "core" fn miri_rt_test_simulate_double_free()
+
+/// Frees one allocation twice.
+///
+/// Under MIRI_HEAP_GUARD the second release is trapped and the process aborts
+/// naming the allocation site and both free sites. Use in tests that verify the
+/// heap guard fires; without the guard this really does corrupt the heap.
+public fn simulate_double_free()
+    miri_rt_test_simulate_double_free()

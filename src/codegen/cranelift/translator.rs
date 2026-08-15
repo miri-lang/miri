@@ -1684,6 +1684,11 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Helper to call libc malloc, caching the FuncId across invocations.
+    ///
+    /// Every inline heap allocation compiled code makes — class instances,
+    /// tuples, `Option`s, enum payloads, closure environments — funnels through
+    /// here, so registering the result with the heap guard at this one point
+    /// covers them all and cannot be missed by a future caller.
     pub(crate) fn call_libc_malloc(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1701,7 +1706,55 @@ impl<'a> FunctionTranslator<'a> {
                 args: &[size],
             },
         )?;
-        Ok(builder.inst_results(inst)[0])
+        let raw_ptr = builder.inst_results(inst)[0];
+        // Emitted before the caller's own null check, so the runtime hook must
+        // treat a null pointer as a no-op.
+        Self::call_rt_class_alloc_track(builder, ctx, raw_ptr)?;
+        Ok(raw_ptr)
+    }
+
+    /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline `malloc`
+    /// with the heap guard.
+    pub(crate) fn call_rt_class_alloc_track(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::CLASS_ALLOC_TRACK,
+                param_types: &[ptr_type],
+                return_types: &[],
+                args: &[ptr],
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Calls `miri_rt_class_free_track(ptr)` so the heap guard witnesses an
+    /// inline `free` before compiled code performs it.
+    pub(crate) fn call_rt_class_free_track(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::CLASS_FREE_TRACK,
+                param_types: &[ptr_type],
+                return_types: &[],
+                args: &[ptr],
+            },
+        )?;
+        Ok(())
     }
 
     /// Helper to call libc free, caching the FuncId across invocations.
@@ -1722,6 +1775,11 @@ impl<'a> FunctionTranslator<'a> {
         let real_ptr = builder
             .ins()
             .load(ptr_type, MemFlags::new(), malloc_ptr_slot, 0);
+
+        // Every inline release funnels through here, so the guard witnesses the
+        // free at one point rather than at each `emit_drop_*` arm. It is keyed
+        // on the same allocation base the matching `malloc` reported.
+        Self::call_rt_class_free_track(builder, ctx, real_ptr)?;
 
         Self::call_cached_func(
             builder,

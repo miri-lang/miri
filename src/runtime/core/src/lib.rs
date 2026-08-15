@@ -20,6 +20,7 @@
 pub mod alloc;
 pub mod array;
 pub mod fs;
+pub mod guard;
 pub mod hash;
 pub mod io;
 pub mod list;

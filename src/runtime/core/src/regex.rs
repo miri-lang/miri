@@ -7,6 +7,7 @@
 //! the `regex` crate. Patterns are compiled once and cached in a thread-local
 //! slab to avoid recompilation overhead.
 
+use crate::guard;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -69,6 +70,7 @@ fn set_match_result(start: i64, end: i64) {
 /// - `pattern` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_compile(pattern: *const MiriString) -> i64 {
+    guard::guard_check(pattern as *mut u8);
     let pattern_str = if pattern.is_null() {
         "".to_string()
     } else {
@@ -149,6 +151,7 @@ pub extern "C" fn miri_rt_regex_compile_message() -> *mut MiriString {
 /// If the pattern fails to compile, indicating a compiler/runtime version mismatch.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_from_validated_pattern(pattern: *const MiriString) -> i64 {
+    guard::guard_check(pattern as *mut u8);
     let pattern_str = if pattern.is_null() {
         ""
     } else {
@@ -198,6 +201,7 @@ pub unsafe extern "C" fn miri_rt_regex_from_validated_pattern(pattern: *const Mi
 /// - `text` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_matches(handle: i64, text: *const MiriString) -> bool {
+    guard::guard_check(text as *mut u8);
     let text_str = if text.is_null() { "" } else { (*text).as_str() };
 
     REGEX_STATE.with(|state| {
@@ -221,6 +225,7 @@ pub unsafe extern "C" fn miri_rt_regex_matches(handle: i64, text: *const MiriStr
 /// - `text` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_find(handle: i64, text: *const MiriString) -> bool {
+    guard::guard_check(text as *mut u8);
     let text_str = if text.is_null() { "" } else { (*text).as_str() };
 
     let match_info = REGEX_STATE.with(|state| {
@@ -259,6 +264,7 @@ pub unsafe extern "C" fn miri_rt_regex_find_from(
     text: *const MiriString,
     from: i64,
 ) -> bool {
+    guard::guard_check(text as *mut u8);
     let text_str = if text.is_null() { "" } else { (*text).as_str() };
 
     if from < 0 || from as usize > text_str.len() {
@@ -323,6 +329,8 @@ pub unsafe extern "C" fn miri_rt_regex_replace(
     text: *const MiriString,
     replacement: *const MiriString,
 ) -> *mut MiriString {
+    guard::guard_check(text as *mut u8);
+    guard::guard_check(replacement as *mut u8);
     if handle < 0 {
         let text_str = if text.is_null() { "" } else { (*text).as_str() };
         return crate::string::into_raw_ptr(MiriString::from_str(text_str));

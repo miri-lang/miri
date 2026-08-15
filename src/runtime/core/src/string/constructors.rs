@@ -4,6 +4,7 @@
 //! FFI functions for creating, cloning, and freeing `MiriString` values.
 
 use super::{into_raw_ptr, MiriString};
+use crate::guard;
 use std::{slice, str};
 
 /// Creates a new empty string.
@@ -48,6 +49,10 @@ pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) ->
 /// - The pointer must not have been freed already (double-free is UB).
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
+// Deliberately unguarded at entry: a release path is reached precisely when the
+// RC has just fallen to zero, which the entry check reads as a corrupt header.
+// Double frees here are caught by `guard_free` inside `free_with_rc`, which
+// reports them with both free sites.
 pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
     if !ptr.is_null() {
         // Run the MiriString destructor to free the inner data buffer.
@@ -93,6 +98,7 @@ pub unsafe extern "C" fn miri_rt_string_decref_element(ptr: *mut u8) {
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_clone(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return miri_rt_string_new();
     }

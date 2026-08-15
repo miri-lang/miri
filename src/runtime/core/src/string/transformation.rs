@@ -8,6 +8,7 @@
 //! [`super::miri_rt_string_free`].
 
 use super::{into_raw_ptr, miri_rt_string_new, MiriString};
+use crate::guard;
 
 /// Concatenates two strings and returns a new string.
 ///
@@ -22,6 +23,8 @@ pub unsafe extern "C" fn miri_rt_string_concat(
     left: *const MiriString,
     right: *const MiriString,
 ) -> *mut MiriString {
+    guard::guard_check(left as *mut u8);
+    guard::guard_check(right as *mut u8);
     let left_len = if left.is_null() { 0 } else { (*left).len };
     let right_len = if right.is_null() { 0 } else { (*right).len };
 
@@ -64,6 +67,7 @@ pub unsafe extern "C" fn miri_rt_string_concat(
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_to_lower(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     transform_str(ptr, |s| s.to_lowercase())
 }
 
@@ -74,6 +78,7 @@ pub unsafe extern "C" fn miri_rt_string_to_lower(ptr: *const MiriString) -> *mut
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_to_upper(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     transform_str(ptr, |s| s.to_uppercase())
 }
 
@@ -84,6 +89,7 @@ pub unsafe extern "C" fn miri_rt_string_to_upper(ptr: *const MiriString) -> *mut
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     transform_str_ref(ptr, str::trim)
 }
 
@@ -94,6 +100,7 @@ pub unsafe extern "C" fn miri_rt_string_trim(ptr: *const MiriString) -> *mut Mir
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim_start(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     transform_str_ref(ptr, str::trim_start)
 }
 
@@ -104,6 +111,7 @@ pub unsafe extern "C" fn miri_rt_string_trim_start(ptr: *const MiriString) -> *m
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim_end(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     transform_str_ref(ptr, str::trim_end)
 }
 
@@ -120,6 +128,9 @@ pub unsafe extern "C" fn miri_rt_string_replace(
     from: *const MiriString,
     to: *const MiriString,
 ) -> *mut MiriString {
+    guard::guard_check(s as *mut u8);
+    guard::guard_check(from as *mut u8);
+    guard::guard_check(to as *mut u8);
     if s.is_null() {
         return miri_rt_string_new();
     }
@@ -152,6 +163,7 @@ pub unsafe extern "C" fn miri_rt_string_substring(
     start: usize,
     end: usize,
 ) -> *mut MiriString {
+    guard::guard_check(s as *mut u8);
     if s.is_null() {
         return miri_rt_string_new();
     }
@@ -180,6 +192,7 @@ pub unsafe extern "C" fn miri_rt_string_char_at(
     ptr: *const MiriString,
     index: usize,
 ) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return miri_rt_string_new();
     }
@@ -206,6 +219,7 @@ pub unsafe extern "C" fn miri_rt_string_repeat(
     ptr: *const MiriString,
     count: usize,
 ) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() || count == 0 {
         return miri_rt_string_new();
     }

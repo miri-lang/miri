@@ -30,6 +30,16 @@ pub mod rt {
     pub const CLOSURE_FREE_TRACK: &str = "miri_rt_closure_free_track";
     /// Test-only: simulates a closure leak to verify the MIRI_LEAK_CHECK detector.
     pub const CLOSURE_SIMULATE_LEAK: &str = "miri_rt_test_simulate_closure_leak";
+    /// Test-only: frees one allocation twice to verify the heap guard's
+    /// double-free trap.
+    pub const SIMULATE_DOUBLE_FREE: &str = "miri_rt_test_simulate_double_free";
+    /// Compiler-internal: registers an inline `malloc` with the heap guard, not
+    /// in stdlib. Covers class instances, tuples, Options, enum payloads and
+    /// closure environments, which codegen allocates without the runtime.
+    pub const CLASS_ALLOC_TRACK: &str = "miri_rt_class_alloc_track";
+    /// Compiler-internal: witnesses an inline `free` for the heap guard, not in
+    /// stdlib. Paired with [`CLASS_ALLOC_TRACK`].
+    pub const CLASS_FREE_TRACK: &str = "miri_rt_class_free_track";
 
     // ── Array ────────────────────────────────────────────────────────────────
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
@@ -251,6 +261,9 @@ pub mod rt {
         CLOSURE_ALLOC_TRACK,
         CLOSURE_FREE_TRACK,
         CLOSURE_SIMULATE_LEAK,
+        SIMULATE_DOUBLE_FREE,
+        CLASS_ALLOC_TRACK,
+        CLASS_FREE_TRACK,
         // Array
         ARRAY_NEW,
         ARRAY_FREE,
