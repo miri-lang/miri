@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::mir_snapshot_test;
+use crate::mir::utils::{mir_lower_code, mir_snapshot_test};
+use miri::ast::types::TypeKind;
 
 #[test]
 fn test_lower_variable_declaration() {
@@ -107,5 +108,26 @@ fn main()
                 return;
             }
         "#,
+    );
+}
+
+#[test]
+fn test_declared_optional_keeps_its_payload_type() {
+    // `Option<T>` written as a generic argument must reach MIR as the same type
+    // the inferred form produces. Left as `Custom("Option", [T])` the payload is
+    // invisible, and a drop frees the optional's own block without releasing
+    // what it holds.
+    let body = mir_lower_code(
+        r#"
+fn main()
+    let c Option<Option<int>> = Some(Some(42))
+"#,
+    );
+
+    let declared = &body.local_decls[1].ty.kind;
+    assert!(
+        matches!(declared, TypeKind::Option(inner) if matches!(inner.kind, TypeKind::Option(_))),
+        "the declared optional must carry its payload type: {:?}",
+        declared
     );
 }
