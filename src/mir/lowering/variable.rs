@@ -253,6 +253,27 @@ fn resolve_alias_target(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Typ
     current
 }
 
+/// A declared type in the form every later pass expects.
+///
+/// A type reaches lowering spelled the way it was written, while the rest of
+/// the pipeline reads the canonical form that inference produces. Two spellings
+/// diverge: an alias stands in for the type behind it, and an optional written
+/// as a generic argument keeps its payload inside a type-argument expression
+/// where nothing looks for it. Both leave a later pass reading a name instead of
+/// a type — which storage to give the value, which coercion its initializer
+/// needs, and whether the value is reference counted all then answer wrongly.
+fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
+    let resolved = resolve_alias_target(tc, ty);
+    let TypeKind::Custom(name, Some(args)) = &resolved.kind else {
+        return resolved;
+    };
+    if name != crate::ast::types::OPTION_TYPE_NAME || args.len() != 1 {
+        return resolved;
+    }
+    let payload = canonical_declared_type(tc, &resolve_type(tc, &args[0]));
+    Type::new(TypeKind::Option(Box::new(payload)), resolved.span)
+}
+
 /// Resolves a declaration's type and initializer operand. Returns the
 /// variable type, the initializer expression (borrowed from `decl`), and an
 /// already-lowered operand when type inference forced an early lowering.
@@ -263,7 +284,7 @@ fn resolve_decl_init<'d>(
 ) -> Result<(Type, Option<&'d Expression>, Option<Operand>), LoweringError> {
     if let Some(type_expr) = &decl.typ {
         let declared = resolve_type(ctx.type_checker, type_expr);
-        let ty = ctx.resolve_self_in(&resolve_alias_target(ctx.type_checker, &declared));
+        let ty = ctx.resolve_self_in(&canonical_declared_type(ctx.type_checker, &declared));
         return Ok((ty, decl.initializer.as_deref(), None));
     }
     let Some(init_expr) = decl.initializer.as_deref() else {
