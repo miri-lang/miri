@@ -132,12 +132,19 @@ impl MiriList {
                 .checked_mul(self.elem_size)
                 .unwrap_or_else(|| std::process::abort());
             match Layout::from_size_align(old_size, 8) {
-                Ok(old_layout) => unsafe { realloc(self.data, old_layout, new_size) },
+                Ok(old_layout) => unsafe {
+                    // `realloc` releases the old block when it moves, so the
+                    // guard must witness that free here; growing a list is not a
+                    // double free even though the same address may come back.
+                    crate::guard::guard_free_raw(self.data);
+                    realloc(self.data, old_layout, new_size)
+                },
                 Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
             }
         };
 
         if !new_data.is_null() {
+            crate::guard::guard_alloc_raw(new_data, crate::guard::AllocKind::Buffer);
             self.data = new_data;
             self.capacity = new_capacity;
         } else {
@@ -296,6 +303,7 @@ impl Drop for MiriList {
                 .unwrap_or_else(|| std::process::abort());
             if let Ok(layout) = Layout::from_size_align(size, 8) {
                 unsafe {
+                    crate::guard::guard_free_raw(self.data);
                     dealloc(self.data, layout);
                 }
             }
@@ -307,6 +315,7 @@ impl Drop for MiriList {
 pub mod ffi {
     use super::read_as_i64;
     use super::*;
+    use crate::guard;
     use std::alloc::{alloc, dealloc, Layout};
     use std::ptr;
 
@@ -437,6 +446,7 @@ pub mod ffi {
         };
         let data = alloc(layout);
         if !data.is_null() {
+            guard::guard_alloc_raw(data, guard::AllocKind::Buffer);
             (*list).data = data;
             (*list).capacity = capacity;
         }
@@ -447,6 +457,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_len(ptr: *const MiriList) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -457,6 +468,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_capacity(ptr: *const MiriList) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -467,6 +479,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 1;
         }
@@ -486,6 +499,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -498,6 +512,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -514,6 +529,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_get(ptr: *const MiriList, index: usize) -> *const u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr::null();
         }
@@ -524,6 +540,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) -> *mut u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr::null_mut();
         }
@@ -538,6 +555,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_set(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -569,6 +587,7 @@ pub mod ffi {
         index: usize,
         val: usize,
     ) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -609,6 +628,7 @@ pub mod ffi {
     /// Drop the element at `index` out of the list, releasing it only when the
     /// list still owns it after the removal.
     unsafe fn remove_at_index(ptr: *mut MiriList, index: usize, release_element: bool) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -646,6 +666,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_set_elem_drop_fn(ptr: *mut MiriList, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_drop_fn = fn_ptr;
         }
@@ -658,6 +679,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_set_elem_clone_fn(ptr: *mut MiriList, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_clone_fn = fn_ptr;
         }
@@ -709,6 +731,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_clear(ptr: *mut MiriList) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).clear();
         }
@@ -723,6 +746,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return miri_rt_list_new(0);
         }
@@ -775,6 +799,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_cow(ptr: *mut MiriList) -> *mut MiriList {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr;
         }
@@ -810,6 +835,7 @@ pub mod ffi {
                 .checked_mul(list.elem_size)
                 .unwrap_or_else(|| std::process::abort());
             let layout = Layout::from_size_align(size, 8).unwrap_or_else(|_| std::process::abort());
+            guard::guard_free_raw(list.data);
             dealloc(list.data, layout);
         }
         // Free the [RC][struct] block
@@ -821,6 +847,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_first(ptr: *const MiriList) -> *const u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() || (*ptr).is_empty() {
             return ptr::null();
         }
@@ -831,6 +858,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() || (*ptr).is_empty() {
             return ptr::null();
         }
@@ -843,6 +871,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -882,6 +911,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }

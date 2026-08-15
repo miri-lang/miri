@@ -7,6 +7,7 @@
 //! Boolean results are returned as `u8` (0 = false, 1 = true) for C compatibility.
 
 use super::{bool_to_ffi, deref_as_str, MiriString};
+use crate::guard;
 
 /// Returns the byte length of a string. Returns 0 for null pointers.
 ///
@@ -15,6 +16,7 @@ use super::{bool_to_ffi, deref_as_str, MiriString};
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_len(ptr: *const MiriString) -> usize {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return 0;
     }
@@ -30,6 +32,7 @@ pub unsafe extern "C" fn miri_rt_string_len(ptr: *const MiriString) -> usize {
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> usize {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return 0;
     }
@@ -43,6 +46,7 @@ pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> us
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_is_empty(ptr: *const MiriString) -> u8 {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return 1;
     }
@@ -61,6 +65,8 @@ pub unsafe extern "C" fn miri_rt_string_contains(
     haystack: *const MiriString,
     needle: *const MiriString,
 ) -> u8 {
+    guard::guard_check(haystack as *mut u8);
+    guard::guard_check(needle as *mut u8);
     if haystack.is_null() || needle.is_null() {
         return 0;
     }
@@ -79,6 +85,8 @@ pub unsafe extern "C" fn miri_rt_string_starts_with(
     s: *const MiriString,
     prefix: *const MiriString,
 ) -> u8 {
+    guard::guard_check(s as *mut u8);
+    guard::guard_check(prefix as *mut u8);
     if s.is_null() || prefix.is_null() {
         return 0;
     }
@@ -97,6 +105,8 @@ pub unsafe extern "C" fn miri_rt_string_ends_with(
     s: *const MiriString,
     suffix: *const MiriString,
 ) -> u8 {
+    guard::guard_check(s as *mut u8);
+    guard::guard_check(suffix as *mut u8);
     if s.is_null() || suffix.is_null() {
         return 0;
     }
@@ -112,6 +122,8 @@ pub unsafe extern "C" fn miri_rt_string_ends_with(
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const MiriString) -> u8 {
+    guard::guard_check(a as *mut u8);
+    guard::guard_check(b as *mut u8);
     let a_str = deref_as_str(a);
     let b_str = deref_as_str(b);
     bool_to_ffi(a_str == b_str)
@@ -126,6 +138,7 @@ pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const M
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_data(ptr: *const MiriString) -> *const u8 {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() {
         return std::ptr::null();
     }
@@ -146,6 +159,7 @@ pub unsafe extern "C" fn miri_rt_string_data(ptr: *const MiriString) -> *const u
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_code_at(ptr: *const MiriString, index: isize) -> isize {
+    guard::guard_check(ptr as *mut u8);
     if ptr.is_null() || index < 0 {
         return -1;
     }

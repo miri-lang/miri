@@ -31,6 +31,9 @@ pub fn assert_runs(code: &str) {
         if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
             panic!("Memory leak detected:\n{}", result.output());
         }
+        if result.stderr.contains("MIRI_HEAP_GUARD:") {
+            panic!("Heap guard reported a violation:\n{}", result.output());
+        }
         panic!(
             "Expected program to compile and run successfully, but it failed:\n{}",
             result.output()
@@ -52,6 +55,9 @@ pub fn assert_runs_with_output(code: &str, expected_output: &str) {
     if !result.success {
         if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
             panic!("Memory leak detected:\n{}", result.output());
+        }
+        if result.stderr.contains("MIRI_HEAP_GUARD:") {
+            panic!("Heap guard reported a violation:\n{}", result.output());
         }
         panic!(
             "Expected program to compile and run successfully, but it failed:\n{}",
@@ -78,6 +84,9 @@ pub fn assert_runs_with_args_and_output(code: &str, args: &[&str], expected_outp
     if !result.success {
         if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
             panic!("Memory leak detected:\n{}", result.output());
+        }
+        if result.stderr.contains("MIRI_HEAP_GUARD:") {
+            panic!("Heap guard reported a violation:\n{}", result.output());
         }
         panic!(
             "Expected program to compile and run successfully with args {:?}, but it failed:\n{}",
@@ -231,6 +240,66 @@ pub fn assert_runtime_crash(code: &str) {
     }
 }
 
+/// Assert that the code compiles and runs cleanly under MIRI_HEAP_GUARD=1.
+///
+/// The heap guard sanitizer must not produce any error output for correct code.
+pub fn assert_heap_guard_ok(code: &str) {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
+
+    if !result.success {
+        panic!(
+            "Expected program to run successfully under heap guard, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    // Guard error output starts with "MIRI_HEAP_GUARD:"
+    if result.stderr.contains("MIRI_HEAP_GUARD:") {
+        panic!(
+            "Expected no heap guard errors, but got:\n{}",
+            result.output()
+        );
+    }
+}
+
+/// Assert that running `code` under `MIRI_HEAP_GUARD=1` trips the guard, and
+/// that its report contains every fragment in `expected_fragments`.
+///
+/// The counterpart to [`assert_heap_guard_ok`]: that one proves the guard stays
+/// silent on correct code, this one proves it actually fires. Without both, a
+/// guard that never activates would look indistinguishable from a clean run.
+pub fn assert_heap_guard_detects(code: &str, expected_fragments: &[&str]) {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
+
+    if result.success {
+        panic!(
+            "Expected the heap guard to abort the program, but it exited successfully:\n{}",
+            result.output()
+        );
+    }
+
+    if !result.stderr.contains("MIRI_HEAP_GUARD:") {
+        panic!(
+            "Expected a MIRI_HEAP_GUARD report in stderr, but got:\n{}",
+            result.output()
+        );
+    }
+
+    for fragment in expected_fragments {
+        if !result.stderr.contains(fragment) {
+            panic!(
+                "Expected heap guard report to contain '{}', but got:\n{}",
+                fragment,
+                result.output()
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multi-file project helpers
 //
@@ -247,6 +316,9 @@ pub fn assert_project_runs(files: &[(&str, &str)]) {
         if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
             panic!("Memory leak detected:\n{}", result.output());
         }
+        if result.stderr.contains("MIRI_HEAP_GUARD:") {
+            panic!("Heap guard reported a violation:\n{}", result.output());
+        }
         panic!(
             "Expected project to compile and run successfully, but it failed:\n{}",
             result.output()
@@ -262,6 +334,9 @@ pub fn assert_project_runs_with_output(files: &[(&str, &str)], expected_output: 
     if !result.success {
         if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
             panic!("Memory leak detected:\n{}", result.output());
+        }
+        if result.stderr.contains("MIRI_HEAP_GUARD:") {
+            panic!("Heap guard reported a violation:\n{}", result.output());
         }
         panic!(
             "Expected project to compile and run successfully, but it failed:\n{}",

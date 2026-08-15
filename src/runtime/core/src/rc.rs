@@ -16,6 +16,8 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
+use crate::guard::{guard_alloc, guard_free, report_and_abort, AllocKind, FreeVerdict};
+
 /// Size of the reference count header, in bytes.
 /// Matches `ptr_type.bytes()` in the Cranelift codegen.
 pub const RC_HEADER_SIZE: usize = std::mem::size_of::<usize>();
@@ -73,9 +75,15 @@ extern "C" fn leak_check_at_exit() {
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
 ///
+/// `#[track_caller]` so the heap guard records the *calling intrinsic's*
+/// `file:line` (e.g. `list.rs:403`) rather than this function's own location.
+/// Without it every allocation in the program shares one site and the guard's
+/// leak report cannot attribute anything.
+///
 /// # Safety
 /// The caller must ensure that `payload_size` together with the reference count
 /// header fits in a valid memory layout.
+#[track_caller]
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_leak_check_registered();
 
@@ -95,7 +103,14 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
 
     RC_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
 
-    base.add(RC_HEADER_SIZE)
+    let payload_ptr = base.add(RC_HEADER_SIZE);
+
+    // The kind is inferred by the guard from the tracked caller's source file,
+    // since this shared entry point serves every collection and string. Passing
+    // an explicit kind here would require a parameter at all six call sites.
+    guard_alloc(payload_ptr, payload_size, AllocKind::Unknown);
+
+    payload_ptr
 }
 
 /// Increments the RC of a managed heap object.
@@ -118,20 +133,45 @@ pub unsafe fn incref(ptr: *mut u8) {
 
 /// Frees the `[RC][payload]` block given a pointer to the payload.
 ///
+/// `#[track_caller]` for the same reason as [`alloc_with_rc`]: the guard records
+/// the freeing intrinsic's `file:line`, which is what names the two free sites in
+/// a double-free report.
+///
 /// # Safety
 /// `payload_ptr` must have been allocated via `alloc_with_rc` and `payload_size`
 /// must be the same as was used during allocation.
+#[track_caller]
 pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     if payload_ptr.is_null() {
         return;
     }
 
+    // Check with the heap guard (if enabled). The fatal verdicts report and
+    // diverge, so a double-freed block is never released a second time.
+    let verdict = guard_free(payload_ptr);
+
+    if matches!(
+        verdict,
+        FreeVerdict::DoubleFree | FreeVerdict::WriteAfterFree
+    ) {
+        report_and_abort(verdict, payload_ptr as usize);
+    }
+
+    // Always decrement the balance counter.
+    RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
+
+    // Only deallocate if the guard didn't quarantine the block.
+    if verdict == FreeVerdict::Quarantine {
+        // Block is quarantined; the guard will deallocate it later.
+        return;
+    }
+
+    // Guard is disabled, returned DeallocNow, or the block was untracked.
+    // Deallocate immediately.
     let base = payload_ptr.sub(RC_HEADER_SIZE);
     let total_size = RC_HEADER_SIZE + payload_size;
     let layout = Layout::from_size_align(total_size, 8).unwrap_or_else(|_| std::process::abort());
     dealloc(base, layout);
-
-    RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
 }
 
 /// Records that a closure heap allocation has been made.
@@ -173,6 +213,62 @@ pub unsafe extern "C" fn miri_rt_closure_free_track() {
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
     ensure_leak_check_registered();
     CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Records a raw `libc::malloc` made by compiled code with the heap guard.
+///
+/// Class instances, tuples, `Option`s, enum payloads and closure environments
+/// are allocated inline by codegen rather than through [`alloc_with_rc`], so
+/// they never reach the guard's shadow table on their own. Codegen emits a call
+/// to this right after the malloc, mirroring the existing
+/// `miri_rt_closure_alloc_track` pattern.
+///
+/// `ptr` is the raw allocation base, which is also what `free` later receives —
+/// keeping both sides of the pair keyed identically.
+///
+/// # Safety
+/// `ptr` must be the pointer just returned by `malloc`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
+    ensure_leak_check_registered();
+    // Codegen emits this before its own null check, so a failed malloc arrives
+    // here as null and must be ignored rather than recorded.
+    crate::guard::guard_alloc_raw(ptr, AllocKind::Class);
+}
+
+/// Records that compiled code is about to `libc::free` a raw allocation.
+///
+/// The counterpart to [`miri_rt_class_alloc_track`]. Codegen frees the memory
+/// itself, so unlike the runtime's own release path this block cannot be
+/// quarantined; the guard still detects a double free and attributes the leak.
+///
+/// # Safety
+/// `ptr` must be the allocation base about to be passed to `free`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
+    crate::guard::guard_free_raw(ptr);
+}
+
+/// Frees the same allocation twice, to verify the heap guard's double-free trap.
+///
+/// With `MIRI_HEAP_GUARD=1` the second release is caught and the process aborts
+/// naming the allocation site and both free sites. With the guard off this is a
+/// genuine double free, so it exists purely so a test can prove the trap fires;
+/// the counter-based leak check cannot see this class of bug at all, which is
+/// the reason the guard exists.
+///
+/// # Safety
+/// This function is for testing only. Without the guard enabled it corrupts the
+/// heap by design; never call it from production code.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_double_free() {
+    let payload_size = 32;
+    let ptr = alloc_with_rc(payload_size);
+    if ptr.is_null() {
+        return;
+    }
+    free_with_rc(ptr, payload_size);
+    free_with_rc(ptr, payload_size);
 }
 
 #[cfg(test)]

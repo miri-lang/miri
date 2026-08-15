@@ -135,7 +135,9 @@ impl MiriSet {
         let data_layout =
             Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
         self.states = alloc_zeroed(states_layout);
+        crate::guard::guard_alloc_raw(self.states, crate::guard::AllocKind::Buffer);
         self.data = alloc_zeroed(data_layout);
+        crate::guard::guard_alloc_raw(self.data, crate::guard::AllocKind::Buffer);
         self.capacity = capacity;
     }
 
@@ -169,6 +171,7 @@ impl MiriSet {
         if !states.is_null() && capacity > 0 {
             let states_layout =
                 Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
+            crate::guard::guard_free_raw(states);
             dealloc(states, states_layout);
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
@@ -177,6 +180,7 @@ impl MiriSet {
                 .unwrap_or_else(|| std::process::abort());
             let data_layout =
                 Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
+            crate::guard::guard_free_raw(data);
             dealloc(data, data_layout);
         }
     }
@@ -201,6 +205,7 @@ impl MiriSet {
 /// Stable FFI interface for set operations.
 pub mod ffi {
     use super::*;
+    use crate::guard;
     use std::ptr;
 
     /// Creates a new empty set with the given element size.
@@ -232,6 +237,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_set_elem_drop_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_drop_fn = fn_ptr;
         }
@@ -244,6 +250,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_set_elem_clone_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_clone_fn = fn_ptr;
         }
@@ -253,6 +260,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_len(ptr: *const MiriSet) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -263,6 +271,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_is_empty(ptr: *const MiriSet) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 1;
         }
@@ -281,6 +290,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -296,6 +306,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -312,6 +323,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -338,6 +350,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_clear(ptr: *mut MiriSet) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -367,6 +380,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_element_at(ptr: *const MiriSet, index: usize) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -421,6 +435,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_clone(ptr: *const MiriSet) -> *mut MiriSet {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return miri_rt_set_new(0);
         }
@@ -468,6 +483,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_cow(ptr: *mut MiriSet) -> *mut MiriSet {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr;
         }

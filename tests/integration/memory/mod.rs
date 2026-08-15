@@ -12,6 +12,7 @@ pub mod escape_analysis;
 pub mod field_projections;
 pub mod functions;
 pub mod generics;
+pub mod heap_guard;
 pub mod loops;
 pub mod match_arms;
 pub mod method_arg_temps;

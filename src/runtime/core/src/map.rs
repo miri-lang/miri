@@ -205,17 +205,23 @@ impl MiriMap {
         if states.is_null() {
             return None;
         }
+        crate::guard::guard_alloc_raw(states, crate::guard::AllocKind::Buffer);
         let keys = alloc_zeroed(keys_layout);
         if keys.is_null() {
+            crate::guard::guard_free_raw(states);
             dealloc(states, states_layout);
             return None;
         }
+        crate::guard::guard_alloc_raw(keys, crate::guard::AllocKind::Buffer);
         let values = alloc_zeroed(values_layout);
         if values.is_null() {
+            crate::guard::guard_free_raw(states);
             dealloc(states, states_layout);
+            crate::guard::guard_free_raw(keys);
             dealloc(keys, keys_layout);
             return None;
         }
+        crate::guard::guard_alloc_raw(values, crate::guard::AllocKind::Buffer);
 
         Some((states, keys, values))
     }
@@ -234,12 +240,14 @@ impl MiriMap {
         }
         if !states.is_null() {
             if let Ok(layout) = Layout::from_size_align(capacity, 1) {
+                crate::guard::guard_free_raw(states);
                 dealloc(states, layout);
             }
         }
         if !keys.is_null() {
             if let Some(key_total) = capacity.checked_mul(key_size) {
                 if let Ok(layout) = Layout::from_size_align(key_total, 8) {
+                    crate::guard::guard_free_raw(keys);
                     dealloc(keys, layout);
                 }
             }
@@ -247,6 +255,7 @@ impl MiriMap {
         if !values.is_null() {
             if let Some(val_total) = capacity.checked_mul(value_size.max(1)) {
                 if let Ok(layout) = Layout::from_size_align(val_total, 8) {
+                    crate::guard::guard_free_raw(values);
                     dealloc(values, layout);
                 }
             }
@@ -471,6 +480,7 @@ impl Drop for MiriMap {
 /// Stable FFI interface for map operations.
 pub mod ffi {
     use super::*;
+    use crate::guard;
     use std::ptr;
 
     /// Creates a new empty map with the given key/value sizes and key kind.
@@ -508,6 +518,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_len(ptr: *const MiriMap) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -518,6 +529,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 1;
         }
@@ -535,6 +547,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: usize, value: usize) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -551,6 +564,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: usize) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -570,6 +584,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: usize) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             eprintln!("Runtime error: map index on null map");
             std::process::abort();
@@ -590,6 +605,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -607,6 +623,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -622,6 +639,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_clear(ptr: *mut MiriMap) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).clear();
         }
@@ -635,6 +653,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_set_val_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).val_drop_fn = fn_ptr;
         }
@@ -648,6 +667,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_set_key_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).key_drop_fn = fn_ptr;
         }
@@ -661,6 +681,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_set_val_clone_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).val_clone_fn = fn_ptr;
         }
@@ -677,6 +698,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_set_key_kind(ptr: *mut MiriMap, key_kind: usize) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -695,6 +717,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_key_at(ptr: *const MiriMap, nth: usize) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -719,6 +742,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_value_at(ptr: *const MiriMap, nth: usize) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -781,6 +805,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_clone(ptr: *const MiriMap) -> *mut MiriMap {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return miri_rt_map_new(0, 0, 0);
         }
@@ -842,6 +867,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_cow(ptr: *mut MiriMap) -> *mut MiriMap {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr;
         }

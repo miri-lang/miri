@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 
 use super::{into_raw_ptr, MiriString};
+use crate::guard;
 use crate::list::MiriList;
 
 thread_local! {
@@ -58,6 +59,8 @@ pub unsafe extern "C" fn miri_rt_string_split(
     s: *const MiriString,
     separator: *const MiriString,
 ) -> *mut MiriList {
+    guard::guard_check(s as *mut u8);
+    guard::guard_check(separator as *mut u8);
     let s_str = if s.is_null() { "" } else { (*s).as_str() };
     let sep_str = if separator.is_null() {
         ""
@@ -114,6 +117,7 @@ pub unsafe extern "C" fn miri_rt_string_join(
     separator: *const MiriString,
     parts: *const MiriList,
 ) -> *mut MiriString {
+    guard::guard_check(separator as *mut u8);
     let sep_str = if separator.is_null() {
         ""
     } else {
@@ -164,6 +168,7 @@ pub unsafe extern "C" fn miri_rt_string_join(
 /// - `s` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_string_parse_int(s: *const MiriString) -> i64 {
+    guard::guard_check(s as *mut u8);
     let s_str = if s.is_null() { "" } else { (*s).as_str() };
 
     match s_str.parse::<i64>() {
@@ -189,6 +194,7 @@ pub unsafe extern "C" fn miri_rt_string_parse_int(s: *const MiriString) -> i64 {
 /// - `s` must be a valid `MiriString` pointer or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_string_parse_float(s: *const MiriString) -> f64 {
+    guard::guard_check(s as *mut u8);
     let s_str = if s.is_null() { "" } else { (*s).as_str() };
 
     match s_str.parse::<f64>() {
@@ -216,6 +222,7 @@ pub unsafe extern "C" fn miri_rt_string_next_char_boundary(
     s: *const MiriString,
     byte_pos: i64,
 ) -> i64 {
+    guard::guard_check(s as *mut u8);
     let s_str = if s.is_null() { "" } else { (*s).as_str() };
     let len = s_str.len() as i64;
 

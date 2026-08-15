@@ -76,6 +76,7 @@ impl Drop for MiriArray {
         if !self.data.is_null() && self.elem_count > 0 && self.elem_size > 0 {
             if let Ok(layout) = Layout::from_size_align(self.byte_len(), 8) {
                 unsafe {
+                    crate::guard::guard_free_raw(self.data);
                     dealloc(self.data, layout);
                 }
             }
@@ -86,6 +87,7 @@ impl Drop for MiriArray {
 /// Stable FFI interface for array operations.
 pub mod ffi {
     use super::*;
+    use crate::guard;
     use crate::list::MiriList;
     use std::ptr;
 
@@ -129,6 +131,7 @@ pub mod ffi {
                 }
             };
             let data = alloc_zeroed(layout);
+            crate::guard::guard_alloc_raw(data, crate::guard::AllocKind::Buffer);
             (*arr).data = data;
             (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
         } else {
@@ -171,6 +174,7 @@ pub mod ffi {
             }
             let layout = Layout::from_size_align(arr.byte_len(), 8)
                 .unwrap_or_else(|_| std::process::abort());
+            crate::guard::guard_free_raw(arr.data);
             dealloc(arr.data, layout);
         }
         // Free the [RC][struct] block
@@ -211,6 +215,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_set_elem_drop_fn(ptr: *mut MiriArray, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_drop_fn = fn_ptr;
         }
@@ -223,6 +228,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_set_elem_clone_fn(ptr: *mut MiriArray, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_clone_fn = fn_ptr;
         }
@@ -232,6 +238,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return 0;
         }
@@ -244,6 +251,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_get(ptr: *const MiriArray, index: usize) -> *const u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr::null();
         }
@@ -260,6 +268,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_get_mut(ptr: *mut MiriArray, index: usize) -> *mut u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr::null_mut();
         }
@@ -283,6 +292,7 @@ pub mod ffi {
         index: usize,
         elem: *const u8,
     ) -> u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() || elem.is_null() {
             return 0;
         }
@@ -328,6 +338,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() || elem.is_null() {
             return;
         }
@@ -360,6 +371,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return miri_rt_array_new(0, 0);
         }
@@ -407,6 +419,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return;
         }
@@ -445,6 +458,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_data(ptr: *const MiriArray) -> *const u8 {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr::null();
         }
@@ -457,6 +471,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut MiriList {
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return crate::miri_rt_list_new(0);
         }
