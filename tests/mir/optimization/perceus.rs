@@ -754,6 +754,52 @@ fn read_name(h Holder) String:
 }
 
 #[test]
+fn test_lowered_alias_to_tuple_is_still_released() {
+    // A declared type reaches lowering spelled as written, so an alias arrives
+    // as its own name with nothing to say the value behind it is heap
+    // allocated. Resolving the alias is what lets the RC pass see the tuple;
+    // without it the block the aggregate allocated is never released.
+    let source = r#"
+type Pair is (int, int)
+
+fn probe()
+    let p Pair = (1, 2)
+"#;
+    let body = lowered_with_rc(source, "probe");
+
+    assert!(
+        all_statements(&body)
+            .iter()
+            .any(|kind| matches!(kind, StatementKind::DecRef(_))),
+        "the aliased tuple must be released: {:?}",
+        all_statements(&body)
+    );
+}
+
+#[test]
+fn test_lowered_alias_to_primitive_is_not_reference_counted() {
+    // The complement, and the reason resolving the alias cannot be skipped in
+    // either direction: an alias to a bare integer allocates nothing, so
+    // emitting RC ops for it would release a value that was never a heap
+    // object.
+    let source = r#"
+type Meters is int
+
+fn probe()
+    let m Meters = 5
+"#;
+    let body = lowered_with_rc(source, "probe");
+
+    assert!(
+        !all_statements(&body)
+            .iter()
+            .any(|kind| matches!(kind, StatementKind::DecRef(_))),
+        "an aliased integer must not be released: {:?}",
+        all_statements(&body)
+    );
+}
+
+#[test]
 fn test_lowered_string_reassignment_decrefs_the_replaced_value() {
     let source = r#"
 fn revive() String:
