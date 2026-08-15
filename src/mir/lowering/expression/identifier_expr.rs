@@ -36,27 +36,39 @@ pub(crate) fn lower_identifier_expr(
 
 /// Lower a reference to a local variable: copy into `dest`, else Move/Copy per
 /// the variable's auto-copy semantics.
+///
+/// An aggregate that assigns bitwise is rebuilt rather than referenced, so the
+/// result is independent of the variable it came from.
 fn lower_local_identifier(
     ctx: &mut LoweringContext,
     local: crate::mir::Local,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let ty = ctx.body.local_decls[local.0].ty.clone();
+    let source = Place::new(local);
+
     if let Some(d) = dest {
+        if let Some(operand) =
+            super::value_copy::copy_value_aggregate(ctx, &source, &ty, Some(d.clone()), expr.span)?
+        {
+            return Ok(operand);
+        }
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                d.clone(),
-                Rvalue::Use(Operand::Copy(Place::new(local))),
-            ),
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(source))),
             span: expr.span,
         });
         return Ok(Operand::Copy(d));
     }
-    let ty = ctx.body.local_decls[local.0].ty.clone();
+    if let Some(operand) =
+        super::value_copy::copy_value_aggregate(ctx, &source, &ty, None, expr.span)?
+    {
+        return Ok(operand);
+    }
     if ctx.is_type_auto_copy(&ty) {
-        Ok(Operand::Copy(Place::new(local)))
+        Ok(Operand::Copy(source))
     } else {
-        Ok(Operand::Move(Place::new(local)))
+        Ok(Operand::Move(source))
     }
 }
 

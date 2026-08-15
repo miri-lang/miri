@@ -25,7 +25,7 @@ pub struct Perceus;
 /// while iterating over `basic_blocks` mutably.
 struct PerceusContext<'a> {
     local_decls: &'a [crate::mir::LocalDecl],
-    auto_copy_types: &'a std::collections::HashSet<String>,
+    unmanaged_type_names: &'a std::collections::HashSet<String>,
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
@@ -63,7 +63,7 @@ impl OptimizationPass for Perceus {
         let Body {
             ref mut basic_blocks,
             ref local_decls,
-            ref auto_copy_types,
+            ref unmanaged_type_names,
             ref field_types,
             ref type_params,
             ref closure_capture_types,
@@ -73,7 +73,7 @@ impl OptimizationPass for Perceus {
 
         let ctx = PerceusContext {
             local_decls,
-            auto_copy_types,
+            unmanaged_type_names,
             field_types,
             type_params,
             closure_capture_types,
@@ -108,7 +108,7 @@ impl Perceus {
                 *i > body.arg_count
                     && decl
                         .mir_ty
-                        .is_managed(&body.auto_copy_types, &body.type_params)
+                        .is_managed(&body.unmanaged_type_names, &body.type_params)
             })
             .map(|(i, _)| crate::mir::Local(i))
             .collect()
@@ -199,7 +199,7 @@ impl Perceus {
             if is_place_managed(
                 &param_place,
                 ctx.local_decls,
-                ctx.auto_copy_types,
+                ctx.unmanaged_type_names,
                 ctx.field_types,
                 ctx.type_params,
                 ctx.closure_capture_types,
@@ -268,7 +268,7 @@ impl Perceus {
         if is_place_managed(
             source,
             ctx.local_decls,
-            ctx.auto_copy_types,
+            ctx.unmanaged_type_names,
             ctx.field_types,
             ctx.type_params,
             ctx.closure_capture_types,
@@ -302,7 +302,7 @@ impl Perceus {
                 if is_place_managed(
                     place,
                     ctx.local_decls,
-                    ctx.auto_copy_types,
+                    ctx.unmanaged_type_names,
                     ctx.field_types,
                     ctx.type_params,
                     ctx.closure_capture_types,
@@ -333,7 +333,7 @@ impl Perceus {
                 .iter()
                 .any(|e| matches!(e, PlaceElem::Field(_)))
                 && MirType::from_type_kind(&target_ty.kind)
-                    .is_managed(ctx.auto_copy_types, ctx.type_params)
+                    .is_managed(ctx.unmanaged_type_names, ctx.type_params)
             {
                 new_stmts.push(Statement {
                     kind: StatementKind::IncRef(place.clone()),
@@ -352,7 +352,7 @@ impl Perceus {
             && is_place_managed(
                 lhs,
                 ctx.local_decls,
-                ctx.auto_copy_types,
+                ctx.unmanaged_type_names,
                 ctx.field_types,
                 ctx.type_params,
                 ctx.closure_capture_types,
@@ -414,7 +414,7 @@ fn get_move_from_param_place(rvalue: &Rvalue, arg_count: usize) -> Option<Place>
 fn is_place_managed(
     place: &Place,
     local_decls: &[crate::mir::LocalDecl],
-    auto_copy_types: &std::collections::HashSet<String>,
+    unmanaged_type_names: &std::collections::HashSet<String>,
     field_types: &std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &std::collections::HashSet<String>,
     closure_capture_types: &std::collections::HashMap<
@@ -472,5 +472,5 @@ fn is_place_managed(
         current = next;
     }
 
-    current.is_managed(auto_copy_types, type_params)
+    current.is_managed(unmanaged_type_names, type_params)
 }

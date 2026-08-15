@@ -103,8 +103,8 @@ impl<'a> LoweringContext<'a> {
         type_checker: &'a crate::type_checker::TypeChecker,
         is_release: bool,
     ) -> Self {
-        // Pre-compute auto-copy type set from type definitions
-        body.auto_copy_types = Self::compute_auto_copy_types(type_checker);
+        // Pre-compute the custom names that never denote a heap object.
+        body.unmanaged_type_names = Self::compute_unmanaged_type_names(type_checker);
         // Pre-compute field type map for struct/class types (used by Perceus to resolve
         // Field(i) projections without access to the type checker at optimization time).
         body.field_types = Self::compute_field_types(type_checker);
@@ -501,7 +501,11 @@ impl<'a> LoweringContext<'a> {
     /// Returns `true` if `kind` requires reference-count management.
     /// Delegates to the single authority in `crate::mir::rc::is_managed_type`.
     pub fn is_perceus_managed(&self, kind: &crate::ast::types::TypeKind) -> bool {
-        crate::mir::rc::is_managed_type(kind, &self.body.auto_copy_types, &self.body.type_params)
+        crate::mir::rc::is_managed_type(
+            kind,
+            &self.body.unmanaged_type_names,
+            &self.body.type_params,
+        )
     }
 
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`
@@ -553,18 +557,31 @@ impl<'a> LoweringContext<'a> {
         crate::type_checker::utils::is_auto_copy(&ty.kind, self.type_checker.type_definitions())
     }
 
-    /// Computes the set of custom type names that qualify as auto-copy.
-    fn compute_auto_copy_types(
+    /// Computes the set of custom type names that never denote a heap object.
+    ///
+    /// A type alias keeps its own name all the way into MIR, so `type Meters is
+    /// int` arrives as `Custom("Meters")` with nothing to tell the RC pass that
+    /// the value behind it is a bare integer. Collecting those names here lets
+    /// `is_managed_type` answer correctly without resolving aliases itself.
+    /// An alias to a managed type is left out, so it keeps its RC treatment.
+    fn compute_unmanaged_type_names(
         type_checker: &crate::type_checker::TypeChecker,
     ) -> std::collections::HashSet<String> {
-        let mut auto_copy = std::collections::HashSet::new();
-        for name in type_checker.type_definitions().keys() {
+        let definitions = type_checker.type_definitions();
+        let mut unmanaged = std::collections::HashSet::new();
+        for (name, definition) in definitions {
+            if !matches!(
+                definition,
+                crate::type_checker::context::TypeDefinition::Alias(_)
+            ) {
+                continue;
+            }
             let kind = crate::ast::types::TypeKind::Custom(name.clone(), None);
-            if crate::type_checker::utils::is_auto_copy(&kind, type_checker.type_definitions()) {
-                auto_copy.insert(name.clone());
+            if crate::type_checker::utils::is_auto_copy(&kind, definitions) {
+                unmanaged.insert(name.clone());
             }
         }
-        auto_copy
+        unmanaged
     }
 
     /// Builds the set of type names that declare a `fn drop(self)` destructor.

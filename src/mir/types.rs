@@ -179,7 +179,7 @@ impl MirType {
     /// [`MirType`] values, avoiding any AST traversal.
     pub fn is_managed(
         &self,
-        auto_copy_types: &HashSet<String>,
+        unmanaged_type_names: &HashSet<String>,
         type_params: &HashSet<String>,
     ) -> bool {
         match self {
@@ -196,13 +196,13 @@ impl MirType {
             MirType::Function => true,
             // Generic parameters and unknown types are never managed.
             MirType::Generic | MirType::Unknown => false,
-            // Custom (user-defined) types: managed unless they are in the auto-copy
-            // set, are unresolved generic placeholders, or are reserved names.
+            // Custom (user-defined) types: managed unless they are unresolved
+            // generic placeholders or reserved names.
             // Also exclude unresolved collection class names (e.g. Custom("List"))
             // that appear in stdlib method signatures.
             MirType::Custom(name) => {
                 name != "Self"
-                    && !auto_copy_types.contains(name.as_str())
+                    && !unmanaged_type_names.contains(name.as_str())
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
                     && crate::ast::types::vec_dim(name.as_str()).is_none()

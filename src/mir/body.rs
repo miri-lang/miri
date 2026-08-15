@@ -39,10 +39,19 @@ pub struct Body {
     pub execution_model: ExecutionModel,
     /// Backend-specific metadata. None for CPU functions.
     pub backend_metadata: Option<BackendMetadata>,
-    /// Names of custom types that have auto-copy semantics (all fields are
-    /// primitive or other auto-copy types, and total size <= `AUTO_COPY_MAX_SIZE`).
-    /// These types use bitwise copy on assignment and do not need RC.
-    pub auto_copy_types: HashSet<String>,
+    /// Names of custom types that never denote a heap object, and so are never
+    /// reference counted.
+    ///
+    /// These are type aliases that resolve to an unmanaged type: `type Meters is
+    /// int` reaches MIR as `Custom("Meters")`, but the value behind it is a bare
+    /// integer with no allocation to release. Aliases to a managed type (`type ID
+    /// is String`) are absent from this set and stay managed.
+    ///
+    /// Auto-copy structs and enums are deliberately NOT listed here. They are
+    /// heap-allocated like any other aggregate, so they need releasing; their
+    /// bitwise-copy semantics are a question about assignment, decided separately
+    /// at lowering.
+    pub unmanaged_type_names: HashSet<String>,
     /// Maps struct/class type names to their ordered field types (in layout order).
     /// Used by Perceus to resolve `Field(i)` place projections and determine
     /// whether the projected field is a managed type.
@@ -99,7 +108,7 @@ impl Body {
             span,
             execution_model,
             backend_metadata: None,
-            auto_copy_types: HashSet::new(),
+            unmanaged_type_names: HashSet::new(),
             field_types: HashMap::new(),
             env_capture_locals: Vec::new(),
             type_params: HashSet::new(),

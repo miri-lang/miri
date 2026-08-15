@@ -573,13 +573,15 @@ fn test_monomorphized_class_place_is_increfd() {
 }
 
 #[test]
-fn test_auto_copy_custom_type_gets_no_rc_ops() {
+fn test_unmanaged_type_name_gets_no_rc_ops() {
+    // A type alias to a primitive keeps its own name into MIR (`type Meters is
+    // int` arrives as Custom("Meters")), but there is no allocation behind it.
     let mut body = body_with(
-        &[ty(TypeKind::Void), custom("Point"), custom("Point")],
+        &[ty(TypeKind::Void), custom("Meters"), custom("Meters")],
         0,
         vec![assign(place(2), use_copy(place(1))), storage_dead(place(2))],
     );
-    body.auto_copy_types.insert("Point".to_string());
+    body.unmanaged_type_names.insert("Meters".to_string());
 
     assert_eq!(
         rc_statements(&mut body),
@@ -587,7 +589,30 @@ fn test_auto_copy_custom_type_gets_no_rc_ops() {
             StatementKind::Assign(place(2), use_copy(place(1))),
             StatementKind::StorageDead(place(2)),
         ],
-        "auto-copy types are copied bitwise and never reference counted"
+        "a name with no heap object behind it is never reference counted"
+    );
+}
+
+#[test]
+fn test_auto_copy_struct_is_reference_counted() {
+    // An auto-copy struct is copied bitwise on assignment, but it is still a
+    // heap-allocated aggregate, so its storage must be released. Excluding it
+    // from RC left it allocated with nothing to free it.
+    let mut body = body_with(
+        &[ty(TypeKind::Void), custom("Point"), custom("Point")],
+        0,
+        vec![assign(place(2), use_copy(place(1))), storage_dead(place(2))],
+    );
+
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![
+            StatementKind::IncRef(place(1)),
+            StatementKind::Assign(place(2), use_copy(place(1))),
+            StatementKind::DecRef(place(2)),
+            StatementKind::StorageDead(place(2)),
+        ],
+        "an aggregate that is heap-allocated must also be released"
     );
 }
 
