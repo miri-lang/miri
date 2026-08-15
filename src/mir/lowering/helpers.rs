@@ -435,8 +435,13 @@ fn assign_expr_to_local(
         kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand.clone())),
         span: expr.span,
     });
+    // Reading a field out of a freshly built aggregate leaves the aggregate
+    // itself with no other reference, so the base local is dropped even when the
+    // value taken from it is a projection. `emit_temp_drop` still refuses to
+    // touch anything older than the watermark, which is what keeps a match-arm
+    // binding or an enclosing variable from being released here.
     if let Operand::Copy(p) | Operand::Move(p) = &operand {
-        if p.local != target_local && p.projection.is_empty() {
+        if p.local != target_local {
             ctx.emit_temp_drop(p.local, watermark, expr.span);
         }
     }
