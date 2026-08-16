@@ -1,4 +1,4 @@
-# The Miri Programming Language
+# Miri — a GPU-first programming language
 
 <p align="center">
   <img src="banner.png"/>
