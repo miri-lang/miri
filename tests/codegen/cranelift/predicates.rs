@@ -2,7 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::expression::{Expression, ExpressionKind};
-use miri::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use miri::ast::types::{
+    BuiltinCollectionKind, Type, TypeKind, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+};
 use miri::codegen::cranelift::translator::ElementShape;
 use miri::codegen::cranelift::FunctionTranslator;
 use miri::error::syntax::Span;
@@ -81,20 +83,31 @@ fn classify_element_shape_builtin_collections() {
     ));
 }
 
+/// A vector written with the component it holds is stored inline and carries no
+/// per-element drop callback.
 #[test]
 fn classify_element_shape_vec_types_are_other() {
-    assert!(matches!(
-        FunctionTranslator::classify_element_shape(&TypeKind::Custom("Vec2".to_string(), None)),
-        ElementShape::Other
-    ));
-    assert!(matches!(
-        FunctionTranslator::classify_element_shape(&TypeKind::Custom("Vec3".to_string(), None)),
-        ElementShape::Other
-    ));
-    assert!(matches!(
-        FunctionTranslator::classify_element_shape(&TypeKind::Custom("Vec4".to_string(), None)),
-        ElementShape::Other
-    ));
+    for name in [VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME] {
+        assert!(matches!(
+            FunctionTranslator::classify_element_shape(&TypeKind::Custom(
+                name.to_string(),
+                Some(vec![mk_expr_type(TypeKind::F32)])
+            )),
+            ElementShape::Other
+        ));
+    }
+}
+
+/// A declaration reusing a vector's name without the component it holds is an
+/// ordinary type, so its elements are released through that type's own thunk.
+#[test]
+fn classify_element_shape_treats_a_type_reusing_a_vector_name_as_a_user_class() {
+    for name in [VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME] {
+        assert!(matches!(
+            FunctionTranslator::classify_element_shape(&TypeKind::Custom(name.to_string(), None)),
+            ElementShape::UserClass(found) if found == name
+        ));
+    }
 }
 
 #[test]

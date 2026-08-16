@@ -12,6 +12,7 @@
 //! thunk-generation site drops through to the wrong layout.
 
 use cranelift_frontend::Variable;
+use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{
     Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, CLONEABLE_TRAIT_NAME, STRING_TYPE_NAME,
     VEC3_TYPE_NAME,
@@ -36,6 +37,17 @@ fn ty(kind: TypeKind) -> Type {
 
 fn custom(name: &str) -> TypeKind {
     TypeKind::Custom(name.to_string(), None)
+}
+
+/// `name<component>` — the form a compiler-known inline value type is always
+/// written in, and what tells it apart from a user type reusing the name.
+fn custom_of(name: &str, component: TypeKind) -> TypeKind {
+    let arg = Expression::new(
+        0,
+        ExpressionKind::Type(Box::new(ty(component)), false),
+        span(),
+    );
+    TypeKind::Custom(name.to_string(), Some(vec![arg]))
 }
 
 fn generic_param(name: &str) -> GenericDefinition {
@@ -431,11 +443,15 @@ fn test_enum_of_scalar_variants_collects_nothing() {
 
 #[test]
 fn test_inline_value_fields_are_not_collected_as_managed() {
-    // `Vec3` and `Atomic` are stored by value inside the payload, so a DecRef
-    // on them would treat raw bytes as a pointer.
+    // A vector and an atomic written with the component they hold are stored by
+    // value inside the payload, so a DecRef on them would treat raw bytes as a
+    // pointer.
     let shape = enum_def([(
         "Inline",
-        vec![custom(VEC3_TYPE_NAME), custom(ATOMIC_TYPE_NAME)],
+        vec![
+            custom_of(VEC3_TYPE_NAME, TypeKind::F32),
+            custom_of(ATOMIC_TYPE_NAME, TypeKind::U32),
+        ],
     )]);
     let defs = HashMap::new();
     let captures = HashMap::new();
@@ -445,6 +461,24 @@ fn test_inline_value_fields_are_not_collected_as_managed() {
 
     assert!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
+    );
+}
+
+/// A declaration that reuses a vector's name without the component it holds is
+/// an ordinary type: it is laid out from its own fields and heap-allocated, so
+/// its payload position holds a pointer that has to be released.
+#[test]
+fn test_a_type_reusing_a_vector_name_is_collected_as_managed() {
+    let shape = enum_def([("Payload", vec![custom(VEC3_TYPE_NAME)])]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+
+    assert_eq!(
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
+        vec![(0, vec![(0, custom(VEC3_TYPE_NAME))])]
     );
 }
 

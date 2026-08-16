@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::Parameter;
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::error::syntax::Span;
 use std::fmt;
 
@@ -732,6 +732,38 @@ pub fn vec_dim(name: &str) -> Option<u8> {
         VEC4_TYPE_NAME => Some(4),
         _ => None,
     }
+}
+
+/// Returns the dimension (2, 3, or 4) of a compiler-known vector type as
+/// written, or `None` when the type is not one.
+///
+/// A compiler-known vector is generic over its component and is always written
+/// with it (`Vec2<f32>`): the component decides the type's width, so a spelling
+/// that omits it names nothing the compiler can lay out inline. A declaration
+/// that reuses one of these names for an ordinary type therefore keeps ordinary
+/// struct behavior — heap-allocated, reference-counted, laid out from its own
+/// fields — instead of silently inheriting inline vector treatment.
+///
+/// This is the same test the field-layout path applies, so a type laid out as a
+/// vector is exactly a type the drop path treats as one.
+pub fn vec_type_dim(kind: &TypeKind) -> Option<u8> {
+    let TypeKind::Custom(name, type_args) = kind else {
+        return None;
+    };
+    if !names_a_component(type_args.as_deref()) {
+        return None;
+    }
+    vec_dim(name)
+}
+
+/// Whether a type-argument list opens with a type — the form a compiler-known
+/// inline value type is always written in. A value-generic argument carries a
+/// literal instead and names no component.
+fn names_a_component(type_args: Option<&[Expression]>) -> bool {
+    matches!(
+        type_args.and_then(|args| args.first()).map(|arg| &arg.node),
+        Some(ExpressionKind::Type(_, _))
+    )
 }
 
 /// Returns `Some(&T)` if `args` represents a single-parameter generic list for

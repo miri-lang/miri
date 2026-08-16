@@ -30,7 +30,7 @@ impl<'a> FunctionTranslator<'a> {
             TypeKind::Custom(name, _) => {
                 // Vector types (Vec2/3/4) and `Atomic<scalar>` are value types
                 // stored inline — they carry no per-element drop/clone callback.
-                if crate::ast::types::vec_dim(name).is_some()
+                if crate::ast::types::vec_type_dim(kind).is_some()
                     || name == crate::ast::types::ATOMIC_TYPE_NAME
                 {
                     return ElementShape::Other;

@@ -143,6 +143,34 @@ fn main()
     );
 }
 
+/// Reusing a compiler-known vector's name for an ordinary struct gets ordinary
+/// struct behavior. A built-in vector is written with the component it holds
+/// (`Vec2<f32>`) and is stored inline, unmanaged; a declaration without one is
+/// laid out from its own fields and heap-allocated, so a field of that type
+/// holds a pointer its owner has to release. A managed field makes the
+/// difference visible: the label survives the read and the allocation is freed.
+#[test]
+fn test_struct_named_like_a_builtin_vector_keeps_struct_behavior() {
+    assert_runs_with_output(
+        r#"
+
+struct Vec2
+    label String
+    count int
+
+struct Card
+    front Vec2
+    back Vec2
+
+fn main()
+    let c = Card(front: Vec2(label: "a", count: 1), back: Vec2(label: "b", count: 2))
+    println(c.front.label)
+    println(f"{c.back.count}")
+    "#,
+        "a\n2",
+    );
+}
+
 #[test]
 fn test_drop_struct_with_string_field() {
     // A struct containing a String field is NOT auto-copy. It is managed
