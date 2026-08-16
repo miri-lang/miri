@@ -1,0 +1,65 @@
+name: Heap guard tests
+
+# The shadow-heap sanitizer (MIRI_HEAP_GUARD=1) checks every runtime allocation
+# and release against a shadow table, so it catches a leak, a double free, or a
+# release of an address the runtime never handed out. It roughly doubles the
+# suite's wall time, which is why it runs nightly rather than on every PR: the
+# defects it finds are reference-counting mistakes in lowering, which appear at
+# a rate measured in commits, not in minutes.
+on:
+  schedule:
+    - cron: "0 4 * * *" # 04:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  heap-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      # Always test the current tip of `main`, not the commit that triggered the
+      # run, so a fix already merged shows up on a manual re-run instead of
+      # waiting for the next cron.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install LLVM/Clang 21.1.8 (apt.llvm.org)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common ca-certificates
+
+          wget -O- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+
+          sudo apt-get update
+
+          CANDIDATE="$(apt-cache madison clang-21 | awk '{print $3}' | head -n1)"
+          echo "$CANDIDATE" | grep -q '21\.1\.8'
+
+          sudo apt-get install -y \
+            clang-21="$CANDIDATE" \
+            llvm-21="$CANDIDATE" \
+            llvm-21-dev="$CANDIDATE" \
+            libclang-21-dev="$CANDIDATE" \
+            libpolly-21-dev="$CANDIDATE"
+
+      # A compiled program inherits this job's environment, so exporting the
+      # variable here is what arms the guard inside every test the suite runs.
+      # A test whose program trips the guard fails on the report in its stderr,
+      # so a violation surfaces as that test's failure rather than as a note.
+      - name: Run the suite under the heap guard
+        env:
+          MIRI_HEAP_GUARD: "1"
+        run: make test
