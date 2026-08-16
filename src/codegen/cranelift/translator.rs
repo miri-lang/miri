@@ -720,10 +720,7 @@ impl<'a> FunctionTranslator<'a> {
                 // value to the component width. `arr[i].x` is typed without a
                 // concrete scalar width upstream, so an `f64` literal can reach
                 // an `f32` field; an unnarrowed store would write past it.
-                let is_vector_field = matches!(
-                    &current_type.kind,
-                    TypeKind::Custom(name, _) if crate::ast::types::vec_dim(name).is_some()
-                );
+                let is_vector_field = crate::ast::types::vec_type_dim(&current_type.kind).is_some();
                 let mut value = value;
                 if is_vector_field {
                     let from_ty = builder.func.dfg.value_type(value);
@@ -1804,8 +1801,24 @@ pub fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, _) = kind {
         // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
         // stored by value, never reference-counted — exclude them from the
-        // managed-element drop path.
-        if crate::ast::types::vec_dim(name).is_some() || name == crate::ast::types::ATOMIC_TYPE_NAME
+        // managed-element drop path. A vector is recognized as the field-layout
+        // path recognizes one, so a user type that merely reuses the name stays
+        // managed and its allocation is released.
+        //
+        // TODO: `Atomic` is still matched by name alone, so a user type of that
+        // name is wrongly treated as an inline scalar and its allocation leaks.
+        // Applying the same rule here needs `MirType::Custom` to carry the
+        // component type too, or MIR keeps calling the user type unmanaged and
+        // the two layers disagree about who releases it.
+        //
+        // TODO: a vector held as a field of a user struct reads back garbage and
+        // leaks. A vector binding now carries its own allocation, so the struct's
+        // slot holds a pointer while this predicate and the field-layout path
+        // both read it as inline bytes — `s.v.x` decodes the pointer's low half
+        // as a component. Deciding inline-versus-pointer by the field's position
+        // rather than by its type alone is what closes it.
+        if crate::ast::types::vec_type_dim(kind).is_some()
+            || name == crate::ast::types::ATOMIC_TYPE_NAME
         {
             return false;
         }

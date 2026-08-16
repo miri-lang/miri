@@ -1227,7 +1227,7 @@ impl<'a> FunctionTranslator<'a> {
                                         .unwrap_or(TypeKind::Error);
 
                                     // Only apply substitution for compiler-known Vec types.
-                                    if crate::ast::types::vec_dim(name).is_some() {
+                                    if crate::ast::types::vec_type_dim(&current).is_some() {
                                         Self::substitute_first_generic(
                                             &field_type,
                                             type_args_opt.as_ref(),
