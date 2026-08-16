@@ -578,10 +578,7 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, key_kind_val)?;
 
         Self::register_map_value_callbacks(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
-        if key_kind == 1 {
-            let drop_fn_addr = Self::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
-            Self::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)?;
-        }
+        Self::register_map_key_drop(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
 
         for chunk in translated.chunks(2) {
             if chunk.len() == 2 {
@@ -625,6 +622,31 @@ impl<'a> FunctionTranslator<'a> {
             _ => 0,
         };
         (key_size, value_size, key_kind)
+    }
+
+    /// Registers `key_drop_fn` for a map literal whose keys are managed, so the
+    /// runtime releases each key when the map drops it. The key type is read
+    /// from the first key operand, which a literal always carries.
+    fn register_map_key_drop(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        operands: &[Operand],
+        map_ptr: Value,
+        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let Some(key_kind) = operands
+            .first()
+            .and_then(|op| Self::first_operand_kind(op, type_ctx))
+        else {
+            return Ok(());
+        };
+        let Some(drop_fn_addr) =
+            Self::key_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)?
+        else {
+            return Ok(());
+        };
+        Self::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)
     }
 
     /// Registers `elem_drop_fn` / `elem_clone_fn` callbacks for the value side

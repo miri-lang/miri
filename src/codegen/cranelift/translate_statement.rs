@@ -349,7 +349,11 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Registers the key kind and key drop callback for a string-keyed map.
+    /// Registers the key kind and key drop callback for a map with managed keys.
+    ///
+    /// A string key also switches the map to content-based comparison; every
+    /// other managed key keeps the default byte comparison and only needs the
+    /// drop callback, so the runtime releases each key it discards.
     fn register_map_key_callbacks(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -361,17 +365,23 @@ impl<'a> FunctionTranslator<'a> {
         let ExpressionKind::Type(key_ty, _) = &key_expr.node else {
             return Ok(());
         };
-        if !matches!(key_ty.kind, TypeKind::String) {
-            return Ok(());
+        if matches!(key_ty.kind, TypeKind::String) {
+            let key_kind_val = builder
+                .ins()
+                .iconst(ptr_type, FunctionTranslator::MANAGED_STRING_KEY_KIND);
+            FunctionTranslator::call_rt_map_set_key_kind(builder, ctx, map_ptr, key_kind_val)?;
         }
 
-        let key_kind_val = builder
-            .ins()
-            .iconst(ptr_type, FunctionTranslator::MANAGED_STRING_KEY_KIND);
-        FunctionTranslator::call_rt_map_set_key_kind(builder, ctx, map_ptr, key_kind_val)?;
-
-        let drop_fn_addr =
-            FunctionTranslator::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
+        let Some(drop_fn_addr) = FunctionTranslator::key_decref_addr_for_kind(
+            builder,
+            ctx,
+            &key_ty.kind,
+            ptr_type,
+            type_ctx,
+        )?
+        else {
+            return Ok(());
+        };
         FunctionTranslator::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)?;
         Ok(())
     }

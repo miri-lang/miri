@@ -11,6 +11,7 @@ mod gpu_launch;
 pub mod layout;
 mod predicates;
 mod rc;
+pub mod structural_elements;
 pub mod translate_rvalue;
 pub mod translate_statement;
 pub mod translator;
@@ -232,6 +233,7 @@ impl Backend for CraneliftBackend {
 
         self.declare_runtime_imports(&mut module)?;
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
+        self.generate_structural_element_decref_functions(&mut module, &mut ctx, &isa, bodies)?;
         self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
         let kernel_registry =
             crate::codegen::cranelift::gpu_launch::build_kernel_registry(&mut module, bodies)?;
@@ -638,6 +640,34 @@ impl CraneliftBackend {
                 &self.type_definitions,
             )?;
             self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
+        }
+        Ok(())
+    }
+
+    /// Generate the decref thunk for every structural collection entry the
+    /// program uses.
+    ///
+    /// A collection releases the entries it discards through a drop callback,
+    /// which takes the address of a decref function. An entry that is a named
+    /// type already has one; a tuple or an option has no declaration to name, so
+    /// its thunk is generated here, keyed by the entry type's structure.
+    fn generate_structural_element_decref_functions(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+        bodies: &[(&str, &Body)],
+    ) -> Result<(), CodegenError> {
+        for (symbol, kind) in structural_elements::structural_element_types(bodies) {
+            FunctionTranslator::generate_structural_decref_function(
+                module,
+                ctx,
+                isa,
+                &symbol,
+                &kind,
+                &self.type_definitions,
+                &self.generic_class_instantiations,
+            )?;
         }
         Ok(())
     }
