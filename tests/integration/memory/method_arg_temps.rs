@@ -26,6 +26,65 @@ fn main()
 }
 
 #[test]
+fn test_temp_argument_to_a_static_method_is_released() {
+    assert_runs_with_output(
+        r#"
+class Ruler
+    public static fn width(text String) int: text.length()
+
+fn main()
+    let width = Ruler.width("ab" + "cd")
+    println(f"{width}")
+"#,
+        "4",
+    );
+}
+
+/// A static call reached through the enclosing class name is the same call, so
+/// its argument temp is released the same way.
+#[test]
+fn test_temp_argument_to_a_static_method_called_from_a_sibling_is_released() {
+    assert_runs_with_output(
+        r#"
+class Ruler
+    public static fn width(text String) int: text.length()
+
+    public static fn doubled(text String) int
+        Ruler.width(text + text)
+
+fn main()
+    let width = Ruler.doubled("ab")
+    println(f"{width}")
+"#,
+        "4",
+    );
+}
+
+/// An enum value built at a static call site lives in a temp no scope owns, so
+/// the call is the only place that can release it. The variant here carries no
+/// managed payload, which is the case with nothing else to fall back on.
+#[test]
+fn test_enum_argument_built_at_a_static_call_is_released() {
+    assert_heap_guard_ok(
+        r#"
+enum Value
+    Text(String)
+    Nothing
+
+class Box
+    public static fn describe(v Value) String
+        match v
+            Value.Text(text): text
+            Value.Nothing: "nothing"
+
+fn main()
+    println(Box.describe(Value.Nothing))
+    println(Box.describe(Value.Text("here")))
+"#,
+    );
+}
+
+#[test]
 fn test_temp_argument_to_a_generic_method_is_released() {
     assert_runs_with_output(
         r#"
