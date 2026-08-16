@@ -219,6 +219,7 @@ fn lower_static_method_impl(
     method_info: &crate::type_checker::context::MethodInfo,
 ) -> Result<Option<Operand>, LoweringError> {
     // Static method call with no receiver
+    let arg_watermark = ctx.body.local_decls.len();
     let mut arg_ops = lower_plain_args(ctx, args)?;
     push_allocator_arg(ctx, &mut arg_ops);
 
@@ -247,12 +248,13 @@ fn lower_static_method_impl(
     emit_call_terminator(
         ctx,
         func_op,
-        arg_ops,
+        arg_ops.clone(),
         out_args,
         Vec::new(), // arg_handles
-        destination,
+        destination.clone(),
         *span,
     );
+    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
     Ok(Some(result_op))
 }
 
