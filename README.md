@@ -4,7 +4,7 @@
   <img src="banner.png"/>
 </p>
 
-**A modern, GPU-first, statically-typed, compiled programming language designed for balancing high performance and safety in the age of Generative AI.**
+**Miri is a statically typed, natively compiled programming language with first-class GPU programming: mark data `gpu`, launch with `forall`, no CUDA toolchain.**
 
 Miri is built for **agentic engineering** — a world in which the majority of production code is generated, repaired, and shipped by autonomous agents. Humans declare intent. The compiler enforces the invariants agents are most likely to violate, and the toolchain emits structured artifacts agents can consume directly.
 
