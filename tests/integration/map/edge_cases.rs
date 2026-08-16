@@ -176,3 +176,75 @@ println(val)
         "here",
     );
 }
+
+/// A tuple key survives every path that discards a key — overwriting an entry,
+/// removing one, and clearing the map — each of which releases the key the map
+/// was holding.
+#[test]
+fn map_tuple_keys_survive_overwrite_remove_and_clear() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+let a = (1, 2)
+let b = (3, 4)
+var m = {a: "one"}
+m.set(b, "two")
+m.set(a, "uno")
+println(m[a])
+println(f"{m.length()}")
+m.remove(b)
+println(f"{m.length()}")
+m.clear()
+println(f"{m.length()}")
+"#,
+        "uno\n2\n1\n0",
+    );
+}
+
+/// Removing an entry releases a tuple value the same as it releases a tuple
+/// key: the value slot's callback is what frees it, since the map dropped its
+/// reference without the map itself being dropped.
+#[test]
+fn map_tuple_value_released_when_its_entry_is_removed() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+let p = (1, 2)
+var m = {"k": p}
+let stored = m["k"]
+println(f"{stored.0}")
+m.remove("k")
+println(f"{m.length()}")
+"#,
+        "1\n0",
+    );
+}
+
+/// A key the map hands back stays alive for as long as the binding that took
+/// it, and the map keeps its own: reading a key out and cloning the map both
+/// leave the entry and the original key usable. One entry only — a map's
+/// iteration order follows its hash table, not insertion.
+#[test]
+fn map_object_key_handed_out_outlives_the_read() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+class Point
+    public var x int
+    public fn init(x int): self.x = x
+
+let p = Point(7)
+let m = {p: "one"}
+let first = m.element_at(0)
+println(f"{first.x}")
+let copy = m.clone()
+println(f"{copy.length()}")
+println(m[p])
+println(f"{p.x}")
+"#,
+        "7\n1\none\n7",
+    );
+}

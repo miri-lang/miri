@@ -194,3 +194,26 @@ fn main()
         "0",
     );
 }
+
+#[test]
+fn test_set_of_tuples_remove_and_clear() {
+    // A tuple element has no declared name, so its decref helper comes from the
+    // thunk generated for its structure. Without it the set holds the element's
+    // last reference and remove() and clear() discard it without releasing.
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn main()
+    let a = (1, 2)
+    let b = (3, 4)
+    var s = {a, b}
+    println(f"{s.length()}")
+    s.remove(a)
+    println(f"{s.length()}")
+    s.clear()
+    println(f"{s.length()}")
+"#,
+        "2\n1\n0",
+    );
+}

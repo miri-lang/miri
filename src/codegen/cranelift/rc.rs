@@ -77,7 +77,9 @@ impl<'a> FunctionTranslator<'a> {
     /// A recorded generic-class instantiation (`Box<String>`) routes to its
     /// per-instantiation `__decref_Box__String` wrapper so the concrete managed
     /// field is released when the runtime drops an element (`clear`, `remove_at`,
-    /// `pop`). All other shapes — including non-generic classes and unrecorded
+    /// `pop`). A structural element — a tuple, an option — routes to the thunk
+    /// generated for its structure, since it has no declaration to name. All
+    /// other shapes — including non-generic classes and unrecorded
     /// instantiations — fall back to the shared per-shape helper.
     pub(crate) fn elem_decref_addr_for_kind(
         builder: &mut FunctionBuilder,
@@ -86,6 +88,12 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
+        if let Some(symbol) =
+            crate::codegen::cranelift::structural_elements::structural_thunk_symbol(elem_kind)
+        {
+            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &symbol, ptr_type)?;
+            return Ok(Some(addr));
+        }
         let shape = Self::classify_element_shape(elem_kind);
         if let ElementShape::UserClass(class_name) = shape {
             let symbol = Self::generic_drop_thunk_name_part(
@@ -97,6 +105,26 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(Some(addr));
         }
         Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)
+    }
+
+    /// Address of the decref helper to register as a map's `key_drop_fn` for key
+    /// type `key_kind`, or `None` when the key is a value type the map stores by
+    /// its bytes and never releases.
+    ///
+    /// A key reaches the same helper a collection element of that type would;
+    /// the separate entry point exists to skip a generic parameter that has no
+    /// concrete symbol yet, the way the value side already does.
+    pub(crate) fn key_decref_addr_for_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        key_kind: &TypeKind,
+        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<Value>, CodegenError> {
+        if Self::is_unresolved_generic_elem(key_kind, type_ctx.type_definitions) {
+            return Ok(None);
+        }
+        Self::elem_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)
     }
 
     /// The type-argument expressions of a `TypeKind::Custom`, or `None` for any
@@ -1495,6 +1523,96 @@ impl<'a> FunctionTranslator<'a> {
             .define_function(func_id, ctx)
             .map_err(|e| CodegenError::define_function(decref_name, e.to_string()))?;
         ctx.clear();
+        Ok(())
+    }
+
+    /// Generates `__decref_{symbol}(ptr)` for a structural type — a tuple or an
+    /// option, which carries managed payload but has no declaration whose name
+    /// could be mangled into a symbol. `symbol` comes from
+    /// [`crate::codegen::cranelift::structural_keys::structural_thunk_symbol`],
+    /// which encodes the type's structure so distinct types get distinct thunks.
+    ///
+    /// The body is the same inline decref-and-drop sequence a direct release
+    /// emits, so the structural payload is released exactly as it would be at a
+    /// binding's scope exit. Used as a map's `key_drop_fn`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn generate_structural_decref_function(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        symbol: &str,
+        kind: &TypeKind,
+        type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = isa.pointer_type();
+        let mut decref_name = String::with_capacity(9 + symbol.len());
+        decref_name.push_str("__decref_");
+        decref_name.push_str(symbol);
+        let mut sig = Signature::new(isa.default_call_conv());
+        sig.params.push(AbiParam::new(ptr_type));
+        let func_id = module
+            .declare_function(&decref_name, Linkage::Export, &sig)
+            .map_err(|e| CodegenError::declare_function(decref_name.clone(), e.to_string()))?;
+
+        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
+            sig,
+        );
+        let mut builder_ctx = FunctionBuilderContext::new();
+        Self::emit_structural_decref_body(
+            module,
+            ctx,
+            &mut builder_ctx,
+            kind,
+            type_definitions,
+            generic_class_instantiations,
+            ptr_type,
+        )?;
+
+        module
+            .define_function(func_id, ctx)
+            .map_err(|e| CodegenError::define_function(decref_name, e.to_string()))?;
+        ctx.clear();
+        Ok(())
+    }
+
+    /// Emit the body of a structural decref thunk: release `ptr` at `kind`,
+    /// which drops and frees it when its count reaches zero, then return.
+    fn emit_structural_decref_body(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        builder_ctx: &mut FunctionBuilderContext,
+        kind: &TypeKind,
+        type_definitions: &HashMap<String, TypeDefinition>,
+        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+        ptr_type: cl_types::Type,
+    ) -> Result<(), CodegenError> {
+        let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
+        let ptr = builder.block_params(entry_block)[0];
+
+        let mut string_literals = HashMap::new();
+        let empty_kernel_registry = HashMap::new();
+        let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
+        let empty_captures = HashMap::new();
+        let empty_out_ptr_vars = HashMap::new();
+        let type_ctx = TypeCtx {
+            local_types: &[],
+            type_definitions,
+            ptr_type,
+            closure_capture_ast_types: &empty_captures,
+            out_param_ptr_vars: &empty_out_ptr_vars,
+            generic_class_instantiations,
+        };
+
+        Self::emit_decref_value(&mut builder, &mut module_ctx, kind, ptr, &type_ctx)?;
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize();
         Ok(())
     }
 
