@@ -1706,8 +1706,62 @@ impl<'a> FunctionTranslator<'a> {
         let raw_ptr = builder.inst_results(inst)[0];
         // Emitted before the caller's own null check, so the runtime hook must
         // treat a null pointer as a no-op.
-        Self::call_rt_class_alloc_track(builder, ctx, raw_ptr)?;
+        Self::emit_tracked(builder, ctx, |builder, ctx| {
+            Self::call_rt_class_alloc_track(builder, ctx, raw_ptr)
+        })?;
         Ok(raw_ptr)
+    }
+
+    /// Emit `body` under a test of the runtime's tracking state, so it runs only
+    /// while the runtime asks to observe allocations.
+    ///
+    /// The hook `body` calls crosses into the runtime static library, which a
+    /// Cranelift-emitted program cannot inline, so an unobserved allocation
+    /// would otherwise pay a full call to learn there is nothing to report.
+    /// Testing a runtime byte here costs a load and a branch that predicts.
+    ///
+    /// The state starts out neither on nor off, and only the value meaning
+    /// "off" skips: the first allocation therefore still calls in, and that call
+    /// is what settles the state. Nothing is missed before the runtime has read
+    /// its environment, which matters because it has no startup hook to read it
+    /// in.
+    fn emit_tracked(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        body: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
+    ) -> Result<(), CodegenError> {
+        use cranelift_module::Module;
+
+        let state_id = ctx
+            .module
+            .declare_data(rt::TRACKING_STATE, Linkage::Import, false, false)
+            .map_err(|e| {
+                CodegenError::declare_function(rt::TRACKING_STATE.to_string(), e.to_string())
+            })?;
+        let state_gv = ctx.module.declare_data_in_func(state_id, builder.func);
+        let ptr_type = ctx.module.target_config().pointer_type();
+        let state_addr = builder.ins().symbol_value(ptr_type, state_gv);
+        let state = builder
+            .ins()
+            .load(cl_types::I8, MemFlags::new(), state_addr, 0);
+        let is_off = builder.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            state,
+            rt::TRACKING_STATE_OFF,
+        );
+
+        let track_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_off, merge_block, &[], track_block, &[]);
+
+        builder.switch_to_block(track_block);
+        body(builder, ctx)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.switch_to_block(merge_block);
+        Ok(())
     }
 
     /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline `malloc`
@@ -1776,7 +1830,9 @@ impl<'a> FunctionTranslator<'a> {
         // Every inline release funnels through here, so the guard witnesses the
         // free at one point rather than at each `emit_drop_*` arm. It is keyed
         // on the same allocation base the matching `malloc` reported.
-        Self::call_rt_class_free_track(builder, ctx, real_ptr)?;
+        Self::emit_tracked(builder, ctx, |builder, ctx| {
+            Self::call_rt_class_free_track(builder, ctx, real_ptr)
+        })?;
 
         Self::call_cached_func(
             builder,

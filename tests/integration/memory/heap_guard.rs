@@ -62,6 +62,61 @@ fn main()
     );
 }
 
+/// An allocation compiled code makes inline is reported when it leaks, and the
+/// report names it as a class rather than as an anonymous block.
+///
+/// This also pins the earliest allocation being tracked at all. Compiled code
+/// asks a runtime byte whether reporting is wanted before it calls the tracking
+/// hook, and that byte is only settled *by* the hook — so it starts out meaning
+/// neither yes nor no, and only the value meaning "no" skips the call. Were the
+/// initial value to mean "no", nothing would ever call in to settle it, every
+/// allocation would go unseen, and this program would exit silently.
+#[test]
+fn test_heap_guard_reports_a_leaked_inline_allocation() {
+    assert_heap_guard_detects(
+        r#"
+class Node
+    public var peer Node?
+    public fn init(): self.peer = None
+
+fn main()
+    var a = Node()
+    a.peer = Some(a)
+    println("built")
+"#,
+        &["leaked", "(class)"],
+    );
+}
+
+/// A program the runtime is not observing allocates and releases correctly.
+///
+/// Compiled code reads a runtime byte and skips the reporting hooks when
+/// nothing wants them, which is the path a released program takes and the one
+/// every other test here misses: the harness runs each test with the leak
+/// counter on, so tracking is always resolved to "report" elsewhere in the
+/// suite. Allocating in a loop makes the branch run on both a hot path and a
+/// release path rather than once.
+#[test]
+fn test_untracked_program_allocates_and_releases_correctly() {
+    assert_runs_untracked(
+        r#"
+class Node
+    public var value int
+    public fn init(value int): self.value = value
+
+fn main()
+    var total = 0
+    var index = 0
+    while index < 1000
+        let node = Node(index)
+        total = total + node.value
+        index = index + 1
+    println(f"{total}")
+"#,
+        "499500",
+    );
+}
+
 /// Guard output is absent when the variable is unset (no behavior change).
 #[test]
 fn test_heap_guard_disabled_by_default() {

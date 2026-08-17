@@ -300,6 +300,33 @@ pub fn assert_heap_guard_detects(code: &str, expected_fragments: &[&str]) {
     }
 }
 
+/// Assert that `code` produces `expected` with neither the heap guard nor the
+/// leak counter asked for, so the runtime observes none of its allocations.
+///
+/// Every other helper here runs with the leak counter on, which is what a test
+/// needs in order to fail on a leak — but it also means the rest of the suite
+/// never exercises the path a released program takes, where compiled code reads
+/// the runtime's tracking state and skips the reporting hooks. This helper is
+/// the coverage for that path.
+pub fn assert_runs_untracked(code: &str, expected: &str) {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_LEAK_CHECK", "0");
+
+    if !result.success {
+        panic!(
+            "Expected the program to run untracked, but it failed:\n{}",
+            result.output()
+        );
+    }
+    assert_eq!(
+        result.stdout.trim(),
+        expected.trim(),
+        "untracked output differs:\n{}",
+        result.output()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Multi-file project helpers
 //

@@ -40,6 +40,11 @@ pub mod rt {
     /// Compiler-internal: witnesses an inline `free` for the heap guard, not in
     /// stdlib. Paired with [`CLASS_ALLOC_TRACK`].
     pub const CLASS_FREE_TRACK: &str = "miri_rt_class_free_track";
+    /// Compiler-internal: runtime byte telling compiled code whether either
+    /// tracking hook above is worth calling. A data symbol, not a function —
+    /// codegen loads it and branches, so an unobserved allocation pays a load
+    /// rather than a call it cannot inline.
+    pub const TRACKING_STATE: &str = "miri_rt_tracking_state";
 
     // ── Array ────────────────────────────────────────────────────────────────
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
@@ -264,6 +269,7 @@ pub mod rt {
         SIMULATE_DOUBLE_FREE,
         CLASS_ALLOC_TRACK,
         CLASS_FREE_TRACK,
+        TRACKING_STATE,
         // Array
         ARRAY_NEW,
         ARRAY_FREE,
@@ -421,6 +427,13 @@ pub mod rt {
         REGEX_MATCH_END,
         REGEX_REPLACE,
     ];
+
+    /// Value of [`TRACKING_STATE`] meaning the runtime wants no report, so
+    /// compiled code may skip the hook. Any other value — including the initial
+    /// unset one, which is why the first allocation always calls in — means
+    /// report it. A value rather than a symbol name, so it belongs below the
+    /// table above rather than in it.
+    pub const TRACKING_STATE_OFF: i64 = 1;
 }
 
 use crate::ast::types::BuiltinCollectionKind;
