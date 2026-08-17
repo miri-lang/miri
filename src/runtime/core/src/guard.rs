@@ -409,6 +409,54 @@ fn is_guard_enabled() -> bool {
     GUARD_ENABLED.load(Ordering::Relaxed)
 }
 
+/// Compiled code has not yet learned whether the runtime wants to observe its
+/// allocations. Deliberately distinct from [`TRACKING_OFF`], so the first
+/// allocation still calls the hook and that call is what settles the question —
+/// no allocation is missed before the environment has been read, and the
+/// runtime needs no startup entry point it does not have.
+pub const TRACKING_UNSET: u8 = 0;
+
+/// The runtime does not want to observe allocations. Compiled code skips the
+/// hook call entirely.
+pub const TRACKING_OFF: u8 = 1;
+
+/// The runtime wants every allocation and release reported.
+pub const TRACKING_ON: u8 = 2;
+
+/// Whether compiled code should report the allocations it makes inline.
+///
+/// Codegen loads this before each hook call and skips the call while it reads
+/// [`TRACKING_OFF`]. The call cannot be inlined — it crosses from a
+/// Cranelift-emitted program into this static library — so hoisting the test to
+/// the call site is what keeps an unobserved allocation down to a load and a
+/// branch it will predict.
+///
+/// "Tracking" is wider than the guard on purpose. The leak counter registers
+/// its exit handler from the same hook, so a program that only allocates inline
+/// — a class, a tuple, a closure environment — would never register it if the
+/// guard alone decided this.
+/// Named in the exported `miri_rt_*` style shared by every symbol compiled code
+/// links against, which is also what the drift check between the compiler's
+/// symbol table and this library scans for.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static miri_rt_tracking_state: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(TRACKING_UNSET);
+
+/// Settles [`MIRI_RT_TRACKING_STATE`] on the first allocation reported.
+///
+/// Idempotent, and safe to race: every caller computes the same answer from the
+/// same environment, so a concurrent second store writes the value already
+/// there.
+pub fn resolve_tracking_state() {
+    if miri_rt_tracking_state.load(Ordering::Relaxed) != TRACKING_UNSET {
+        return;
+    }
+    let wanted = is_guard_enabled() || crate::rc::is_leak_check_enabled();
+    let state = if wanted { TRACKING_ON } else { TRACKING_OFF };
+    miri_rt_tracking_state.store(state, Ordering::Relaxed);
+}
+
 /// Default quarantine capacity in bytes.
 const DEFAULT_QUARANTINE_CAPACITY: usize = 256 * 1024 * 1024; // 256 MB
 

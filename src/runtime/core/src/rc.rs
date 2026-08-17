@@ -40,13 +40,22 @@ fn ensure_leak_check_registered() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        // Only register the atexit handler when MIRI_LEAK_CHECK=1
-        if std::env::var("MIRI_LEAK_CHECK").as_deref() == Ok("1") {
+        if is_leak_check_enabled() {
             unsafe {
                 libc::atexit(leak_check_at_exit);
             }
         }
     });
+}
+
+/// Whether the allocation-balance check was asked for.
+///
+/// Read directly rather than inferred from whether the exit handler was
+/// registered: the tracking state compiled code consults is settled on the
+/// first allocation, which is the same moment registration happens, so it
+/// cannot ask about the outcome of the thing it is deciding.
+pub fn is_leak_check_enabled() -> bool {
+    std::env::var("MIRI_LEAK_CHECK").as_deref() == Ok("1")
 }
 
 /// Called at process exit to report any leaked allocations.
@@ -230,6 +239,7 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
 /// `ptr` must be the pointer just returned by `malloc`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
+    crate::guard::resolve_tracking_state();
     ensure_leak_check_registered();
     // Codegen emits this before its own null check, so a failed malloc arrives
     // here as null and must be ignored rather than recorded.
@@ -246,6 +256,7 @@ pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
 /// `ptr` must be the allocation base about to be passed to `free`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
+    crate::guard::resolve_tracking_state();
     crate::guard::guard_free_raw(ptr);
 }
 
