@@ -1020,9 +1020,14 @@ impl Pipeline {
         }
 
         // Optional MIR verification pass: check RC invariants after Perceus.
-        // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
-        // non-empty value, or by configuring it on the Pipeline instance.
-        if self.verify_mir || std::env::var("MIRI_VERIFY_MIR").is_ok() {
+        // Enabled by setting the MIRI_VERIFY_MIR environment variable.
+        // Set MIRI_VERIFY_MIR=warn for warnings only; any other non-empty value is hard error.
+        let verify_mode = self
+            .verify_mir
+            .then(|| "error".to_string())
+            .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok());
+
+        if let Some(mode) = verify_mode {
             let mut all_violations = Vec::new();
             for (name, body) in &bodies {
                 let violations = mir::verify::verify_body(body);
@@ -1031,11 +1036,16 @@ impl Pipeline {
                 }
             }
             if !all_violations.is_empty() {
-                return Err(CompilerError::MirVerification(format!(
+                let message = format!(
                     "RC invariant violations detected in {} function(s):\n{}",
                     all_violations.len(),
                     all_violations.join("\n")
-                )));
+                );
+                if mode == "warn" {
+                    eprintln!("{}", message);
+                } else {
+                    return Err(CompilerError::MirVerification(message));
+                }
             }
         }
 
@@ -2079,14 +2089,9 @@ impl Pipeline {
         let mut pipeline_result = self.frontend_script(source)?;
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let mut bodies = self.lower_to_mir(&pipeline_result, false)?;
-        for (_name, body) in &mut bodies {
-            mir::optimization::insert_rc(body);
-        }
-        for (_name, body) in &mut bodies {
-            mir::optimization::elide_rc(body);
-        }
-        Ok(bodies)
+        // `lower_to_mir` already inserts and elides RC. Running either pass again
+        // here would hand tests bodies carrying two of every operation.
+        self.lower_to_mir(&pipeline_result, false)
     }
 
     /// Link an object file to an executable using the system linker.
