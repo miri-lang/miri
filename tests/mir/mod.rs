@@ -12,3 +12,4 @@ pub mod residency;
 pub mod ssa;
 pub mod terminator;
 pub mod utils;
+pub mod verify;

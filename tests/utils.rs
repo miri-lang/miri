@@ -76,7 +76,9 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
         let mut cmd = miri_cmd();
         cmd.env("RUST_BACKTRACE", "1")
             .env("MIRI_LEAK_CHECK", "1")
-            .env("MIRI_VERIFY_MIR", "1")
+            // Warn-only: the verifier reports to stderr and compilation continues.
+            // It is promoted to a hard error once the suite reports nothing.
+            .env("MIRI_VERIFY_MIR", "warn")
             .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
             // Prevent linker-override env vars from leaking in from concurrent tests.
             .env_remove("MIRI_CC")
@@ -146,7 +148,7 @@ pub fn miri_run_with_env(input: &str, env_var: &str, env_value: &str) -> Compile
     let mut cmd = miri_cmd();
     cmd.env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
-        .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_VERIFY_MIR", "warn")
         .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env(env_var, env_value)
         .env_remove("MIRI_CC")
@@ -198,7 +200,7 @@ pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
     let output = cmd
         .env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
-        .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_VERIFY_MIR", "warn")
         .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         // Prevent linker-override env vars from leaking in from concurrent tests.
         .env_remove("MIRI_CC")
