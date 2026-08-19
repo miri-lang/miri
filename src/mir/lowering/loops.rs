@@ -8,8 +8,8 @@ use std::rc::Rc;
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
-    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
-    VariableDeclaration, WhileStatementType, ITERABLE_TRAIT_NAME,
+    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeDeclarationKind,
+    TypeKind, VariableDeclaration, WhileStatementType, ITERABLE_TRAIT_NAME,
 };
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -296,26 +296,49 @@ fn resolve_loop_elem_type(
             if BuiltinCollectionKind::from_name(name).is_none()
                 && name != crate::ast::types::TUPLE_TYPE_NAME =>
         {
-            resolve_iterable_trait_element_type(ctx, name).unwrap_or_else(|| ty.clone())
+            resolve_iterable_trait_element_type(ctx, ty).unwrap_or_else(|| ty.clone())
         }
         _ => ty.clone(),
     }
 }
 
 /// Resolve the element type a class yields as `Iterable<T>`, read from the trait
-/// arguments recorded on its definition. `None` when the class does not implement
-/// the trait or leaves its type argument unspecified.
-fn resolve_iterable_trait_element_type(ctx: &LoweringContext, class_name: &str) -> Option<Type> {
+/// arguments recorded on its definition. For generic classes, substitutes the trait's
+/// type argument using the instantiation's type parameters.
+/// E.g., Class<int> implementing Iterable<T> becomes Iterable<int>.
+/// This mirrors the parallel fix in src/type_checker/utils.rs and must stay in sync:
+/// both sites substitute the element type before returning.
+/// `None` when the class does not implement the trait or leaves its type argument unspecified.
+fn resolve_iterable_trait_element_type(ctx: &LoweringContext, class_ty: &Type) -> Option<Type> {
+    let TypeKind::Custom(class_name, args) = &class_ty.kind else {
+        return None;
+    };
     let Some(TypeDefinition::Class(class_def)) =
         ctx.type_checker.type_definitions().get(class_name)
     else {
         return None;
     };
-    class_def
-        .trait_args
-        .get(ITERABLE_TRAIT_NAME)?
-        .first()
-        .cloned()
+    let trait_args = class_def.trait_args.get(ITERABLE_TRAIT_NAME)?;
+
+    // If trait_args is empty (malformed trait declaration), fall back to Generic("T")
+    // to match the behavior in src/type_checker/utils.rs and ensure type checker and
+    // MIR lowering agree on the element type.
+    let elem_ty = trait_args.first().cloned().unwrap_or_else(|| {
+        Type::new(
+            TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
+            class_ty.span,
+        )
+    });
+
+    if let Some(class_generics) = &class_def.generics {
+        if args.is_some() {
+            let subs =
+                super::build_class_generic_substitution(ctx.type_checker, class_generics, class_ty);
+            return Some(super::apply_generic_sub(&elem_ty, &subs));
+        }
+    }
+
+    Some(elem_ty)
 }
 
 /// Allocate the optional second loop variable (index, or map value), if present.

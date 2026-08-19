@@ -1626,23 +1626,37 @@ impl TypeChecker {
                 }
                 Self::error_type()
             }
-            TypeKind::Custom(name, _) => {
+            TypeKind::Custom(name, args) => {
                 if let Some(TypeDefinition::Class(class_def)) =
                     self.type_table.global_type_definitions.get(name)
                 {
                     if let Some(trait_args) = class_def.trait_args.get(ITERABLE_TRAIT_NAME) {
-                        // A class that names its element type yields that type. One
-                        // that implements `Iterable` bare is normally rejected earlier,
-                        // because its `element_at` cannot match the trait signature;
-                        // the placeholder keeps this arm total if such a class ever
-                        // reaches here.
-                        return trait_args.first().cloned().unwrap_or_else(|| {
+                        // For a generic class implementing Iterable<T>, substitute the trait's
+                        // type argument using the instantiation's type parameters.
+                        // E.g., Class<int> implementing Iterable<T> becomes Iterable<int>.
+                        // This mirrors the parallel fix in src/mir/lowering/loops.rs and must
+                        // stay in sync: both sites substitute the element type before returning.
+                        let elem_ty = trait_args.first().cloned().unwrap_or_else(|| {
                             make_type(TypeKind::Generic(
                                 "T".to_string(),
                                 None,
                                 TypeDeclarationKind::None,
                             ))
                         });
+
+                        if let Some(class_generics) = &class_def.generics {
+                            if let Some(class_args) = args {
+                                let mut subs = std::collections::HashMap::new();
+                                for (generic, arg) in class_generics.iter().zip(class_args) {
+                                    if let Ok(concrete) = self.extract_type_from_expression(arg) {
+                                        subs.insert(generic.name.clone(), concrete);
+                                    }
+                                }
+                                return self.substitute_type(&elem_ty, &subs);
+                            }
+                        }
+
+                        return elem_ty;
                     }
                 }
                 self.report_error(format!("Type {} is not iterable", ty), span);

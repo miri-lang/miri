@@ -651,3 +651,108 @@ let r = b.add(\"str\")
         "expected int, got String",
     );
 }
+
+// A generic class implementing Queryable<T> instantiated at float must have the
+// trait-default first() method dispatch to a body whose return type is the
+// concrete float, not the uninstantiated pointer-width int. This guards against
+// double lowering of trait defaults (uninstantiated + per-instantiation) causing
+// conflicting symbol declarations.
+#[test]
+#[ignore = "Code Generation Error: trait-default first() method for Bag<float> declares incompatible signature (expects F64 return type but previous declaration was I64)"]
+fn generic_queryable_float_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<float>()
+    b.add(2.5)
+    println(f\"{b.first() ?? 2.5}\")
+",
+        "2.5",
+    );
+}
+
+// The bool instantiation of the same generic queryable must dispatch to a body
+// typed at the concrete bool width, not the uninstantiated int width.
+#[test]
+#[ignore = "Code Generation Error: trait-default first() method for Bag<bool> declares incompatible signature (expects I8 return type but previous declaration was I64)"]
+fn generic_queryable_bool_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<bool>()
+    b.add(true)
+    if b.first() ?? false
+        println(\"found true\")
+",
+        "found true",
+    );
+}
+
+// The i32 instantiation of the same generic queryable must dispatch correctly.
+#[test]
+#[ignore = "Code Generation Error: trait-default first() method for Bag<i32> declares incompatible signature (expects I32 return type but previous declaration was I64)"]
+fn generic_queryable_i32_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<i32>()
+    b.add(5)
+    println(f\"{b.first() ?? 0}\")
+",
+        "5",
+    );
+}

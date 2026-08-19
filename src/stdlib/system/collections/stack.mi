@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+use system.ops
+use system.collections.list
+use system.collections.queryable
+use system.collections.foldable
+
+/// A LIFO (Last-In-First-Out) stack that yields elements in reverse-insertion order.
+///
+/// A Stack<T> implements Queryable<T>, Iterable<T>, and Foldable<T>.
+/// Iteration and all derived operations (first, last, contains, index_of, sum, min, max,
+/// reduce, count_where, any, all) yield elements in pop order (top to bottom).
+///
+/// Important: element_at(0) is the TOP of the stack (the next element to pop).
+/// This means first() returns the top (the next pop()), and last() returns the bottom.
+/// All inherited methods like contains, index_of, and reduce follow this order.
+///
+/// Example:
+/// ```
+/// let s = Stack<int>()
+/// s.push(1)
+/// s.push(2)
+/// s.push(3)
+/// for x in s
+///     println(f"{x}")
+/// // prints 3, 2, 1 (top to bottom)
+/// ```
+public class Stack<T> implements Queryable<T>, Iterable<T>, Foldable<T>
+    private var items List<T>
+
+    /// Initializes an empty stack.
+    fn init()
+        self.items = List<T>()
+
+    /// Returns the number of elements in the stack.
+    public fn length() int
+        return self.items.length()
+
+    /// Returns the element at the given index, where index 0 is the TOP.
+    /// This enables for-loop iteration: `for x in stack` yields top to bottom.
+    /// Internally flips the index so element_at(0) is the last pushed element.
+    /// Aborts at runtime if index is out of bounds (negative or >= length).
+    public fn element_at(index int) T
+        if index < 0
+            return self.items.element_at(index)
+        if index >= self.items.length()
+            return self.items.element_at(index)
+        let actual_index = self.items.length() - 1 - index
+        return self.items.element_at(actual_index)
+
+    /// Pushes an element onto the top of the stack.
+    public fn push(item T)
+        self.items.push(item)
+
+    /// Removes and returns the top element of the stack.
+    /// Returns None when the stack is empty.
+    public fn pop() T?
+        if self.items.is_empty()
+            return None
+        return self.items.remove_at(self.items.length() - 1)
+
+    /// Returns the top element without removing it.
+    /// Returns None when the stack is empty.
+    public fn peek() T?
+        if self.items.is_empty()
+            return None
+        let top_index = self.items.length() - 1
+        return self.items.element_at(top_index)
