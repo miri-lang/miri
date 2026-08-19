@@ -297,7 +297,18 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
                 node: ExpressionKind::Type(Box::new(new_ty), *is_ref),
             }
         }
-        // Non-type expressions don't contain generics that need substitution
+        // A type argument written as a bare name (`List<T>`) parses as an
+        // identifier rather than a resolved type, so it needs the same
+        // substitution: without it the argument keeps naming the generic
+        // parameter and the instantiation is never recognised as concrete.
+        ExpressionKind::Identifier(name, _) => match subs.get(name.as_str()) {
+            Some(concrete) => Expression {
+                id: expr.id,
+                span: expr.span,
+                node: ExpressionKind::Type(Box::new(concrete.clone()), false),
+            },
+            None => expr.clone(),
+        },
         _ => expr.clone(),
     }
 }

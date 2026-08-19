@@ -16,6 +16,7 @@ use crate::type_checker::context::{
 use crate::type_checker::TypeChecker;
 
 use super::{apply_generic_sub, is_monomorphizable_scalar, lower_expression, LoweringContext};
+use crate::ast::BuiltinCollectionKind;
 use std::collections::HashMap;
 
 /// Produce a mangled function name for a generic instantiation.
@@ -538,7 +539,7 @@ fn resolve_method_receiver(
     obj: &Expression,
     method_expr: &Expression,
 ) -> Option<(Type, String, String)> {
-    let raw_obj_ty = ctx.type_checker.get_type(obj.id)?.clone();
+    let raw_obj_ty = ctx.recorded_type(obj.id)?;
     let obj_ty = resolve_receiver_override(ctx, &raw_obj_ty, obj).unwrap_or(raw_obj_ty);
     let class_name = extract_class_name(&obj_ty)?;
     let method_name = match &method_expr.node {
@@ -636,6 +637,32 @@ fn call_result_type(
     }
 }
 
+/// Whether a type argument is laid out differently from the pointer-width
+/// integer that an unmonomorphized generic body falls back to.
+///
+/// A narrower or wider integer changes the operand width, and a float changes
+/// the register class outright, so either makes the shared body's signature
+/// disagree with the call site. `int` matches the fallback exactly, and every
+/// managed type is passed as a pointer, so both are already correct.
+fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+    )
+}
+
 /// Resolve a generic-class method call to its per-instantiation monomorphized
 /// symbol and concrete return type, or `None` when the plain generic body applies.
 fn resolve_generic_class_monomorph(
@@ -658,6 +685,29 @@ fn resolve_generic_class_monomorph(
         .collect::<Result<_, _>>()
         .ok()?;
     if resolved.len() != gens.len() || !resolved.iter().all(|t| is_monomorphizable_scalar(&t.kind))
+    {
+        return None;
+    }
+    // A builtin collection only needs a per-instantiation body where the shared
+    // generic one is ABI-wrong. That body types every type-parameter position at
+    // the pointer-width integer fallback, which is already correct for `int` and
+    // for any managed element (a pointer), so monomorphizing those would copy
+    // dozens of methods per element type for no change in generated code.
+    if BuiltinCollectionKind::from_name(name.as_str()).is_some()
+        && !resolved
+            .iter()
+            .any(|arg| differs_from_pointer_width_fallback(&arg.kind))
+    {
+        return None;
+    }
+    // A method taking a function parameter keeps the shared generic body:
+    // lowering a lambda argument inside a per-instantiation copy is not
+    // supported, and mangling here without an emitted body would leave the call
+    // referencing a symbol nothing defines.
+    if method_info
+        .params
+        .iter()
+        .any(|(_, param_ty)| matches!(param_ty.kind, TypeKind::Function(_)))
     {
         return None;
     }

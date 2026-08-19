@@ -326,8 +326,8 @@ fn resolve_decl_init<'d>(
             *span,
         ));
     };
-    if let Some(ty) = ctx.type_checker.get_type(init_expr.id) {
-        return Ok((ty.clone(), Some(init_expr), None));
+    if let Some(ty) = ctx.recorded_type(init_expr.id) {
+        return Ok((ty, Some(init_expr), None));
     }
     // No recorded type: lower now to infer it.
     let op = lower_expression(ctx, init_expr, None)?;
@@ -446,8 +446,8 @@ fn assign_variable_initializer(
         return Ok(());
     }
 
-    let init_ty = ctx.type_checker.get_type(init_expr.id);
-    let types_match = init_ty.is_some_and(|ity| {
+    let init_ty = ctx.recorded_type(init_expr.id);
+    let types_match = init_ty.as_ref().is_some_and(|ity| {
         MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(var_ty_kind)
     });
     if types_match {

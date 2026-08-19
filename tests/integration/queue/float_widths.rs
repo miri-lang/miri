@@ -10,7 +10,6 @@
 use crate::integration::utils::*;
 
 #[test]
-#[ignore = "List<T> methods written in Miri (remove_at/pop) lower once at pointer width: 'List_remove_at/List_pop ... returns [F64] is incompatible with previous declaration ... returns [I64]'. Builtin collections are TypeKind::List, so they never enter generic-class monomorphization."]
 fn test_queue_float_enqueue_dequeue() {
     assert_runs_with_output(
         r#"
@@ -32,7 +31,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "List<T> methods written in Miri (remove_at/pop) lower once at pointer width: 'List_remove_at/List_pop ... returns [F64] is incompatible with previous declaration ... returns [I64]'. Builtin collections are TypeKind::List, so they never enter generic-class monomorphization."]
 fn test_queue_float_mixed_operations() {
     assert_runs_with_output(
         r#"

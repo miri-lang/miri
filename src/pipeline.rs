@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::ast::BuiltinCollectionKind;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 
@@ -400,6 +401,109 @@ impl Default for Pipeline {
     }
 }
 
+/// Record the instantiations a program needs but never names.
+///
+/// A `Queue<float>` keeps its elements in a `List<T>` field, so the source only
+/// ever mentions `Queue<float>` while lowering needs that inner collection's
+/// methods at the concrete element width. Substitute each recorded instantiation
+/// into its class's field types and record every nested generic-class type the
+/// substitution makes concrete, repeating until a pass discovers nothing new so
+/// a chain of nested containers is covered.
+/// Every function name a lowered body calls.
+fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::HashSet<String> {
+    let mut called = std::collections::HashSet::new();
+    for (_, body) in bodies {
+        for block in &body.basic_blocks {
+            let Some(term) = &block.terminator else {
+                continue;
+            };
+            if let mir::TerminatorKind::Call {
+                func: mir::Operand::Constant(constant),
+                ..
+            } = &term.kind
+            {
+                if let crate::ast::literal::Literal::Identifier(name) = &constant.literal {
+                    called.insert(name.clone());
+                }
+            }
+        }
+    }
+    called
+}
+
+fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
+    loop {
+        let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
+            .generic_class_instantiations
+            .iter()
+            .map(|(name, tuples)| (name.clone(), tuples.clone()))
+            .collect();
+        let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
+
+        for (class_name, tuples) in &recorded {
+            let Some(TypeDefinition::Class(def)) =
+                type_checker.type_definitions().get(class_name.as_str())
+            else {
+                continue;
+            };
+            let Some(generics) = def.generics.as_ref() else {
+                continue;
+            };
+            let field_types: Vec<Type> = def
+                .fields
+                .iter()
+                .map(|(_, field)| field.ty.clone())
+                .collect();
+
+            for args in tuples {
+                if args.len() != generics.len() {
+                    continue;
+                }
+                let subs: std::collections::HashMap<String, Type> = generics
+                    .iter()
+                    .zip(args)
+                    .map(|(generic, arg)| (generic.name.clone(), arg.clone()))
+                    .collect();
+
+                for field_ty in &field_types {
+                    let concrete = mir::lowering::apply_generic_sub(field_ty, &subs);
+                    let TypeKind::Custom(nested_name, Some(nested_args)) = &concrete.kind else {
+                        continue;
+                    };
+                    let mut resolved = Vec::with_capacity(nested_args.len());
+                    for arg in nested_args {
+                        let Ok(concrete_arg) = type_checker.extract_type_from_expression(arg)
+                        else {
+                            break;
+                        };
+                        resolved.push(concrete_arg);
+                    }
+                    if resolved.len() == nested_args.len() && !resolved.is_empty() {
+                        discovered.push((nested_name.clone(), resolved));
+                    }
+                }
+            }
+        }
+
+        let before: usize = type_checker
+            .generic_class_instantiations
+            .values()
+            .map(Vec::len)
+            .sum();
+        for (name, args) in discovered {
+            type_checker.record_generic_class_instantiation(&name, args);
+        }
+        let after: usize = type_checker
+            .generic_class_instantiations
+            .values()
+            .map(Vec::len)
+            .sum();
+        if after == before {
+            return;
+        }
+    }
+}
+
 impl Pipeline {
     pub fn new() -> Self {
         Self {
@@ -457,6 +561,7 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
+        expand_nested_generic_instantiations(&mut type_checker);
 
         Ok(PipelineResult { ast, type_checker })
     }
@@ -480,6 +585,7 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
+        expand_nested_generic_instantiations(&mut type_checker);
 
         for warning in type_checker.warnings() {
             eprintln!(
@@ -748,6 +854,13 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
+        // A builtin collection's methods are emitted on demand after the main
+        // lowering: most call sites lower to a direct runtime call instead of the
+        // Miri body, so emitting every method for every recorded element type
+        // would compile bodies nothing reaches.
+        if BuiltinCollectionKind::from_name(class_name).is_some() {
+            return Ok(());
+        }
         for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             Self::lower_instantiation_methods(
                 result,
@@ -912,6 +1025,13 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         kernel_namer: &mir::lowering::SharedKernelNamer,
     ) -> Result<(), CompilerError> {
+        // A builtin collection's methods are emitted on demand after the main
+        // lowering: most call sites lower to a direct runtime call instead of the
+        // Miri body, so emitting every method for every recorded element type
+        // would compile bodies nothing reaches.
+        if BuiltinCollectionKind::from_name(class_name).is_some() {
+            return Ok(());
+        }
         for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             // The trait-default body is written in the trait's own generic
             // parameters (`U`), which the class binds through
@@ -938,6 +1058,141 @@ impl Pipeline {
             )?;
         }
         Ok(())
+    }
+
+    /// Emit a builtin collection's monomorphized methods only where a lowered
+    /// body actually calls them.
+    ///
+    /// A collection declares dozens of methods and most call sites lower to a
+    /// direct runtime call rather than the Miri body, so emitting every method
+    /// for every recorded element type compiles bodies nothing can reach — and an
+    /// unreachable body still has to satisfy MIR verification. Scan the lowered
+    /// bodies for mangled collection symbols, emit just those, and repeat until a
+    /// pass finds nothing new, since a freshly emitted body can call another.
+    fn lower_called_builtin_collection_methods(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        kernel_namer: &mir::lowering::SharedKernelNamer,
+    ) -> Result<(), CompilerError> {
+        loop {
+            let called = called_function_names(bodies);
+            let mut emitted = false;
+
+            for stmt in result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter())
+            {
+                let StatementKind::Class(class_data) = &stmt.node else {
+                    continue;
+                };
+                let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                    continue;
+                };
+                if BuiltinCollectionKind::from_name(class_name).is_none() {
+                    continue;
+                }
+
+                for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
+                    mir::lowering::dispatch::extend_subs_with_trait_params(
+                        &result.type_checker,
+                        class_name,
+                        &mut subs,
+                    );
+
+                    let own = class_data.body.iter();
+                    let defaults = Self::trait_default_methods_for_class(result, class_name);
+                    for method_stmt in own.chain(defaults.iter().copied()) {
+                        let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                            continue;
+                        };
+                        if decl.body.is_none() {
+                            continue;
+                        }
+                        let base = Self::mangle_method_name(class_name, &decl.name);
+                        let mangled =
+                            mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
+                        if lowered_names.contains(&mangled) || !called.contains(&mangled) {
+                            continue;
+                        }
+                        Self::lower_one_instantiation_method(
+                            result,
+                            class_name,
+                            method_stmt,
+                            &decl.name,
+                            is_release,
+                            &subs,
+                            &mangle_args,
+                            bodies,
+                            lowered_names,
+                            kernel_namer,
+                        )?;
+                        emitted = true;
+                    }
+                }
+            }
+
+            if !emitted {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Default-method statements of every trait a class implements, including
+    /// inherited traits, excluding those the class defines itself.
+    fn trait_default_methods_for_class<'a>(
+        result: &'a PipelineResult,
+        class_name: &str,
+    ) -> Vec<&'a Statement> {
+        use crate::type_checker::context::TypeDefinition;
+        let Some(TypeDefinition::Class(def)) =
+            result.type_checker.type_definitions().get(class_name)
+        else {
+            return Vec::new();
+        };
+        let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut pending: Vec<String> = def.traits.clone();
+        while let Some(trait_name) = pending.pop() {
+            if !wanted.insert(trait_name.clone()) {
+                continue;
+            }
+            if let Some(TypeDefinition::Trait(trait_def)) =
+                result.type_checker.type_definitions().get(&trait_name)
+            {
+                pending.extend(trait_def.parent_traits.iter().cloned());
+            }
+        }
+
+        let mut methods = Vec::new();
+        for stmt in result
+            .ast
+            .body
+            .iter()
+            .chain(result.type_checker.imported_statements.iter())
+        {
+            let StatementKind::Trait(name_expr, _, _, body, _) = &stmt.node else {
+                continue;
+            };
+            let Some(trait_name) = Self::identifier_name(name_expr) else {
+                continue;
+            };
+            if !wanted.contains(trait_name) {
+                continue;
+            }
+            for method_stmt in body {
+                let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                    continue;
+                };
+                if decl.body.is_some() && !def.methods.contains_key(decl.name.as_str()) {
+                    methods.push(method_stmt);
+                }
+            }
+        }
+        methods
     }
 
     fn lower_to_mir(
@@ -990,6 +1245,14 @@ impl Pipeline {
         }
 
         self.lower_monomorphized_generics(
+            result,
+            is_release,
+            &mut bodies,
+            &mut lowered_names,
+            &kernel_namer,
+        )?;
+
+        self.lower_called_builtin_collection_methods(
             result,
             is_release,
             &mut bodies,
