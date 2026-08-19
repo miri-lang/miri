@@ -92,6 +92,32 @@ fn main()
     );
 }
 
+/// The default operand is released when it is the one that gets used.
+///
+/// The result retains whichever side it takes, so the temp the right-hand
+/// expression allocated needs releasing on that path — without it the fallback
+/// list stays allocated with a reference nobody holds.
+#[test]
+fn test_coalesce_default_operand_no_leak() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn maybe(count int) [int]?
+    if count > 0
+        var items = List<int>()
+        items.push(1)
+        return Some(items)
+    return None
+
+fn main()
+    let items = maybe(0) ?? List<int>()
+    println(f"{items.length()}")
+"#,
+        "0",
+    );
+}
+
 #[test]
 fn test_coalesce_over_list_payload_no_leak() {
     assert_runs_with_output(

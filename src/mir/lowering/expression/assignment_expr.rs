@@ -16,7 +16,9 @@ use crate::runtime_fns::rt;
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
-use crate::mir::lowering::helpers::{coerce_rvalue, ensure_place, resolve_type};
+use crate::mir::lowering::helpers::{
+    coerce_rvalue, ensure_place, resolve_type, spellings_of_one_value,
+};
 
 fn assign_to_identifier(
     ctx: &mut LoweringContext,
@@ -66,7 +68,7 @@ fn assign_to_var_simple(
     let lhs_ty = ctx.body.local_decls[local.0].ty.clone();
     let rhs_ty = val.ty(&ctx.body).clone();
 
-    let rvalue = if rhs_ty.kind != lhs_ty.kind {
+    let rvalue = if rhs_ty.kind != lhs_ty.kind && !spellings_of_one_value(&rhs_ty, &lhs_ty) {
         coerce_rvalue(val.clone(), &rhs_ty, &lhs_ty)
     } else {
         Rvalue::Use(val.clone())

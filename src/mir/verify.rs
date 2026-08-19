@@ -24,68 +24,76 @@
 //!
 //! | MIR event | Effect on the delta |
 //! |---|---|
-//! | `StorageLive(x)` | `d(x) := 0` |
+//! | `StorageLive(x)` | `d(x) := unwritten` |
 //! | `StorageDead(x)` | leak if `d(x) > 0`; then `d(x) := ⊥` |
-//! | `IncRef(p)` | `d(p) += 1`, unless it funds an alias — see below |
-//! | `DecRef(p)`, `Dealloc(p)` | `d(p) -= 1`; double-release if it would go below zero |
+//! | `IncRef(p)` | `d(p) += 1`, unless something downstream claims it — see below |
+//! | `DecRef(p)`, `Dealloc(p)` | `d(p) -= 1`; double-release below zero, no-op while unwritten |
 //! | `Assign(x, rv)` / `Reassign(x, rv)` with an owning rvalue | `d(x) += 1` |
-//! | a bare-local `Move(p)` operand inside an rvalue | `d(p) -= 1`; double-release if `p` owns none |
-//! | call destination of managed type | `d(dest) += 1` |
-//! | a bare-local operand of a `Cast` | `d(p) -= 1` |
-//! | a bare-local `Move(p)` argument, when the call hands back that same type | `d(p) -= 1` |
-//! | `Return` | every tracked local must be at `0` or `⊥` |
+//! | a bare-local `Move(p)` inside a `Use` or a `Cast` | `d(p) -= 1`; double-release if `p` owns none |
+//! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
+//! | an argument the callee takes ownership of | `d(p) -= 1` |
+//! | a call that never returns | the path stops; nothing is carried into its successor |
+//! | `Return` | every tracked local must own nothing |
 //!
-//! **An `IncRef` funds the consumer, not the local it names.** Aliasing lowers to
-//! `IncRef(source)` immediately followed by `Assign(dest, Copy(source))`, and that
-//! increment exists to pay for `dest`'s reference. Crediting `source` leaves
-//! `dest` at zero, so `dest`'s release reads as a double-release while `source`
-//! reads as a leak. The increment is therefore attributed to the destination — but
-//! only for a plain alias. When the following assignment builds an aggregate, its
-//! operand increments pay for the references stored *inside* the aggregate and are
-//! consumed by the `move`s that place them there, so they stay with the operands.
+//! **A retain pays for whoever claims what it retained, and is credited where that
+//! claim happens.** Aliasing lowers to `IncRef(source)` followed by
+//! `Assign(dest, Copy(source))`, and the increment exists to pay for `dest`'s
+//! reference: crediting `source` leaves `dest` at zero, so `dest`'s release reads as
+//! a double-release while `source` reads as a leak. The claim need not be the next
+//! statement — rebinding releases the old value in between — and crediting at the
+//! retain rather than at the read would let that release consume the reference meant
+//! for the new binding.
 //!
-//! **A `Copy` with no funding `IncRef` is a borrow** and moves no ownership. That
-//! is why the increment is attributed rather than a reference being transferred out
-//! of the source: transferring would charge a source that was only read.
+//! **A retain feeding a slot of a value is claimed by no local.** Building an
+//! aggregate, or storing through a projection, hands the reference to the value
+//! being written, which releases it when it dies. The store itself consumes
+//! nothing: one made without a retain is copying values the builder still owns and
+//! still releases.
 //!
-//! **A `Move` of a projection does not consume its base.** Field and index reads
-//! are borrows by design; only a bare local carries ownership.
+//! **A `Copy` of a whole local with no funding retain is a borrow** and moves no
+//! ownership. Reading a field or an element out is not — that produces a value of
+//! its own, which its destination owns.
 //!
-//! **A `Move` argument is consumed only when the callee hands back the type it was
-//! given.** The copy-on-write path moves its receiver in and returns the same
-//! container, so it has taken that reference over; a call returning nothing is
-//! mutating in place, and one returning a different type is reading its argument to
-//! build something else. Both of those leave the reference with the caller. On its
-//! own [`Operand::Move`] is a uniqueness witness for copy-on-write, never a
-//! statement about ownership.
+//! **What a call does to its arguments and its result is a property of the callee**,
+//! recorded per intrinsic in [`crate::runtime_fns`]. A container insertion keeps
+//! what it is handed; a copy-on-write entry point takes its receiver over; a failure
+//! reporter never returns; map indexing hands back a borrow of an entry the map
+//! still owns. On its own [`Operand::Move`] is a uniqueness witness for
+//! copy-on-write, never a statement about ownership — reading it as one consumes a
+//! local at every comparison it appears in.
 //!
-//! **A `Cast` of a managed value re-types it rather than copying it**, so it carries
-//! the source's reference across however the operand is spelled.
+//! **A `Cast` re-spells a type without touching the value**, so it carries across
+//! whatever the read it wraps produced, and a local that keeps holding that value
+//! past the cast needs a retain to pay for it.
 //!
 //! # Domain
 //!
-//! `⊥` (untracked or out of scope), a concrete `0..=8`, `Unbounded` for a count that
-//! grew past the cap, and `Suppressed` once a finding has been reported against a
-//! local, so one defect does not cascade into every block downstream. Capping is
-//! what bounds the lattice height and makes the fixpoint terminate; a count that
-//! reaches the cap is a reference acquired on every turn of a loop, which is itself
-//! the finding.
+//! `⊥` (untracked or out of scope), `unwritten` for a local that is live but null,
+//! a concrete `0..=8`, `Unbounded` for a count that grew past the cap, and
+//! `Suppressed` once a finding has been reported against a local, so one defect does
+//! not cascade into every block downstream. Capping is what bounds the lattice
+//! height and makes the fixpoint terminate; a count that reaches the cap is a
+//! reference acquired on every turn of a loop, which is itself the finding.
 //!
 //! Edges that disagree at a merge keep the larger count rather than collapsing, and
 //! the disagreement is reported by comparing the incoming edges directly. Collapsing
-//! at the merge would swallow exactly the loop case above.
+//! at the merge would swallow exactly the loop case above. An edge that never wrote
+//! the local disagrees with nobody: it reads null, so a release downstream frees
+//! what the other edge owns and does nothing here.
 //!
 //! # Enabling
 //!
 //! `MIRI_VERIFY_MIR=warn` reports and continues; any other non-empty value, or the
 //! `--verify-mir` flag, makes findings fatal.
 
+use crate::ast::literal::Literal;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::StatementKind;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::{Body, Local, Statement};
+use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -115,6 +123,10 @@ impl fmt::Display for VerificationViolation {
 enum Delta {
     /// Out of scope, or not yet reached on this path.
     Bottom,
+    /// Live but never written on this path, so the local reads as null. Releasing
+    /// one is a no-op: the release path checks for null before touching anything,
+    /// which is what makes rebinding a declared-but-unassigned variable work.
+    Uninit,
     Owned(i32),
     /// The count grew past [`DELTA_CAP`] — a reference acquired on every turn of a
     /// loop and never released. Reported rather than followed, which is also what
@@ -129,6 +141,8 @@ impl Delta {
     fn shift(self, by: i32) -> Delta {
         match self {
             Delta::Bottom => Delta::Owned(by.max(0)),
+            Delta::Uninit if by > 0 => Delta::Owned(by),
+            Delta::Uninit => Delta::Uninit,
             Delta::Owned(n) if (0..=DELTA_CAP).contains(&(n + by)) => Delta::Owned(n + by),
             Delta::Owned(_) => Delta::Unbounded,
             Delta::Unbounded => Delta::Unbounded,
@@ -147,14 +161,32 @@ impl Delta {
         match (self, other) {
             (Delta::Bottom, other) => other,
             (owned, Delta::Bottom) => owned,
+            (Delta::Uninit, other) => other,
+            (owned, Delta::Uninit) => owned,
             (Delta::Owned(left), Delta::Owned(right)) => Delta::Owned(left.max(right)),
             (Delta::Suppressed, _) | (_, Delta::Suppressed) => Delta::Suppressed,
             (Delta::Unbounded, _) | (_, Delta::Unbounded) => Delta::Unbounded,
         }
     }
 
+    /// Whether two edges arrive holding the same number of references.
+    ///
+    /// `⊥` disagrees with nobody: the local is not live on that edge. Neither does
+    /// an unwritten one — it reads null, so a release downstream frees the value the
+    /// other edge owns and does nothing on this one. Both paths stay correct, which
+    /// is what a merge exists to establish. The divergence worth reporting is
+    /// between edges that both wrote the local and disagree on how many references
+    /// they left holding.
+    fn owns_as_much_as(self, other: Delta) -> bool {
+        match (self, other) {
+            (Delta::Bottom, _) | (_, Delta::Bottom) => true,
+            (Delta::Uninit, _) | (_, Delta::Uninit) => true,
+            (left, right) => left == right,
+        }
+    }
+
     fn is_settled(self) -> bool {
-        matches!(self, Delta::Bottom | Delta::Owned(0))
+        matches!(self, Delta::Bottom | Delta::Uninit | Delta::Owned(0))
     }
 }
 
@@ -162,6 +194,7 @@ impl fmt::Display for Delta {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Delta::Bottom => write!(f, "out of scope"),
+            Delta::Uninit => write!(f, "unwritten"),
             Delta::Owned(n) => write!(f, "{}", n),
             Delta::Unbounded => write!(f, "more than {}", DELTA_CAP),
             Delta::Suppressed => write!(f, "indeterminate"),
@@ -314,18 +347,37 @@ fn run_to_fixpoint(
     entries
 }
 
+/// Blocks the analysis follows out of `bb`.
+///
+/// A call that never returns has no successor to carry state into, whatever block
+/// the terminator names: the path stops at the call, so what the caller was still
+/// holding is not a leak. The block itself stays reachable — every one of these
+/// sits on a failure branch that some other edge also reaches.
 fn successors_of(body: &Body, bb: usize) -> Vec<usize> {
-    body.basic_blocks[bb]
-        .terminator
-        .as_ref()
-        .map(|terminator| {
-            terminator
-                .successors()
-                .into_iter()
-                .map(|block| block.0)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(terminator) = body.basic_blocks[bb].terminator.as_ref() else {
+        return Vec::new();
+    };
+    if terminator_diverges(&terminator.kind) {
+        return Vec::new();
+    }
+    terminator
+        .successors()
+        .into_iter()
+        .map(|block| block.0)
+        .collect()
+}
+
+/// Whether a terminator hands control to a callee that never gives it back.
+fn terminator_diverges(kind: &TerminatorKind) -> bool {
+    match kind {
+        TerminatorKind::Call { func, .. } => direct_call_name(func).is_some_and(diverges),
+        TerminatorKind::VirtualCall { .. }
+        | TerminatorKind::GpuLaunch { .. }
+        | TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => false,
+    }
 }
 
 /// Exit state of a block, recomputed from its converged entry state.
@@ -418,19 +470,22 @@ fn report_join_divergences(
 }
 
 /// The first pair of in-edges that disagree about how many references they own.
+///
+/// Edges are compared by what they own, not by which state says so: a local that
+/// was never written and one that was written and released both own nothing, and
+/// arriving at a merge by either route is the same thing.
 fn first_divergence(
     exits: &[(usize, PathState)],
     local: Local,
 ) -> Option<(usize, Delta, usize, Delta)> {
-    let (base_bb, base) = exits
-        .iter()
-        .map(|(bb, state)| (*bb, delta_of(state, local)))
-        .find(|(_, delta)| !matches!(delta, Delta::Bottom | Delta::Suppressed))?;
+    let counted = |(bb, state): &(usize, PathState)| (*bb, delta_of(state, local));
+    let comparable = |(_, delta): &(usize, Delta)| !matches!(delta, Delta::Suppressed);
 
+    let (base_bb, base) = exits.iter().map(counted).find(comparable)?;
     exits
         .iter()
-        .map(|(bb, state)| (*bb, delta_of(state, local)))
-        .find(|(_, delta)| !matches!(delta, Delta::Bottom | Delta::Suppressed) && *delta != base)
+        .map(counted)
+        .find(|(_, delta)| comparable(&(0, *delta)) && !delta.owns_as_much_as(base))
         .map(|(other_bb, other)| (base_bb, base, other_bb, other))
 }
 
@@ -443,55 +498,145 @@ fn run_block(
     violations: &mut Vec<VerificationViolation>,
 ) {
     let block = &body.basic_blocks[bb];
-    let funded = aliases_funded_by_incref(&block.statements);
+    let credits = retain_credits(&block.statements);
 
     for (index, stmt) in block.statements.iter().enumerate() {
-        let credit = funded.get(&index).copied();
-        apply_statement(body, stmt, credit, tracked, state, violations);
+        if credits.absorbed.contains(&index) {
+            continue;
+        }
+        apply_statement(body, stmt, tracked, state, violations);
+        if let Some(funded) = credits.funded_reads.get(&index) {
+            adjust(state, tracked, *funded, 1);
+        }
     }
 
     if let Some(terminator) = &block.terminator {
-        apply_terminator(body, &terminator.kind, tracked, state);
+        apply_terminator(body, &terminator.kind, tracked, state, violations);
     }
 }
 
-/// Map each `IncRef` statement index to the local its increment actually funds.
-///
-/// An increment immediately followed by an assignment that reads the same place by
-/// `Copy` pays for the destination's reference, so the destination is credited.
-fn aliases_funded_by_incref(statements: &[Statement]) -> HashMap<usize, Local> {
-    let mut funded = HashMap::new();
+/// Where the reference an `IncRef` pays for lands.
+#[derive(Debug, Default)]
+struct RetainCredits {
+    /// Statement indices of retains whose reference is claimed elsewhere, so the
+    /// retain itself moves no delta.
+    absorbed: HashSet<usize>,
+    /// Statement index of a read, and the local its retain pays for. The credit is
+    /// applied where the read happens rather than where the retain does: rebinding
+    /// releases the old value in between, and crediting early would let that
+    /// release consume the reference meant for the new binding.
+    funded_reads: HashMap<usize, Local>,
+}
+
+/// Work out, for every `IncRef` in a block, where the reference it pays for lands.
+fn retain_credits(statements: &[Statement]) -> RetainCredits {
+    let mut credits = RetainCredits::default();
     for (index, stmt) in statements.iter().enumerate() {
         let StatementKind::IncRef(incremented) = &stmt.kind else {
             continue;
         };
-        let Some(next) = statements.get(index + 1) else {
+        // Retaining a field pays for the read that takes it out, and that read is
+        // what credits its destination. Nothing else may claim it: crediting the
+        // value holding the field would read as a reference it acquired and leaked.
+        if !incremented.projection.is_empty() {
+            credits.absorbed.insert(index);
             continue;
-        };
-        let (dest, rvalue) = match &next.kind {
-            StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
-                (dest, rvalue)
+        }
+        match reader_of(statements, index, incremented) {
+            Some(Reader::Alias(at, local)) => {
+                credits.absorbed.insert(index);
+                credits.funded_reads.insert(at, local);
             }
-            StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::IncRef(_)
-            | StatementKind::DecRef(_)
-            | StatementKind::Dealloc(_)
-            | StatementKind::Nop => continue,
-        };
-        if let Rvalue::Use(Operand::Copy(source)) = rvalue {
-            if source == incremented && dest.projection.is_empty() {
-                funded.insert(index, dest.local);
+            Some(Reader::Slot) => {
+                credits.absorbed.insert(index);
             }
+            None => {}
         }
     }
-    funded
+    credits
+}
+
+/// What claims the reference a retain pays for.
+enum Reader {
+    /// A read at this statement index, landing in this local.
+    Alias(usize, Local),
+    /// A slot inside a value, which owns the reference from then on. No tracked
+    /// local holds it, so no delta moves.
+    Slot,
+}
+
+/// Find what claims the reference retained at `index`, if anything does.
+///
+/// The reader need not be the next statement: rebinding a variable releases the old
+/// value between retaining the new one and storing it, and the release of an
+/// unrelated local says nothing about what this retain funds. The scan stops at
+/// anything that changes what the retained place holds or owns, because past that
+/// point a later read is reading a different value than the one paid for.
+fn reader_of(statements: &[Statement], index: usize, retained: &Place) -> Option<Reader> {
+    for (at, stmt) in statements.iter().enumerate().skip(index + 1) {
+        match &stmt.kind {
+            StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
+                if stores_place_in_a_value(dest, rvalue, retained) {
+                    return Some(Reader::Slot);
+                }
+                if reads_place_without_owning(rvalue, retained) && dest.projection.is_empty() {
+                    return Some(Reader::Alias(at, dest.local));
+                }
+                if *dest == *retained {
+                    return None;
+                }
+            }
+            StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
+                if place == retained {
+                    return None;
+                }
+            }
+            StatementKind::StorageDead(place) => {
+                if place == retained {
+                    return None;
+                }
+            }
+            StatementKind::StorageLive(_) | StatementKind::IncRef(_) | StatementKind::Nop => {}
+        }
+    }
+    None
+}
+
+/// Whether an assignment puts `place` inside a value that owns it from then on:
+/// a field of an aggregate being built, or a slot of a container being written.
+///
+/// The reference stored there belongs to the container, which releases it when it
+/// dies. No tracked local holds it, so the retain that paid for it moves no delta —
+/// and an aggregate built without a retain is copying values that were already
+/// owned, which is why the store itself never consumes anything.
+fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool {
+    match rvalue {
+        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| reads(operand, place)),
+        Rvalue::Use(operand) => !dest.projection.is_empty() && reads(operand, place),
+        Rvalue::Cast(_, _)
+        | Rvalue::Ref(_)
+        | Rvalue::BinaryOp(_, _, _)
+        | Rvalue::UnaryOp(_, _)
+        | Rvalue::Len(_)
+        | Rvalue::Allocate(_, _, _)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(_, _)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Phi(_) => false,
+    }
+}
+
+/// Whether an operand reads exactly `place`, however it is spelled.
+fn reads(operand: &Operand, place: &Place) -> bool {
+    match operand {
+        Operand::Copy(source) | Operand::Move(source) => source == place,
+        Operand::Constant(_) => false,
+    }
 }
 
 fn apply_statement(
     body: &Body,
     stmt: &Statement,
-    incref_credit: Option<Local>,
     tracked: &[Local],
     state: &mut PathState,
     violations: &mut Vec<VerificationViolation>,
@@ -499,16 +644,16 @@ fn apply_statement(
     match &stmt.kind {
         StatementKind::StorageLive(place) => {
             if tracked.contains(&place.local) {
-                state.insert(place.local, Delta::Owned(0));
+                state.insert(place.local, Delta::Uninit);
             }
         }
         StatementKind::StorageDead(place) => {
             flag_leak_at_scope_end(body, place, tracked, state, violations);
         }
-        StatementKind::IncRef(place) => {
-            let credited = incref_credit.unwrap_or(place.local);
-            adjust(state, tracked, credited, 1);
-        }
+        // A retain whose reference is claimed elsewhere never reaches here: the
+        // block skips it and credits the claimant instead. What is left pays for
+        // the local it names.
+        StatementKind::IncRef(place) => adjust(state, tracked, place.local, 1),
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
             release(body, place, tracked, state, violations);
         }
@@ -570,7 +715,10 @@ fn release(
         Delta::Owned(owned) if owned > 0 => {
             state.insert(place.local, Delta::Owned(owned - 1));
         }
-        Delta::Unbounded | Delta::Suppressed => {}
+        // Releasing a local that was never written reads null and does nothing,
+        // which is how rebinding a declared-but-unassigned variable releases an
+        // old value that is not there yet.
+        Delta::Uninit | Delta::Unbounded | Delta::Suppressed => {}
         Delta::Bottom | Delta::Owned(_) => {
             violations.push(VerificationViolation {
                 local: place.local,
@@ -582,42 +730,109 @@ fn release(
     }
 }
 
-fn apply_terminator(body: &Body, kind: &TerminatorKind, tracked: &[Local], state: &mut PathState) {
-    let (args, destination) = match kind {
+fn apply_terminator(
+    body: &Body,
+    kind: &TerminatorKind,
+    tracked: &[Local],
+    state: &mut PathState,
+    violations: &mut Vec<VerificationViolation>,
+) {
+    let (func, args, destination) = match kind {
         TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } => (Some(func), args.as_slice(), destination),
+        // A virtual call resolves its callee through a vtable at runtime, so
+        // nothing static is known about what it takes ownership of.
+        TerminatorKind::VirtualCall {
             args, destination, ..
-        }
-        | TerminatorKind::VirtualCall {
-            args, destination, ..
-        } => (args.as_slice(), destination),
+        } => (None, args.as_slice(), destination),
         TerminatorKind::GpuLaunch {
             launch_args,
             destination,
             ..
-        } => (launch_args.args(), destination),
+        } => (None, launch_args.args(), destination),
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::Return
         | TerminatorKind::Unreachable => return,
     };
 
-    if !destination.projection.is_empty() || !tracked.contains(&destination.local) {
-        return;
+    release_taken_args(body, func, args, tracked, state, violations);
+
+    let borrows = func
+        .and_then(direct_call_name)
+        .is_some_and(hands_back_a_borrow);
+    if destination.projection.is_empty() && !borrows {
+        adjust(state, tracked, destination.local, 1);
     }
-    // A callee handing back the type it was given has taken that argument over —
-    // the copy-on-write path moves its receiver in and returns the container. One
-    // returning a different type is reading the argument and building something
-    // else, so the caller keeps its reference.
-    let handed_back = &body.local_decls[destination.local.0].mir_ty;
-    for arg in args {
-        let Some(local) = bare_local_moved(arg) else {
+}
+
+/// Hand over the references a call takes ownership of.
+///
+/// Which arguments those are is a property of the callee, not of how the argument
+/// is spelled: a `move` marks a value the caller will not read again, which is what
+/// makes copy-on-write safe, but it says nothing about who releases it. Reading it
+/// as ownership would consume the arguments of every call that merely builds
+/// something out of what it was given.
+fn release_taken_args(
+    body: &Body,
+    func: Option<&Operand>,
+    args: &[Operand],
+    tracked: &[Local],
+    state: &mut PathState,
+    violations: &mut Vec<VerificationViolation>,
+) {
+    let Some(name) = func.and_then(direct_call_name) else {
+        return;
+    };
+    for position in taken_argument_positions(name) {
+        let Some(local) = args.get(*position).and_then(bare_local_read) else {
             continue;
         };
-        if body.local_decls[local.0].mir_ty == *handed_back {
-            adjust(state, tracked, local, -1);
-        }
+        release(body, &Place::new(local), tracked, state, violations);
     }
-    adjust(state, tracked, destination.local, 1);
+}
+
+/// The symbol a call names, for a direct call to a named function.
+///
+/// Indirect and closure calls resolve their callee at runtime, so nothing static
+/// is known about what they take ownership of.
+fn direct_call_name(func: &Operand) -> Option<&str> {
+    match func {
+        Operand::Constant(constant) => match &constant.literal {
+            Literal::Identifier(name) => Some(name.as_str()),
+            Literal::Integer(_)
+            | Literal::Float(_)
+            | Literal::String(_)
+            | Literal::Boolean(_)
+            | Literal::Regex(_)
+            | Literal::None => None,
+        },
+        Operand::Copy(_) | Operand::Move(_) => None,
+    }
+}
+
+/// Whether an rvalue reads `place` without taking over a reference to it, so that
+/// a preceding retain is what pays for the destination.
+fn reads_place_without_owning(rvalue: &Rvalue, place: &Place) -> bool {
+    match rvalue {
+        Rvalue::Use(Operand::Copy(source)) => source == place,
+        Rvalue::Use(_)
+        | Rvalue::Cast(_, _)
+        | Rvalue::Ref(_)
+        | Rvalue::Aggregate(_, _)
+        | Rvalue::BinaryOp(_, _, _)
+        | Rvalue::UnaryOp(_, _)
+        | Rvalue::Len(_)
+        | Rvalue::Allocate(_, _, _)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(_, _)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Phi(_) => false,
+    }
 }
 
 /// Whether an rvalue hands its destination a reference the function must release.
@@ -626,11 +841,17 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
         // A managed constant is materialized fresh and a move carries the source's
         // reference across.
         Rvalue::Use(Operand::Constant(_)) | Rvalue::Use(Operand::Move(_)) => true,
-        // Aggregates allocate; a cast of a managed value and an explicit allocation
-        // both yield a reference the destination owns.
-        Rvalue::Aggregate(_, _) | Rvalue::Cast(_, _) | Rvalue::Allocate(_, _, _) => true,
-        // A plain copy is a borrow until an IncRef funds it.
-        Rvalue::Use(Operand::Copy(_)) => false,
+        // A cast re-spells a type without touching the value, so it carries across
+        // whatever the read it wraps produced.
+        Rvalue::Cast(_, _) => true,
+        // Aggregates allocate, and an explicit allocation yields a reference the
+        // destination owns.
+        Rvalue::Aggregate(_, _) | Rvalue::Allocate(_, _, _) => true,
+        // Reading a field or element out produces a value of its own, which the
+        // destination owns and releases. Copying a whole local is a borrow instead,
+        // and stays one until a retain funds it — that is the alias case, where two
+        // names share one value and the retain is what pays for the second name.
+        Rvalue::Use(Operand::Copy(source)) => !source.projection.is_empty(),
         Rvalue::Ref(_)
         | Rvalue::BinaryOp(_, _, _)
         | Rvalue::UnaryOp(_, _)
@@ -649,16 +870,32 @@ fn bare_local_moved(operand: &Operand) -> Option<Local> {
     }
 }
 
-/// Locals whose reference an rvalue takes over.
+/// Locals whose reference an assignment takes over.
 ///
-/// A cast of a managed value re-types it in place rather than copying it, so it
-/// carries the source's reference across however the operand is spelled; every
-/// other rvalue takes over only what is moved into it.
+/// A rebinding move, and a cast, which re-spells the type of the value it reads in
+/// place rather than copying it — so the reference goes with it, and a local that
+/// keeps holding the value past the cast needs a retain to pay for that.
+///
+/// Storing into an aggregate or a container slot is deliberately not here. What
+/// pays for the stored reference is the operand's own retain, which is credited to
+/// the container rather than to a local, so a store made without one is copying a
+/// value that was already owned. Consuming there would report the still-rightful
+/// owner's later release as one release too many.
 fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
-    if let Rvalue::Cast(operand, _) = rvalue {
-        return bare_local_read(operand).into_iter().collect();
+    match rvalue {
+        Rvalue::Cast(operand, _) => bare_local_read(operand).into_iter().collect(),
+        Rvalue::Use(_)
+        | Rvalue::Ref(_)
+        | Rvalue::Aggregate(_, _)
+        | Rvalue::BinaryOp(_, _, _)
+        | Rvalue::UnaryOp(_, _)
+        | Rvalue::Len(_)
+        | Rvalue::Allocate(_, _, _)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(_, _)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Phi(_) => moved_bare_locals(rvalue),
     }
-    moved_bare_locals(rvalue)
 }
 
 /// The bare local an operand reads, whether it is spelled as a copy or a move.
@@ -672,33 +909,26 @@ fn bare_local_read(operand: &Operand) -> Option<Local> {
 }
 
 /// Locals whose reference an rvalue takes over by moving them out.
+///
+/// Only a plain use rebinds a value; every other rvalue reads its operands to
+/// compute something and leaves them where they were. A `move` there is the
+/// uniqueness witness copy-on-write relies on, not a transfer of ownership —
+/// reading it as one would consume a local at every comparison it appears in.
 fn moved_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
-    let operands: Vec<&Operand> = match rvalue {
-        Rvalue::Use(operand) => vec![operand],
-        Rvalue::Cast(operand, _) | Rvalue::UnaryOp(_, operand) => vec![operand.as_ref()],
-        Rvalue::BinaryOp(_, left, right) => vec![left.as_ref(), right.as_ref()],
-        Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) => {
-            operands.iter().collect()
-        }
-        Rvalue::Allocate(size, align, allocator) => vec![size, align, allocator],
-        Rvalue::AtomicOp {
-            op: _,
-            buffer,
-            index,
-            value,
-            compare_expected,
-        } => {
-            let mut operands = vec![buffer.as_ref(), index.as_ref(), value.as_ref()];
-            if let Some(expected) = compare_expected {
-                operands.push(expected.as_ref());
-            }
-            operands
-        }
-        // A `Phi` merges values the incoming edges already accounted for; taking
-        // every operand here would charge each of them for the one that is selected.
-        Rvalue::Ref(_) | Rvalue::Len(_) | Rvalue::GpuIntrinsic(_) | Rvalue::Phi(_) => Vec::new(),
-    };
-    operands.into_iter().filter_map(bare_local_moved).collect()
+    match rvalue {
+        Rvalue::Use(operand) => bare_local_moved(operand).into_iter().collect(),
+        Rvalue::Cast(_, _)
+        | Rvalue::UnaryOp(_, _)
+        | Rvalue::BinaryOp(_, _, _)
+        | Rvalue::Aggregate(_, _)
+        | Rvalue::MathIntrinsic(_, _)
+        | Rvalue::Allocate(_, _, _)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Ref(_)
+        | Rvalue::Len(_)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::Phi(_) => Vec::new(),
+    }
 }
 
 /// Returns a human-readable display name for a local: the variable name if
