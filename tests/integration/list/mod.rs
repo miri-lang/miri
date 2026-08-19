@@ -8,6 +8,7 @@ pub mod cow;
 pub mod edge_cases;
 pub mod errors;
 pub mod float_collections;
+pub mod float_widths;
 pub mod indexing_iteration;
 pub mod integration;
 pub mod methods;

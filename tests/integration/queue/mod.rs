@@ -6,4 +6,5 @@ pub use crate::integration::utils;
 pub mod basic;
 pub mod derived_traits;
 pub mod encapsulation;
+pub mod float_widths;
 pub mod managed;

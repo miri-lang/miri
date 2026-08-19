@@ -784,7 +784,11 @@ impl<'a> FunctionTranslator<'a> {
         for (i, arg) in args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
             let val_ty = builder.func.dfg.value_type(val);
-            let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
+            let val = if widen_value_args
+                && i > 0
+                && val_ty.bytes() < ptr_type.bytes()
+                && !val_ty.is_float()
+            {
                 builder.ins().sextend(ptr_type, val)
             } else {
                 val
@@ -795,7 +799,14 @@ impl<'a> FunctionTranslator<'a> {
                 out_arg_slots.push((addr, local));
                 addr
             } else {
-                Self::cast_arg_to_predeclared(builder, val, i, predeclared_sig.as_ref())?
+                Self::cast_arg_to_predeclared(
+                    builder,
+                    val,
+                    i,
+                    func_name,
+                    predeclared_sig.as_ref(),
+                    ptr_type,
+                )?
             };
             arg_values.push(val);
             sig.params
@@ -865,14 +876,38 @@ impl<'a> FunctionTranslator<'a> {
         addr
     }
 
+    /// Detect if an argument to a runtime function is an opaque value parameter
+    /// (passed as bit-pattern, not numeric). These parameters hold opaque data
+    /// (like element bytes) and should not be numerically converted.
+    fn is_opaque_value_param(func_name: Option<&str>, arg_index: usize) -> bool {
+        /// Each runtime entry point paired with the positions of its
+        /// opaque-value parameters.
+        const OPAQUE_VALUE_PARAMS: &[(&str, &[usize])] = &[
+            (rt::LIST_PUSH, &[1]),
+            (rt::LIST_SET, &[2]),
+            (rt::LIST_INSERT, &[2]),
+            (rt::MAP_SET, &[1, 2]),
+            (rt::SET_ADD, &[1]),
+        ];
+        func_name.is_some_and(|name| {
+            OPAQUE_VALUE_PARAMS
+                .iter()
+                .any(|(entry, positions)| *entry == name && positions.contains(&arg_index))
+        })
+    }
+
     /// Cast a call argument to match the pre-declared parameter type when one
-    /// is known. Uses `cast_value_with_sign` so int↔int, int↔float, and
-    /// float↔float all pick a verifier-legal Cranelift op.
+    /// is known. For opaque-value-parameter arguments (e.g., items passed to
+    /// LIST_PUSH), preserves the bit pattern via stack-slot reinterpretation
+    /// rather than numeric conversion. For other arguments, uses `cast_value_with_sign`
+    /// for proper numeric conversion.
     fn cast_arg_to_predeclared(
         builder: &mut FunctionBuilder,
         val: cranelift_codegen::ir::Value,
         i: usize,
+        func_name: Option<&str>,
         predeclared_sig: Option<&Signature>,
+        ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
         let Some(pre_sig) = predeclared_sig else {
             return Ok(val);
@@ -885,18 +920,72 @@ impl<'a> FunctionTranslator<'a> {
         if actual_ty == expected_ty {
             return Ok(val);
         }
-        crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
-            builder,
-            val,
-            actual_ty,
-            expected_ty,
-            false,
-        )
-        .map_err(|e| {
-            CodegenError::Internal(format!(
-                "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
-            ))
-        })
+
+        if Self::is_opaque_value_param(func_name, i) {
+            if actual_ty.bytes() == expected_ty.bytes() {
+                Self::bitcast_via_stack(builder, val, actual_ty, expected_ty, ptr_type)
+                    .map_err(|e| CodegenError::Internal(format!("Bitcast for arg {i} failed: {e}")))
+            } else if actual_ty.bytes() < expected_ty.bytes() {
+                if actual_ty.is_float() {
+                    // A narrower-than-word float would have to be placed in the
+                    // low bytes of the value word and read back at the
+                    // collection's element stride. That stride is not yet
+                    // resolved for sub-word floats, so the element reads back as
+                    // zero. Refuse rather than store a value that cannot be
+                    // recovered.
+                    Err(CodegenError::Internal(format!(
+                        "Call arg {i}: {actual_ty} element values are not supported in \
+                         collections yet; the element stride for floats narrower than \
+                         {expected_ty} is unresolved and the value would read back as zero"
+                    )))
+                } else {
+                    Ok(builder.ins().uextend(expected_ty, val))
+                }
+            } else {
+                Ok(builder.ins().ireduce(expected_ty, val))
+            }
+        } else {
+            crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
+                builder,
+                val,
+                actual_ty,
+                expected_ty,
+                false,
+            )
+            .map_err(|e| {
+                CodegenError::Internal(format!(
+                    "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
+                ))
+            })
+        }
+    }
+
+    /// Reinterpret a value's bit pattern by storing to a stack slot and loading
+    /// with the target type. Both types must be the same byte size.
+    fn bitcast_via_stack(
+        builder: &mut FunctionBuilder,
+        val: cranelift_codegen::ir::Value,
+        from_ty: cranelift_codegen::ir::Type,
+        to_ty: cranelift_codegen::ir::Type,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<cranelift_codegen::ir::Value, String> {
+        if from_ty.bytes() != to_ty.bytes() {
+            return Err(format!(
+                "bitcast_via_stack: cannot cast between {} and {} (different sizes)",
+                from_ty, to_ty
+            ));
+        }
+
+        let byte_size = from_ty.bytes();
+        let align_log = byte_size.trailing_zeros() as u8;
+        let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, byte_size, align_log);
+        let slot = builder.create_sized_stack_slot(slot_data);
+
+        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
+
+        builder.ins().store(MemFlags::new(), val, addr, 0);
+        let loaded = builder.ins().load(to_ty, MemFlags::new(), addr, 0);
+        Ok(loaded)
     }
 
     /// Direct call to a named symbol: declare-import the callee, emit the
