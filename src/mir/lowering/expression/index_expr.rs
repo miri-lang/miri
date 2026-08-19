@@ -157,10 +157,17 @@ fn lower_map_index_read(
         Type::new(TypeKind::Int, expr.span)
     };
 
+    // Indexing reads through to the entry the map still owns, so the result is a
+    // borrow: the intrinsic does not raise the count, and releasing it would take
+    // a reference away from the map that is still holding the value.
+    let borrows = ctx.is_perceus_managed(&result_ty.kind);
     let (destination, op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
     } else {
         let temp = ctx.push_temp(result_ty, expr.span);
+        if borrows {
+            ctx.mark_borrowed_temp(temp);
+        }
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };

@@ -119,6 +119,39 @@ fn main()
     );
 }
 
+/// The copy made for a call argument is released once, not twice.
+///
+/// The copy is registered with the scope enclosing the call, and the call site
+/// used to drop it as well, so the same value was released on both paths. A single
+/// run survived that — the freed block usually still held its old contents — which
+/// is why this repeats: over many iterations the allocator hands the block out
+/// again between the two releases and the program dies.
+#[test]
+fn test_auto_copy_struct_argument_copy_is_released_once() {
+    assert_runs_with_output(
+        r#"
+
+struct Point
+    x int
+    y int
+
+fn offset_point(p Point, dx int, dy int) Point
+    Point(x: p.x + dx, y: p.y + dy)
+
+fn main()
+    var i = 0
+    var total = 0
+    while i < 500
+        let p = Point(x: i, y: 2)
+        let q = offset_point(p: p, dx: 10, dy: 20)
+        total = total + q.y
+        i = i + 1
+    println(f"{total}")
+    "#,
+        "11000",
+    );
+}
+
 #[test]
 fn test_auto_copy_nested_struct() {
     // A struct of auto-copy structs is itself auto-copy.

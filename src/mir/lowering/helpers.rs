@@ -399,6 +399,19 @@ pub(crate) fn mir_types_structurally_match(a: &MirType, b: &MirType) -> bool {
     )
 }
 
+/// Whether two types are the same value at the MIR level, differing only in how
+/// their type is spelled.
+///
+/// `Array<int, 3>` and `Array<int, SIZE>` are one array; `List(T)` and
+/// `List(Custom("T"))` are one list. Coercing between them would hand the same
+/// object a second holder while both holders still get released, so the pair is
+/// passed through untouched instead.
+pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
+    let from = MirType::from_type_kind(&from_ty.kind);
+    let to = MirType::from_type_kind(&to_ty.kind);
+    from == to || mir_types_structurally_match(&from, &to)
+}
+
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
 /// If `target_ty` is `Option<T>` and `op_ty` is `T`, it allocates an Option box.
 /// Otherwise, it emits a standard type Cast.

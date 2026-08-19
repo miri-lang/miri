@@ -438,6 +438,65 @@ pub mod rt {
 
 use crate::ast::types::BuiltinCollectionKind;
 
+/// Argument positions whose reference `name` takes ownership of, in call order.
+///
+/// Two shapes reach the same place. A container intrinsic that stores what it is
+/// handed keeps that reference: the element is released later by the container's
+/// drop callback, never by the code that built it, and lowering pays for this by
+/// retaining the value into the temp it passes. A copy-on-write entry point takes
+/// its receiver over instead: it hands back either that same value or a fresh
+/// clone, releasing the original in the clone case, so exactly one reference goes
+/// in and one comes out.
+///
+/// Either way the caller stops owning what it passed, which is what anything
+/// reasoning about reference counts over MIR needs to know. The receiver of a
+/// storing intrinsic is not listed — those mutate in place, so the caller keeps
+/// holding the container after the call returns.
+///
+/// Empty for every other symbol: the readers borrow their arguments, and a call
+/// that builds something new out of what it is given leaves the originals with the
+/// caller to release.
+pub fn taken_argument_positions(name: &str) -> &'static [usize] {
+    match name {
+        rt::LIST_PUSH | rt::SET_ADD => &[1],
+        rt::LIST_INSERT => &[2],
+        rt::MAP_SET => &[1, 2],
+        rt::LIST_COW | rt::MAP_COW | rt::SET_COW => &[0],
+        _ => &[],
+    }
+}
+
+/// Whether `name` hands back a reference its container keeps owning.
+///
+/// Indexing a map reads through to the entry the map still holds — `m[k]` is
+/// consumed in place by the expression around it, which never releases what it
+/// read. Treating that as a fresh reference would report it as one nobody released.
+///
+/// Every other call hands back something its caller owns: a reader that raises the
+/// count before returning, or a value built on the spot.
+pub fn hands_back_a_borrow(name: &str) -> bool {
+    name == rt::MAP_GET_CHECKED
+}
+
+/// Whether `name` never returns to its caller.
+///
+/// Each of these reports a failure and ends the process, or unwinds past the call
+/// through the trap the testing harness installs. Control does not come back, so
+/// the block the call names as its successor is not reached along that path and
+/// nothing the caller was still holding there is ever released — correctly, since
+/// there is no one left to release it for.
+pub fn diverges(name: &str) -> bool {
+    matches!(
+        name,
+        rt::PANIC
+            | rt::ASSERT_FAIL
+            | rt::ASSERT_EQ_FAIL
+            | rt::ASSERT_NE_FAIL
+            | rt::ARRAY_PANIC_OOB
+            | rt::DIV_BY_ZERO_PANIC
+    )
+}
+
 /// Returns the Copy-on-Write runtime function for a built-in collection kind,
 /// or `None` for kinds that do not have a CoW intrinsic (`Array`).
 ///

@@ -151,11 +151,22 @@ fn emit_logical_rhs(
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     ctx.set_current_block(rhs_bb);
+    let watermark = ctx.body.local_decls.len();
     let rhs_op = lower_expression(ctx, rhs, None)?;
+    let rhs_local = match &rhs_op {
+        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+        Operand::Constant(_) => None,
+    };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
         span: expr.span,
     });
+    // The assignment retains the value for the result, so a temp this branch
+    // allocated to produce it still holds a reference of its own. One that
+    // predates the branch belongs to an enclosing scope and is left alone.
+    if let Some(local) = rhs_local {
+        ctx.emit_temp_drop(local, watermark, expr.span);
+    }
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
         expr.span,

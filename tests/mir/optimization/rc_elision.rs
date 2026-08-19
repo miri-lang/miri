@@ -182,14 +182,6 @@ fn benchmark(items [int]) int:
 /// After RC elision, the MIR verifier must not report any violations.
 /// This is the key soundness check: elision must not corrupt RC invariants.
 ///
-/// Ignored while the verifier still reports the values a collection intrinsic
-/// takes over from its caller. `List.push`, `Map.set` and `Set.add` keep the
-/// value handed to them, so nothing in the caller releases it; the verifier reads
-/// that as a reference acquired on every turn of the loop and never released, and
-/// every stdlib method building a collection in a loop trips it. Closing it needs
-/// the table of which argument each collection intrinsic takes ownership of.
-/// Re-enable once that lands — the bodies this test lowers are otherwise clean.
-#[ignore]
 #[test]
 fn test_elision_does_not_break_mir_verification() {
     use miri::mir::verify::verify_body;

@@ -232,6 +232,35 @@ println(f\"{b.data.length()}\")
     );
 }
 
+/// A value coerced into a differently-spelled type is released once, not twice.
+///
+/// The coercion re-spells the type in place, so the temp holds the same array the
+/// variable does. Releasing both frees one allocation twice — silently for a single
+/// run, and fatally once the freed block is handed out again.
+#[test]
+fn test_array_sized_const_coercion_releases_once() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 3
+
+fn total(xs Array<int, SIZE>) int
+    xs.length()
+
+fn main()
+    var i = 0
+    var acc = 0
+    while i < 300
+        let a = Array<int, SIZE>()
+        acc = acc + total(a)
+        i = i + 1
+    println(f\"{acc}\")
+",
+        "900",
+    );
+}
+
 #[test]
 fn test_array_sized_named_const_param_type() {
     // Type-position form in a function parameter type.

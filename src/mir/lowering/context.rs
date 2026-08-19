@@ -63,6 +63,9 @@ pub struct LoweringContext<'a> {
     pub scope_pool: Vec<ScopeData>,
     /// Stack of loops for tracking break/continue targets
     pub loop_stack: Vec<LoopContext>,
+    /// Temps that hold a value another local owns and must therefore never be
+    /// released. A coercion re-spelling a live value's type produces one.
+    pub borrowed_temps: std::collections::HashSet<Local>,
     /// Lambda bodies collected during lowering
     pub lambda_bodies: Vec<LambdaInfo>,
     /// Type declarations collected during lowering
@@ -123,6 +126,7 @@ impl<'a> LoweringContext<'a> {
             scope_stack: vec![ScopeData::new()],
             scope_pool: Vec::with_capacity(8), // Pool for reusing scopes
             loop_stack: Vec::new(),
+            borrowed_temps: std::collections::HashSet::new(),
             lambda_bodies: Vec::new(),
             declarations: Vec::new(),
             imports: Vec::new(),
@@ -281,6 +285,24 @@ impl<'a> LoweringContext<'a> {
     ///
     /// Without an enclosing scope the temp has no owner and is left alone, the
     /// same way a temp behaves everywhere else in lowering.
+    /// Whether an enclosing scope already owns `local`'s release.
+    ///
+    /// A value copied for a call is registered with the scope that encloses the
+    /// call, because the copy outlives the argument list when the callee keeps it.
+    /// Dropping it at the call site as well releases it twice on the same path.
+    /// Record that `local` holds a value another local owns, so nothing may
+    /// release it. A coercion that only re-spells a type produces one of these:
+    /// the value behind it is still the source's to release.
+    pub fn mark_borrowed_temp(&mut self, local: Local) {
+        self.borrowed_temps.insert(local);
+    }
+
+    pub fn is_owned_by_a_scope(&self, local: Local) -> bool {
+        self.scope_stack
+            .iter()
+            .any(|scope| scope.owned_temps.contains(&local))
+    }
+
     pub fn register_scope_temp(&mut self, local: Local) {
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.owned_temps.push(local);
@@ -511,6 +533,10 @@ impl<'a> LoweringContext<'a> {
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`
     /// and its type is Perceus-managed.
     ///
+    /// A temp an enclosing scope has taken responsibility for is left alone — the
+    /// copy made for a by-value struct argument or an array element is one, and
+    /// releasing it here as well releases the same value twice on one path.
+    ///
     /// Used to release temporary locals that were created during expression
     /// lowering and are no longer needed after a call or aggregate assignment.
     /// The Perceus pass will later insert `DecRef` before this statement.
@@ -520,7 +546,10 @@ impl<'a> LoweringContext<'a> {
         watermark: usize,
         span: crate::error::syntax::Span,
     ) {
-        if local.0 < watermark {
+        if local.0 < watermark
+            || self.borrowed_temps.contains(&local)
+            || self.is_owned_by_a_scope(local)
+        {
             return;
         }
         let kind = self.body.local_decls[local.0].ty.kind.clone();

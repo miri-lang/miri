@@ -14,7 +14,7 @@ use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
-use super::helpers::{coerce_rvalue, gpu_math_return_type};
+use super::helpers::{coerce_rvalue, gpu_math_return_type, spellings_of_one_value};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
@@ -1193,6 +1193,38 @@ fn resolve_param_types(
     }
 }
 
+/// Retain a value a coercion is about to take the reference of, when the local it
+/// came from keeps holding it.
+///
+/// The coercion re-spells the value's type without copying it, so the reference
+/// goes with it and the coerced temp is what gets released. A local variable is
+/// released again when its scope ends, so it needs a reference of its own to give
+/// away — otherwise one object is freed twice.
+///
+/// A parameter is not this case: it belongs to the caller, so reading it into a
+/// temp already retains it. Neither is a field read, which produces a value the
+/// reader owns, nor a constant, which is materialized fresh, nor an anonymous temp
+/// that nothing else releases — there the coerced temp is the only holder left, and
+/// retaining would strand the extra reference.
+fn retain_still_held_value(ctx: &mut LoweringContext, op: &Operand, op_ty: &Type, span: Span) {
+    if !ctx.is_perceus_managed(&op_ty.kind) {
+        return;
+    }
+    let (Operand::Copy(place) | Operand::Move(place)) = op else {
+        return;
+    };
+    let is_parameter = place.local.0 >= 1 && place.local.0 <= ctx.body.arg_count;
+    let stays_held =
+        ctx.body.local_decls[place.local.0].name.is_some() || ctx.is_owned_by_a_scope(place.local);
+    if !place.projection.is_empty() || is_parameter || !stays_held {
+        return;
+    }
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::IncRef(place.clone()),
+        span,
+    });
+}
+
 fn lower_and_coerce_args(
     ctx: &mut LoweringContext,
     args: &[Expression],
@@ -1212,8 +1244,9 @@ fn lower_and_coerce_args(
             if i < params.len() {
                 let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
                 let op_ty = op.ty(&ctx.body).clone();
-                if op_ty.kind != target_ty.kind {
+                if op_ty.kind != target_ty.kind && !spellings_of_one_value(&op_ty, &target_ty) {
                     let temp = ctx.push_temp(target_ty.clone(), arg.span);
+                    retain_still_held_value(ctx, &op, &op_ty, arg.span);
                     ctx.push_statement(crate::mir::Statement {
                         kind: StatementKind::Assign(
                             Place::new(temp),

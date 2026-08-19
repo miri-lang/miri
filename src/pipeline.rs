@@ -1029,16 +1029,21 @@ impl Pipeline {
 
         if let Some(mode) = verify_mode {
             let mut all_violations = Vec::new();
+            let mut functions_with_violations = 0;
             for (name, body) in &bodies {
                 let violations = mir::verify::verify_body(body);
+                if !violations.is_empty() {
+                    functions_with_violations += 1;
+                }
                 for v in violations {
                     all_violations.push(format!("  fn {}: {}", name, v));
                 }
             }
             if !all_violations.is_empty() {
                 let message = format!(
-                    "RC invariant violations detected in {} function(s):\n{}",
+                    "{} RC invariant violation(s) in {} function(s):\n{}",
                     all_violations.len(),
+                    functions_with_violations,
                     all_violations.join("\n")
                 );
                 if mode == "warn" {
