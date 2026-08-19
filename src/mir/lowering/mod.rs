@@ -285,19 +285,172 @@ fn substitute_self_in_type_args(args: &[Expression], self_type: &Type) -> Vec<Ex
         .collect()
 }
 
+/// Apply a generic substitution mapping to an Expression that contains a type,
+/// replacing generic parameters in the wrapped type.
+fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> Expression {
+    match &expr.node {
+        ExpressionKind::Type(ty, is_ref) => {
+            let new_ty = apply_generic_sub(ty, subs);
+            Expression {
+                id: expr.id,
+                span: expr.span,
+                node: ExpressionKind::Type(Box::new(new_ty), *is_ref),
+            }
+        }
+        // Non-type expressions don't contain generics that need substitution
+        _ => expr.clone(),
+    }
+}
+
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters
-/// with their concrete counterparts.
+/// with their concrete counterparts. Exhaustively handles all `TypeKind` variants
+/// that can contain nested types: recursively substitutes in `Option<T>`, `List<T>`,
+/// `Custom<T>`, `Tuple`, `Result<T, E>`, `Function`, `Meta<T>`, `Linear<T>`,
+/// `Generic` bounds, and all other type constructors.
 ///
 /// Handles two representations that appear in `resolve_type` output:
 /// - `TypeKind::Generic("T", ...)` - explicit generic placeholder
 /// - `TypeKind::Custom("T", None)` - generic param written as a plain identifier
 pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type {
+    if subs.is_empty() {
+        return ty.clone();
+    }
+
     match &ty.kind {
-        TypeKind::Generic(name, _, _) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        TypeKind::Custom(name, None) if subs.contains_key(name.as_str()) => {
-            subs[name.as_str()].clone()
+        // Direct generic: replace with concrete type if in map
+        TypeKind::Generic(name, bound, decl_kind) => {
+            if let Some(concrete) = subs.get(name) {
+                concrete.clone()
+            } else {
+                // Bound itself might contain generics
+                let new_bound = bound.as_ref().map(|b| Box::new(apply_generic_sub(b, subs)));
+                Type::new(
+                    TypeKind::Generic(name.clone(), new_bound, *decl_kind),
+                    ty.span,
+                )
+            }
         }
-        _ => ty.clone(),
+        // Custom type with no args: replace if it's a generic param name
+        TypeKind::Custom(name, None) => {
+            if let Some(concrete) = subs.get(name.as_str()) {
+                concrete.clone()
+            } else {
+                ty.clone()
+            }
+        }
+        // Custom type with args: substitute in each arg expression
+        TypeKind::Custom(name, Some(args)) => {
+            let new_args = args
+                .iter()
+                .map(|arg| substitute_in_type_expr(arg, subs))
+                .collect();
+            Type::new(TypeKind::Custom(name.clone(), Some(new_args)), ty.span)
+        }
+        // Type wrappers that directly contain Type (not Expression)
+        TypeKind::Option(inner) => {
+            let new_inner = apply_generic_sub(inner, subs);
+            Type::new(TypeKind::Option(Box::new(new_inner)), ty.span)
+        }
+        TypeKind::Meta(inner) => {
+            let new_inner = apply_generic_sub(inner, subs);
+            Type::new(TypeKind::Meta(Box::new(new_inner)), ty.span)
+        }
+        TypeKind::Linear(inner) => {
+            let new_inner = apply_generic_sub(inner, subs);
+            Type::new(TypeKind::Linear(Box::new(new_inner)), ty.span)
+        }
+        // Type constructors that use Expression (parser-only or container variants)
+        TypeKind::List(expr) => {
+            let new_expr = substitute_in_type_expr(expr, subs);
+            Type::new(TypeKind::List(Box::new(new_expr)), ty.span)
+        }
+        TypeKind::Array(elem_expr, size_expr) => {
+            let new_elem = substitute_in_type_expr(elem_expr, subs);
+            Type::new(
+                TypeKind::Array(Box::new(new_elem), size_expr.clone()),
+                ty.span,
+            )
+        }
+        TypeKind::Map(key_expr, val_expr) => {
+            let new_key = substitute_in_type_expr(key_expr, subs);
+            let new_val = substitute_in_type_expr(val_expr, subs);
+            Type::new(TypeKind::Map(Box::new(new_key), Box::new(new_val)), ty.span)
+        }
+        TypeKind::Set(elem_expr) => {
+            let new_elem = substitute_in_type_expr(elem_expr, subs);
+            Type::new(TypeKind::Set(Box::new(new_elem)), ty.span)
+        }
+        TypeKind::Tuple(exprs) => {
+            let new_exprs = exprs
+                .iter()
+                .map(|expr| substitute_in_type_expr(expr, subs))
+                .collect();
+            Type::new(TypeKind::Tuple(new_exprs), ty.span)
+        }
+        TypeKind::Result(ok_expr, err_expr) => {
+            let new_ok = substitute_in_type_expr(ok_expr, subs);
+            let new_err = substitute_in_type_expr(err_expr, subs);
+            Type::new(
+                TypeKind::Result(Box::new(new_ok), Box::new(new_err)),
+                ty.span,
+            )
+        }
+        TypeKind::Future(expr) => {
+            let new_expr = substitute_in_type_expr(expr, subs);
+            Type::new(TypeKind::Future(Box::new(new_expr)), ty.span)
+        }
+        TypeKind::Function(fdata) => {
+            use crate::ast::common::Parameter as AstParameter;
+            let new_generics = fdata.generics.as_ref().map(|gens| {
+                gens.iter()
+                    .map(|gen| substitute_in_type_expr(gen, subs))
+                    .collect()
+            });
+            let new_params = fdata
+                .params
+                .iter()
+                .map(|p| AstParameter {
+                    name: p.name.clone(),
+                    typ: Box::new(substitute_in_type_expr(&p.typ, subs)),
+                    guard: p.guard.clone(),
+                    default_value: p.default_value.clone(),
+                    is_out: p.is_out,
+                    residency: p.residency,
+                })
+                .collect();
+            let new_return_type = fdata
+                .return_type
+                .as_ref()
+                .map(|rt| Box::new(substitute_in_type_expr(rt, subs)));
+            let new_fdata = crate::ast::types::FunctionTypeData {
+                generics: new_generics,
+                params: new_params,
+                return_type: new_return_type,
+            };
+            Type::new(TypeKind::Function(Box::new(new_fdata)), ty.span)
+        }
+        // Leaf types that cannot contain generics: clone as-is
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error => ty.clone(),
     }
 }
 

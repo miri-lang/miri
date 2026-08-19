@@ -657,8 +657,13 @@ let r = b.add(\"str\")
 // concrete float, not the uninstantiated pointer-width int. This guards against
 // double lowering of trait defaults (uninstantiated + per-instantiation) causing
 // conflicting symbol declarations.
+//
+// BLOCKED: This test uses List<float>.push(), which has a pre-existing FFI bug
+// (cast_value_with_sign uses numeric conversion instead of bitcast). The type
+// substitution fix is correct, but the underlying float list bug prevents the
+// test from passing. Proven with non-generic List<float> tests in float_collections.rs.
 #[test]
-#[ignore = "Code Generation Error: trait-default first() method for Bag<float> declares incompatible signature (expects F64 return type but previous declaration was I64)"]
+#[ignore = "Blocked by pre-existing List<float> push() FFI bug (documented in tests/integration/list/float_collections.rs)"]
 fn generic_queryable_float_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "
@@ -689,10 +694,41 @@ fn main()
     );
 }
 
+// Additional test: u8 instantiation
+#[test]
+fn generic_queryable_u8_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<u8>()
+    b.add(255)
+    println(f\"{b.first() ?? 0}\")
+",
+        "255",
+    );
+}
+
 // The bool instantiation of the same generic queryable must dispatch to a body
 // typed at the concrete bool width, not the uninstantiated int width.
 #[test]
-#[ignore = "Code Generation Error: trait-default first() method for Bag<bool> declares incompatible signature (expects I8 return type but previous declaration was I64)"]
 fn generic_queryable_bool_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "
@@ -717,16 +753,52 @@ class Bag<T> implements Queryable<T>
 fn main()
     var b = Bag<bool>()
     b.add(true)
-    if b.first() ?? false
-        println(\"found true\")
+    var c = Bag<bool>()
+    c.add(false)
+    println(f\"{b.first() ?? false}\")
+    println(f\"{c.first() ?? true}\")
 ",
-        "found true",
+        "true
+false",
+    );
+}
+
+// A wide unsigned instantiation must round-trip its boundary value: a body typed
+// at the uninstantiated pointer width would sign-extend and print a negative
+// number instead.
+#[test]
+fn generic_queryable_u32_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<u32>()
+    b.add(4294967295)
+    println(f\"{b.first() ?? 0}\")
+",
+        "4294967295",
     );
 }
 
 // The i32 instantiation of the same generic queryable must dispatch correctly.
 #[test]
-#[ignore = "Code Generation Error: trait-default first() method for Bag<i32> declares incompatible signature (expects I32 return type but previous declaration was I64)"]
 fn generic_queryable_i32_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "
@@ -754,5 +826,176 @@ fn main()
     println(f\"{b.first() ?? 0}\")
 ",
         "5",
+    );
+}
+
+// Test i64 instantiation of generic queryable trait default
+#[test]
+fn generic_queryable_i64_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<i64>()
+    b.add(9223372036854775807)
+    println(f\"{b.first() ?? 0}\")
+",
+        "9223372036854775807",
+    );
+}
+
+// Test f32 instantiation of generic queryable trait default
+#[test]
+#[ignore = "List<f32> push/element_at fails at codegen (pre-existing float list bug)"]
+fn generic_queryable_f32_trait_default_uses_concrete_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.queryable
+
+class Bag<T> implements Queryable<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn length() int
+        return self.items.length()
+
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    public fn add(item T)
+        self.items.push(item)
+
+fn main()
+    var b = Bag<f32>()
+    b.add(3.14)
+    println(f\"{b.first() ?? 0.0}\")
+",
+        "3.14",
+    );
+}
+
+// Test generic class with List<T> field - direct element_at without trait default
+#[test]
+fn generic_bag_list_field_direct_element_at_i32() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Container<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn add_item(x T)
+        self.items.push(x)
+
+    public fn get_item(i int) T
+        return self.items.element_at(i)
+
+fn main()
+    var c = Container<i32>()
+    c.add_item(42)
+    println(f\"{c.get_item(0)}\")
+",
+        "42",
+    );
+}
+
+// Test generic class with direct T field at float width (no List)
+#[test]
+fn generic_box_direct_field_float() {
+    assert_runs_with_output(
+        "
+class Box<T>
+    private var value T
+
+    fn init(v T)
+        self.value = v
+
+    public fn get() T
+        return self.value
+
+fn main()
+    var b = Box<float>(2.5)
+    println(f\"{b.get()}\")
+",
+        "2.5",
+    );
+}
+
+// Test generic class with List<T> field at float width
+#[test]
+#[ignore = "Pre-existing List<float> push bug (FFI coercion uses numeric conversion instead of bitcast)"]
+fn generic_bag_list_field_direct_element_at_float() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+class Container<T>
+    private var items List<T>
+
+    fn init()
+        self.items = List<T>()
+
+    public fn add_item(x T)
+        self.items.push(x)
+
+    public fn get_item(i int) T
+        return self.items.element_at(i)
+
+fn main()
+    var c = Container<float>()
+    c.add_item(2.5)
+    println(f\"{c.get_item(0)}\")
+",
+        "2.5",
+    );
+}
+
+// Test two-parameter generic class at different scalar widths
+#[test]
+fn generic_pair_two_scalar_widths() {
+    assert_runs_with_output(
+        "
+class Pair<K, V>
+    private var key K
+    private var value V
+
+    fn init(k K, v V)
+        self.key = k
+        self.value = v
+
+    public fn get_key() K
+        return self.key
+
+fn main()
+    var p1 = Pair<i32, i64>(42, 9223372036854775807)
+    println(f\"{p1.get_key()}\")
+    var p2 = Pair<u8, i32>(255, 123)
+    println(f\"{p2.get_key()}\")
+",
+        "42
+255",
     );
 }

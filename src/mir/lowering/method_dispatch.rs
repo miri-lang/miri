@@ -627,7 +627,8 @@ fn call_result_type(
     mono: &Option<(String, Type)>,
 ) -> Type {
     if let Some(inferred) = ctx.type_checker.get_type(m.call_expr_id) {
-        return ctx.resolve_self_in(inferred);
+        let resolved = ctx.resolve_self_in(inferred);
+        return apply_generic_sub(&resolved, &ctx.generic_subs);
     }
     match mono {
         Some((_, concrete_return)) => concrete_return.clone(),
