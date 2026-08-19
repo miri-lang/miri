@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+use system.ops
+use system.collections.list
+use system.collections.queryable
+use system.collections.foldable
+
+/// A FIFO (First-In-First-Out) queue that yields elements in insertion order.
+///
+/// A Queue<T> implements Queryable<T>, Iterable<T>, and Foldable<T>.
+/// Iteration and all derived operations (first, last, contains, index_of, sum, min, max,
+/// reduce, count_where, any, all) yield elements in insertion order.
+///
+/// Example:
+/// ```
+/// let q = Queue<int>()
+/// q.enqueue(1)
+/// q.enqueue(2)
+/// q.enqueue(3)
+/// for x in q
+///     println(f"{x}")
+/// ```
+public class Queue<T> implements Queryable<T>, Iterable<T>, Foldable<T>
+    private var items List<T>
+
+    /// Initializes an empty queue.
+    fn init()
+        self.items = List<T>()
+
+    /// Returns the number of elements in the queue.
+    public fn length() int
+        return self.items.length()
+
+    /// Returns the element at the given index.
+    /// This enables for-loop iteration: `for x in queue`.
+    /// Index 0 is the front (the next element to dequeue).
+    public fn element_at(index int) T
+        return self.items.element_at(index)
+
+    /// Appends an element to the back of the queue.
+    public fn enqueue(item T)
+        self.items.push(item)
+
+    /// Removes and returns the front element of the queue.
+    /// Returns None when the queue is empty.
+    public fn dequeue() T?
+        if self.items.is_empty()
+            return None
+        return self.items.remove_at(0)
+
+    /// Returns the front element without removing it.
+    /// Returns None when the queue is empty.
+    public fn peek() T?
+        if self.items.is_empty()
+            return None
+        return self.items.element_at(0)
