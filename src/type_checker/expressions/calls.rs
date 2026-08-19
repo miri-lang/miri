@@ -1805,18 +1805,21 @@ impl TypeChecker {
                 if let Some(ty) =
                     self.try_infer_list_constructor(name, type_args, positional_args, span, context)
                 {
+                    self.record_builtin_collection_instantiation(&ty);
                     return ty;
                 }
 
                 if let Some(ty) =
                     self.try_infer_map_constructor(name, type_args, positional_args, span, context)
                 {
+                    self.record_builtin_collection_instantiation(&ty);
                     return ty;
                 }
 
                 if let Some(ty) =
                     self.try_infer_set_constructor(name, type_args, positional_args, span, context)
                 {
+                    self.record_builtin_collection_instantiation(&ty);
                     return ty;
                 }
 
@@ -1827,6 +1830,7 @@ impl TypeChecker {
                     span,
                     context,
                 ) {
+                    self.record_builtin_collection_instantiation(&ty);
                     return ty;
                 }
 
@@ -1894,6 +1898,37 @@ impl TypeChecker {
         }
         self.report_error(format!("Type '{}' is not callable", inner_type), span);
         make_type(TypeKind::Error)
+    }
+
+    /// Record a builtin collection constructor's element types as a generic-class
+    /// instantiation.
+    ///
+    /// A collection constructor resolves to `Custom("List", [T])` and returns
+    /// before the generic-class recording path runs. Without this the
+    /// collection's Miri-defined methods (`remove_at`, `pop`) are lowered only
+    /// once, with the element falling back to pointer width, so any element type
+    /// other than a pointer-width integer declares a signature that conflicts
+    /// with the single generic body.
+    fn record_builtin_collection_instantiation(&mut self, ty: &Type) {
+        let TypeKind::Custom(name, Some(args)) = &ty.kind else {
+            return;
+        };
+        if BuiltinCollectionKind::from_name(name).is_none() {
+            return;
+        }
+        let name = name.clone();
+        let args = args.clone();
+        let mut resolved = Vec::with_capacity(args.len());
+        for arg in &args {
+            let Ok(concrete) = self.extract_type_from_expression(arg) else {
+                return;
+            };
+            resolved.push(concrete);
+        }
+        if !resolved.iter().all(type_arg_is_concrete) {
+            return;
+        }
+        self.record_generic_class_instantiation(&name, resolved);
     }
 
     fn try_infer_list_constructor(
@@ -2510,5 +2545,25 @@ impl TypeChecker {
             span,
         );
         Some(make_type(TypeKind::Error))
+    }
+}
+
+/// Whether a resolved type argument names no generic parameter, directly or
+/// nested inside a container.
+///
+/// Only a fully concrete tuple describes an instantiation the program actually
+/// asked for; one still carrying a parameter comes from a generic body being
+/// checked in its own terms.
+fn type_arg_is_concrete(ty: &Type) -> bool {
+    match &ty.kind {
+        TypeKind::Generic(_, _, _) => false,
+        TypeKind::Custom(_, Some(args)) | TypeKind::Tuple(args) => {
+            args.iter().all(|arg| match &arg.node {
+                ExpressionKind::Type(inner, _) => type_arg_is_concrete(inner),
+                _ => false,
+            })
+        }
+        TypeKind::Option(inner) => type_arg_is_concrete(inner),
+        _ => true,
     }
 }

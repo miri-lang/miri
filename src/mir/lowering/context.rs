@@ -146,6 +146,20 @@ impl<'a> LoweringContext<'a> {
     ///
     /// Returns `ty` unchanged outside a class body, where `Self` is not a
     /// legal spelling and the type checker has already rejected it.
+    /// The type the type checker recorded for an expression, with the active
+    /// instantiation substitution applied.
+    ///
+    /// A body lowered for one instantiation of a generic class re-uses types the
+    /// type checker recorded once, generically. Read raw, those types still name
+    /// the generic parameter, which codegen resolves to the pointer-width
+    /// fallback and so addresses a concrete element at the wrong width. Outside a
+    /// monomorphized body `generic_subs` is empty and this is the recorded type
+    /// unchanged.
+    pub fn recorded_type(&self, expr_id: usize) -> Option<Type> {
+        let ty = self.type_checker.get_type(expr_id)?;
+        Some(super::apply_generic_sub(ty, &self.generic_subs))
+    }
+
     pub fn resolve_self_in(&self, ty: &Type) -> Type {
         match &self.self_type {
             Some(self_type) => super::substitute_self_type(ty, self_type),

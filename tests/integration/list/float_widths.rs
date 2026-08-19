@@ -88,7 +88,6 @@ fn main()
 // --- DEFECT 1: non-intercepted methods at non-int widths ---
 
 #[test]
-#[ignore = "List<T> methods written in Miri (remove_at/pop) lower once at pointer width: 'List_remove_at/List_pop ... returns [F64] is incompatible with previous declaration ... returns [I64]'. Builtin collections are TypeKind::List, so they never enter generic-class monomorphization."]
 fn test_list_remove_at_float() {
     assert_runs_with_output(
         r#"
@@ -104,7 +103,7 @@ fn main()
 }
 
 #[test]
-#[ignore = "List<T> methods written in Miri (remove_at/pop) lower once at pointer width: 'List_remove_at/List_pop ... returns [F64] is incompatible with previous declaration ... returns [I64]'. Builtin collections are TypeKind::List, so they never enter generic-class monomorphization."]
+#[ignore = "f32 collection elements are refused at codegen: the element stride for floats narrower than a word is unresolved, so a stored value reads back as zero. Fails closed rather than corrupting; float/f64 round-trips correctly."]
 fn test_list_remove_at_f32() {
     assert_runs_with_output(
         r#"
@@ -120,7 +119,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "List<T> methods written in Miri (remove_at/pop) lower once at pointer width: 'List_remove_at/List_pop ... returns [F64] is incompatible with previous declaration ... returns [I64]'. Builtin collections are TypeKind::List, so they never enter generic-class monomorphization."]
 fn test_list_pop_float() {
     assert_runs_with_output(
         r#"
