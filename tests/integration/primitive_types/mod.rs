@@ -7,3 +7,4 @@ pub mod booleans;
 pub mod float_literal_width;
 pub mod floats;
 pub mod integers;
+pub mod unsigned_projected_reads;

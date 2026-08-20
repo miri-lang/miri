@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::kernel_namer::{new_shared_kernel_namer, SharedKernelNamer};
+use crate::ast::expression::Expression;
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
 use crate::mir::declaration::Declaration;
@@ -142,10 +143,6 @@ impl<'a> LoweringContext<'a> {
         ctx
     }
 
-    /// Resolve the `Self` keyword in `ty` against the enclosing class.
-    ///
-    /// Returns `ty` unchanged outside a class body, where `Self` is not a
-    /// legal spelling and the type checker has already rejected it.
     /// The type the type checker recorded for an expression, with the active
     /// instantiation substitution applied.
     ///
@@ -160,6 +157,24 @@ impl<'a> LoweringContext<'a> {
         Some(super::apply_generic_sub(ty, &self.generic_subs))
     }
 
+    /// The type a written type expression names, with `Self` and the active
+    /// instantiation substitution both resolved.
+    ///
+    /// A declared parameter type is written once for the generic class and reused
+    /// by every instantiation, so read raw it still spells the class's type
+    /// parameter. A temp declared at that spelling is an unknown named type, which
+    /// counts as managed wherever the enclosing body no longer lists the parameter
+    /// as generic, so reference counting inserts a release for what may be a plain
+    /// integer — and one the callee's own claim on the value already accounts for.
+    pub fn resolved_type(&self, expr: &Expression) -> Type {
+        let named = super::resolve_type(self.type_checker, expr);
+        super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
+    }
+
+    /// Resolve the `Self` keyword in `ty` against the enclosing class.
+    ///
+    /// Returns `ty` unchanged outside a class body, where `Self` is not a
+    /// legal spelling and the type checker has already rejected it.
     pub fn resolve_self_in(&self, ty: &Type) -> Type {
         match &self.self_type {
             Some(self_type) => super::substitute_self_type(ty, self_type),

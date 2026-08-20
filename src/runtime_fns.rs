@@ -466,6 +466,43 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
+/// Argument positions of `name` that carry an element value as opaque bytes.
+///
+/// A collection stores whatever bit pattern it is handed and compares later
+/// lookups against those same bytes, so an element argument is never a number to
+/// the runtime — it is the element's representation widened into a value word.
+/// Converting it numerically would store one thing and search for another: a
+/// float turned into the integer nearest its value can never match the float
+/// that was stored.
+///
+/// Both the storing entry points and the lookup ones are listed, because a
+/// lookup that reinterprets differently from the store it must match is exactly
+/// the mismatch this prevents. Positions naming an index or a size are not
+/// listed; those really are numbers.
+pub fn element_value_positions(name: &str) -> &'static [usize] {
+    match name {
+        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
+        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
+        rt::LIST_SET | rt::LIST_INSERT => &[2],
+        rt::MAP_SET => &[1, 2],
+        _ => &[],
+    }
+}
+
+/// Whether `name` hands its caller an element value as opaque bytes.
+///
+/// A container stores element bytes in a value word and returns that same word,
+/// whatever the element's declared type is. Declaring the call as returning a
+/// float instead would read the result from the register floats are returned in
+/// while the runtime wrote the one integers use, so the value would arrive as
+/// zero. The word is reinterpreted at the destination instead.
+pub fn returns_element_value(name: &str) -> bool {
+    matches!(
+        name,
+        rt::MAP_GET | rt::MAP_GET_CHECKED | rt::MAP_KEY_AT | rt::MAP_VALUE_AT | rt::SET_ELEMENT_AT
+    )
+}
+
 /// Whether `name` hands back a reference its container keeps owning.
 ///
 /// Indexing a map reads through to the entry the map still holds — `m[k]` is

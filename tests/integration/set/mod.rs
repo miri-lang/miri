@@ -11,3 +11,4 @@ pub mod integration;
 pub mod iteration;
 pub mod methods;
 pub mod rc;
+pub mod scalar_widths;
