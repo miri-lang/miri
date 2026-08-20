@@ -130,9 +130,13 @@ impl<'a> FunctionTranslator<'a> {
                 // unsigned), the destination for float→int. Keying off the
                 // destination alone wrongly treats a `u32` with its top bit set as
                 // a negative value when converting to float.
-                let src_kind = Self::operand_type_kind(operand, type_ctx);
-                let is_unsigned = if Self::is_integer_kind(src_kind) {
-                    Self::is_unsigned_type_kind(src_kind)
+                // The projected kind, because a field or element read has the
+                // type of what it reaches: judging by the base local reports a
+                // class or a list, which is not an integer at all, and the cast
+                // then falls back to signed and widens `200` in a `u8` to `-56`.
+                let src_kind = Self::operand_projected_kind(operand, type_ctx);
+                let is_unsigned = if Self::is_integer_kind(&src_kind) {
+                    Self::is_unsigned_type_kind(&src_kind)
                 } else {
                     Self::is_unsigned_type_kind(&ty.kind)
                 };
@@ -2223,18 +2227,27 @@ impl<'a> FunctionTranslator<'a> {
             builder.ins().icmp(icc, lhs, rhs)
         }
     }
-    /// Returns true if the operand has an unsigned integer type.
-    fn operand_is_unsigned(operand: &Operand, type_ctx: &TypeCtx) -> bool {
-        let kind = match operand {
+    /// Whether the operand's value is an unsigned integer, so that widening it
+    /// fills the new bytes with zeros and comparing it orders it as unsigned.
+    ///
+    /// The projected type decides this: a place read through a field or an index
+    /// has the type of what it reaches, not of the local it starts from. Judging
+    /// by the base local instead treats every projected read as signed, so an
+    /// unsigned value with its top bit set becomes a negative number — `200`
+    /// held in a `u8` field reads back as `-56`.
+    pub(crate) fn operand_is_unsigned(operand: &Operand, type_ctx: &TypeCtx) -> bool {
+        Self::is_unsigned_type_kind(&Self::operand_projected_kind(operand, type_ctx))
+    }
+
+    /// The type an operand's value actually has, resolving field and index
+    /// projections rather than reporting the base local's type.
+    pub(crate) fn operand_projected_kind(operand: &Operand, type_ctx: &TypeCtx) -> TypeKind {
+        match operand {
             Operand::Copy(place) | Operand::Move(place) => {
-                &type_ctx.local_types[place.local.0].kind
+                Self::resolve_projected_type_kind(place, type_ctx)
             }
-            Operand::Constant(c) => &c.ty.kind,
-        };
-        matches!(
-            kind,
-            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
-        )
+            Operand::Constant(constant) => constant.ty.kind.clone(),
+        }
     }
 
     /// Returns the TypeKind of an operand.

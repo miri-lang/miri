@@ -1242,7 +1242,7 @@ fn lower_and_coerce_args(
 
         if let Some(params) = param_types {
             if i < params.len() {
-                let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
+                let target_ty = ctx.resolved_type(&params[i].typ);
                 let op_ty = op.ty(&ctx.body).clone();
                 if op_ty.kind != target_ty.kind && !spellings_of_one_value(&op_ty, &target_ty) {
                     let temp = ctx.push_temp(target_ty.clone(), arg.span);

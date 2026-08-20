@@ -680,9 +680,12 @@ impl<'a> FunctionTranslator<'a> {
 
         let dest_ty = &body.local_decls[destination.local.0].ty;
         let cl_dest_ty = translate_type(dest_ty, ptr_type);
+        let reinterpret_as = Self::element_word_result_type(func_name.as_deref(), cl_dest_ty);
         let mut sig = sig;
         if dest_ty.kind != TypeKind::Void {
-            sig.returns.push(AbiParam::new(cl_dest_ty));
+            sig.returns.push(AbiParam::new(
+                reinterpret_as.map_or(cl_dest_ty, |_| ptr_type),
+            ));
         }
 
         if let Some(func_name) = func_name {
@@ -698,6 +701,7 @@ impl<'a> FunctionTranslator<'a> {
                 locals,
                 type_ctx,
                 ptr_type,
+                reinterpret_as,
             )?;
         } else {
             Self::dispatch_indirect_call(
@@ -774,8 +778,6 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<PreparedCallArgs, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let predeclared_sig = Self::lookup_predeclared_sig(ctx, func_name);
-        let widen_value_args =
-            func_name.is_some_and(|n| n == rt::LIST_PUSH || n == rt::LIST_INSERT);
 
         let mut sig = Signature::new(builder.func.signature.call_conv);
         let mut arg_values = Vec::with_capacity(args.len());
@@ -783,22 +785,13 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, arg) in args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            let val_ty = builder.func.dfg.value_type(val);
-            let val = if widen_value_args
-                && i > 0
-                && val_ty.bytes() < ptr_type.bytes()
-                && !val_ty.is_float()
-            {
-                builder.ins().sextend(ptr_type, val)
-            } else {
-                val
-            };
             let scalar_out_local = Self::scalar_out_local_for_arg(out_args, i, arg, type_ctx);
             let val = if let Some(local) = scalar_out_local {
                 let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
                 out_arg_slots.push((addr, local));
                 addr
             } else {
+                let is_unsigned = Self::operand_is_unsigned(arg, type_ctx);
                 Self::cast_arg_to_predeclared(
                     builder,
                     val,
@@ -806,6 +799,7 @@ impl<'a> FunctionTranslator<'a> {
                     func_name,
                     predeclared_sig.as_ref(),
                     ptr_type,
+                    is_unsigned,
                 )?
             };
             arg_values.push(val);
@@ -876,23 +870,12 @@ impl<'a> FunctionTranslator<'a> {
         addr
     }
 
-    /// Detect if an argument to a runtime function is an opaque value parameter
-    /// (passed as bit-pattern, not numeric). These parameters hold opaque data
-    /// (like element bytes) and should not be numerically converted.
+    /// Whether an argument to a runtime function carries an element value as
+    /// opaque bytes, and so must keep its bit pattern rather than be converted
+    /// numerically.
     fn is_opaque_value_param(func_name: Option<&str>, arg_index: usize) -> bool {
-        /// Each runtime entry point paired with the positions of its
-        /// opaque-value parameters.
-        const OPAQUE_VALUE_PARAMS: &[(&str, &[usize])] = &[
-            (rt::LIST_PUSH, &[1]),
-            (rt::LIST_SET, &[2]),
-            (rt::LIST_INSERT, &[2]),
-            (rt::MAP_SET, &[1, 2]),
-            (rt::SET_ADD, &[1]),
-        ];
         func_name.is_some_and(|name| {
-            OPAQUE_VALUE_PARAMS
-                .iter()
-                .any(|(entry, positions)| *entry == name && positions.contains(&arg_index))
+            crate::runtime_fns::element_value_positions(name).contains(&arg_index)
         })
     }
 
@@ -908,6 +891,7 @@ impl<'a> FunctionTranslator<'a> {
         func_name: Option<&str>,
         predeclared_sig: Option<&Signature>,
         ptr_type: cranelift_codegen::ir::Type,
+        is_unsigned: bool,
     ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
         let Some(pre_sig) = predeclared_sig else {
             return Ok(val);
@@ -950,7 +934,7 @@ impl<'a> FunctionTranslator<'a> {
                 val,
                 actual_ty,
                 expected_ty,
-                false,
+                is_unsigned,
             )
             .map_err(|e| {
                 CodegenError::Internal(format!(
@@ -989,6 +973,37 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Direct call to a named symbol: declare-import the callee, emit the
+    /// Bind a call's result to the local the call names as its destination.
+    fn define_call_destination(
+        builder: &mut FunctionBuilder,
+        locals: &HashMap<Local, Variable>,
+        destination: &Place,
+        result: cranelift_codegen::ir::Value,
+    ) -> Result<(), CodegenError> {
+        let dest_var = locals.get(&destination.local).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "Unknown call destination local: {:?}",
+                destination.local
+            ))
+        })?;
+        builder.def_var(*dest_var, result);
+        Ok(())
+    }
+
+    /// The type a call's result must be reinterpreted into, when the call hands
+    /// back element bytes in a value word rather than a value of the
+    /// destination's type.
+    ///
+    /// Only a float destination needs this. Every other destination is already
+    /// read out of the register the word arrives in, so the word is the value.
+    fn element_word_result_type(
+        func_name: Option<&str>,
+        cl_dest_ty: cranelift_codegen::ir::Type,
+    ) -> Option<cranelift_codegen::ir::Type> {
+        let hands_back_bytes = func_name.is_some_and(crate::runtime_fns::returns_element_value);
+        (hands_back_bytes && cl_dest_ty.is_float()).then_some(cl_dest_ty)
+    }
+
     /// `call` instruction, store the result into the destination local, and
     /// run any runtime-specific post-call initialization (List drop-fn /
     /// clone-fn registration for `miri_rt_list_new*`).
@@ -1005,6 +1020,7 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
         ptr_type: cranelift_codegen::ir::Type,
+        reinterpret_result_as: Option<cranelift_codegen::ir::Type>,
     ) -> Result<(), CodegenError> {
         let func_id = ctx
             .module
@@ -1014,14 +1030,21 @@ impl<'a> FunctionTranslator<'a> {
         let call = builder.ins().call(local_func, &arg_values);
 
         let maybe_result = if dest_ty.kind != TypeKind::Void {
-            let result = builder.inst_results(call)[0];
-            let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "Unknown call destination local: {:?}",
-                    destination.local
-                ))
-            })?;
-            builder.def_var(*dest_var, result);
+            let raw = builder.inst_results(call)[0];
+            let result = match reinterpret_result_as {
+                Some(dest_cl_ty) => {
+                    let raw_ty = builder.func.dfg.value_type(raw);
+                    Self::bitcast_via_stack(builder, raw, raw_ty, dest_cl_ty, ptr_type).map_err(
+                        |e| {
+                            CodegenError::Internal(format!(
+                                "Reinterpreting {func_name}'s element word as {dest_cl_ty} failed: {e}"
+                            ))
+                        },
+                    )?
+                }
+                None => raw,
+            };
+            Self::define_call_destination(builder, locals, destination, result)?;
             Some(result)
         } else {
             None
@@ -1070,13 +1093,7 @@ impl<'a> FunctionTranslator<'a> {
 
         if dest_ty.kind != TypeKind::Void {
             let result = builder.inst_results(call)[0];
-            let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "Unknown call destination local: {:?}",
-                    destination.local
-                ))
-            })?;
-            builder.def_var(*dest_var, result);
+            Self::define_call_destination(builder, locals, destination, result)?;
         }
         Ok(())
     }
