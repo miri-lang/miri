@@ -218,3 +218,42 @@ fn main()
         "min none",
     );
 }
+
+#[test]
+fn test_queue_reduce_folds_in_insertion_order() {
+    assert_runs_with_output(
+        r#"
+use system.collections.queue
+
+fn main()
+    let q = Queue<int>()
+    q.enqueue(1)
+    q.enqueue(2)
+    q.enqueue(3)
+
+    let total = q.reduce(0, fn(acc int, x int) int: acc + x)
+    println(f"reduce {total}")
+"#,
+        "reduce 6",
+    );
+}
+
+#[test]
+fn test_queue_count_where_any_and_all() {
+    assert_runs_with_output(
+        r#"
+use system.collections.queue
+
+fn main()
+    let q = Queue<int>()
+    q.enqueue(1)
+    q.enqueue(2)
+    q.enqueue(3)
+
+    println(f"count {q.count_where(fn(x int) bool: x > 1)}")
+    println(f"any {q.any(fn(x int) bool: x == 2)}")
+    println(f"all {q.all(fn(x int) bool: x > 0)}")
+"#,
+        "count 2\nany true\nall true",
+    );
+}
