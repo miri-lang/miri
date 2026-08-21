@@ -254,24 +254,36 @@ fn test_concrete_element_kinds_are_resolved() {
     }
 }
 
+/// The kind a field of `class_def` has for one instantiation: the declared type
+/// with the class's type parameters substituted, exactly as the drop thunk
+/// resolves it.
+fn field_kind_for(
+    class_def: &ClassDefinition,
+    field_kind: &TypeKind,
+    inst_args: Option<&[Type]>,
+) -> TypeKind {
+    FunctionTranslator::instantiated_field_type(class_def, &ty(field_kind.clone()), inst_args).kind
+}
+
 #[test]
 fn test_generic_field_resolves_to_the_argument_at_its_parameter_position() {
-    let mut box_def = class("Pair");
-    box_def.generics = Some(vec![generic_param("K"), generic_param("V")]);
+    let mut pair = class("Pair");
+    pair.generics = Some(vec![generic_param("K"), generic_param("V")]);
+    let args = [ty(TypeKind::String), ty(TypeKind::Int)];
 
-    let first = FunctionTranslator::generic_field_concrete_kind(
-        &box_def,
+    let first = field_kind_for(
+        &pair,
         &TypeKind::Generic("K".to_string(), None, TypeDeclarationKind::None),
-        Some(&[ty(TypeKind::String), ty(TypeKind::Int)]),
+        Some(&args),
     );
-    let second = FunctionTranslator::generic_field_concrete_kind(
-        &box_def,
+    let second = field_kind_for(
+        &pair,
         &TypeKind::Generic("V".to_string(), None, TypeDeclarationKind::None),
-        Some(&[ty(TypeKind::String), ty(TypeKind::Int)]),
+        Some(&args),
     );
 
-    assert_eq!(first, Some(TypeKind::String));
-    assert_eq!(second, Some(TypeKind::Int));
+    assert_eq!(first, TypeKind::String);
+    assert_eq!(second, TypeKind::Int);
 }
 
 #[test]
@@ -282,72 +294,83 @@ fn test_generic_field_spelled_as_a_bare_custom_name_also_resolves() {
     box_def.generics = Some(vec![generic_param("T")]);
 
     assert_eq!(
-        FunctionTranslator::generic_field_concrete_kind(
-            &box_def,
-            &custom("T"),
-            Some(&[ty(TypeKind::String)])
-        ),
-        Some(TypeKind::String)
+        field_kind_for(&box_def, &custom("T"), Some(&[ty(TypeKind::String)])),
+        TypeKind::String
     );
 }
 
 #[test]
-fn test_field_naming_a_non_parameter_type_does_not_resolve() {
+fn test_element_type_nested_in_a_collection_field_resolves() {
+    // `items List<T>` is what a collection-backed generic class declares. The
+    // element type has to be substituted too, or the list is dropped without
+    // ever releasing what it holds.
+    let mut box_def = class("Box");
+    box_def.generics = Some(vec![generic_param("T")]);
+
+    let resolved = field_kind_for(
+        &box_def,
+        &custom_of("List", custom("T")),
+        Some(&[ty(TypeKind::String)]),
+    );
+
+    let TypeKind::Custom(name, Some(args)) = &resolved else {
+        panic!("expected a resolved collection type, got {resolved:?}");
+    };
+    assert_eq!(name, "List");
+    let ExpressionKind::Type(elem, _) = &args[0].node else {
+        panic!("expected a resolved element type argument");
+    };
+    assert_eq!(elem.kind, TypeKind::String);
+}
+
+#[test]
+fn test_field_naming_a_non_parameter_type_is_left_as_written() {
     let mut box_def = class("Box");
     box_def.generics = Some(vec![generic_param("T")]);
 
     assert_eq!(
-        FunctionTranslator::generic_field_concrete_kind(
-            &box_def,
-            &custom("Widget"),
-            Some(&[ty(TypeKind::String)])
-        ),
-        None,
+        field_kind_for(&box_def, &custom("Widget"), Some(&[ty(TypeKind::String)])),
+        custom("Widget"),
         "a concrete field type is not a generic placeholder to substitute"
     );
 }
 
 #[test]
-fn test_generic_field_without_instantiation_arguments_does_not_resolve() {
-    // The shared bare-name thunk carries no arguments; the field must be
-    // skipped there rather than guessed at.
+fn test_generic_field_without_instantiation_arguments_is_left_as_written() {
+    // The shared bare-name thunk carries no arguments; the field stays spelled
+    // as its parameter rather than being guessed at.
     let mut box_def = class("Box");
     box_def.generics = Some(vec![generic_param("T")]);
+    let unresolved = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
 
     assert_eq!(
-        FunctionTranslator::generic_field_concrete_kind(
-            &box_def,
-            &TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
-            None
-        ),
-        None
+        field_kind_for(&box_def, &unresolved, None),
+        unresolved.clone()
+    );
+    assert!(FunctionTranslator::is_unresolved_generic_elem(
+        &unresolved,
+        &HashMap::new()
+    ));
+}
+
+#[test]
+fn test_generic_field_of_a_non_generic_class_is_left_as_written() {
+    let unresolved = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    assert_eq!(
+        field_kind_for(&class("Widget"), &unresolved, Some(&[ty(TypeKind::String)])),
+        unresolved
     );
 }
 
 #[test]
-fn test_generic_field_of_a_non_generic_class_does_not_resolve() {
-    assert_eq!(
-        FunctionTranslator::generic_field_concrete_kind(
-            &class("Widget"),
-            &TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
-            Some(&[ty(TypeKind::String)])
-        ),
-        None
-    );
-}
-
-#[test]
-fn test_generic_field_beyond_the_supplied_arguments_does_not_resolve() {
+fn test_generic_field_beyond_the_supplied_arguments_is_left_as_written() {
     let mut pair = class("Pair");
     pair.generics = Some(vec![generic_param("K"), generic_param("V")]);
+    let unresolved = TypeKind::Generic("V".to_string(), None, TypeDeclarationKind::None);
 
     assert_eq!(
-        FunctionTranslator::generic_field_concrete_kind(
-            &pair,
-            &TypeKind::Generic("V".to_string(), None, TypeDeclarationKind::None),
-            Some(&[ty(TypeKind::String)])
-        ),
-        None,
+        field_kind_for(&pair, &unresolved, Some(&[ty(TypeKind::String)])),
+        unresolved,
         "a short argument list must not index past its end"
     );
 }

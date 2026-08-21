@@ -15,7 +15,9 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::TypeChecker;
 
-use super::{apply_generic_sub, is_monomorphizable_scalar, lower_expression, LoweringContext};
+use super::{
+    apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
+};
 use crate::ast::BuiltinCollectionKind;
 use std::collections::HashMap;
 
@@ -684,7 +686,10 @@ fn resolve_generic_class_monomorph(
         .map(|e| ctx.type_checker.extract_type_from_expression(e))
         .collect::<Result<_, _>>()
         .ok()?;
-    if resolved.len() != gens.len() || !resolved.iter().all(|t| is_monomorphizable_scalar(&t.kind))
+    if resolved.len() != gens.len()
+        || !resolved
+            .iter()
+            .all(|t| is_monomorphizable_type_argument(&t.kind))
     {
         return None;
     }

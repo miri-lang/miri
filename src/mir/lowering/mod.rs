@@ -534,14 +534,13 @@ pub(crate) fn rebuild_class_type_params(
         .collect()
 }
 
-/// True for a generic-class type argument that monomorphizes safely today.
+/// True for a type argument whose instantiation is a scalar.
 ///
 /// Admits any non-managed scalar: integers of every width, floats (`float`,
 /// `f16`, `f32`, `f64`), and `bool`. A scalar field carries a concrete
-/// store/load width per instantiation and its drop is a genuine no-op (nothing
-/// to reference-count), so the shared bare-name drop thunk can safely skip it.
-/// Managed type arguments (`String`, collections, class/struct instances) still
-/// need per-instantiation decref thunks and are excluded until that lands.
+/// store/load width per instantiation and its drop is a genuine no-op, nothing
+/// to reference-count. Managed type arguments are admitted separately by
+/// [`is_monomorphizable_type_argument`], for a different reason.
 pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
     matches!(
         kind,
@@ -562,6 +561,22 @@ pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
             | TypeKind::F64
             | TypeKind::Boolean
     )
+}
+
+/// True for a generic-class type argument that gets a per-instantiation body.
+///
+/// Adds `String` to the scalar set. A managed type argument needs the
+/// instantiated body for a different reason than a scalar does: not to pin a
+/// store width, but so reference counting sees the concrete type. In a body
+/// that still spells the argument `T`, an unresolved type parameter counts as
+/// unmanaged, so a value stored into a field is never retained and the holder
+/// releases a reference it never took.
+///
+/// Class and struct instances are not admitted yet: their type argument mangles
+/// through the same symbol as a differently-shaped one would, so two
+/// instantiations can collide on a name.
+pub(crate) fn is_monomorphizable_type_argument(kind: &TypeKind) -> bool {
+    is_monomorphizable_scalar(kind) || matches!(kind, TypeKind::String)
 }
 
 /// Lower a generic function with concrete type substitutions to produce a
