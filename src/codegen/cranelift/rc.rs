@@ -242,29 +242,28 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Resolve a generic class's bare-generic field to its concrete kind for one
-    /// instantiation.
+    /// A field of a generic class as one instantiation actually stores it.
     ///
-    /// `inst_args` is the recorded instantiation's ordered type arguments. When
-    /// the field is a bare generic parameter (`value T`), it is resolved to the
-    /// argument at the parameter's declared position. Returns `None` when the
-    /// field is not a bare generic, or when no per-instantiation arguments are
-    /// available (the shared bare-name thunk), so the caller skips the field.
-    pub fn generic_field_concrete_kind(
+    /// `inst_args` is the recorded instantiation's ordered type arguments, so a
+    /// `Box<String>` resolves `value T` to `String` and `items List<T>` to
+    /// `List<String>` — the nested element too, which is what a collection-backed
+    /// class needs to release what it holds. Returns the field type unchanged
+    /// when the class is not generic or no per-instantiation arguments are
+    /// available (the shared bare-name thunk).
+    pub fn instantiated_field_type(
         class_def: &ClassDefinition,
-        field_kind: &TypeKind,
+        field_ty: &Type,
         inst_args: Option<&[Type]>,
-    ) -> Option<TypeKind> {
-        let gen_name = if let TypeKind::Generic(name, _, _) = field_kind {
-            name.as_str()
-        } else if let TypeKind::Custom(name, None) = field_kind {
-            name.as_str()
-        } else {
-            return None;
+    ) -> Type {
+        let (Some(generics), Some(args)) = (class_def.generics.as_ref(), inst_args) else {
+            return field_ty.clone();
         };
-        let generics = class_def.generics.as_ref()?;
-        let param_idx = generics.iter().position(|g| g.name == gen_name)?;
-        inst_args?.get(param_idx).map(|t| t.kind.clone())
+        let subs: HashMap<String, Type> = generics
+            .iter()
+            .zip(args)
+            .map(|(generic, arg)| (generic.name.clone(), arg.clone()))
+            .collect();
+        crate::mir::lowering::apply_generic_sub(field_ty, &subs)
     }
 
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
@@ -893,27 +892,25 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Class(class_def) => {
                 use crate::type_checker::context::collect_class_fields_all;
                 let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
-                // A bare-generic field (`value T`) has no concrete kind in the class
-                // definition. The per-instantiation drop thunk (`__drop_Box__String`)
-                // supplies `inst_args`, so the field resolves to its concrete kind:
-                // a managed one (`String`) joins the DecRef set at that kind, a scalar
-                // one (`float`) is a genuine no-op and is skipped. The shared bare-name
-                // thunk (`inst_args = None`) is only reached as a collection element's
+                // A field of a generic class is written in the class's own type
+                // parameters (`value T`, `items List<T>`), which name nothing
+                // concrete on their own. The per-instantiation drop thunk
+                // (`__drop_Box__String`) supplies `inst_args`, so every field
+                // resolves to the kind this instantiation actually stores: a
+                // managed one joins the DecRef set at that kind, a scalar one is a
+                // genuine no-op and is skipped. Substituting the whole field type
+                // rather than only a bare parameter is what reaches an element type
+                // nested inside a collection field. The shared bare-name thunk
+                // (`inst_args = None`) is only reached as a collection element's
                 // decref helper; there the direct drop already routed through the
                 // mangled thunk, so an unresolvable generic field is skipped here.
                 let mut managed_fields: Vec<(usize, TypeKind)> = Vec::new();
                 for (idx, (_field_name, fi)) in all_fields.iter().enumerate() {
-                    let kind = &fi.ty.kind;
+                    let resolved = Self::instantiated_field_type(class_def, &fi.ty, inst_args);
+                    let kind = &resolved.kind;
                     if class_def.generics.is_some()
                         && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
                     {
-                        if let Some(concrete) =
-                            Self::generic_field_concrete_kind(class_def, kind, inst_args)
-                        {
-                            if is_field_managed(&concrete) {
-                                managed_fields.push((idx, concrete));
-                            }
-                        }
                         continue;
                     }
                     if is_field_managed(kind) {

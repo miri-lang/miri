@@ -134,9 +134,14 @@ fn lower_return(
 ) -> Result<(), LoweringError> {
     if let Some(expr) = ret_expr {
         let ret_ty = ctx.body.local_decls[0].ty.clone();
+        // The returned expression's type is read through the instantiation
+        // substitution: a body lowered for `Container<String>` returns `String`
+        // where the type checker recorded `T`. Read raw, the two spellings never
+        // match, so the value takes a detour through a temp that is retained for
+        // the read and released after it — leaving the returned value with no
+        // holder at all.
         let types_match = ctx
-            .type_checker
-            .get_type(expr.id)
+            .recorded_type(expr.id)
             .map(|ety| {
                 let em = MirType::from_type_kind(&ety.kind);
                 let rm = MirType::from_type_kind(&ret_ty.kind);

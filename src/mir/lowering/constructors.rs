@@ -276,7 +276,7 @@ fn monomorphized_init_symbol(
     let mut mangle_args = Vec::with_capacity(generics.len());
     for generic in generics {
         match field_subs.get(&generic.name) {
-            Some(ty) if super::is_monomorphizable_scalar(&ty.kind) => {
+            Some(ty) if super::is_monomorphizable_type_argument(&ty.kind) => {
                 mangle_args.push((generic.name.clone(), ty.clone()))
             }
             _ => return plain,
@@ -522,8 +522,8 @@ pub(crate) fn lower_list_constructor(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let list_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-        call_ty.clone()
+    let list_ty = if let Some(call_ty) = ctx.recorded_type(call_expr_id) {
+        call_ty
     } else {
         Type::new(TypeKind::Int, *span)
     };
@@ -673,8 +673,8 @@ pub(crate) fn lower_map_constructor(
         }
     }
 
-    let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-        call_ty.clone()
+    let return_ty = if let Some(call_ty) = ctx.recorded_type(call_expr_id) {
+        call_ty
     } else {
         crate::ast::factory::type_map(
             crate::ast::factory::type_void(),
@@ -717,8 +717,8 @@ pub(crate) fn lower_set_constructor(
         }
     }
 
-    let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-        call_ty.clone()
+    let return_ty = if let Some(call_ty) = ctx.recorded_type(call_expr_id) {
+        call_ty
     } else {
         crate::ast::factory::type_set(crate::ast::factory::type_void())
     };
@@ -764,8 +764,8 @@ pub(crate) fn lower_array_constructor(
     }
 
     // Get the inferred type: Custom("Array", Some([elem_expr, size_expr]))
-    let array_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-        call_ty.clone()
+    let array_ty = if let Some(call_ty) = ctx.recorded_type(call_expr_id) {
+        call_ty
     } else {
         return Err(LoweringError::unsupported_expression(
             "Unable to infer Array<T, N>() constructor type".to_string(),

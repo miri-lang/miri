@@ -840,11 +840,13 @@ impl Pipeline {
     /// by the instantiation's concrete types. The mangled name matches the symbol
     /// the dispatcher emits at the call site, byte-for-byte, so the call resolves.
     ///
-    /// Restricted to the non-managed-scalar slice (see [`is_monomorphizable_scalar`]
-    /// in `mir::lowering`): each scalar type argument load/stores at a concrete
-    /// per-instantiation field width and needs no reference counting. Managed type
-    /// arguments fall back to the plain generic body and its fail-closed drop path
-    /// until per-instantiation decref thunks land.
+    /// This pass emits every method of a scalar instantiation up front, because a
+    /// scalar type argument changes the field width every method addresses. An
+    /// instantiation at a managed type is emitted on demand instead (see
+    /// [`Self::lower_called_generic_class_methods`]): what it needs is reference
+    /// counting against the concrete type, which only the methods a program
+    /// actually calls require, and a class inherits trait defaults that no
+    /// managed instantiation can compile at all.
     fn lower_generic_class_instantiations(
         result: &PipelineResult,
         class_name: &str,
@@ -889,6 +891,16 @@ impl Pipeline {
         result: &PipelineResult,
         class_name: &str,
     ) -> Vec<InstantiationSub> {
+        Self::instantiation_subs(result, class_name, mir::lowering::is_monomorphizable_scalar)
+    }
+
+    /// Build the substitution and mangle-argument pairs for every recorded
+    /// instantiation of a generic class whose type arguments all satisfy `admits`.
+    fn instantiation_subs(
+        result: &PipelineResult,
+        class_name: &str,
+        admits: fn(&TypeKind) -> bool,
+    ) -> Vec<InstantiationSub> {
         let Some(TypeDefinition::Class(def)) =
             result.type_checker.type_definitions().get(class_name)
         else {
@@ -907,10 +919,7 @@ impl Pipeline {
         instantiations
             .iter()
             .filter(|type_args| {
-                type_args.len() == generics.len()
-                    && type_args
-                        .iter()
-                        .all(|t| mir::lowering::is_monomorphizable_scalar(&t.kind))
+                type_args.len() == generics.len() && type_args.iter().all(|t| admits(&t.kind))
             })
             .map(|type_args| {
                 let pairs: Vec<(String, Type)> = generics
@@ -1060,16 +1069,19 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Emit a builtin collection's monomorphized methods only where a lowered
-    /// body actually calls them.
+    /// Emit a generic class's remaining monomorphized methods only where a
+    /// lowered body actually calls them.
     ///
     /// A collection declares dozens of methods and most call sites lower to a
     /// direct runtime call rather than the Miri body, so emitting every method
     /// for every recorded element type compiles bodies nothing can reach — and an
-    /// unreachable body still has to satisfy MIR verification. Scan the lowered
-    /// bodies for mangled collection symbols, emit just those, and repeat until a
-    /// pass finds nothing new, since a freshly emitted body can call another.
-    fn lower_called_builtin_collection_methods(
+    /// unreachable body still has to satisfy MIR verification. The same holds for
+    /// a class instantiated at a managed type: `Queue<String>` inherits a `sum`
+    /// default that adds its elements, which no program calls and no backend can
+    /// compile. Scan the lowered bodies for mangled symbols, emit just those, and
+    /// repeat until a pass finds nothing new, since a freshly emitted body can
+    /// call another.
+    fn lower_called_generic_class_methods(
         &self,
         result: &PipelineResult,
         is_release: bool,
@@ -1093,11 +1105,11 @@ impl Pipeline {
                 let Some(class_name) = Self::identifier_name(&class_data.name) else {
                     continue;
                 };
-                if BuiltinCollectionKind::from_name(class_name).is_none() {
-                    continue;
-                }
-
-                for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
+                for (mut subs, mangle_args) in Self::instantiation_subs(
+                    result,
+                    class_name,
+                    mir::lowering::is_monomorphizable_type_argument,
+                ) {
                     mir::lowering::dispatch::extend_subs_with_trait_params(
                         &result.type_checker,
                         class_name,
@@ -1252,7 +1264,7 @@ impl Pipeline {
             &kernel_namer,
         )?;
 
-        self.lower_called_builtin_collection_methods(
+        self.lower_called_generic_class_methods(
             result,
             is_release,
             &mut bodies,

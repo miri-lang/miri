@@ -11,6 +11,7 @@ pub mod enums;
 pub mod escape_analysis;
 pub mod field_projections;
 pub mod functions;
+pub mod generic_managed_type_arguments;
 pub mod generics;
 pub mod heap_guard;
 pub mod loops;

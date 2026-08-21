@@ -540,7 +540,12 @@ pub fn lower_as_return(
 
     match &stmt.node {
         StatementKind::Expression(expr) => {
-            let expr_ty = ctx.type_checker.get_type(expr.id).cloned();
+            // Read through the instantiation substitution: a body lowered for
+            // `Container<String>` returns `String` where the type checker
+            // recorded `T`. Read raw, the two spellings never match, so the
+            // value takes a detour through a temp that is retained for the read
+            // and released after it, leaving the returned value with no holder.
+            let expr_ty = ctx.recorded_type(expr.id);
             let types_match = expr_ty
                 .as_ref()
                 .map(|t| {

@@ -3,9 +3,9 @@
 
 //! Stack<T> at non-int element widths.
 //!
-//! Blocked on builtin-collection method lowering: `List<T>` is a `TypeKind::List`,
-//! so it never enters generic-class monomorphization and its Miri-defined methods
-//! (`remove_at`, `pop`) lower once at pointer width.
+//! The backing list stores an element at the width its type argument declares,
+//! so a float goes in and comes back out as the same bits. Reading it back at
+//! the pointer-width fallback instead is what these guard against.
 
 use crate::integration::utils::*;
 
