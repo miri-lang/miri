@@ -48,3 +48,20 @@ fn main()
 10.5",
     );
 }
+
+#[test]
+fn test_queue_narrow_int_round_trip() {
+    assert_runs_with_output(
+        r#"
+use system.collections.queue
+
+fn main()
+    var q = Queue<i32>()
+    q.enqueue(200)
+    q.enqueue(7)
+    println(f"{q.dequeue() ?? 0}")
+    println(f"{q.dequeue() ?? 0}")
+"#,
+        "200\n7",
+    );
+}

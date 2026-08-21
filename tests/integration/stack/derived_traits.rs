@@ -218,3 +218,41 @@ fn main()
         "min none",
     );
 }
+
+#[test]
+fn test_stack_reduce_folds_from_the_top() {
+    assert_runs_with_output(
+        r#"
+use system.collections.stack
+
+fn main()
+    let s = Stack<int>()
+    s.push(4)
+    s.push(5)
+
+    let total = s.reduce(0, fn(acc int, x int) int: acc + x)
+    println(f"reduce {total}")
+"#,
+        "reduce 9",
+    );
+}
+
+#[test]
+fn test_stack_count_where_any_and_all() {
+    assert_runs_with_output(
+        r#"
+use system.collections.stack
+
+fn main()
+    let s = Stack<int>()
+    s.push(1)
+    s.push(2)
+    s.push(3)
+
+    println(f"count {s.count_where(fn(x int) bool: x > 1)}")
+    println(f"any {s.any(fn(x int) bool: x == 2)}")
+    println(f"all {s.all(fn(x int) bool: x > 0)}")
+"#,
+        "count 2\nany true\nall true",
+    );
+}
