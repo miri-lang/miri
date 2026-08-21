@@ -20,12 +20,7 @@ fn main()
     );
 }
 
-/// A managed payload returned inside `Option<T>` is never released: matching
-/// `Some(v)` where `v` is a `String` leaks that allocation, so the harness's leak
-/// check fails the test even though the value read back is correct. Reproducible
-/// without this module by a plain `fn f() String?` returning `Some("a" + "b")`.
 #[test]
-#[ignore = "leaks the Option payload; the read-back value itself is correct"]
 fn test_env_get_set_variable() {
     assert_runs_with_output(
         r#"
@@ -65,9 +60,7 @@ fn main()
     );
 }
 
-/// Blocked on the same unreleased `Option` payload as `test_env_get_set_variable`.
 #[test]
-#[ignore = "leaks the Option payload; the read-back value itself is correct"]
 fn test_env_set_empty_string() {
     assert_runs_with_output(
         r#"
@@ -87,11 +80,9 @@ fn main()
     );
 }
 
-/// Blocked on the same unreleased `Option` payload as `test_env_get_set_variable`.
-/// This is the test that proves an empty-valued variable is `Some("")` while an
-/// unset one is `None`; its output is already correct, only the leak check fails.
+/// Proves an empty-valued variable reads back as `Some("")` while an unset one
+/// reads back as `None`.
 #[test]
-#[ignore = "leaks the Option payload; the Some/None distinction itself is correct"]
 fn test_env_unset_vs_empty_string() {
     assert_runs_with_output(
         r#"
