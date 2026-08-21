@@ -18,6 +18,7 @@ pub mod match_arms;
 pub mod method_arg_temps;
 pub mod nested_calls;
 pub mod null_coalesce;
+pub mod option_coercion;
 pub mod out_parameter;
 pub mod rc_elision;
 pub mod reassignment;

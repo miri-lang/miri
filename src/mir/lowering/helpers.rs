@@ -412,6 +412,36 @@ pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
     from == to || mir_types_structurally_match(&from, &to)
 }
 
+/// Whether coercing `op_ty` into `target_ty` hands the value a second holder.
+///
+/// Wrapping a bare `T` into an `Option` builds an aggregate, and Perceus retains
+/// every managed place an aggregate reads. A value a callee has just donated
+/// lives in a temp no scope releases, so that retain has to be answered.
+pub fn coercion_retains_source(op_ty: &Type, target_ty: &Type) -> bool {
+    matches!(target_ty.kind, TypeKind::Option(_)) && !matches!(op_ty.kind, TypeKind::Option(_))
+}
+
+/// Release the temp a retaining coercion read, when the expression being lowered
+/// is what created it.
+///
+/// `emit_temp_drop` leaves named locals, borrowed temps and scope-owned locals
+/// untouched, so a value some other holder still owns keeps its reference.
+pub fn release_coerced_source(
+    ctx: &mut LoweringContext,
+    operand: &Operand,
+    op_ty: &Type,
+    target_ty: &Type,
+    watermark: usize,
+    span: Span,
+) {
+    if !coercion_retains_source(op_ty, target_ty) {
+        return;
+    }
+    if let Operand::Copy(place) | Operand::Move(place) = operand {
+        ctx.emit_temp_drop(place.local, watermark, span);
+    }
+}
+
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
 /// If `target_ty` is `Option<T>` and `op_ty` is `T`, it allocates an Option box.
 /// Otherwise, it emits a standard type Cast.

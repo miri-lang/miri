@@ -13,7 +13,8 @@ use crate::mir::{
     Terminator, TerminatorKind,
 };
 
-use super::{helpers::coerce_rvalue, lower_expression, resolve_type, LoweringContext};
+use super::helpers::{coerce_rvalue, release_coerced_source};
+use super::{lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
 // These two GPU intrinsics are synthesized by the compiler, never written in
@@ -455,17 +456,19 @@ fn assign_variable_initializer(
         return Ok(());
     }
 
+    let watermark = ctx.body.local_decls.len();
     let op = lower_expression(ctx, init_expr, None)?;
     let op_ty = op.ty(&ctx.body).clone();
+    let target_ty = ctx.body.local_decls[local.0].ty.clone();
     let rvalue = if op_ty.kind != *var_ty_kind {
-        let target_ty = ctx.body.local_decls[local.0].ty.clone();
-        coerce_rvalue(op, &op_ty, &target_ty)
+        coerce_rvalue(op.clone(), &op_ty, &target_ty)
     } else {
-        Rvalue::Use(op)
+        Rvalue::Use(op.clone())
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(dest, rvalue),
         span: *span,
     });
+    release_coerced_source(ctx, &op, &op_ty, &target_ty, watermark, *span);
     Ok(())
 }

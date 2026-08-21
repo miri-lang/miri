@@ -22,7 +22,9 @@ use crate::type_checker::context::{GenericDefinition, TypeDefinition};
 use super::context::LoweringContext;
 use super::control_flow::{lower_break, lower_continue, lower_for, lower_if, lower_while};
 use super::expression::lower_expression;
-use super::helpers::{coerce_rvalue, mir_types_structurally_match, resolve_type};
+use super::helpers::{
+    coerce_rvalue, mir_types_structurally_match, release_coerced_source, resolve_type,
+};
 use super::variable::lower_variable;
 
 /// Lower an AST statement to MIR.
@@ -145,17 +147,19 @@ fn lower_return(
         if types_match {
             lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
         } else {
+            let watermark = ctx.body.local_decls.len();
             let ret_val = lower_expression(ctx, expr, None)?;
             let val_ty = ret_val.ty(&ctx.body).clone();
             let rvalue = if val_ty.kind != ret_ty.kind {
-                coerce_rvalue(ret_val, &val_ty, &ret_ty)
+                coerce_rvalue(ret_val.clone(), &val_ty, &ret_ty)
             } else {
-                Rvalue::Use(ret_val)
+                Rvalue::Use(ret_val.clone())
             };
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
                 span,
             });
+            release_coerced_source(ctx, &ret_val, &val_ty, &ret_ty, watermark, span);
         }
     }
     // Emit StorageDead for all live named locals before returning so Perceus
