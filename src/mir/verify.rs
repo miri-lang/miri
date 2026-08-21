@@ -92,7 +92,7 @@ use crate::mir::place::Place;
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::StatementKind;
 use crate::mir::terminator::TerminatorKind;
-use crate::mir::{Body, Local, Statement};
+use crate::mir::{Body, ExecutionModel, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -220,7 +220,20 @@ fn join_states(into: &mut PathState, from: &PathState) {
 ///
 /// Returns a (possibly empty) list of violations. A non-empty list indicates a bug
 /// in lowering or in one of the RC passes, not in the program being compiled.
+///
+/// A body that runs on a GPU has no ownership account to check. Reference
+/// counting is a property of the host heap; a kernel's values live in registers
+/// and in buffers the host owns and releases, and the shader backends discard
+/// every RC operation. Reading such a body through the host's rules reports a
+/// leak for each value the kernel holds.
 pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
+    if matches!(
+        body.execution_model,
+        ExecutionModel::GpuKernel | ExecutionModel::GpuDevice
+    ) {
+        return Vec::new();
+    }
+
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
     let tracked = collect_tracked_locals(body, &env_captures);
     let managed_params = collect_managed_param_locals(body);

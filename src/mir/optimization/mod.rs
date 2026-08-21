@@ -40,7 +40,7 @@ pub mod perceus;
 pub mod rc_elision;
 pub mod simplify_cfg;
 
-use crate::mir::Body;
+use crate::mir::{Body, ExecutionModel};
 use constant_propagation::ConstantPropagation;
 use copy_propagation::CopyPropagation;
 use dead_code::DeadCodeElimination;
@@ -135,11 +135,28 @@ pub fn optimize(body: &mut Body) {
 /// duplicate IncRef/DecRef and allow later passes to invalidate the RC
 /// annotations.
 ///
+/// A body that runs on a GPU is left alone. There is no heap to count
+/// references into: every value a kernel holds lives in a register or in a
+/// buffer the host owns, and the shader backends discard `IncRef`/`DecRef`
+/// outright. Annotating one produces operations no backend reads and an
+/// ownership account that describes nothing.
+///
 /// # Arguments
 ///
 /// * `body` - The MIR function body to annotate with RC operations (mutated in place)
 pub fn insert_rc(body: &mut Body) {
+    if runs_on_a_gpu(body) {
+        return;
+    }
     Perceus.run(body);
+}
+
+/// Whether `body` executes on a GPU rather than on the host.
+fn runs_on_a_gpu(body: &Body) -> bool {
+    matches!(
+        body.execution_model,
+        ExecutionModel::GpuKernel | ExecutionModel::GpuDevice
+    )
 }
 
 /// Remove redundant IncRef/DecRef pairs from the MIR body.
@@ -154,5 +171,8 @@ pub fn insert_rc(body: &mut Body) {
 ///
 /// * `body` - The MIR function body already annotated with RC operations
 pub fn elide_rc(body: &mut Body) {
+    if runs_on_a_gpu(body) {
+        return;
+    }
     RcElision.run(body);
 }
