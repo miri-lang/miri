@@ -17,7 +17,7 @@ use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue, ensure_place, resolve_type, spellings_of_one_value,
+    coerce_rvalue, ensure_place, release_coerced_source, resolve_type, spellings_of_one_value,
 };
 
 fn assign_to_identifier(
@@ -83,7 +83,9 @@ fn assign_to_var_simple(
         if let Some(rhs_place) = rhs_place {
             handle_managed_place_assign(ctx, local, &lhs_ty, rhs_place, expr, dest, rhs_watermark)
         } else {
-            handle_managed_nonplace_assign(ctx, local, rvalue, expr, dest)
+            let assigned = handle_managed_nonplace_assign(ctx, local, rvalue, expr, dest)?;
+            release_coerced_source(ctx, &val, &rhs_ty, &lhs_ty, *rhs_watermark, expr.span);
+            Ok(assigned)
         }
     } else {
         ctx.push_statement(crate::mir::Statement {

@@ -14,7 +14,9 @@ use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
-use super::helpers::{coerce_rvalue, gpu_math_return_type, spellings_of_one_value};
+use super::helpers::{
+    coerce_rvalue, gpu_math_return_type, release_coerced_source, spellings_of_one_value,
+};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
@@ -1232,6 +1234,7 @@ fn lower_and_coerce_args(
 ) -> Vec<Operand> {
     let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
+        let watermark = ctx.body.local_decls.len();
         let mut op = lower_expression(ctx, arg, None).unwrap_or_else(|_| {
             Operand::Constant(Box::new(crate::mir::Constant {
                 span: arg.span,
@@ -1250,10 +1253,11 @@ fn lower_and_coerce_args(
                     ctx.push_statement(crate::mir::Statement {
                         kind: StatementKind::Assign(
                             Place::new(temp),
-                            coerce_rvalue(op, &op_ty, &target_ty),
+                            coerce_rvalue(op.clone(), &op_ty, &target_ty),
                         ),
                         span: arg.span,
                     });
+                    release_coerced_source(ctx, &op, &op_ty, &target_ty, watermark, arg.span);
                     op = Operand::Copy(Place::new(temp));
                 }
             }
