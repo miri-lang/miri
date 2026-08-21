@@ -234,3 +234,82 @@ fn main()
         "9",
     );
 }
+
+#[test]
+fn test_field_read_off_a_call_result_no_leak() {
+    assert_runs_with_output(
+        r#"
+class Widget
+    public var tag int
+    fn init(t int)
+        self.tag = t
+
+fn make() Widget
+    return Widget(7)
+
+fn main()
+    println(f"{make().tag}")
+"#,
+        "7",
+    );
+}
+
+#[test]
+fn test_field_read_off_a_call_result_in_arithmetic_no_leak() {
+    assert_runs_with_output(
+        r#"
+class Widget
+    public var tag int
+    fn init(t int)
+        self.tag = t
+
+fn make() Widget
+    return Widget(7)
+
+fn main()
+    let total = make().tag + make().tag
+    println(f"{total}")
+"#,
+        "14",
+    );
+}
+
+#[test]
+fn test_managed_field_read_off_a_call_result_no_leak() {
+    assert_runs_with_output(
+        r#"
+class Widget
+    public var name String
+    fn init(n String)
+        self.name = n
+
+fn make() Widget
+    return Widget("panel")
+
+fn main()
+    println(make().name)
+"#,
+        "panel",
+    );
+}
+
+#[test]
+fn test_field_read_off_a_method_call_result_no_leak() {
+    assert_runs_with_output(
+        r#"
+class Widget
+    public var tag int
+    fn init(t int)
+        self.tag = t
+
+class Factory
+    public fn build() Widget
+        return Widget(3)
+
+fn main()
+    let f = Factory()
+    println(f"{f.build().tag}")
+"#,
+        "3",
+    );
+}

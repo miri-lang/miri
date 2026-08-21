@@ -393,6 +393,40 @@ fn lower_frame_input_field(
     }
 }
 
+/// Release the object a field access read through, when that object is a value
+/// this expression produced and nothing else names.
+///
+/// `make().tag` leaves the returned object in a temp no local binds, so nothing
+/// else would ever release it. Once the field value has been materialized
+/// somewhere of its own the object is dead and is dropped immediately; while the
+/// result is still a projection of the object, the object has to outlive this
+/// expression, so the enclosing scope takes the release and performs it on every
+/// exit path.
+///
+/// A base older than `watermark` is a name the caller keeps, a borrowed temp
+/// holds a value another local owns, and a base a scope already owns is already
+/// released once; all three are left alone.
+fn release_field_access_base(
+    ctx: &mut LoweringContext,
+    base: crate::mir::Local,
+    watermark: usize,
+    result: &Operand,
+    span: crate::error::syntax::Span,
+) {
+    if base.0 < watermark || ctx.borrowed_temps.contains(&base) || ctx.is_owned_by_a_scope(base) {
+        return;
+    }
+    let result_base = match result {
+        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+        Operand::Constant(_) => None,
+    };
+    if result_base == Some(base) {
+        ctx.register_scope_temp(base);
+    } else {
+        ctx.emit_temp_drop(base, watermark, span);
+    }
+}
+
 pub(crate) fn lower_member_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -418,6 +452,7 @@ pub(crate) fn lower_member_expr(
         }
     }
 
+    let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
 
     if let Some(result) = try_gpu_intrinsic(ctx, &obj_operand, prop, expr, dest.clone())? {
@@ -436,7 +471,10 @@ pub(crate) fn lower_member_expr(
         if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) = &prop.node {
             let idx = extract_integer_index(val);
             let obj_place = ensure_place(ctx, obj_operand, obj.span);
-            return lower_tuple_field_access(ctx, obj_place, idx, elements, expr, dest);
+            let base = obj_place.local;
+            let result = lower_tuple_field_access(ctx, obj_place, idx, elements, expr, dest)?;
+            release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
+            return Ok(result);
         }
     }
 
@@ -450,7 +488,10 @@ pub(crate) fn lower_member_expr(
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                 if let Some(idx) = def.fields.iter().position(|(f, _, _)| f == field_name) {
                     let place = ensure_place(ctx, obj_operand, obj.span);
-                    return lower_custom_field_access(ctx, place, idx, expr, dest);
+                    let base = place.local;
+                    let result = lower_custom_field_access(ctx, place, idx, expr, dest)?;
+                    release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
+                    return Ok(result);
                 } else {
                     return Err(LoweringError::unsupported_lhs(
                         format!(
@@ -479,7 +520,10 @@ pub(crate) fn lower_member_expr(
                     .position(|(n, _)| *n == field_name.as_str())
                 {
                     let place = ensure_place(ctx, obj_operand, obj.span);
-                    return lower_custom_field_access(ctx, place, idx, expr, dest);
+                    let base = place.local;
+                    let result = lower_custom_field_access(ctx, place, idx, expr, dest)?;
+                    release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
+                    return Ok(result);
                 }
             }
         }
