@@ -202,8 +202,16 @@ pub(crate) fn try_lower_kernel_launch(
     if args.len() != 2 {
         return Err(LoweringError::invalid_gpu_launch_args(2, args.len(), *span));
     }
+    let dimension_watermark = ctx.body.local_decls.len();
     let grid_op = lower_expression(ctx, &args[0], None)?;
     let block_op = lower_expression(ctx, &args[1], None)?;
+    let dimension_locals: Vec<crate::mir::Local> = [&grid_op, &block_op]
+        .iter()
+        .filter_map(|op| match op {
+            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+            Operand::Constant(_) => None,
+        })
+        .collect();
 
     let return_ty = ctx
         .type_checker
@@ -288,6 +296,12 @@ pub(crate) fn try_lower_kernel_launch(
         *span,
     ));
     ctx.set_current_block(target_bb);
+    // The grid and block dimensions are allocations of their own, read by the
+    // launch and dead once it returns. A local the caller named is older than
+    // the watermark and keeps its own release.
+    for local in dimension_locals {
+        ctx.emit_temp_drop(local, dimension_watermark, *span);
+    }
     Ok(Some(op))
 }
 
