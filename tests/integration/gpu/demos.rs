@@ -7,8 +7,10 @@
 // `include_str!` for CI verification.
 //
 // Each demo tests:
-// - Compilation succeeds (adapter-less CI still runs).
 // - Value correctness (adapter-present CI asserts exact output).
+// - Compilation succeeds — see `builds_without_an_adapter` at the bottom of
+//   this file, which is what covers the demos on a machine with no GPU. The
+//   value tests above it all need one, so on such a machine they do not run.
 // - Surface compliance: residency keywords, cost-class ordering, buffer
 //   reuse, bounds-checking, and portability checks.
 //
@@ -293,4 +295,44 @@ fn demo_fluid_web() {
 fn demo_neural_web() {
     let source = include_str!("../../../examples/gpu/web/neural.mi");
     assert_gpu_runs_with_output(source, "loss_milli=583 acc_milli=700");
+}
+
+/// Every demo compiles on a machine with no GPU.
+///
+/// The value tests above need an adapter, so without one they are skipped and
+/// nothing checks the demos at all — including the passes a build runs over
+/// their host code, the reference-counting verifier among them. A build needs
+/// no adapter, so these run everywhere.
+mod builds_without_an_adapter {
+    use crate::integration::utils::assert_builds;
+
+    macro_rules! demo_builds {
+        ($($name:ident => $path:literal),* $(,)?) => {
+            $(
+                #[test]
+                fn $name() {
+                    assert_builds(include_str!($path));
+                }
+            )*
+        };
+    }
+
+    demo_builds! {
+        vector_add => "../../../examples/gpu/vector_add.mi",
+        buffer_reuse => "../../../examples/gpu/buffer_reuse.mi",
+        box_blur => "../../../examples/gpu/box_blur.mi",
+        matmul => "../../../examples/gpu/matmul.mi",
+        tiled_matmul => "../../../examples/gpu/tiled_matmul.mi",
+        linear_regression => "../../../examples/gpu/linear_regression.mi",
+        neural_net => "../../../examples/gpu/neural_net.mi",
+        neural_net_mlp => "../../../examples/gpu/neural_net_mlp.mi",
+        game_of_life_web => "../../../examples/gpu/web/game_of_life.mi",
+        mandelbrot_web => "../../../examples/gpu/web/mandelbrot.mi",
+        raymarch_web => "../../../examples/gpu/web/raymarch.mi",
+        blackhole_web => "../../../examples/gpu/web/blackhole.mi",
+        wormhole_web => "../../../examples/gpu/web/wormhole.mi",
+        particles_web => "../../../examples/gpu/web/particles.mi",
+        fluid_web => "../../../examples/gpu/web/fluid.mi",
+        neural_web => "../../../examples/gpu/web/neural.mi",
+    }
 }
