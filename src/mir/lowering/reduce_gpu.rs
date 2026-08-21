@@ -83,14 +83,14 @@ pub(crate) fn try_lower_gpu_reduce(
     });
 
     // Emit the GpuLaunch terminator. Returns an operand reading the result
-    // (the reduced scalar) out of the 1-element output buffer, plus the
-    // local backing that buffer (so it can be freed below).
+    // (the reduced scalar) out of the 1-element output buffer, plus that
+    // buffer's device handle.
     // If dest is gpu-resident, skip the readback (buffer stays on GPU).
     let dest_is_gpu_resident = match &dest {
         Some(d) => ctx.body.local_decls[d.local.0].residency == BindingResidency::Gpu,
         None => false,
     };
-    let (output_op, output_local, handle_id) = emit_gpu_reduce_launch(
+    let (output_op, handle_id) = emit_gpu_reduce_launch(
         ctx,
         &kernel_name,
         receiver_local,
@@ -127,19 +127,12 @@ pub(crate) fn try_lower_gpu_reduce(
     // for reduce results, we want it to reference the 1-element output buffer
     // instead. This ensures cross-residency assignment (`let h = gpu_sum`) uses
     // the correct device buffer for readback.
+    // `_reduce_out` is a local of the enclosing scope, which releases it on every
+    // exit path; releasing it here as well would free the buffer twice.
     if dest_is_gpu_resident {
         if let Some(dest_local) = dest_local_opt {
             ctx.body.local_decls[dest_local.0].device_handle = Some(handle_id);
         }
-    } else {
-        // For host-resident results, emit StorageDead to free the temporary 1-element
-        // array after the element has been copied. `_reduce_out` is a managed heap
-        // array created without a `StorageLive`, so Perceus only `DecRef`s it at this
-        // explicit `StorageDead`; omitting it would leak the buffer on every reduce call.
-        ctx.push_statement(MirStatement {
-            kind: MirStatementKind::StorageDead(Place::new(output_local)),
-            span: *span,
-        });
     }
 
     Ok(Some(result_op))
@@ -1179,7 +1172,7 @@ fn emit_gpu_reduce_launch(
     init_op: Operand,
     span: Span,
     dest_is_gpu_resident: bool,
-) -> Result<(Operand, Local, crate::mir::body::DeviceHandleId), LoweringError> {
+) -> Result<(Operand, crate::mir::body::DeviceHandleId), LoweringError> {
     let receiver_ty = ctx.body.local_decls[receiver_local.0].ty.clone();
     let elem_ty = extract_element_type(&receiver_ty)?;
 
@@ -1208,5 +1201,5 @@ fn emit_gpu_reduce_launch(
     );
 
     let result_op = extract_reduce_result(ctx, output_local, span);
-    Ok((result_op, output_local, handle_id))
+    Ok((result_op, handle_id))
 }

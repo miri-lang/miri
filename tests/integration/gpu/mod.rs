@@ -37,6 +37,7 @@ pub mod gpu_for_capture_residency;
 pub mod gpu_frame;
 pub mod headless_runner;
 pub mod helpers;
+pub mod host_rc_balance;
 pub mod i32_range_validation;
 pub mod kernel_callable_fns;
 pub mod launch;
