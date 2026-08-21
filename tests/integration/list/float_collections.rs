@@ -4,7 +4,6 @@
 use super::utils::*;
 
 #[test]
-#[ignore = "List<float>.push() fails at codegen: FFI argument coercion in cast_value_with_sign uses numeric conversion instead of bitcast"]
 fn test_list_float_push() {
     assert_runs_with_output(
         r#"
@@ -19,7 +18,9 @@ println(f'{a[0]}')
 }
 
 #[test]
-#[ignore = "List<f32>.push() fails at codegen for the same reason as List<float>.push()"]
+#[ignore = "f32 collection elements are refused at codegen: the element stride \
+            for floats narrower than a word is unresolved, so a stored value \
+            would read back as zero. float (f64) round-trips correctly."]
 fn test_list_f32_push() {
     assert_runs_with_output(
         r#"
@@ -34,7 +35,6 @@ println(f'{a[0]}')
 }
 
 #[test]
-#[ignore = "List<float>.push() with multiple values fails at codegen for the same reason"]
 fn test_list_float_multiple_push() {
     assert_runs_with_output(
         r#"
@@ -108,7 +108,9 @@ println(f'{b[0]}')
 }
 
 #[test]
-#[ignore = "List<f32>.push() used internally fails at codegen"]
+#[ignore = "f32 collection elements are refused at codegen: the element stride \
+            for floats narrower than a word is unresolved, so a stored value \
+            would read back as zero. float (f64) round-trips correctly."]
 fn test_list_f32_set_method() {
     assert_runs_with_output(
         r#"

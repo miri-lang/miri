@@ -657,13 +657,7 @@ let r = b.add(\"str\")
 // concrete float, not the uninstantiated pointer-width int. This guards against
 // double lowering of trait defaults (uninstantiated + per-instantiation) causing
 // conflicting symbol declarations.
-//
-// BLOCKED: This test uses List<float>.push(), which has a pre-existing FFI bug
-// (cast_value_with_sign uses numeric conversion instead of bitcast). The type
-// substitution fix is correct, but the underlying float list bug prevents the
-// test from passing. Proven with non-generic List<float> tests in float_collections.rs.
 #[test]
-#[ignore = "Blocked by pre-existing List<float> push() FFI bug (documented in tests/integration/list/float_collections.rs)"]
 fn generic_queryable_float_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "
@@ -863,7 +857,10 @@ fn main()
 
 // Test f32 instantiation of generic queryable trait default
 #[test]
-#[ignore = "List<f32> push/element_at fails at codegen (pre-existing float list bug)"]
+#[ignore = "f32 collection elements are refused at codegen: the element stride for \
+            floats narrower than a word is unresolved, so a stored value would \
+            read back as zero. The float (f64) instantiation above covers the \
+            same trait-default dispatch."]
 fn generic_queryable_f32_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "
@@ -946,7 +943,6 @@ fn main()
 
 // Test generic class with List<T> field at float width
 #[test]
-#[ignore = "Pre-existing List<float> push bug (FFI coercion uses numeric conversion instead of bitcast)"]
 fn generic_bag_list_field_direct_element_at_float() {
     assert_runs_with_output(
         "
