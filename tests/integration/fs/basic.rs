@@ -249,7 +249,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "Result-wrapped list payloads are never freed by the compiler; this causes RC leaks that prevent the test from passing. The issue occurs at the compiler level and is unrelated to the Fs implementation. Re-enable when the compiler's Result<[T], E> deallocation is fixed."]
 fn test_list_dir() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     fs::write(temp_dir.path().join("file1.txt"), "").expect("write f1");
