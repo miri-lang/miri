@@ -19,6 +19,7 @@ use super::{
     apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
 };
 use crate::ast::BuiltinCollectionKind;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Produce a mangled function name for a generic instantiation.
@@ -33,7 +34,7 @@ pub(crate) fn mangle_generic_name(
     }
 
     let mut total_len = base.len();
-    let mangled_types: Vec<&'static str> = type_args
+    let mangled_types: Vec<Cow<'static, str>> = type_args
         .iter()
         .map(|(_, ty)| {
             let s = type_kind_to_mangle_str(&ty.kind);
@@ -51,25 +52,22 @@ pub(crate) fn mangle_generic_name(
     path
 }
 
-/// Return a static string or owned String for a TypeKind mangle representation.
-/// Primitive types and custom names return static strings; complex or owned
-/// types return Strings. Using Cow would add complexity; direct iteration here
-/// avoids allocations for the common path (primitives).
-fn type_kind_to_mangle_str(kind: &TypeKind) -> &'static str {
-    match kind {
+/// The token one type argument contributes to a mangled name.
+///
+/// A built-in kind spells itself. A user-defined type spells its own name, so
+/// two instantiations of the same generic at two different classes get two
+/// symbols: sharing one would make the second instantiation run the first one's
+/// body against its own field layout. Only the built-in tokens are borrowed;
+/// a named type has to own its string.
+fn type_kind_to_mangle_str(kind: &TypeKind) -> Cow<'static, str> {
+    let token: &'static str = match kind {
         TypeKind::Int => "int",
         TypeKind::Float | TypeKind::F64 => "float",
         TypeKind::F32 => "f32",
         TypeKind::Boolean => "bool",
         TypeKind::String => STRING_TYPE_NAME,
         TypeKind::Void => "void",
-        // TODO: every user-defined type collapses to one token, so `Box<Widget>`
-        // and `Box<Gadget>` mangle to the same `Box__custom`. Per-instantiation
-        // drop thunks are deduplicated by mangled name, so the second
-        // instantiation would run the first one's field layout. Returning the
-        // type's own name requires an owned String here (see the doc comment).
-        TypeKind::Custom(_, None) => "custom",
-        TypeKind::Custom(_, Some(_)) => "custom",
+        TypeKind::Custom(name, _) => return Cow::Owned(name.clone()),
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
             unreachable!("collection types are normalized to Custom before this point")
         }
@@ -83,7 +81,8 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> &'static str {
         TypeKind::U32 => "u32",
         TypeKind::U64 => "u64",
         _ => "unknown",
-    }
+    };
+    Cow::Borrowed(token)
 }
 
 /// Residency-mangled name for a call that passes gpu-resident buffers into a
@@ -689,7 +688,7 @@ fn resolve_generic_class_monomorph(
     if resolved.len() != gens.len()
         || !resolved
             .iter()
-            .all(|t| is_monomorphizable_type_argument(&t.kind))
+            .all(|t| is_monomorphizable_type_argument(&t.kind, defs))
     {
         return None;
     }

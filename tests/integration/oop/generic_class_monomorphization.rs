@@ -999,3 +999,101 @@ fn main()
 255",
     );
 }
+
+// A class instance is a type argument like any other. Two instantiations of one
+// generic class at two different classes must each read back their own field:
+// when both mangle to the same symbol, the second instantiation runs the first
+// one's body against its own layout.
+#[test]
+fn generic_class_at_two_distinct_class_arguments_keeps_them_apart() {
+    assert_runs_with_output(
+        "
+class Widget
+    public var tag int
+    fn init(t int)
+        self.tag = t
+
+class Gadget
+    public var label String
+    fn init(l String)
+        self.label = l
+
+class Box<T>
+    private var value T
+
+    fn init(v T)
+        self.value = v
+
+    public fn get() T
+        return self.value
+
+fn main()
+    let boxed_widget = Box<Widget>(Widget(7))
+    let boxed_gadget = Box<Gadget>(Gadget(\"hi\"))
+    let widget = boxed_widget.get()
+    let gadget = boxed_gadget.get()
+    println(f\"{widget.tag}\")
+    println(gadget.label)
+",
+        "7\nhi",
+    );
+}
+
+// A collection-backed generic class at a class element: the element has to come
+// back out whole, with its own fields readable.
+#[test]
+fn generic_container_of_class_elements_reads_fields_back() {
+    assert_runs_with_output(
+        "
+use system.collections.queue
+
+class Widget
+    public var name String
+    fn init(n String)
+        self.name = n
+
+fn main()
+    var q = Queue<Widget>()
+    q.enqueue(Widget(\"first\"))
+    q.enqueue(Widget(\"second\"))
+    let taken = q.dequeue()
+    match taken
+        Some(w)
+            println(w.name)
+        None
+            println(\"none\")
+",
+        "first",
+    );
+}
+
+// A field read taken straight off a call result (`box.get().tag`) leaves the
+// returned value in a temp that nothing releases. Binding the call result to a
+// local first is the same program with a holder, and that one is balanced —
+// which is what the test above covers. Not generic-specific: a non-generic class
+// with the same shape leaks identically.
+#[test]
+#[ignore = "reading a field directly off a call result never releases the result temp"]
+fn generic_class_field_read_off_a_call_result_is_balanced() {
+    assert_heap_guard_ok(
+        "
+class Widget
+    public var tag int
+    fn init(t int)
+        self.tag = t
+
+class Box<T>
+    private var value T
+
+    fn init(v T)
+        self.value = v
+
+    public fn get() T
+        return self.value
+
+fn main()
+    let boxed = Box<Widget>(Widget(7))
+    println(f\"{boxed.get().tag}\")
+",
+    );
+}

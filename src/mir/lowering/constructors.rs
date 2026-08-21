@@ -226,7 +226,7 @@ pub fn lower_class_constructor(
     };
 
     if let Some(init_class) = init_class_name {
-        let init_symbol = monomorphized_init_symbol(def, &init_class, class_name, &field_subs);
+        let init_symbol = monomorphized_init_symbol(ctx, def, &init_class, class_name, &field_subs);
         lower_class_with_init(ctx, span, class_name, init_symbol, &all_fields, args, dest)
     } else {
         lower_class_without_init(ctx, span, class_name, &all_fields, args, dest)
@@ -261,6 +261,7 @@ fn build_class_field_substitution(
 /// non-generic class, unresolved args, or an `init` inherited from a base — keeps
 /// the plain `Class_init` symbol.
 fn monomorphized_init_symbol(
+    ctx: &LoweringContext,
     def: &ClassDefinition,
     init_class: &str,
     class_name: &str,
@@ -276,7 +277,12 @@ fn monomorphized_init_symbol(
     let mut mangle_args = Vec::with_capacity(generics.len());
     for generic in generics {
         match field_subs.get(&generic.name) {
-            Some(ty) if super::is_monomorphizable_type_argument(&ty.kind) => {
+            Some(ty)
+                if super::is_monomorphizable_type_argument(
+                    &ty.kind,
+                    ctx.type_checker.type_definitions(),
+                ) =>
+            {
                 mangle_args.push((generic.name.clone(), ty.clone()))
             }
             _ => return plain,
