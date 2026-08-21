@@ -282,25 +282,31 @@ pub unsafe extern "C" fn miri_rt_test_simulate_double_free() {
     free_with_rc(ptr, payload_size);
 }
 
+/// Serializes every test that allocates or frees through [`alloc_with_rc`] /
+/// [`free_with_rc`]. Both maintain the process-global `RC_ALLOC_BALANCE`, so a
+/// test asserting an exact balance delta races with any sibling test that
+/// allocates concurrently. Holding this lock makes the delta deterministic
+/// under the default multi-threaded test runner.
+///
+/// It lives at module scope rather than inside the test module because the
+/// tests that perturb the counter are not all in this file: any test anywhere
+/// in the crate that reaches these two functions has to take the same lock, or
+/// the delta a balance assertion reads includes that test's allocations.
+#[cfg(test)]
+pub(crate) static BALANCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquires [`BALANCE_LOCK`], recovering the guard when an earlier panicking
+/// test poisoned it: one test failing must not cascade into the others.
+#[cfg(test)]
+pub(crate) fn balance_guard() -> std::sync::MutexGuard<'static, ()> {
+    BALANCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    /// Serializes every test that allocates or frees through `alloc_with_rc` /
-    /// `free_with_rc`. Both maintain the process-global `RC_ALLOC_BALANCE`, so a
-    /// test asserting an exact balance delta races with any sibling test that
-    /// allocates concurrently. Holding this lock makes the delta deterministic
-    /// under the default multi-threaded test runner.
-    static BALANCE_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Acquires [`BALANCE_LOCK`], recovering the guard when an earlier panicking
-    /// test poisoned it: one test failing must not cascade into the others.
-    fn balance_guard() -> MutexGuard<'static, ()> {
-        BALANCE_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     #[test]
     fn alloc_with_rc_returns_pointer_with_rc_one() {
