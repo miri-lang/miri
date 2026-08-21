@@ -139,6 +139,22 @@ pub fn assert_compiler_error(code: &str, expected_error: &str) {
     }
 }
 
+/// Assert that the code compiles all the way through a build.
+///
+/// The build runs every pass a real compilation does, the RC verifier included,
+/// so this covers a program the suite cannot execute — a GPU host program on a
+/// machine without an adapter — for everything decided before it would run.
+pub fn assert_builds(code: &str) {
+    let result = miri_build(code);
+
+    if !result.success {
+        panic!(
+            "Expected program to build successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+}
+
 /// Assert that the code fails during the build (full compilation pipeline) with a specific error message.
 /// This is distinct from assert_compiler_error, which only runs the type-checker.
 /// Use this for errors that occur during MIR lowering or code generation.
