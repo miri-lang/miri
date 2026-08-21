@@ -1068,12 +1068,10 @@ fn main()
 }
 
 // A field read taken straight off a call result (`box.get().tag`) leaves the
-// returned value in a temp that nothing releases. Binding the call result to a
-// local first is the same program with a holder, and that one is balanced —
-// which is what the test above covers. Not generic-specific: a non-generic class
-// with the same shape leaks identically.
+// returned value in a temp no local binds. Binding the call result to a local
+// first is the same program with a holder, and that one is balanced — which is
+// what the test above covers.
 #[test]
-#[ignore = "reading a field directly off a call result never releases the result temp"]
 fn generic_class_field_read_off_a_call_result_is_balanced() {
     assert_heap_guard_ok(
         "
