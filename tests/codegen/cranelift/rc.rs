@@ -178,14 +178,15 @@ fn test_multiple_type_arguments_mangle_in_declaration_order() {
 /// the call agree, so the symbol always resolves — the shared thunk is why the
 /// two instantiations cannot be given different field layouts.
 #[test]
-fn test_class_type_arguments_share_one_mangled_token() {
+fn test_class_type_arguments_mangle_to_their_own_names() {
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(custom("Widget"))]),
-        "Box__custom"
+        "Box__Widget"
     );
-    assert_eq!(
+    assert_ne!(
         mangle_class_instantiation("Box", &[ty(custom("Gadget"))]),
-        mangle_class_instantiation("Box", &[ty(custom("Widget"))])
+        mangle_class_instantiation("Box", &[ty(custom("Widget"))]),
+        "two instantiations sharing a symbol would run one body against the other's layout"
     );
 }
 

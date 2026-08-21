@@ -572,11 +572,28 @@ pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
 /// unmanaged, so a value stored into a field is never retained and the holder
 /// releases a reference it never took.
 ///
-/// Class and struct instances are not admitted yet: their type argument mangles
-/// through the same symbol as a differently-shaped one would, so two
-/// instantiations can collide on a name.
-pub(crate) fn is_monomorphizable_type_argument(kind: &TypeKind) -> bool {
-    is_monomorphizable_scalar(kind) || matches!(kind, TypeKind::String)
+/// A named type is admitted only when the type table defines it. The same
+/// spelling carries a generic parameter still awaiting substitution (`T` reaches
+/// here as `Custom("T", None)`), and monomorphizing at a placeholder would name
+/// a body no call site can reach.
+pub(crate) fn is_monomorphizable_type_argument(
+    kind: &TypeKind,
+    type_definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> bool {
+    if is_monomorphizable_scalar(kind) || matches!(kind, TypeKind::String) {
+        return true;
+    }
+    let TypeKind::Custom(name, None) = kind else {
+        return false;
+    };
+    matches!(
+        type_definitions.get(name),
+        Some(
+            crate::type_checker::context::TypeDefinition::Class(_)
+                | crate::type_checker::context::TypeDefinition::Struct(_)
+                | crate::type_checker::context::TypeDefinition::Enum(_)
+        )
+    )
 }
 
 /// Lower a generic function with concrete type substitutions to produce a
@@ -960,6 +977,19 @@ fn lower_class_method_impl(
     // `T` (e.g. `self.items.element_at(0)`) resolves to the concrete
     // instantiation type instead of the pointer-width fallback.
     ctx.generic_subs = subs.clone();
+
+    // The field-type table is built once from the class declaration, so a field
+    // declared `value T` still reads as its type parameter. Perceus decides by
+    // that type whether assigning into the field claims the value, so an
+    // instantiation at a managed type would store what it never retained and the
+    // caller would release it out from under the field.
+    if let TypeKind::Custom(owner, _) = &self_type.kind {
+        if let Some(field_types) = ctx.body.field_types.get_mut(owner) {
+            for field_ty in field_types.iter_mut() {
+                *field_ty = apply_generic_sub(field_ty, subs);
+            }
+        }
+    }
 
     // Method-own generics plus class-level generics that appear in param/return
     // types (e.g. T in List<T>), minus any name pinned to a concrete type by

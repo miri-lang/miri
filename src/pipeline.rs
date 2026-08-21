@@ -891,7 +891,21 @@ impl Pipeline {
         result: &PipelineResult,
         class_name: &str,
     ) -> Vec<InstantiationSub> {
-        Self::instantiation_subs(result, class_name, mir::lowering::is_monomorphizable_scalar)
+        Self::instantiation_subs(result, class_name, &|kind| {
+            mir::lowering::is_monomorphizable_scalar(kind)
+        })
+    }
+
+    /// Every recorded instantiation that gets a per-instantiation body, scalar
+    /// and managed alike.
+    fn monomorphizable_instantiation_subs(
+        result: &PipelineResult,
+        class_name: &str,
+    ) -> Vec<InstantiationSub> {
+        let defs = result.type_checker.type_definitions();
+        Self::instantiation_subs(result, class_name, &|kind| {
+            mir::lowering::is_monomorphizable_type_argument(kind, defs)
+        })
     }
 
     /// Build the substitution and mangle-argument pairs for every recorded
@@ -899,7 +913,7 @@ impl Pipeline {
     fn instantiation_subs(
         result: &PipelineResult,
         class_name: &str,
-        admits: fn(&TypeKind) -> bool,
+        admits: &dyn Fn(&TypeKind) -> bool,
     ) -> Vec<InstantiationSub> {
         let Some(TypeDefinition::Class(def)) =
             result.type_checker.type_definitions().get(class_name)
@@ -1105,11 +1119,9 @@ impl Pipeline {
                 let Some(class_name) = Self::identifier_name(&class_data.name) else {
                     continue;
                 };
-                for (mut subs, mangle_args) in Self::instantiation_subs(
-                    result,
-                    class_name,
-                    mir::lowering::is_monomorphizable_type_argument,
-                ) {
+                for (mut subs, mangle_args) in
+                    Self::monomorphizable_instantiation_subs(result, class_name)
+                {
                     mir::lowering::dispatch::extend_subs_with_trait_params(
                         &result.type_checker,
                         class_name,
