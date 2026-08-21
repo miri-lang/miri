@@ -380,11 +380,21 @@ impl GuardState {
             None => TouchVerdict::Ok,
             Some(record) => match record.state {
                 AllocState::Live => {
-                    // Check RC sanity.
+                    // A codegen-owned block's header does not sit at
+                    // `payload_ptr - RC_HEADER_SIZE`, so there is no RC to read
+                    // there and reading one would leave the allocation.
+                    if record.raw_block {
+                        return TouchVerdict::Ok;
+                    }
                     unsafe {
                         let rc_ptr = (payload_ptr - RC_HEADER_SIZE) as *const usize;
                         let rc = *rc_ptr;
-                        if rc == 0 || rc > 1_000_000 {
+                        // An immortal object stores its RC as a negative
+                        // `isize`, which read as a `usize` sits far above any
+                        // plausible owner count. It is live by design, never
+                        // freed, and skipped by `incref` and by the leak scan;
+                        // only a non-immortal RC is bounded.
+                        if (rc as isize) >= 0 && (rc == 0 || rc > 1_000_000) {
                             return TouchVerdict::HeaderCorrupt;
                         }
                     }
@@ -1426,6 +1436,60 @@ mod tests {
 
         unsafe {
             dealloc(base_ptr, layout);
+        }
+    }
+
+    /// An immortal object is live, not corrupt. Its RC is a negative `isize`,
+    /// which read as a `usize` is far above any plausible owner count — the
+    /// same encoding `incref` and the leak scan already recognise.
+    #[test]
+    fn guard_check_immortal_rc_is_live() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+
+        const PAYLOAD_SIZE: usize = 64;
+        let site = Location::caller();
+
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let base_ptr = unsafe { alloc(layout) };
+        let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
+
+        state.record_alloc(payload_ptr, PAYLOAD_SIZE, AllocKind::List, site);
+
+        unsafe {
+            *(base_ptr as *mut usize) = (-1isize) as usize;
+        }
+
+        let verdict = state.validate(payload_ptr);
+        assert_eq!(verdict, TouchVerdict::Ok, "immortal RC is not corruption");
+
+        unsafe {
+            dealloc(base_ptr, layout);
+        }
+    }
+
+    /// A codegen-owned block carries no RC header the guard may read, so
+    /// validating one must not reach for a word below the payload.
+    #[test]
+    fn guard_check_codegen_owned_block_is_live() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+
+        const PAYLOAD_SIZE: usize = 64;
+        let site = Location::caller();
+
+        let layout = Layout::from_size_align(PAYLOAD_SIZE, 8).unwrap();
+        let payload_ptr = unsafe { alloc(layout) };
+
+        state.record_alloc_raw(payload_ptr as usize, AllocKind::List, site);
+
+        let verdict = state.validate(payload_ptr as usize);
+        assert_eq!(
+            verdict,
+            TouchVerdict::Ok,
+            "a block with no RC header is not corruption"
+        );
+
+        unsafe {
+            dealloc(payload_ptr, layout);
         }
     }
 
