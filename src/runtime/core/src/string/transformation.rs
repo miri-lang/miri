@@ -290,9 +290,11 @@ pub extern "C" fn miri_rt_string_from_code_point(code: isize) -> *mut MiriString
 mod tests {
     use super::super::constructors::miri_rt_string_free;
     use super::*;
+    use crate::rc::balance_guard;
 
     #[test]
     fn repeat_with_huge_count_returns_empty() {
+        let _balance = balance_guard();
         unsafe {
             // usize::MAX with any non-zero string length would overflow.
             let s = MiriString::from_str("hello");
@@ -307,6 +309,7 @@ mod tests {
 
     #[test]
     fn repeat_with_normal_count_works() {
+        let _balance = balance_guard();
         unsafe {
             let s = MiriString::from_str("ab");
             let ptr = into_raw_ptr(s);
@@ -321,6 +324,7 @@ mod tests {
 
     #[test]
     fn repeat_with_zero_returns_empty() {
+        let _balance = balance_guard();
         unsafe {
             let s = MiriString::from_str("hello");
             let ptr = into_raw_ptr(s);
@@ -333,6 +337,7 @@ mod tests {
 
     #[test]
     fn repeat_with_null_returns_empty() {
+        let _balance = balance_guard();
         unsafe {
             let result = miri_rt_string_repeat(std::ptr::null(), 5);
             assert_eq!((*result).len, 0, "null input should return empty string");
