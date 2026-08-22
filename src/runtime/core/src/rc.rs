@@ -33,35 +33,31 @@ static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 /// atexit handler catch closure-only leaks that `RC_ALLOC_BALANCE` would miss.
 pub static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
-/// Registers an `atexit` handler that checks the allocation balance.
-/// Called once on first allocation. Prints a diagnostic to stderr if
-/// any RC-tracked allocations were not freed.
-fn ensure_leak_check_registered() {
+/// Registers an `atexit` handler for exit reporting on first allocation.
+/// Called once on first RC allocation, closure allocation, or inline allocation.
+/// Ensures both alloc-count and leak-check handlers are registered as needed.
+fn ensure_exit_handler_registered() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        if is_leak_check_enabled() {
-            unsafe {
-                libc::atexit(leak_check_at_exit);
-            }
-        }
+        // Ensure alloc-count handler is registered if enabled.
+        crate::handler_config::ensure_alloc_count_handler_registered();
+
+        // Ensure leak-check handler is registered if enabled.
+        crate::handler_config::ensure_leak_check_handler_registered();
     });
 }
 
-/// Whether the allocation-balance check was asked for.
-///
-/// Read directly rather than inferred from whether the exit handler was
-/// registered: the tracking state compiled code consults is settled on the
-/// first allocation, which is the same moment registration happens, so it
-/// cannot ask about the outcome of the thing it is deciding.
-pub fn is_leak_check_enabled() -> bool {
-    std::env::var("MIRI_LEAK_CHECK").as_deref() == Ok("1")
-}
-
 /// Called at process exit to report any leaked allocations.
-extern "C" fn leak_check_at_exit() {
-    let rc_balance = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
-    let cl_balance = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+/// This is the leak-check portion of the exit handler; allocation count reporting
+/// is handled separately by `alloc_count::report_at_exit()`.
+pub(crate) fn report_leak_check_at_exit() {
+    // Report allocation count first
+    crate::alloc_count::report_at_exit();
+
+    // Then check for leaks
+    let rc_balance = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
+    let cl_balance = CLOSURE_ALLOC_BALANCE.load(Ordering::Relaxed);
     if rc_balance != 0 || cl_balance != 0 {
         // Use a raw write to stderr to avoid Rust's buffered I/O flushing issues.
         let msg = if rc_balance != 0 && cl_balance != 0 {
@@ -94,7 +90,7 @@ extern "C" fn leak_check_at_exit() {
 /// header fits in a valid memory layout.
 #[track_caller]
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
-    ensure_leak_check_registered();
+    ensure_exit_handler_registered();
 
     let total_size = RC_HEADER_SIZE + payload_size;
     let layout = match Layout::from_size_align(total_size, 8) {
@@ -111,6 +107,7 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     *(base as *mut usize) = 1;
 
     RC_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+    crate::alloc_count::increment_rc_count();
 
     let payload_ptr = base.add(RC_HEADER_SIZE);
 
@@ -193,7 +190,7 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
 /// closure is freed.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_closure_alloc_track() {
-    ensure_leak_check_registered();
+    ensure_exit_handler_registered();
     CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
 }
 
@@ -220,7 +217,7 @@ pub unsafe extern "C" fn miri_rt_closure_free_track() {
 /// counter; calling it in production code will produce a false leak report.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
-    ensure_leak_check_registered();
+    ensure_exit_handler_registered();
     CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
 }
 
@@ -240,9 +237,12 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
     crate::guard::resolve_tracking_state();
-    ensure_leak_check_registered();
+    ensure_exit_handler_registered();
     // Codegen emits this before its own null check, so a failed malloc arrives
     // here as null and must be ignored rather than recorded.
+    if !ptr.is_null() {
+        crate::alloc_count::increment_inline_count();
+    }
     crate::guard::guard_alloc_raw(ptr, AllocKind::Class);
 }
 
@@ -378,16 +378,16 @@ mod tests {
     fn alloc_and_free_balance() {
         let _balance = balance_guard();
         unsafe {
-            let before = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+            let before = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
 
             let ptr1 = alloc_with_rc(64);
             let ptr2 = alloc_with_rc(128);
-            let after_alloc = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+            let after_alloc = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
             assert_eq!(after_alloc, before + 2, "balance should increase by 2");
 
             free_with_rc(ptr1, 64);
             free_with_rc(ptr2, 128);
-            let after_free = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+            let after_free = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
             assert_eq!(after_free, before, "balance should return to original");
         }
     }

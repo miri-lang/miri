@@ -206,6 +206,7 @@ impl MiriMap {
             return None;
         }
         crate::guard::guard_alloc_raw(states, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
         let keys = alloc_zeroed(keys_layout);
         if keys.is_null() {
             crate::guard::guard_free_raw(states);
@@ -213,6 +214,7 @@ impl MiriMap {
             return None;
         }
         crate::guard::guard_alloc_raw(keys, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
         let values = alloc_zeroed(values_layout);
         if values.is_null() {
             crate::guard::guard_free_raw(states);
@@ -222,6 +224,7 @@ impl MiriMap {
             return None;
         }
         crate::guard::guard_alloc_raw(values, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
 
         Some((states, keys, values))
     }

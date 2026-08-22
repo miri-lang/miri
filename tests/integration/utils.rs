@@ -416,3 +416,248 @@ pub fn assert_project_compiler_error(files: &[(&str, &str)], expected_error: &st
         );
     }
 }
+
+/// Assert that running `code` with `MIRI_ALLOC_COUNT=1` produces exactly
+/// `expected_count` allocations.
+///
+/// The count represents the total number of allocations performed over the
+/// entire program lifetime, not the number of live allocations at exit.
+/// This includes RC-tracked structures (strings, lists, maps, sets, user classes),
+/// inline aggregates (tuples, Options, enum payloads), collection buffers,
+/// and raw allocation calls.
+///
+/// Returns a parsed allocation count from the `MIRI_ALLOC_COUNT:` stderr line.
+pub fn assert_allocation_count(code: &str, expected_count: usize) {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
+
+    if !result.success {
+        panic!(
+            "Expected program to run successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    // Parse the allocation count from stderr.
+    // Expected format: `MIRI_ALLOC_COUNT: <total> allocation(s) (...)`
+    let lines: Vec<&str> = result
+        .stderr
+        .lines()
+        .filter(|line| line.starts_with("MIRI_ALLOC_COUNT:"))
+        .collect();
+
+    if lines.is_empty() {
+        panic!(
+            "Expected MIRI_ALLOC_COUNT output in stderr, but got:\n{}",
+            result.output()
+        );
+    }
+
+    // Verify exactly one MIRI_ALLOC_COUNT line (detect if handler was registered twice)
+    if lines.len() > 1 {
+        panic!(
+            "Expected exactly one MIRI_ALLOC_COUNT line in stderr, but found {} lines:\n{}\nFull output:\n{}",
+            lines.len(),
+            lines.join("\n"),
+            result.output()
+        );
+    }
+
+    let alloc_count_line = lines[0];
+
+    // Parse the total count from the line using strip_prefix for robustness.
+    // Expected format: "MIRI_ALLOC_COUNT: <total> allocation(s) ..."
+    let after_prefix = alloc_count_line
+        .strip_prefix("MIRI_ALLOC_COUNT:")
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected line to start with 'MIRI_ALLOC_COUNT:', but got: {}",
+                alloc_count_line
+            )
+        })
+        .trim();
+
+    // Take the first whitespace-delimited token as the total count
+    let total_str = after_prefix.split_whitespace().next().unwrap_or_else(|| {
+        panic!(
+            "Expected a number after 'MIRI_ALLOC_COUNT:', but got: {}",
+            alloc_count_line
+        )
+    });
+
+    let actual_count: usize = total_str.parse().unwrap_or_else(|_| {
+        panic!(
+            "Expected allocation count to be a number, but got: {} from line: {}",
+            total_str, alloc_count_line
+        )
+    });
+
+    if actual_count != expected_count {
+        panic!(
+            "Expected {} allocation(s), but got {} from: {}\nFull output:\n{}",
+            expected_count,
+            actual_count,
+            alloc_count_line,
+            result.output()
+        );
+    }
+}
+
+/// Assert that when MIRI_ALLOC_COUNT is not set, the program:
+/// 1. Runs successfully
+/// 2. Does NOT print any MIRI_ALLOC_COUNT line
+/// 3. Leak detection still works normally
+pub fn assert_allocation_count_disabled(code: &str) {
+    use crate::utils::miri_run_with_env;
+
+    // Run with MIRI_LEAK_CHECK=1 (the default) but no MIRI_ALLOC_COUNT
+    let result = miri_run_with_env(code, "MIRI_LEAK_CHECK", "1");
+
+    if !result.success {
+        // It's OK if the program has other failures, but not because of missing MIRI_ALLOC_COUNT
+        if result.stderr.contains("MIRI_ALLOC_COUNT") {
+            panic!(
+                "Unexpected MIRI_ALLOC_COUNT output when counter was not enabled:\n{}",
+                result.output()
+            );
+        }
+    }
+
+    // Verify NO MIRI_ALLOC_COUNT line in stderr
+    if result.stderr.contains("MIRI_ALLOC_COUNT:") {
+        panic!(
+            "Expected no MIRI_ALLOC_COUNT output in stderr when counter is disabled, but got:\n{}",
+            result.output()
+        );
+    }
+}
+
+/// Parse allocation count breakdown from a program's stderr.
+/// Returns (rc, inline, buffers, raw) counts.
+pub struct AllocationBreakdown {
+    pub rc: usize,
+    pub inline: usize,
+    pub buffers: usize,
+    pub raw: usize,
+}
+
+pub fn parse_alloc_count_breakdown(code: &str) -> AllocationBreakdown {
+    // Default to MIRI_LEAK_CHECK=1 (for consistent handler registration) plus MIRI_ALLOC_COUNT
+    parse_alloc_count_breakdown_with_env(
+        code,
+        &[("MIRI_ALLOC_COUNT", "1"), ("MIRI_LEAK_CHECK", "1")],
+    )
+}
+
+pub fn parse_alloc_count_breakdown_with_env(
+    code: &str,
+    env_vars: &[(&str, &str)],
+) -> AllocationBreakdown {
+    use crate::utils::miri_run_with_env_multiple;
+
+    // Ensure MIRI_ALLOC_COUNT is in the env vars
+    let mut final_env_vars = env_vars.to_vec();
+    if !final_env_vars.iter().any(|(k, _)| k == &"MIRI_ALLOC_COUNT") {
+        final_env_vars.push(("MIRI_ALLOC_COUNT", "1"));
+    }
+    // Ensure MIRI_LEAK_CHECK is set for consistent handler registration (unless explicitly overridden)
+    if !final_env_vars.iter().any(|(k, _)| k == &"MIRI_LEAK_CHECK") {
+        final_env_vars.push(("MIRI_LEAK_CHECK", "1"));
+    }
+
+    let result = miri_run_with_env_multiple(code, &final_env_vars);
+
+    if !result.success {
+        panic!(
+            "Expected program to run successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    let line = result
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("MIRI_ALLOC_COUNT:"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected MIRI_ALLOC_COUNT output in stderr, but got:\n{}",
+                result.output()
+            )
+        });
+
+    // Expected format: `MIRI_ALLOC_COUNT: <total> allocation(s) (rc=X inline=Y buffers=Z raw=W)`
+    // Note: there are two '(' characters, one in "allocation(s)" and one before the counts
+    // We want the part between the second '(' and ')'
+    if let Some(breakdown_start) = line.rfind('(') {
+        let breakdown_end = line.rfind(')').unwrap_or(line.len());
+        let breakdown = &line[breakdown_start + 1..breakdown_end];
+        let mut rc = 0;
+        let mut inline = 0;
+        let mut buffers = 0;
+        let mut raw = 0;
+
+        for part in breakdown.split_whitespace() {
+            if let Some(value) = part.strip_prefix("rc=") {
+                rc = value.parse().unwrap_or(0);
+            } else if let Some(value) = part.strip_prefix("inline=") {
+                inline = value.parse().unwrap_or(0);
+            } else if let Some(value) = part.strip_prefix("buffers=") {
+                buffers = value.parse().unwrap_or(0);
+            } else if let Some(value) = part.strip_prefix("raw=") {
+                raw = value.parse().unwrap_or(0);
+            }
+        }
+
+        AllocationBreakdown {
+            rc,
+            inline,
+            buffers,
+            raw,
+        }
+    } else {
+        panic!("Failed to find '(' in allocation count line: {}", line);
+    }
+}
+
+/// Get just the total allocation count from a program
+pub fn get_allocation_count_value(code: &str) -> usize {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
+
+    if !result.success {
+        panic!(
+            "Expected program to run successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    let line = result
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("MIRI_ALLOC_COUNT:"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected MIRI_ALLOC_COUNT output in stderr, but got:\n{}",
+                result.output()
+            )
+        });
+
+    let after_prefix = line
+        .strip_prefix("MIRI_ALLOC_COUNT:")
+        .unwrap_or_else(|| panic!("Line must start with 'MIRI_ALLOC_COUNT:': {}", line))
+        .trim();
+
+    after_prefix
+        .split_whitespace()
+        .next()
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected a number after 'MIRI_ALLOC_COUNT:', but got: {}",
+                line
+            )
+        })
+        .parse()
+        .unwrap_or_else(|_| panic!("Failed to parse count as number from: {}", line))
+}

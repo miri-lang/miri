@@ -136,8 +136,10 @@ impl MiriSet {
             Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
         self.states = alloc_zeroed(states_layout);
         crate::guard::guard_alloc_raw(self.states, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
         self.data = alloc_zeroed(data_layout);
         crate::guard::guard_alloc_raw(self.data, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
         self.capacity = capacity;
     }
 

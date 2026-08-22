@@ -18,9 +18,11 @@
 //! allowing compiled Miri code to call them via the linker.
 
 pub mod alloc;
+pub mod alloc_count;
 pub mod array;
 pub mod fs;
 pub mod guard;
+pub mod handler_config;
 pub mod hash;
 pub mod io;
 pub mod list;
@@ -36,6 +38,9 @@ pub mod tuple;
 
 // Internal RC helpers (used by other runtime modules)
 pub use rc::*;
+
+// Allocation count accessors (used by tests)
+pub use alloc_count::{get_buffer_count, get_inline_count, get_raw_count, get_rc_count};
 
 // Struct types accessible at crate root (needed by module-internal tests and cross-module code)
 pub use array::MiriArray;
