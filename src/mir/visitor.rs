@@ -201,11 +201,6 @@ pub trait Visitor {
                     self.visit_operand(op, location);
                 }
             }
-            Rvalue::Allocate(size, align, alloc) => {
-                self.visit_operand(size, location);
-                self.visit_operand(align, location);
-                self.visit_operand(alloc, location);
-            }
             Rvalue::AtomicOp {
                 buffer,
                 index,
@@ -421,11 +416,6 @@ pub trait MutVisitor {
                 for (op, _) in args {
                     self.visit_operand(op, location);
                 }
-            }
-            Rvalue::Allocate(size, align, alloc) => {
-                self.visit_operand(size, location);
-                self.visit_operand(align, location);
-                self.visit_operand(alloc, location);
             }
             Rvalue::AtomicOp {
                 buffer,

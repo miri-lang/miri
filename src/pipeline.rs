@@ -2592,11 +2592,6 @@ impl Pipeline {
                     Self::narrow_operand_floats(o);
                 }
             }
-            mir::Rvalue::Allocate(a, b, c) => {
-                Self::narrow_operand_floats(a);
-                Self::narrow_operand_floats(b);
-                Self::narrow_operand_floats(c);
-            }
             mir::Rvalue::Ref(_) | mir::Rvalue::Len(_) | mir::Rvalue::GpuIntrinsic(_) => {}
             mir::Rvalue::AtomicOp {
                 buffer,

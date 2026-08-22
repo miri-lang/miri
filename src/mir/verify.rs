@@ -631,7 +631,6 @@ fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool
         | Rvalue::BinaryOp(_, _, _)
         | Rvalue::UnaryOp(_, _)
         | Rvalue::Len(_)
-        | Rvalue::Allocate(_, _, _)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
         | Rvalue::AtomicOp { .. }
@@ -840,7 +839,6 @@ fn reads_place_without_owning(rvalue: &Rvalue, place: &Place) -> bool {
         | Rvalue::BinaryOp(_, _, _)
         | Rvalue::UnaryOp(_, _)
         | Rvalue::Len(_)
-        | Rvalue::Allocate(_, _, _)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
         | Rvalue::AtomicOp { .. }
@@ -857,9 +855,8 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
         // A cast re-spells a type without touching the value, so it carries across
         // whatever the read it wraps produced.
         Rvalue::Cast(_, _) => true,
-        // Aggregates allocate, and an explicit allocation yields a reference the
-        // destination owns.
-        Rvalue::Aggregate(_, _) | Rvalue::Allocate(_, _, _) => true,
+        // An aggregate allocates, so its destination owns the reference it yields.
+        Rvalue::Aggregate(_, _) => true,
         // Reading a field or element out produces a value of its own, which the
         // destination owns and releases. Copying a whole local is a borrow instead,
         // and stays one until a retain funds it — that is the alias case, where two
@@ -903,7 +900,6 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::BinaryOp(_, _, _)
         | Rvalue::UnaryOp(_, _)
         | Rvalue::Len(_)
-        | Rvalue::Allocate(_, _, _)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
         | Rvalue::AtomicOp { .. }
@@ -935,7 +931,6 @@ fn moved_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::BinaryOp(_, _, _)
         | Rvalue::Aggregate(_, _)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::Allocate(_, _, _)
         | Rvalue::AtomicOp { .. }
         | Rvalue::Ref(_)
         | Rvalue::Len(_)
