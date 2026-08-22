@@ -83,9 +83,6 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
 
         match rvalue {
-            Rvalue::Allocate(size_op, align_op, _) => {
-                Self::translate_allocate(builder, ctx, size_op, align_op, locals, type_ctx)
-            }
             Rvalue::Use(operand) => {
                 Self::translate_operand(builder, ctx, operand, locals, type_ctx, expected_ty)
             }
@@ -163,55 +160,6 @@ impl<'a> FunctionTranslator<'a> {
                 "Atomic operations are GPU-only and not supported in CPU backend".to_string(),
             )),
         }
-    }
-
-    /// Translate an `Rvalue::Allocate` to a Cranelift value (raw aligned heap
-    /// slot with `[malloc_ptr][RC][payload...]` header).
-    fn translate_allocate(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        size_op: &Operand,
-        align_op: &Operand,
-        locals: &HashMap<Local, Variable>,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
-
-        let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx, None)?;
-        let align = Self::translate_operand(builder, ctx, align_op, locals, type_ctx, None)?;
-
-        // Layout: [padding][malloc_ptr][RC][payload...]
-        //
-        // Over-allocate so payload can be aligned. RC header lives at
-        // (payload - ptr_size); real malloc pointer at (payload - 2*ptr_size).
-        let header_overhead = builder.ins().iconst(ptr_type, 2 * ptr_size as i64);
-        let total_size = builder.ins().iadd(size, align);
-        let total_size = builder.ins().iadd(total_size, header_overhead);
-
-        let raw_ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
-
-        let null = builder.ins().iconst(ptr_type, 0);
-        let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
-        builder.ins().trapnz(is_null, OOM_TRAP_CODE);
-
-        // Payload starts at align_to(raw_ptr + 2*ptr_size, align)
-        let payload_base = builder.ins().iadd(raw_ptr, header_overhead);
-        let mask = builder.ins().ineg(align);
-        let align_minus_1 = builder.ins().iadd_imm(align, -1);
-        let bumped = builder.ins().iadd(payload_base, align_minus_1);
-        let ptr = builder.ins().band(bumped, mask);
-
-        let malloc_slot = builder.ins().iadd_imm(ptr, -(2 * ptr_size as i64));
-        builder
-            .ins()
-            .store(MemFlags::new(), raw_ptr, malloc_slot, 0);
-
-        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-        let one = builder.ins().iconst(ptr_type, 1);
-        builder.ins().store(MemFlags::new(), one, header_ptr, 0);
-
-        Ok(ptr)
     }
 
     /// Translate an `Rvalue::BinaryOp` to a Cranelift value, taking the

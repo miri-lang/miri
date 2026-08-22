@@ -1811,8 +1811,9 @@ impl<'a> FunctionTranslator<'a> {
     /// Helper to call libc free, caching the FuncId across invocations.
     ///
     /// `header_ptr` points to the RC header (payload - ptr_size). The real
-    /// malloc pointer is stored at (header_ptr - ptr_size) by `Rvalue::Allocate`,
-    /// and is loaded here so that `free()` receives the original allocation.
+    /// malloc pointer is stored at (header_ptr - ptr_size) by
+    /// `alloc_aggregate_payload`, and is loaded here so that `free()` receives
+    /// the original allocation.
     pub(crate) fn call_libc_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,

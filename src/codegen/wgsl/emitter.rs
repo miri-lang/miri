@@ -1780,12 +1780,9 @@ impl<'a> BodyEmitter<'a> {
                 value,
                 compare_expected,
             } => self.render_atomic_op(*op, buffer, index, value, compare_expected.as_deref()),
-            Rvalue::Len(_) | Rvalue::Ref(_) | Rvalue::Phi(_) | Rvalue::Allocate(_, _, _) => {
-                Err(CodegenError::Internal(format!(
-                    "WGSL backend: rvalue {:?} not yet supported",
-                    rvalue
-                )))
-            }
+            Rvalue::Len(_) | Rvalue::Ref(_) | Rvalue::Phi(_) => Err(CodegenError::Internal(
+                format!("WGSL backend: rvalue {:?} not yet supported", rvalue),
+            )),
         }
     }
 

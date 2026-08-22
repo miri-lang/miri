@@ -88,9 +88,6 @@ pub enum Rvalue {
     /// Accesses predecessor blocks by index (usize).
     /// Vector of (value, predecessor_block_index).
     Phi(Vec<(Operand, crate::mir::BasicBlock)>),
-    /// Dynamically allocate memory.
-    /// Operands: size, alignment, allocator.
-    Allocate(Operand, Operand, Operand),
 }
 
 fn write_comma_separated(f: &mut fmt::Formatter<'_>, ops: &[Operand]) -> fmt::Result {
@@ -210,9 +207,6 @@ impl fmt::Display for Rvalue {
                     }
                 }
                 write!(f, ")")
-            }
-            Rvalue::Allocate(size, align, alloc) => {
-                write!(f, "alloc({}, {}, {})", size, align, alloc)
             }
         }
     }

@@ -357,11 +357,6 @@ impl SSABuilder {
                     self.rewrite_operand(op);
                 }
             }
-            Rvalue::Allocate(size, align, alloc) => {
-                self.rewrite_operand(size);
-                self.rewrite_operand(align);
-                self.rewrite_operand(alloc);
-            }
             Rvalue::AtomicOp {
                 buffer,
                 index,
