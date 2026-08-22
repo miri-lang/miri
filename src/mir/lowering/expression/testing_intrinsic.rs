@@ -20,7 +20,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::expression::{emit_to_string, lower_expression};
+use crate::mir::lowering::expression::{emit_string_concat, emit_to_string, lower_expression};
 use crate::mir::place::Local;
 use crate::mir::{
     BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind,
@@ -564,7 +564,7 @@ fn emit_value_to_quoted_string(
         span,
     });
 
-    let prefixed = emit_string_concat(ctx, span, quote_lhs, value_local)?;
+    let prefixed = emit_string_concat(ctx, quote_lhs, value_local, &span)?;
 
     let quote_rhs = ctx.push_temp(Type::new(TypeKind::String, span), span);
     ctx.push_statement(crate::mir::Statement {
@@ -579,41 +579,5 @@ fn emit_value_to_quoted_string(
         span,
     });
 
-    emit_string_concat(ctx, span, prefixed, quote_rhs)
-}
-
-/// Emit a `String_concat(a, b, allocator)` call (the stdlib wrapper around
-/// `rt::STRING_CONCAT`) and return the resulting Local. We route through the
-/// wrapper so the call ABI — including the implicit allocator parameter —
-/// stays in sync with the f-string lowering, which uses the same symbol.
-fn emit_string_concat(
-    ctx: &mut LoweringContext,
-    span: Span,
-    a: Local,
-    b: Local,
-) -> Result<Local, LoweringError> {
-    let result = ctx.push_temp(Type::new(TypeKind::String, span), span);
-    let next = ctx.new_basic_block();
-    let mut call_args = vec![Operand::Copy(Place::new(a)), Operand::Copy(Place::new(b))];
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        call_args.push(Operand::Copy(Place::new(alloc_local)));
-    }
-    let func_op = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier("String_concat".to_string()),
-    }));
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: call_args,
-            out_args: Vec::new(),
-            arg_handles: Vec::new(),
-            destination: Place::new(result),
-            target: Some(next),
-        },
-        span,
-    ));
-    ctx.set_current_block(next);
-    Ok(result)
+    emit_string_concat(ctx, prefixed, quote_rhs, &span)
 }

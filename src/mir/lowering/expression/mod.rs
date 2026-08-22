@@ -43,6 +43,7 @@ pub mod tuple_expr;
 pub mod type_expr;
 pub mod unary_expr;
 pub mod value_copy;
+pub mod variants_to_string;
 
 pub fn lower_expression(
     ctx: &mut LoweringContext,
@@ -204,6 +205,42 @@ pub(super) fn emit_to_string(
             };
             emit_runtime_to_string(ctx, runtime_fn, call_args, span)
         }
+        TypeKind::Option(inner) => {
+            variants_to_string::emit_option_to_string(ctx, operand, inner, span)
+        }
+        TypeKind::Result(_ok_expr, _err_expr) => {
+            // Result is treated as a special enum with Ok and Err variants.
+            // Both the ok and error type expressions are carried but not needed
+            // for rendering (the enum definition provides the variant structure).
+            variants_to_string::emit_enum_to_string(ctx, operand, "Result", None, span)
+        }
+        TypeKind::Custom(name, type_args) => {
+            // Check if this is an enum and dispatch to enum rendering.
+            if ctx
+                .type_checker
+                .type_table
+                .global_type_definitions
+                .get(name)
+                .map(|def| matches!(def, crate::type_checker::context::TypeDefinition::Enum(_)))
+                .unwrap_or(false)
+            {
+                variants_to_string::emit_enum_to_string(
+                    ctx,
+                    operand,
+                    name,
+                    type_args.as_deref(),
+                    span,
+                )
+            } else {
+                Err(LoweringError::unsupported_expression(
+                    format!(
+                        "Cannot convert type '{}' to String in formatted string",
+                        name
+                    ),
+                    *span,
+                ))
+            }
+        }
         other => Err(LoweringError::unsupported_expression(
             format!(
                 "Cannot convert type '{}' to String in formatted string",
@@ -237,6 +274,49 @@ fn emit_runtime_to_string(
         TerminatorKind::Call {
             func: func_op,
             args,
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(result),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    Ok(result)
+}
+
+/// Emits a call to `String_concat` and returns the result local.
+///
+/// Concatenates two String values by calling the `String_concat` intrinsic.
+/// After the call returns, this function sets the current block to the target
+/// and returns the result local. The caller is responsible for tracking and
+/// releasing the left and right operands if they are temporary values.
+pub(super) fn emit_string_concat(
+    ctx: &mut LoweringContext,
+    left: crate::mir::place::Local,
+    right: crate::mir::place::Local,
+    span: &crate::error::syntax::Span,
+) -> Result<crate::mir::place::Local, LoweringError> {
+    use crate::ast::literal::Literal;
+
+    let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
+    let mut call_args = vec![
+        Operand::Copy(Place::new(left)),
+        Operand::Copy(Place::new(right)),
+    ];
+    if let Some(&al) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(al)));
+    }
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: Literal::Identifier("String_concat".to_string()),
+    }));
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: call_args,
             out_args: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
