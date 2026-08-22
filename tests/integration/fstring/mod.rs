@@ -7,4 +7,5 @@ pub mod basic;
 pub mod errors;
 pub mod functions;
 pub mod types;
+pub mod variants;
 pub mod width_types;

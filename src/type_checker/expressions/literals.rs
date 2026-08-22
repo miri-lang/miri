@@ -51,6 +51,27 @@ use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
+/// Maximum nesting depth for enum type interpolation checks to prevent
+/// stack overflow on deeply-nested acyclic enum chains.
+const MAX_ENUM_INTERPOLATE_DEPTH: usize = 64;
+
+// Thread-local tracking of depth and visited enums during enum interpolation checks.
+// Both depth and visited set are shared across an entire top-level check to properly
+// detect cycles and enforce the depth bound, even when can_interpolate() delegates to
+// nested check_enum_can_interpolate() calls.
+thread_local! {
+    static ENUM_INTERPOLATE_STATE: std::cell::RefCell<EnumInterpolateState> =
+        std::cell::RefCell::new(EnumInterpolateState {
+            depth: 0,
+            visited: std::collections::HashSet::new(),
+        });
+}
+
+struct EnumInterpolateState {
+    depth: usize,
+    visited: std::collections::HashSet<String>,
+}
+
 impl TypeChecker {
     /// Rejects an integer literal whose value does not fit the default `int`
     /// type (`i64`), which would otherwise be silently truncated to a garbage
@@ -173,7 +194,7 @@ impl TypeChecker {
             let part_type = self.infer_expression(part, context);
             // Literal string segments are always fine; only validate interpolated expressions.
             if !matches!(&part.node, ExpressionKind::Literal(Literal::String(_)))
-                && !Self::can_interpolate(&part_type.kind)
+                && !self.can_interpolate(&part_type.kind)
             {
                 self.report_error(
                     format!(
@@ -189,27 +210,206 @@ impl TypeChecker {
 
     /// Returns `true` if a value of this type can be converted to a string
     /// for use in formatted string interpolation.
-    fn can_interpolate(kind: &TypeKind) -> bool {
-        matches!(
-            kind,
+    ///
+    /// Supports scalars (int, float, bool, string), Option<T>, Result<T, E>,
+    /// and user-defined enums. For Option and Result, the payloads must
+    /// recursively support interpolation. For user enums, all variant payloads
+    /// must recursively support interpolation.
+    ///
+    /// Returns `false` for collection types (List, Map, Set) and unresolved
+    /// generics, which are not formattable.
+    pub(crate) fn can_interpolate(&self, kind: &TypeKind) -> bool {
+        match kind {
+            // Scalar types that have simple to-string conversions
             TypeKind::String
-                | TypeKind::Boolean
-                | TypeKind::Int
-                | TypeKind::I8
-                | TypeKind::I16
-                | TypeKind::I32
-                | TypeKind::I64
-                | TypeKind::I128
-                | TypeKind::U8
-                | TypeKind::U16
-                | TypeKind::U32
-                | TypeKind::U64
-                | TypeKind::U128
-                | TypeKind::Float
-                | TypeKind::F32
-                | TypeKind::F64
-                | TypeKind::Error
-        )
+            | TypeKind::Boolean
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Error => true,
+
+            // Option<T>: T must be interpolatable
+            TypeKind::Option(inner) => self.can_interpolate(&inner.kind),
+
+            // Result<T, E> (parser form): both T and E must be interpolatable
+            // This is kept for defensive handling; the type checker normalizes
+            // Result to Custom form, but both forms may reach lowering.
+            TypeKind::Result(ok_expr, err_expr) => {
+                // Recursively check both type arguments' formatability.
+                // Expression-typed arguments are resolved by pattern-matching on
+                // their structure (Type nodes, Identifiers) rather than a full lookup,
+                // so this is safe without circularity.
+                use crate::ast::expression::ExpressionKind;
+                let check_expr = |expr: &Expression| -> bool {
+                    match &expr.node {
+                        ExpressionKind::Type(t, _) => self.can_interpolate(&t.kind),
+                        ExpressionKind::Identifier(name, _) => {
+                            // Look up primitive types by name
+                            if let Some(prim_kind) = crate::ast::types::primitive_type_kind(name) {
+                                self.can_interpolate(&prim_kind)
+                            } else if self.type_definitions().contains_key(name) {
+                                // Custom type: check as enum
+                                self.check_enum_can_interpolate(name, None)
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    }
+                };
+                check_expr(ok_expr) && check_expr(err_expr)
+            }
+
+            // Custom type: check if it's an enum and all payloads are interpolatable
+            TypeKind::Custom(name, type_args) => {
+                self.check_enum_can_interpolate(name, type_args.as_deref())
+            }
+
+            // Unresolved generics cannot be formatted
+            TypeKind::Generic(_, _, _) => false,
+
+            // Collections are not formattable
+            TypeKind::List(_)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Identifier
+            | TypeKind::Void => false,
+
+            // Future types are not formattable
+            TypeKind::Future(_) => false,
+
+            // Meta and Linear are not formattable
+            TypeKind::Meta(_)
+            | TypeKind::Linear(_)
+            | TypeKind::RawPtr
+            | TypeKind::F16
+            | TypeKind::Function(_) => false,
+        }
+    }
+
+    /// Check if an enum type can be interpolated.
+    ///
+    /// An enum can be interpolated if all of its variant payloads
+    /// can be interpolated. This method uses a cycle guard to detect
+    /// direct and mutual recursion in enum definitions. A self-referential
+    /// enum like `enum Wrapper: Wrap(Wrapper)` or mutually-recursive enums
+    /// like `enum A: X(B)` and `enum B: Y(A)` cannot be interpolated
+    /// because rendering would require infinite recursion.
+    ///
+    /// Collection types (List, Map, Set, Array) are never formattable,
+    /// which also blocks indirect recursion like `enum Json: Value([Json]?)`.
+    ///
+    /// A depth bound prevents stack overflow on deeply-nested acyclic chains,
+    /// where the cycle guard alone cannot help.
+    fn check_enum_can_interpolate(&self, name: &str, type_args: Option<&[Expression]>) -> bool {
+        ENUM_INTERPOLATE_STATE.with(|state| {
+            let mut s = state.borrow_mut();
+            let is_top_level = s.depth == 0;
+
+            // At the top level, start fresh. At nested levels, reuse the same
+            // state to properly detect cycles across the entire chain.
+            if is_top_level {
+                s.visited.clear();
+            }
+
+            drop(s);
+            let result = self.check_enum_can_interpolate_impl(name, type_args);
+
+            // Reset state at the top level.
+            if is_top_level {
+                let mut s = state.borrow_mut();
+                s.visited.clear();
+                s.depth = 0;
+            }
+
+            result
+        })
+    }
+
+    fn check_enum_can_interpolate_impl(
+        &self,
+        name: &str,
+        type_args: Option<&[Expression]>,
+    ) -> bool {
+        let should_return_early = ENUM_INTERPOLATE_STATE.with(|state| {
+            let mut s = state.borrow_mut();
+
+            // Check and increment depth.
+            if s.depth >= MAX_ENUM_INTERPOLATE_DEPTH {
+                return true; // Signal to return false
+            }
+            s.depth += 1;
+
+            // If already visited, we've detected a cycle.
+            if s.visited.contains(name) {
+                s.depth -= 1;
+                return true; // Signal to return false
+            }
+
+            false // Signal to continue
+        });
+
+        if should_return_early {
+            return false;
+        }
+
+        let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+            self.type_table.global_type_definitions.get(name)
+        else {
+            ENUM_INTERPOLATE_STATE.with(|state| {
+                state.borrow_mut().depth -= 1;
+            });
+            return false;
+        };
+
+        // Mark this enum as visited before checking its payloads.
+        ENUM_INTERPOLATE_STATE.with(|state| {
+            state.borrow_mut().visited.insert(name.to_string());
+        });
+
+        // Check that all variant payloads are formattable.
+        let result = enum_def.variants.values().all(|payload_types| {
+            payload_types.iter().all(|payload_ty| {
+                // Substitute generic type parameters if this is a generic enum.
+                let concrete_kind = crate::type_checker::generics::substitute_generic_field_kind(
+                    &payload_ty.kind,
+                    type_args,
+                    enum_def.generics.as_ref(),
+                );
+
+                // Recursively check if the concrete type is interpolatable.
+                // Depth and visited set are maintained via thread-local state.
+                match &concrete_kind {
+                    crate::ast::types::TypeKind::Custom(other_name, other_args) => {
+                        self.check_enum_can_interpolate_impl(other_name, other_args.as_deref())
+                    }
+                    _ => self.can_interpolate(&concrete_kind),
+                }
+            })
+        });
+
+        // Remove this enum from visited before returning.
+        // This allows it to be visited in different recursive branches.
+        ENUM_INTERPOLATE_STATE.with(|state| {
+            let mut s = state.borrow_mut();
+            s.visited.remove(name);
+            s.depth -= 1;
+        });
+
+        result
     }
 }
 
