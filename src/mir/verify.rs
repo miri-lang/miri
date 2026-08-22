@@ -27,7 +27,8 @@
 //! | `StorageLive(x)` | `d(x) := unwritten` |
 //! | `StorageDead(x)` | leak if `d(x) > 0`; then `d(x) := ⊥` |
 //! | `IncRef(p)` | `d(p) += 1`, unless something downstream claims it — see below |
-//! | `DecRef(p)`, `Dealloc(p)` | `d(p) -= 1`; double-release below zero, no-op while unwritten |
+//! | `DecRef(p)` | `d(p) -= 1`; double-release below zero, no-op while unwritten |
+//! | `Dealloc(p)` | `d(p)` must be exactly 1, then `d(p) -= 1`; over-specialization error otherwise |
 //! | `Assign(x, rv)` / `Reassign(x, rv)` with an owning rvalue | `d(x) += 1` |
 //! | a bare-local `Move(p)` inside a `Use` or a `Cast` | `d(p) -= 1`; double-release if `p` owns none |
 //! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
@@ -666,8 +667,11 @@ fn apply_statement(
         // block skips it and credits the claimant instead. What is left pays for
         // the local it names.
         StatementKind::IncRef(place) => adjust(state, tracked, place.local, 1),
-        StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
+        StatementKind::DecRef(place) => {
             release(body, place, tracked, state, violations);
+        }
+        StatementKind::Dealloc(place) => {
+            release_dealloc(body, place, tracked, state, violations);
         }
         StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
             if dest.projection.is_empty() && rvalue_is_owning(rvalue) {
@@ -736,6 +740,48 @@ fn release(
                 local: place.local,
                 local_name: local_display_name(body, place.local),
                 message: "released more references than it owns (double-release)".to_string(),
+            });
+            state.insert(place.local, Delta::Suppressed);
+        }
+    }
+}
+
+/// A `Dealloc` frees unconditionally, without the load, immortal check,
+/// decrement and branch a `DecRef` emits. That is only correct when the place
+/// holds exactly one reference: freeing while another holder remains corrupts a
+/// live object rather than reporting a double release. Anything other than a
+/// single owned reference is therefore a violation here, where the same state
+/// would be merely a decrement under `DecRef`.
+fn release_dealloc(
+    body: &Body,
+    place: &Place,
+    tracked: &[Local],
+    state: &mut PathState,
+    violations: &mut Vec<VerificationViolation>,
+) {
+    if !tracked.contains(&place.local) || !place.projection.is_empty() {
+        return;
+    }
+    match delta_of(state, place.local) {
+        Delta::Owned(1) => {
+            state.insert(place.local, Delta::Owned(0));
+        }
+        Delta::Owned(owned) => {
+            violations.push(VerificationViolation {
+                local: place.local,
+                local_name: local_display_name(body, place.local),
+                message: format!(
+                    "dealloc on non-uniquely-owned value (delta = {}; expected 1)",
+                    owned
+                ),
+            });
+            state.insert(place.local, Delta::Suppressed);
+        }
+        Delta::Uninit | Delta::Unbounded | Delta::Suppressed | Delta::Bottom => {
+            violations.push(VerificationViolation {
+                local: place.local,
+                local_name: local_display_name(body, place.local),
+                message: "dealloc without unique ownership".to_string(),
             });
             state.insert(place.local, Delta::Suppressed);
         }
