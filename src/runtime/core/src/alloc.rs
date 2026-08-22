@@ -45,7 +45,11 @@ pub mod ffi {
             None => return ptr::null_mut(),
         };
         // SAFETY: `layout` has non-zero size (guaranteed by `make_layout`).
-        alloc::alloc(layout)
+        let ptr = alloc::alloc(layout);
+        if !ptr.is_null() {
+            crate::alloc_count::increment_raw_count();
+        }
+        ptr
     }
 
     /// Allocates `size` bytes of zeroed memory with the given alignment.
@@ -63,7 +67,11 @@ pub mod ffi {
             None => return ptr::null_mut(),
         };
         // SAFETY: `layout` has non-zero size (guaranteed by `make_layout`).
-        alloc::alloc_zeroed(layout)
+        let ptr = alloc::alloc_zeroed(layout);
+        if !ptr.is_null() {
+            crate::alloc_count::increment_raw_count();
+        }
+        ptr
     }
 
     /// Reallocates memory previously allocated by [`miri_alloc`] or [`miri_alloc_zeroed`].
@@ -98,7 +106,14 @@ pub mod ffi {
         };
 
         // SAFETY: `ptr` is non-null and was allocated with `layout`. `new_size` is non-zero.
-        alloc::realloc(ptr, layout, new_size)
+        // A reallocation that returns a block is counted: it either grows in
+        // place or hands back a fresh one, and both are heap activity the
+        // caller pays for.
+        let new_ptr = alloc::realloc(ptr, layout, new_size);
+        if !new_ptr.is_null() {
+            crate::alloc_count::increment_raw_count();
+        }
+        new_ptr
     }
 
     /// Frees memory previously allocated by [`miri_alloc`] or [`miri_alloc_zeroed`].

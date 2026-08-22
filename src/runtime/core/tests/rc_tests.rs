@@ -3,9 +3,24 @@
 
 use miri_runtime_core::rc::*;
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+/// Serializes the tests that read a before/after delta of the process-wide
+/// closure balance. The test harness runs them on parallel threads, so without
+/// this one test's increment lands inside another's window and corrupts its
+/// delta.
+static BALANCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_balance() -> MutexGuard<'static, ()> {
+    BALANCE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[test]
 fn closure_alloc_track_increments_balance() {
+    let _serialized = lock_balance();
     let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
     unsafe { miri_rt_closure_alloc_track() };
     let after = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
@@ -20,6 +35,7 @@ fn closure_alloc_track_increments_balance() {
 
 #[test]
 fn closure_free_track_decrements_balance() {
+    let _serialized = lock_balance();
     let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
     unsafe { miri_rt_closure_alloc_track() };
     unsafe { miri_rt_closure_free_track() };
@@ -32,6 +48,7 @@ fn closure_free_track_decrements_balance() {
 
 #[test]
 fn unmatched_alloc_leaves_nonzero_balance() {
+    let _serialized = lock_balance();
     let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
     unsafe { miri_rt_closure_alloc_track() };
     let mid = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);

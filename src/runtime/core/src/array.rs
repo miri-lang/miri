@@ -132,6 +132,7 @@ pub mod ffi {
             };
             let data = alloc_zeroed(layout);
             crate::guard::guard_alloc_raw(data, crate::guard::AllocKind::Buffer);
+            crate::alloc_count::increment_buffer_count();
             (*arr).data = data;
             (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
         } else {

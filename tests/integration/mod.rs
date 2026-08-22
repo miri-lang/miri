@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod allocation;
 pub mod arithmetic;
 pub mod array;
 pub mod attributes;

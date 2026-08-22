@@ -145,6 +145,7 @@ impl MiriList {
 
         if !new_data.is_null() {
             crate::guard::guard_alloc_raw(new_data, crate::guard::AllocKind::Buffer);
+            crate::alloc_count::increment_buffer_count();
             self.data = new_data;
             self.capacity = new_capacity;
         } else {
@@ -447,6 +448,7 @@ pub mod ffi {
         let data = alloc(layout);
         if !data.is_null() {
             guard::guard_alloc_raw(data, guard::AllocKind::Buffer);
+            crate::alloc_count::increment_buffer_count();
             (*list).data = data;
             (*list).capacity = capacity;
         }
