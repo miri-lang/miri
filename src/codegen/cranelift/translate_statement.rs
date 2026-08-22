@@ -173,7 +173,8 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// `StatementKind::Dealloc`: unconditional cleanup — the caller has
-    /// already determined this value's RC chain is done. Skips null pointers.
+    /// already determined this value's RC chain is done. Skips null pointers
+    /// and immortal objects (RC < 0).
     fn translate_dealloc(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -182,23 +183,40 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
+        let ptr_size = ptr_type.bytes() as i64;
         let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
-        let dealloc_block = builder.create_block();
+        let rc_block = builder.create_block();
         let merge_block = builder.create_block();
+        builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+        builder.switch_to_block(rc_block);
+        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size));
+        let rc = builder.ins().load(
+            ptr_type,
+            cranelift_codegen::ir::MemFlags::new(),
+            header_ptr,
+            0,
+        );
+
+        let is_immortal = builder.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
+            rc,
+            0,
+        );
+        let dealloc_block = builder.create_block();
         builder
             .ins()
-            .brif(is_null, merge_block, &[], dealloc_block, &[]);
+            .brif(is_immortal, merge_block, &[], dealloc_block, &[]);
 
         builder.switch_to_block(dealloc_block);
-        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
         Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
         builder.ins().jump(merge_block, &[]);
 
+        builder.seal_block(rc_block);
         builder.seal_block(dealloc_block);
         builder.switch_to_block(merge_block);
         builder.seal_block(merge_block);

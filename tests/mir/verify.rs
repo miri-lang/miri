@@ -67,6 +67,10 @@ fn decref(local: usize) -> Statement {
     stmt(StatementKind::DecRef(place(local)))
 }
 
+fn dealloc(local: usize) -> Statement {
+    stmt(StatementKind::Dealloc(place(local)))
+}
+
 fn assign_fresh(local: usize) -> Statement {
     stmt(StatementKind::Assign(place(local), fresh_string()))
 }
@@ -1047,4 +1051,85 @@ fn main()
         "got: {}",
         result.stderr
     );
+}
+
+#[test]
+fn dealloc_with_exactly_one_ownership_verifies_clean() {
+    let clean = temp_body(vec![block(
+        vec![
+            storage_live(1),
+            assign_fresh(1),
+            dealloc(1),
+            storage_dead(1),
+        ],
+        ret(),
+    )]);
+    assert_clean(&clean, "a dealloc with delta = 1");
+}
+
+#[test]
+fn dealloc_with_delta_two_is_flagged() {
+    let over_specialized = temp_body(vec![block(
+        vec![
+            storage_live(1),
+            assign_fresh(1),
+            incref(1),
+            dealloc(1),
+            storage_dead(1),
+        ],
+        ret(),
+    )]);
+    let violations = verify_body(&over_specialized);
+    assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
+    assert_eq!(violations[0].local, Local(1));
+    assert!(
+        violations[0].message.contains("non-uniquely-owned"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn dealloc_with_delta_zero_is_flagged() {
+    let double_free = temp_body(vec![block(
+        vec![
+            storage_live(1),
+            assign_fresh(1),
+            dealloc(1),
+            dealloc(1),
+            storage_dead(1),
+        ],
+        ret(),
+    )]);
+    let violations = verify_body(&double_free);
+    assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
+    assert_eq!(violations[0].local, Local(1));
+    // The message matters, not just the count: releasing an unowned place is a
+    // double release under `DecRef`, but freeing one unconditionally is a
+    // uniqueness failure. Asserting the wording keeps this test discriminating
+    // if the two rules are ever collapsed back together.
+    assert!(
+        violations[0].message.contains("non-uniquely-owned"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn dealloc_in_one_arm_and_decref_in_the_other_verifies_clean() {
+    // A pass that proves uniqueness on only one path may release through
+    // `Dealloc` there and leave `DecRef` on the other. Both arms release the
+    // single reference exactly once, so the join carries no ownership and the
+    // mixed shape is legal.
+    let mixed = body_of(
+        &[void_ty(), string_ty()],
+        0,
+        vec![
+            block(vec![storage_live(1), assign_fresh(1)], branch(1, 2)),
+            block(vec![dealloc(1)], goto(3)),
+            block(vec![decref(1)], goto(3)),
+            block(vec![storage_dead(1)], ret()),
+        ],
+    );
+    assert_clean(&mixed, "a dealloc on one arm and a decref on the other");
 }

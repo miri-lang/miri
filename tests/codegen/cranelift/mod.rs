@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod closure;
+pub mod dealloc;
 pub mod layout;
 pub mod predicates;
 pub mod rc;
