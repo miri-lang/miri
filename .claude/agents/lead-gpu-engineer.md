@@ -1,7 +1,7 @@
 ---
 name: lead-gpu-engineer
 description: Lead GPU engineer for Miri. Reviews WGSL emission, the GPU runtime (wgpu host driver), kernel dispatch, residency/upload/readback, and shader correctness against GPU best practices — memory hierarchy, coalescing, occupancy, bounds, scalar-width portability. Read-only — reports ranked findings; does not edit. Use to review the GPU parts of a diff or the WGSL/runtime path.
-model: sonnet
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 
