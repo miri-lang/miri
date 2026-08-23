@@ -8,8 +8,9 @@
 //! hard error rather than a silently ignored annotation.
 
 use crate::ast::{
-    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, IGNORE_ATTRIBUTE, MUST_USE_ATTRIBUTE,
-    NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE, XFAIL_ATTRIBUTE,
+    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, IGNORE_ATTRIBUTE,
+    INDEX_BOUNDS_CHECK_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE,
+    XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -103,6 +104,12 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         valid_on: &[AttributeTarget::Function],
         takes_argument: true,
         requires: &[TEST_ATTRIBUTE],
+    },
+    AttributeSpec {
+        name: INDEX_BOUNDS_CHECK_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: true,
+        requires: &[],
     },
 ];
 

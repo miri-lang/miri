@@ -564,7 +564,7 @@ use system.collections.list
 
 fn main()
     var words = List(["al" + "pha", "be" + "ta"])
-    let taken = words.remove_at(0)
+    let taken = words.remove_at(0) ?? "missing"
     println(taken)
     println(f"{words.length()}")
 "#,
@@ -582,8 +582,11 @@ use system.collections.list
 
 fn main()
     var rows = List([[1, 2, 3], [4, 5, 6]])
-    let taken = rows.remove_at(0)
-    println(f"{taken.length()}")
+    match rows.remove_at(0)
+        Some(taken)
+            println(f"{taken.length()}")
+        None
+            println("unexpected none")
     println(f"{rows.length()}")
 "#,
         "3\n1",

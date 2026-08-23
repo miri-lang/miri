@@ -308,3 +308,23 @@ fn main()
         "9 9",
     );
 }
+
+/// The device has no tagged-union representation, so a call returning an
+/// optional cannot be lowered for it. The type checker has to say so against the
+/// offending line: reaching the backend instead yields an internal error naming
+/// a MIR aggregate kind, which does not identify the program that caused it.
+#[test]
+fn optional_returning_method_in_device_code_is_rejected() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    gpu var arr = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        let idx = arr.index_of(2) ?? 0
+        arr[i] = idx
+",
+        "cannot be represented in device code",
+    );
+}

@@ -98,7 +98,7 @@ fn main()
     s.push(20)
     s.push(30)
 
-    let idx = s.index_of(20)
+    let idx = s.index_of(20) ?? -1
     println(f"index {idx}")
 "#,
         "index 1",

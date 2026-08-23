@@ -178,6 +178,8 @@ pub struct MethodInfo {
     pub is_abstract: bool,
     /// Whether this method is static (no implicit receiver).
     pub is_static: bool,
+    /// Attributes on the method declaration.
+    pub attributes: Vec<crate::ast::Attribute>,
 }
 
 impl MethodInfo {

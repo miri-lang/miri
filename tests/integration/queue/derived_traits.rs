@@ -98,7 +98,7 @@ fn main()
     q.enqueue(20)
     q.enqueue(30)
 
-    let idx = q.index_of(20)
+    let idx = q.index_of(20) ?? -1
     println(f"index {idx}")
 "#,
         "index 1",

@@ -27,8 +27,12 @@ fn test_contains_and_index_of()
     let probe = [4, 5, 6, 5]
     assert(probe.contains(5))
     assert(not probe.contains(42))
-    assert_eq(probe.index_of(5), 1)
-    assert_eq(probe.index_of(42), -1)
+    assert_eq(probe.index_of(5) ?? -1, 1)
+    match probe.index_of(42)
+        Some(_)
+            assert(false, "index_of missing should be None")
+        None
+            assert(true, "index_of missing is None")
 
 fn test_first_and_last()
     let probe = [4, 5, 6, 5]

@@ -38,9 +38,11 @@ public class Array<T, Size> implements Queryable<T>, Iterable<T>, Cloneable, Tra
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in array`.
+    @index_bounds_check("index")
     public fn element_at(index int) T: self[index]
 
     /// Sets the element at the given index.
+    @index_bounds_check("index")
     public fn set(index int, value T)
         miri_rt_array_set_val(self, index, value)
 

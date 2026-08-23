@@ -56,9 +56,7 @@ public class Stack<T> implements Queryable<T>, Iterable<T>, Foldable<T>
     /// Removes and returns the top element of the stack.
     /// Returns None when the stack is empty.
     public fn pop() T?
-        if self.items.is_empty()
-            return None
-        return self.items.remove_at(self.items.length() - 1)
+        return self.items.pop()
 
     /// Returns the top element without removing it.
     /// Returns None when the stack is empty.

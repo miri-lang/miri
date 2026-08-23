@@ -707,6 +707,7 @@ impl TypeChecker {
                 is_constructor: decl.name == "init",
                 is_abstract: method_is_abstract,
                 is_static: decl.properties.is_static,
+                attributes: decl.attributes.clone(),
             },
         );
 

@@ -94,7 +94,7 @@ use system.collections.list
 
 fn main()
     var l = List([7])
-    let v = l.pop()
+    let v = l.pop() ?? -1
     println(f"{v}")
     println(f"{l.length()}")
 "#,

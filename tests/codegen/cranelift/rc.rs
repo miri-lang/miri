@@ -67,6 +67,7 @@ fn clone_method() -> MethodInfo {
         is_constructor: false,
         is_abstract: false,
         is_static: false,
+        attributes: Vec::new(),
     }
 }
 
