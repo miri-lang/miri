@@ -33,19 +33,21 @@ let host = dst // the only boundary crossing: assignment = readback
 println(f"{host[0]} {host[1]} {host[2]} {host[3]}") // 6.0 8.0 10.0 12.0
 ```
 
-## Current State (v0.5.0-beta.3)
+## Current State (v0.6.0-beta.4)
 
-This release is the **GPU Preview**. Miri compiles data-parallel code to WebGPU (WGSL) and runs it on real hardware — driven entirely from the language, with no separate shading language and no manual buffer marshalling.
+This release is the **Extended Standard Library**. Miri now ships a standard library broad enough for practical programs — file I/O, platform access, time, regex, JSON, extra collections — plus a native test runner and a pair of memory-diagnostic tools that keep the whole suite provably leak- and corruption-free.
 
-**New in v0.5.0-beta.3:**
-- **Residency surface** — `gpu let` / `gpu var` mark buffers that live on the device; the `Accelerable` trait gates which types are eligible. Cross-residency assignment is the *only* boundary crossing (`let host = dst` reads back, host→device re-uploads), with copy semantics and compile-time rejection of accidental element cross-reads.
-- **`forall` / `gpu forall`** — data-parallel loops in 1-, 2-, and 3-D, with literal or runtime bounds. Bare `forall` runs on the CPU unless GPU residency is inferred. Explicit `gpu forall` runs on the GPU.
-- **`gpu fn` kernels** — device functions with `kernel.*` builtins (`global_idx`, `thread_idx`, `block_idx`, `barrier()`), `shared` workgroup memory, `Atomic<i32>` / `Atomic<u32>`, subgroup ops, and on-device `.reduce`.
-- **GPU vectors** — `Vec2` / `Vec3` / `Vec4<f32>` with `dot`, `length`, `normalize`, `cross`, `reflect`, `mix`, scalar broadcast, and std430-correct buffer storage.
-- **Backend + tooling** — a WGSL codegen backend, a `wgpu` host runtime, `miri build --target web-gpu` (emits a runnable WebGPU bundle + native host binary), and a browser Tint validation gate in CI.
-- **Eight interactive web demos** — Mandelbrot, Game of Life, particle flow, fluid, ray marching, an on-GPU neural net, and gravitationally-lensed black-hole / wormhole shaders, each a compile-verified Miri program.
+**New in v0.6.0-beta.4:**
+- **`system.fs`, `system.os`, `system.time`** — capability-class access to the outside world: an `Fs` handle for files and directories, `Env`/`Args` for the environment and argv, `platform()`, `exit()`, and `Clock`/`Instant`/`Duration` for time. A function without the capability parameter cannot touch that part of the world.
+- **`system.text` regex** — `Regex.compile(...)` returning `Result`, plus compile-time-validated regex literals (`re"^\d+$"i`); `String` gains `split`, `join`, `to_int`, `to_float`. Match arms now support string, float, and regex predicates.
+- **`system.json`** — a recursive `Json` enum with a pure-Miri parser, position-carrying parse errors, serialization, and `T?` accessors. No compiler special-casing.
+- **`system.collections`** — `Queue<T>` and `Stack<T>` by composition, with the full derived `Iterable`/`Queryable`/`Foldable` surface for free.
+- **Attributes + `miri test`** — a closed attribute registry (`@non_exhaustive`, `@must_use`, `@test`, `@ignore(reason)`, `@xfail(reason)`; unknown attributes are compile errors, never no-ops) and a native test runner: `miri test` discovers `@test` functions, runs each in an isolated subprocess, and reports cargo-style — with `@xfail` pinning known bugs without greenwashing.
+- **Assertions & formatting for real types** — f-strings render `Option`, `Result`, and any user enum (`f"{Some(15)}"` → `Some(15)`); `assert_eq`/`assert_ne` compare and diff enums, `Option`/`Result`, structs, and classes defining `equals` (`expected Point(x=3, y=4), got Point(x=1, y=2)`). Structural `==` was fixed along the way: enum payloads and managed fields now compare by value, not pointer.
+- **Memory diagnostics** — `MIRI_HEAP_GUARD=1` (ASan-style shadow heap catching use-after-free, double-free, and attributed leaks; the full suite runs green under it nightly), a path-sensitive reference-count verifier running as a hard error on every PR, and `MIRI_ALLOC_COUNT=1` for exact allocation counts. Burning the guard's findings down to zero fixed dozens of real reference-counting defects.
+- **No panics, no sentinels** — nothing in the stdlib panics; `index_of` returns `int?` instead of `-1`, `pop`/`remove_at` return `T?` instead of trapping. Static class members (`Duration.from_millis(500)`) shipped as the language feature this required.
 
-Building on the CPU language from prior betas: full Perceus memory safety, `Result<T, E>` with enforced `must_use`, a backend-agnostic `system.math`, the four-trait collection pipeline, and `system.testing`.
+Building on prior betas: the GPU preview (WGSL backend, `gpu` residency, `forall`, kernels, vectors, eight browser demos), full Perceus memory safety, `Result<T, E>` with enforced `must_use`, a backend-agnostic `system.math`, the four-trait collection pipeline, and `system.testing`.
 
 **Why WGSL first — and what's next.** WGSL/WebGPU is the *first* GPU backend, not the only planned one. It shipped first because it's portable and runs everywhere — including the browser, so the demos above need zero install — and it let us prove the whole language→GPU path (residency, `forall`, kernels, codegen, host runtime) end-to-end against a single target before multiplying backends. The GPU representation in MIR is being made backend-neutral so additional backends — a native SPIR-V / Vulkan path and others — can plug in behind the exact same `forall` / `gpu fn` surface, with no changes to your source.
 
