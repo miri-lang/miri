@@ -7,3 +7,4 @@ pub mod float;
 pub mod integer;
 pub mod logical;
 pub mod string;
+pub mod structural_equality;

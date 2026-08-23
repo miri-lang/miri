@@ -8,9 +8,16 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
+use crate::ast::types::{
+    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, STRING_TYPE_NAME,
+};
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
+
+/// Bound on how deeply structural equality may nest before the compiler
+/// refuses. The comparison is expanded inline, so an unbounded chain would
+/// exhaust the compiler's stack on user input.
+const MAX_STRUCTURAL_EQUALITY_DEPTH: usize = 64;
 
 impl TypeChecker {
     /// Checks that binary operation operands have compatible types.
@@ -178,6 +185,7 @@ impl TypeChecker {
 
         // Allow comparison between compatible types
         if self.are_compatible(left, right, context) {
+            self.check_type_structurally_comparable(left)?;
             return Ok(bool_type());
         }
 
@@ -408,6 +416,118 @@ impl TypeChecker {
             class_def.traits.iter().any(|t| t == trait_name)
         } else {
             false
+        }
+    }
+
+    /// Rejects a type whose shape cannot be compared structurally.
+    ///
+    /// Structural equality is expanded inline at lowering, so a type that
+    /// contains itself would expand without bound and take the compiler with
+    /// it. A type that defines its own `equals` is always accepted: that
+    /// method replaces the derived comparison, which is what makes the advice
+    /// in these diagnostics work.
+    pub(crate) fn check_type_structurally_comparable(&self, ty: &Type) -> Result<(), String> {
+        let mut visiting = Vec::new();
+        self.check_structural_comparability(&ty.kind, &mut visiting, 0)
+    }
+
+    /// Walk a type's payloads, carrying the enclosing type names to detect a
+    /// cycle and the nesting depth to bound an acyclic chain. Both are passed
+    /// down rather than held in shared state so sibling payloads cannot be
+    /// mistaken for nesting.
+    fn check_structural_comparability(
+        &self,
+        kind: &TypeKind,
+        visiting: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth >= MAX_STRUCTURAL_EQUALITY_DEPTH {
+            return Err(
+                "Type nesting too deep for structural equality; implement `equals` method instead"
+                    .to_string(),
+            );
+        }
+
+        match kind {
+            TypeKind::Option(inner) => {
+                self.check_structural_comparability(&inner.kind, visiting, depth + 1)
+            }
+            TypeKind::Result(ok_expr, err_expr) => {
+                for expr in [ok_expr, err_expr] {
+                    if let crate::ast::expression::ExpressionKind::Type(ty, _) = &expr.node {
+                        self.check_structural_comparability(&ty.kind, visiting, depth + 1)?;
+                    }
+                }
+                Ok(())
+            }
+            TypeKind::Custom(name, args) => {
+                self.check_named_type_comparability(name, args.as_deref(), visiting, depth)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Check a named type's payloads or fields, unless it defines `equals`.
+    fn check_named_type_comparability(
+        &self,
+        name: &str,
+        args: Option<&[crate::ast::expression::Expression]>,
+        visiting: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if self.type_defines_own_equality(name) {
+            return Ok(());
+        }
+        if visiting.iter().any(|seen| seen == name) {
+            return Err(format!(
+                "Recursive type `{}` cannot use structural equality; implement `equals` method instead",
+                name
+            ));
+        }
+
+        let member_types: Vec<Type> = match self.type_table.global_type_definitions.get(name) {
+            Some(TypeDefinition::Enum(enum_def)) => enum_def
+                .variants
+                .values()
+                .flatten()
+                .map(|payload_ty| {
+                    Type::new(
+                        crate::type_checker::generics::substitute_generic_field_kind(
+                            &payload_ty.kind,
+                            args,
+                            enum_def.generics.as_ref(),
+                        ),
+                        payload_ty.span,
+                    )
+                })
+                .collect(),
+            Some(TypeDefinition::Struct(struct_def)) => struct_def
+                .fields
+                .iter()
+                .map(|field| field.1.clone())
+                .collect(),
+            _ => return Ok(()),
+        };
+
+        visiting.push(name.to_string());
+        let result = member_types.iter().try_for_each(|member_ty| {
+            self.check_structural_comparability(&member_ty.kind, visiting, depth + 1)
+        });
+        visiting.pop();
+        result
+    }
+
+    /// True when the named type supplies its own `equals`, which the operator
+    /// lowering dispatches to in place of a derived structural comparison.
+    fn type_defines_own_equality(&self, name: &str) -> bool {
+        match self.type_table.global_type_definitions.get(name) {
+            Some(TypeDefinition::Class(class_def)) => {
+                class_def.methods.contains_key(EQUALS_METHOD_NAME)
+            }
+            Some(TypeDefinition::Enum(enum_def)) => {
+                enum_def.methods.contains_key(EQUALS_METHOD_NAME)
+            }
+            _ => false,
         }
     }
 }

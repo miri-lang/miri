@@ -14,6 +14,7 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::statement::lower_statement;
 
+pub mod aggregate_to_string;
 pub mod array_expr;
 pub mod assignment_expr;
 pub mod binary_expr;
@@ -37,6 +38,7 @@ pub mod range_expr;
 pub mod set_expr;
 
 pub mod structmember_expr;
+pub mod structural_equality;
 pub mod super_expr;
 pub mod testing_intrinsic;
 pub mod tuple_expr;

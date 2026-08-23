@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod assert_eq_custom_types;
 pub mod assert_eq_ne;
 pub mod assert_panics;
 pub mod basic_assert;
