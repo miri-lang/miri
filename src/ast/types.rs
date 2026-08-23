@@ -84,6 +84,17 @@ pub const REGEX_TYPE_NAME: &str = "Regex";
 /// Not `public`; documented as the compiler's internal entry point for already-validated patterns.
 pub const REGEX_FROM_VALIDATED_PATTERN_METHOD: &str = "from_validated_pattern";
 
+/// Canonical method name a type defines to supply its own equality.
+///
+/// `==` and `!=` dispatch to this method when the receiver's type declares it,
+/// in place of the comparison derived from the type's shape. Naming the method
+/// rather than the trait that declares it is what keeps the compiler
+/// independent of the standard library: a type opts in by defining the method,
+/// not by being a type the compiler knows. Centralized so the type checker's
+/// comparability rule and the lowering that dispatches agree on one spelling —
+/// if they disagreed, a type could be judged comparable and then not dispatch.
+pub const EQUALS_METHOD_NAME: &str = "equals";
+
 /// Canonical spelling of the `Self` type keyword.
 ///
 /// `Self` names the enclosing class or trait inside its own body. It is a

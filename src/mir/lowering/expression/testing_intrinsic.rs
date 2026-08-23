@@ -493,14 +493,47 @@ fn emit_equality(
         | TypeKind::Float
         | TypeKind::F32
         | TypeKind::F64 => Ok(emit_primitive_equality(ctx, span, a, b)),
-        other => Err(LoweringError::unsupported_expression(
+        other => {
+            reject_class_without_equality(ctx, other, span)?;
+            crate::mir::lowering::expression::structural_equality::emit_structural_equality(
+                ctx, span, other, a, b, true,
+            )
+        }
+    }
+}
+
+/// Refuse a class that defines no `equals`.
+///
+/// `==` answers "the same object" for such a class, and an assertion that
+/// silently compared addresses would report two equal values as different — or
+/// pass for the wrong reason. The class's own equality has to be defined
+/// before a test can assert on it.
+fn reject_class_without_equality(
+    ctx: &LoweringContext<'_>,
+    kind: &TypeKind,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let TypeKind::Custom(name, _) = kind else {
+        return Ok(());
+    };
+    let is_class = matches!(
+        ctx.type_checker.type_definitions().get(name),
+        Some(crate::type_checker::context::TypeDefinition::Class(_))
+    );
+    if is_class
+        && !crate::mir::lowering::expression::structural_equality::type_defines_own_equality(
+            ctx, name,
+        )
+    {
+        return Err(LoweringError::unsupported_expression(
             format!(
-                "assert_eq/assert_ne does not yet support values of type '{}'",
-                other
+                "assert_eq/assert_ne cannot compare values of class '{}': it defines no `equals` method, so `==` compares object identity rather than contents. Implement `equals` (see the `Equatable` trait) to make the comparison meaningful.",
+                name
             ),
             span,
-        )),
+        ));
     }
+    Ok(())
 }
 
 /// Emit `miri_rt_string_equals(a, b)` and return the boolean result local.
@@ -535,6 +568,58 @@ fn emit_primitive_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b:
     result
 }
 
+/// Render a compared value for the failure message.
+///
+/// A class or struct is rendered field by field, a form reachable only from
+/// here; every other type uses the same rendering string interpolation gives
+/// it, so a value reads the same in an assertion as it does in an f-string.
+fn emit_assertion_value_string(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    kind: &TypeKind,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    // Rendering a value written inline — `assert_eq(Some(1), None)` — needs it
+    // in a place to project from, which materialises a temp nothing else owns.
+    // It is released once rendering has read it, and before the failure call,
+    // which never sees it: only the rendered string is passed on.
+    let watermark = ctx.body.local_decls.len();
+    let operand = match operand {
+        constant @ Operand::Constant(_) => {
+            let place = crate::mir::lowering::helpers::ensure_place(ctx, constant, span);
+            Operand::Copy(place)
+        }
+        place_operand => place_operand,
+    };
+    let rendered = emit_assertion_value_string_inner(ctx, operand.clone(), kind, span)?;
+    if let Operand::Copy(place) | Operand::Move(place) = &operand {
+        ctx.emit_temp_drop(place.local, watermark, span);
+    }
+    Ok(rendered)
+}
+
+/// Pick the rendering for the value's type.
+fn emit_assertion_value_string_inner(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    kind: &TypeKind,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    if let TypeKind::Custom(name, _) = kind {
+        if let Some(rendered) =
+            crate::mir::lowering::expression::aggregate_to_string::emit_aggregate_debug_string(
+                ctx,
+                operand.clone(),
+                name,
+                &span,
+            )
+        {
+            return rendered;
+        }
+    }
+    emit_to_string(ctx, operand, kind, &span)
+}
+
 /// Convert a value to its display string, with string values wrapped in
 /// surrounding `"..."` quotes so the failure message disambiguates them from
 /// numeric values.
@@ -544,7 +629,7 @@ fn emit_value_to_quoted_string(
     operand: Operand,
     span: Span,
 ) -> Result<Local, LoweringError> {
-    let value_local = emit_to_string(ctx, operand, kind, &span)?;
+    let value_local = emit_assertion_value_string(ctx, operand, kind, span)?;
 
     if !matches!(kind, TypeKind::String) {
         return Ok(value_local);
