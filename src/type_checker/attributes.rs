@@ -8,7 +8,8 @@
 //! hard error rather than a silently ignored annotation.
 
 use crate::ast::{
-    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE,
+    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, IGNORE_ATTRIBUTE, MUST_USE_ATTRIBUTE,
+    NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE, XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -55,6 +56,9 @@ pub(crate) struct AttributeSpec {
     pub name: &'static str,
     pub valid_on: &'static [AttributeTarget],
     pub takes_argument: bool,
+    /// If non-empty, this attribute requires all of these companion attributes
+    /// to be present on the same declaration.
+    pub requires: &'static [&'static str],
 }
 
 /// Every attribute the compiler knows. Adding one is a single entry here plus
@@ -64,11 +68,13 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         name: NON_EXHAUSTIVE_ATTRIBUTE,
         valid_on: &[AttributeTarget::Enum],
         takes_argument: false,
+        requires: &[],
     },
     AttributeSpec {
         name: MUST_USE_ATTRIBUTE,
         valid_on: &[AttributeTarget::Enum],
         takes_argument: false,
+        requires: &[],
     },
     AttributeSpec {
         name: DEPRECATED_ATTRIBUTE,
@@ -78,6 +84,25 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
             AttributeTarget::Enum,
         ],
         takes_argument: true,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: TEST_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: false,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: IGNORE_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: true,
+        requires: &[TEST_ATTRIBUTE],
+    },
+    AttributeSpec {
+        name: XFAIL_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: true,
+        requires: &[TEST_ATTRIBUTE],
     },
 ];
 
@@ -105,11 +130,15 @@ pub(crate) fn validate_attributes(
 ) -> Vec<TypeError> {
     attributes
         .iter()
-        .filter_map(|attribute| validate_attribute(attribute, target))
+        .filter_map(|attribute| validate_attribute(attribute, target, attributes))
         .collect()
 }
 
-fn validate_attribute(attribute: &Attribute, target: AttributeTarget) -> Option<TypeError> {
+fn validate_attribute(
+    attribute: &Attribute,
+    target: AttributeTarget,
+    all_attributes: &[Attribute],
+) -> Option<TypeError> {
     let Some(spec) = ATTRIBUTE_REGISTRY
         .iter()
         .find(|spec| spec.name == attribute.name)
@@ -135,20 +164,39 @@ fn validate_attribute(attribute: &Attribute, target: AttributeTarget) -> Option<
     }
 
     match (spec.takes_argument, attribute.argument.is_some()) {
-        (true, false) => Some(TypeError::new(
-            TypeErrorKind::AttributeArgumentMissing {
-                name: attribute.name.clone(),
-            },
-            attribute.span,
-        )),
-        (false, true) => Some(TypeError::new(
-            TypeErrorKind::AttributeArgumentExtra {
-                name: attribute.name.clone(),
-            },
-            attribute.span,
-        )),
-        (true, true) | (false, false) => None,
+        (true, false) => {
+            return Some(TypeError::new(
+                TypeErrorKind::AttributeArgumentMissing {
+                    name: attribute.name.clone(),
+                },
+                attribute.span,
+            ))
+        }
+        (false, true) => {
+            return Some(TypeError::new(
+                TypeErrorKind::AttributeArgumentExtra {
+                    name: attribute.name.clone(),
+                },
+                attribute.span,
+            ))
+        }
+        (true, true) | (false, false) => {}
     }
+
+    // Check companion requirements
+    for required_name in spec.requires {
+        if !has_attribute(all_attributes, required_name) {
+            return Some(TypeError::new(
+                TypeErrorKind::MissingRequiredAttribute {
+                    attribute_name: attribute.name.clone(),
+                    required_attribute: required_name.to_string(),
+                },
+                attribute.span,
+            ));
+        }
+    }
+
+    None
 }
 
 /// True if the declaration carries the named attribute.
@@ -242,5 +290,55 @@ mod tests {
         let enum_errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(enum_errors.len(), 1);
         assert_eq!(enum_errors[0].kind.properties().code, "E0114");
+    }
+
+    #[test]
+    fn accepts_test_attribute_on_function() {
+        let attributes = [attribute(TEST_ATTRIBUTE, None)];
+        assert!(validate_attributes(&attributes, AttributeTarget::Function).is_empty());
+    }
+
+    #[test]
+    fn rejects_ignore_without_test() {
+        let attributes = [attribute(IGNORE_ATTRIBUTE, Some("reason"))];
+        let errors = validate_attributes(&attributes, AttributeTarget::Function);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind.properties().code, "E0117");
+    }
+
+    #[test]
+    fn rejects_xfail_without_test() {
+        let attributes = [attribute(XFAIL_ATTRIBUTE, Some("reason"))];
+        let errors = validate_attributes(&attributes, AttributeTarget::Function);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind.properties().code, "E0117");
+    }
+
+    #[test]
+    fn accepts_test_with_ignore() {
+        let attributes = [
+            attribute(TEST_ATTRIBUTE, None),
+            attribute(IGNORE_ATTRIBUTE, Some("reason")),
+        ];
+        assert!(validate_attributes(&attributes, AttributeTarget::Function).is_empty());
+    }
+
+    #[test]
+    fn accepts_test_with_xfail() {
+        let attributes = [
+            attribute(TEST_ATTRIBUTE, None),
+            attribute(XFAIL_ATTRIBUTE, Some("reason")),
+        ];
+        assert!(validate_attributes(&attributes, AttributeTarget::Function).is_empty());
+    }
+
+    #[test]
+    fn accepts_test_with_ignore_and_xfail() {
+        let attributes = [
+            attribute(TEST_ATTRIBUTE, None),
+            attribute(IGNORE_ATTRIBUTE, Some("reason1")),
+            attribute(XFAIL_ATTRIBUTE, Some("reason2")),
+        ];
+        assert!(validate_attributes(&attributes, AttributeTarget::Function).is_empty());
     }
 }

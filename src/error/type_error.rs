@@ -84,6 +84,16 @@ pub enum TypeErrorKind {
     InvalidRegexLiteral {
         reason: String,
     },
+    /// E0116: Invalid @test function signature (takes parameters or declares return type)
+    InvalidTestFunctionSignature {
+        function_name: String,
+        reason: String,
+    },
+    /// E0117: An attribute requiring a companion was used without it
+    MissingRequiredAttribute {
+        attribute_name: String,
+        required_attribute: String,
+    },
     /// A syntax/parse error that originated in an imported module, preserved
     /// with its original error code and title rather than being downgraded to
     /// a generic "Type Error".
@@ -202,6 +212,26 @@ impl TypeErrorKind {
             Self::InvalidRegexLiteral { reason } => {
                 ErrorProperties::simple("E0115", "Invalid Regex Literal")
                     .with_message(format!("Invalid regex literal: {}", reason))
+            }
+            Self::InvalidTestFunctionSignature {
+                function_name,
+                reason,
+            } => {
+                ErrorProperties::simple("E0116", "Invalid Test Function Signature")
+                    .with_message(format!(
+                        "Invalid test function signature for '{}': {}",
+                        function_name, reason
+                    ))
+            }
+            Self::MissingRequiredAttribute {
+                attribute_name,
+                required_attribute,
+            } => {
+                ErrorProperties::simple("E0117", "Missing Required Attribute")
+                    .with_message(format!(
+                        "Attribute @{} requires @{} to be present on the same declaration",
+                        attribute_name, required_attribute
+                    ))
             }
             Self::ParseError {
                 code,

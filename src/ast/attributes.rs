@@ -13,6 +13,15 @@ pub const MUST_USE_ATTRIBUTE: &str = "must_use";
 /// Marks a declaration as deprecated with an optional migration message.
 pub const DEPRECATED_ATTRIBUTE: &str = "deprecated";
 
+/// Marks a function as a test to be run by the test runner.
+pub const TEST_ATTRIBUTE: &str = "test";
+
+/// Marks a test function as ignored, with a reason for why.
+pub const IGNORE_ATTRIBUTE: &str = "ignore";
+
+/// Marks a test function as expected to fail, with a reason why.
+pub const XFAIL_ATTRIBUTE: &str = "xfail";
+
 /// Represents a declaration that can carry attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {

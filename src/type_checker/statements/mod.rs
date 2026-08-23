@@ -43,6 +43,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::attributes::{DeprecatedKind, Deprecation};
 use crate::type_checker::context::{
     AliasDefinition, Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
@@ -124,6 +125,18 @@ impl TypeChecker {
         }
 
         self.report_deprecated_attribute_spellings(attributes);
+
+        if let StatementKind::FunctionDeclaration(decl) = &statement.node {
+            if !self.validate_test_function_signature(
+                &decl.name,
+                &decl.params,
+                &decl.return_type,
+                &decl.attributes,
+            ) {
+                return false;
+            }
+        }
+
         true
     }
 
@@ -148,6 +161,49 @@ impl TypeChecker {
                 )),
             );
         }
+    }
+
+    /// Validates the signature of a test function: must have no parameters
+    /// (except implicit `self` in class methods) and no return type.
+    /// Returns false if the signature is invalid, true otherwise.
+    fn validate_test_function_signature(
+        &mut self,
+        function_name: &str,
+        params: &[Parameter],
+        return_type: &Option<Box<Expression>>,
+        attributes: &[Attribute],
+    ) -> bool {
+        let Some(test_attribute) = attributes
+            .iter()
+            .find(|a| a.name == crate::ast::TEST_ATTRIBUTE)
+        else {
+            return true;
+        };
+
+        // A method's receiver is not something the runner could supply, so it
+        // does not count against the zero-parameter rule.
+        let takes_arguments = params.iter().any(|p| p.name != "self");
+
+        let mut reasons = Vec::new();
+        if takes_arguments {
+            reasons.push("test functions must take zero parameters");
+        }
+        if return_type.is_some() {
+            reasons.push("test functions must not declare a return type");
+        }
+
+        if reasons.is_empty() {
+            return true;
+        }
+
+        self.report_typed_error(TypeError::new(
+            TypeErrorKind::InvalidTestFunctionSignature {
+                function_name: function_name.to_string(),
+                reason: reasons.join(" and "),
+            },
+            test_attribute.span,
+        ));
+        false
     }
 
     /// Records a declaration marked `@deprecated("reason")` so its use sites can

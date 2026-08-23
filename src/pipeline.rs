@@ -79,6 +79,14 @@ fn is_top_level_const_stmt(stmt: &Statement) -> bool {
         })
 }
 
+/// True when script-mode wrapping would demote this statement into a synthetic
+/// `main` body. A program that declares its own `main` skips that wrapping, so
+/// such a statement is silently dropped instead of running — which is why the
+/// test runner refuses a test file containing one.
+pub fn is_script_body_statement(stmt: &Statement) -> bool {
+    is_wrappable_stmt(stmt) && !is_top_level_const_stmt(stmt)
+}
+
 /// Returns true if the statement should stay at the top level (not wrapped in main).
 fn is_top_level_stmt(stmt: &Statement) -> bool {
     matches!(
