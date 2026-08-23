@@ -14,7 +14,7 @@ println(f"{a.first() ?? -1}")
 println(f"{a.last() ?? -1}")
 println(f"{a.is_empty()}")
 println(f"{a.contains(20)}")
-println(f"{a.index_of(30)}")
+println(f"{a.index_of(30) ?? -1}")
 "#,
         "10\n30\nfalse\ntrue\n2",
     );
@@ -122,10 +122,14 @@ fn test_array_index_of_found_and_not_found() {
 use system.collections.array
 
 let a = [5, 10, 15]
-println(f"{a.index_of(15)}")
-println(f"{a.index_of(99)}")
+println(f"{a.index_of(15) ?? -1}")
+match a.index_of(99)
+    Some(_)
+        println("found")
+    None
+        println("not_found")
 "#,
-        "2\n-1",
+        "2\nnot_found",
     );
 }
 
@@ -192,7 +196,7 @@ fn test_array_index_of_duplicates() {
 use system.collections.array
 
 let a = [10, 20, 10, 30]
-println(f"{a.index_of(10)}")
+println(f"{a.index_of(10) ?? -1}")
 "#,
         "0",
     );

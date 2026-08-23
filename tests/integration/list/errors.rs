@@ -34,18 +34,6 @@ println(f\"{l[i]}\")
 }
 
 #[test]
-fn list_out_of_bounds_remove_at() {
-    assert_runtime_crash(
-        "
-use system.collections.list
-
-let l = List([1, 2])
-l.remove_at(5)
-",
-    );
-}
-
-#[test]
 fn list_out_of_bounds_set() {
     assert_runtime_crash(
         "

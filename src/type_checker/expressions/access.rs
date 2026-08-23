@@ -364,7 +364,7 @@ impl TypeChecker {
         args: &Option<Vec<Expression>>,
         index: &Expression,
         index_type: &Type,
-        span: Span,
+        _span: Span,
         context: &mut Context,
     ) -> Type {
         if !matches!(index_type.kind, TypeKind::Int) {
@@ -373,7 +373,7 @@ impl TypeChecker {
         }
 
         if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) {
-            if let Err(result_type) = self.validate_array_bounds(index, args, span, context) {
+            if let Err(result_type) = self.validate_array_bounds(index, args, context) {
                 return result_type;
             }
         }
@@ -381,44 +381,59 @@ impl TypeChecker {
         self.resolve_collection_element_type(args, context)
     }
 
+    /// Shared validator for compile-time index bounds checking.
+    /// Checks if a const-evaluated index is in range for a static-size collection.
+    /// Called by both index expressions and method calls with @index_bounds_check.
+    /// Returns true if the check passed (or cannot be checked), false on error.
+    pub(crate) fn validate_const_index_against_size(
+        &mut self,
+        index_expr: &Expression,
+        size_val: Option<i128>,
+        context: &mut Context,
+    ) -> bool {
+        let Some(idx_val) = Self::try_eval_const_int_with_context(index_expr, context) else {
+            return true;
+        };
+
+        if idx_val < 0 {
+            self.report_error(
+                "Index must be a non-negative integer".to_string(),
+                index_expr.span,
+            );
+            return false;
+        }
+
+        let Some(size) = size_val else {
+            return true;
+        };
+
+        let idx = idx_val as usize;
+        let sz = size as usize;
+        if idx >= sz {
+            self.report_error(
+                format!(
+                    "Index out of bounds: index {} but collection has {} elements",
+                    idx, sz
+                ),
+                index_expr.span,
+            );
+            return false;
+        }
+
+        true
+    }
+
     /// Validates array index bounds. Returns Err with element type on success or error type on failure.
     fn validate_array_bounds(
         &mut self,
         index: &Expression,
         args: &Option<Vec<Expression>>,
-        span: Span,
         context: &mut Context,
     ) -> Result<(), Type> {
-        let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) else {
-            return Ok(());
-        };
+        let size_expr = args.as_deref().and_then(|a| a.get(1));
+        let size_val = size_expr.and_then(Self::try_eval_const_int);
 
-        if idx_val < 0 {
-            self.report_error(
-                "Array index must be a non-negative integer".to_string(),
-                index.span,
-            );
-            return Err(make_type(TypeKind::Error));
-        }
-
-        let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) else {
-            return Ok(());
-        };
-
-        let Some(size_val) = Self::try_eval_const_int(size_expr) else {
-            return Ok(());
-        };
-
-        let idx = idx_val as usize;
-        let size = size_val as usize;
-        if idx >= size {
-            self.report_error(
-                format!(
-                    "Array index out of bounds: index {} but array has {} elements",
-                    idx, size
-                ),
-                span,
-            );
+        if !self.validate_const_index_against_size(index, size_val, context) {
             return Err(make_type(TypeKind::Error));
         }
 
@@ -797,7 +812,7 @@ impl TypeChecker {
         make_type(TypeKind::Error)
     }
 
-    fn extract_member_type_and_args(
+    pub(crate) fn extract_member_type_and_args(
         &mut self,
         obj_type: &Type,
         span: Span,

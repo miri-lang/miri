@@ -85,6 +85,10 @@ impl TypeChecker {
 
         let func_type = self.infer_expression(func, context);
 
+        // Compile-time bounds checking for methods marked with @index_bounds_check.
+        // Must run AFTER infer_expression to avoid re-inferring module alias receivers.
+        self.check_method_index_bounds(func, args, span, context);
+
         // Process arguments
         let mut positional_args = Vec::with_capacity(args.len());
         let mut named_args = HashMap::with_capacity(args.len());
@@ -142,10 +146,72 @@ impl TypeChecker {
         }
 
         if context.in_gpu_function {
+            self.reject_optional_result_in_device_code(func, &result_type, span);
             return self.narrow_gpu_math_result(func, &positional_args, result_type);
         }
 
         result_type
+    }
+
+    /// Position of the parameter a method marks as an index into its receiver,
+    /// or None when the method carries no such marker.
+    ///
+    /// Borrows the type definition rather than cloning it: the definition owns
+    /// the class's whole method table, and this is consulted per method call.
+    fn index_param_position(
+        &self,
+        type_name: &str,
+        method_name: &str,
+        context: &Context,
+    ) -> Option<usize> {
+        let definition = self.resolve_visible_type(type_name, context).or_else(|| {
+            if BuiltinCollectionKind::from_name(type_name).is_some() {
+                self.type_table.global_type_definitions.get(type_name)
+            } else {
+                None
+            }
+        })?;
+        let TypeDefinition::Class(class_def) = definition else {
+            return None;
+        };
+        let method_info = class_def.methods.get(method_name)?;
+        let index_param = method_info
+            .attributes
+            .iter()
+            .find(|attr| attr.name == crate::ast::INDEX_BOUNDS_CHECK_ATTRIBUTE)?
+            .argument
+            .as_deref()?;
+        method_info
+            .params
+            .iter()
+            .position(|(name, _)| name == index_param)
+    }
+
+    /// Rejects a call inside device code whose result is an optional value.
+    ///
+    /// The device has no tagged-union representation, so an optional cannot be
+    /// lowered for it. Catching the call here reports the offending source line;
+    /// left to the backend it surfaces instead as an internal error naming a MIR
+    /// aggregate kind, which says nothing about the program that caused it.
+    fn reject_optional_result_in_device_code(
+        &mut self,
+        func: &Expression,
+        result_type: &Type,
+        span: Span,
+    ) {
+        if !matches!(result_type.kind, TypeKind::Option(_)) {
+            return;
+        }
+        let target = Self::call_func_name(func).unwrap_or("this call");
+        self.report_error_with_help(
+            format!(
+                "'{target}' returns an optional value, which cannot be represented in device code"
+            ),
+            span,
+            "compute the value on the host and pass the result into the kernel, or call a form \
+             that returns a plain value"
+                .to_string(),
+        );
     }
 
     /// Extracts the bare function name from a call target that is either a
@@ -1355,6 +1421,74 @@ impl TypeChecker {
             ),
         );
         Some(make_type(TypeKind::Error))
+    }
+
+    /// Checks if a method call has the @index_bounds_check attribute and validates
+    /// the specified index argument against the receiver's statically-known size.
+    ///
+    /// The receiver's type must already have been computed by a prior
+    /// `infer_expression(func)` call, which records it in the type table. Re-inferring
+    /// the receiver here would report a spurious "undefined type" for a module alias,
+    /// whose resolution only happens at the full member-expression level.
+    fn check_method_index_bounds(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+        span: Span,
+        context: &mut Context,
+    ) {
+        let ExpressionKind::Member(recv, method) = &func.node else {
+            return;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method.node else {
+            return;
+        };
+
+        // Only a constant index can be judged here, and most calls pass none.
+        // Testing that first keeps the type resolution below off the common path:
+        // this runs for every method call in the program.
+        if !args
+            .iter()
+            .any(|arg| Self::try_eval_const_int_with_context(arg, context).is_some())
+        {
+            return;
+        }
+
+        let Some(recv_type) = self.type_table.types.get(&recv.id).cloned() else {
+            return;
+        };
+        let (type_name_opt, _type_args) =
+            self.extract_member_type_and_args(&recv_type, span, context);
+
+        let type_name = match type_name_opt {
+            Some(n) => n,
+            None => return,
+        };
+
+        let param_index = match self.index_param_position(&type_name, method_name, context) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let index_arg = match args.get(param_index) {
+            Some(arg) => arg,
+            None => return,
+        };
+
+        // Get the static size from the receiver type
+        let size_val = match &recv_type.kind {
+            TypeKind::Custom(cname, Some(cargs))
+                if BuiltinCollectionKind::from_name(cname.as_str())
+                    == Some(BuiltinCollectionKind::Array) =>
+            {
+                cargs.get(1).and_then(Self::try_eval_const_int)
+            }
+            TypeKind::Tuple(elements) => Some(elements.len() as i128),
+            _ => None,
+        };
+
+        // Apply the bounds check
+        self.validate_const_index_against_size(index_arg, size_val, context);
     }
 
     /// Validates gpu-resident arguments against function residency.

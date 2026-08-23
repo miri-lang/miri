@@ -22,6 +22,10 @@ pub const IGNORE_ATTRIBUTE: &str = "ignore";
 /// Marks a test function as expected to fail, with a reason why.
 pub const XFAIL_ATTRIBUTE: &str = "xfail";
 
+/// Marks a method parameter as the index into a collection, enabling compile-time
+/// bounds checking. The argument is the parameter name (e.g., `@index_bounds_check("index")`).
+pub const INDEX_BOUNDS_CHECK_ATTRIBUTE: &str = "index_bounds_check";
+
 /// Represents a declaration that can carry attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {

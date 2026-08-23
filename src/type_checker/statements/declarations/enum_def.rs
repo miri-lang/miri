@@ -220,6 +220,7 @@ impl TypeChecker {
                         is_constructor: false,
                         is_abstract: false,
                         is_static: decl.properties.is_static,
+                        attributes: decl.attributes.clone(),
                     },
                 );
                 method_statements.push(method_stmt);

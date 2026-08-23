@@ -11,7 +11,7 @@ use system.collections.tuple
 
 let t = (10, 20, 10, 30)
 println(f"{t.contains(10)}")
-println(f"{t.index_of(10)}")
+println(f"{t.index_of(10) ?? -1}")
 "#,
         "true\n0",
     );
@@ -28,7 +28,7 @@ println(f"{t.length()}")
 println(f"{t.first() ?? -1}")
 println(f"{t.last() ?? -1}")
 println(f"{t.contains(5)}")
-println(f"{t.index_of(10)}")
+println(f"{t.index_of(10) ?? -1}")
 "#,
         "10\n1\n10\ntrue\n9",
     );

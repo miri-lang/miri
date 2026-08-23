@@ -131,10 +131,14 @@ fn test_tuple_index_of() {
 use system.collections.tuple
 
 let t = (10, 20, 30)
-println(f"{t.index_of(20)}")
-println(f"{t.index_of(99)}")
+println(f"{t.index_of(20) ?? -1}")
+match t.index_of(99)
+    Some(idx)
+        println(f"{idx}")
+    None
+        println("not_found")
 "#,
-        "1\n-1",
+        "1\nnot_found",
     );
 }
 
@@ -145,7 +149,7 @@ fn test_tuple_index_of_first_element() {
 use system.collections.tuple
 
 let t = (10, 20, 30)
-println(f"{t.index_of(10)}")
+println(f"{t.index_of(10) ?? -1}")
 "#,
         "0",
     );
@@ -158,7 +162,7 @@ fn test_tuple_index_of_last_element() {
 use system.collections.tuple
 
 let t = (10, 20, 30)
-println(f"{t.index_of(30)}")
+println(f"{t.index_of(30) ?? -1}")
 "#,
         "2",
     );
@@ -179,9 +183,13 @@ let c_yes = t.contains("world")
 let c_no = t.contains("zzz")
 println(f"{c_yes}")
 println(f"{c_no}")
-let i_first = t.index_of("hello")
-let i_last = t.index_of("foo")
-let i_missing = t.index_of("zzz")
+let i_first = t.index_of("hello") ?? -1
+let i_last = t.index_of("foo") ?? -1
+let i_missing = match t.index_of("zzz")
+    Some(idx)
+        idx
+    None
+        -1
 println(f"{i_first}")
 println(f"{i_last}")
 println(f"{i_missing}")

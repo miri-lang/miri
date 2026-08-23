@@ -75,15 +75,15 @@ fn main()
     var opt_five int? = None
     opt_five = 5
     let a [int?; 3] = [opt_five, opt_none, opt_none]
-    
+
     // Use an explicit if-else or `??` to check `first()` since `first()` on `[T]` returns `T?`.
     // Here `T` is `int?`, so `first()` returns `int??`. Miri may collapse or require handling.
     let f1 = a.first()
     let l1 = a.last()
-    
+
     let contains_none = a.contains(opt_none)
-    let index_of_none = a.index_of(opt_none)
-    
+    let index_of_none = a.index_of(opt_none) ?? -1
+
     println(f"{contains_none} {index_of_none}")
     "#,
         "true 1",
@@ -101,11 +101,13 @@ fn main()
     let a = [[1, 2], [3, 4]]
     let search_target = [3, 4]
     let c = a.contains(search_target)
-    let idx = a.index_of(search_target)
-    
-    println(f"{c} {idx}")
+    match a.index_of(search_target)
+        Some(idx)
+            println(f"{c} {idx}")
+        None
+            println(f"{c} none")
     "#,
-        "false -1",
+        "false none",
     );
 }
 

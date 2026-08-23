@@ -860,6 +860,7 @@ impl TypeChecker {
                     is_constructor: decl.name == "init",
                     is_abstract,
                     is_static: false,
+                    attributes: decl.attributes.clone(),
                 },
             );
         }

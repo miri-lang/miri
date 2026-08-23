@@ -348,7 +348,7 @@ fn test_list_index_out_of_bounds_literal() {
 let l = [1, 2, 3]
 let x = l[5]
 ",
-        "Array index out of bounds: index 5 but array has 3 elements",
+        "Index out of bounds: index 5 but collection has 3 elements",
     );
 }
 
@@ -359,7 +359,7 @@ fn test_list_index_constant_expression_oob() {
 let l = [1, 2, 3]
 let x = l[1 + 5]
 ",
-        "Array index out of bounds",
+        "Index out of bounds",
     );
 }
 
@@ -383,6 +383,6 @@ fn test_list_index_empty_error() {
 let l = []
 let x = l[0]
 ",
-        "Array index out of bounds: index 0 but array has 0 elements",
+        "Index out of bounds: index 0 but collection has 0 elements",
     );
 }

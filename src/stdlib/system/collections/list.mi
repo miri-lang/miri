@@ -30,34 +30,47 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in list`.
+    @index_bounds_check("index")
     public fn element_at(index int) T: self[index]
 
     /// Appends an element to the end of the list.
     public fn push(item T)
         miri_rt_list_push(self, item)
 
-    /// Removes and returns the last element of the list.
-    public fn pop() T
-        let item = self[self.length() - 1]
+    /// Removes and returns the last element, or None if the list is empty.
+    ///
+    /// The element leaves the list owned by the caller: the runtime only shrinks
+    /// the length, so releasing it here would free the value this returns.
+    public fn pop() T?
+        let len = self.length()
+        if len == 0: return None
+        let item = self[len - 1]
         miri_rt_list_pop(self)
         return item
 
     /// Returns the element at the given index.
+    @index_bounds_check("index")
     public fn get(index int) T: self[index]
 
     /// Sets the element at the given index.
+    @index_bounds_check("index")
     public fn set(index int, value T)
         miri_rt_list_set(self, index, value)
 
     /// Inserts an element at the given index.
+    @index_bounds_check("index")
     public fn insert(index int, item T)
         miri_rt_list_insert(self, index, item)
 
-    /// Removes and returns the element at the given index.
+    /// Removes and returns the element at the given index, or None when the
+    /// index is negative or past the end.
     ///
     /// The element leaves the list owned by the caller: reading it out and then
     /// releasing it here would free the value this returns.
-    public fn remove_at(index int) T
+    @index_bounds_check("index")
+    public fn remove_at(index int) T?
+        if index < 0: return None
+        if index >= self.length(): return None
         let item = self[index]
         miri_rt_list_take_at(self, index)
         return item
@@ -65,11 +78,13 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
     /// Removes the first occurrence of the given item from the list.
     /// Returns true if an item was removed, false otherwise.
     public fn remove(item T) bool
-        let idx = self.index_of(item)
-        if idx != -1
-            miri_rt_list_remove(self, idx)
-            return true
-        return false
+        let idx_opt = self.index_of(item)
+        match idx_opt
+            Some(idx)
+                miri_rt_list_remove(self, idx)
+                true
+            None
+                false
 
     /// Removes all elements from the list.
     public fn clear()
@@ -83,8 +98,11 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
     public fn reverse()
         miri_rt_list_reverse(self)
 
-    /// Returns the index of the last element, or -1 if empty.
-    public fn last_index() int: self.length() - 1
+    /// Returns the index of the last element, or None if empty.
+    public fn last_index() int?
+        let len = self.length()
+        if len > 0: return Some(len - 1)
+        return None
 
     /// Returns a deep copy of this list.
     public fn clone() List<T>

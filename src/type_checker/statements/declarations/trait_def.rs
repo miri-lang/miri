@@ -244,6 +244,7 @@ impl TypeChecker {
                             is_constructor: false,
                             is_abstract: method_is_abstract,
                             is_static: false,
+                            attributes: decl.attributes.clone(),
                         },
                     );
 

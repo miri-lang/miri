@@ -28,6 +28,7 @@ fn method(is_abstract: bool, is_constructor: bool) -> MethodInfo {
         is_constructor,
         is_abstract,
         is_static: false,
+        attributes: Vec::new(),
     }
 }
 

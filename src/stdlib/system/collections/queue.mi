@@ -45,8 +45,6 @@ public class Queue<T> implements Queryable<T>, Iterable<T>, Foldable<T>
     /// Removes and returns the front element of the queue.
     /// Returns None when the queue is empty.
     public fn dequeue() T?
-        if self.items.is_empty()
-            return None
         return self.items.remove_at(0)
 
     /// Returns the front element without removing it.

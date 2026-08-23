@@ -69,7 +69,8 @@ public trait Sequenced<T> extends Transformable<T>
         let n = self.length()
         while i < n
             let item = self.element_at(i)
-            if result.index_of(item) == -1
+            let is_duplicate = result.index_of(item) != None
+            if not is_duplicate
                 result.push(item)
             i += 1
         return result

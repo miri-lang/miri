@@ -10,7 +10,7 @@ fn test_array_index_out_of_bounds_literal() {
 let a = [1, 2, 3]
 let x = a[5]
     "#,
-        "Array index out of bounds",
+        "Index out of bounds",
     );
 }
 

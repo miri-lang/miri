@@ -73,7 +73,7 @@ fn test_array_index_out_of_bounds_literal() {
         let a = [1, 2, 3]
         let x = a[5]
         ",
-        "Array index out of bounds: index 5 but array has 3 elements",
+        "Index out of bounds: index 5 but collection has 3 elements",
     );
 }
 
@@ -84,7 +84,7 @@ fn test_array_index_boundary_oob() {
         let a = [1, 2, 3]
         let x = a[3]
         ",
-        "Array index out of bounds: index 3 but array has 3 elements",
+        "Index out of bounds: index 3 but collection has 3 elements",
     );
 }
 
@@ -95,7 +95,7 @@ fn test_array_negative_index() {
         let a = [1, 2, 3]
         let x = a[-1]
         ",
-        "Array index must be a non-negative integer",
+        "Index must be a non-negative integer",
     );
 }
 
@@ -106,7 +106,7 @@ fn test_multi_dimensional_oob() {
         let a = [[1, 2], [3, 4]]
         let x = a[0][2]
         ",
-        "Array index out of bounds: index 2 but array has 2 elements",
+        "Index out of bounds: index 2 but collection has 2 elements",
     );
 }
 
@@ -117,7 +117,7 @@ fn test_nested_oob() {
         let a = [[1, 2], [3, 4]]
         let x = a[5][0]
         ",
-        "Array index out of bounds: index 5 but array has 2 elements",
+        "Index out of bounds: index 5 but collection has 2 elements",
     );
 }
 
@@ -128,7 +128,7 @@ fn test_array_large_index_oob() {
         let a = [1, 2, 3]
         let x = a[9223372036854775807]
         ",
-        "Array index out of bounds",
+        "Index out of bounds",
     );
 }
 
@@ -139,7 +139,7 @@ fn test_array_constant_expression_index_oob() {
         let a = [1, 2, 3]
         let x = a[1 + 2]
         ",
-        "Array index out of bounds",
+        "Index out of bounds",
     );
 }
 
@@ -151,7 +151,7 @@ fn test_array_declared_constant_expression_index_oob() {
         let a = [1, 2, 3]
         let x = a[IDX]
         ",
-        "Array index out of bounds",
+        "Index out of bounds",
     );
 }
 
@@ -277,7 +277,7 @@ fn test_index_empty_array() {
         let a = []
         let x = a[0]
         ",
-        "Array index out of bounds: index 0 but array has 0 elements",
+        "Index out of bounds: index 0 but collection has 0 elements",
     );
 }
 

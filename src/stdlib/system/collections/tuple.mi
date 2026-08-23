@@ -32,4 +32,5 @@ public class Tuple<T> implements Queryable<T>, Iterable<T>
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in tuple`.
     /// Handled as a built-in operation by the compiler.
+    @index_bounds_check("index")
     public fn element_at(index int) T: self[index]

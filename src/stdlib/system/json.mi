@@ -54,6 +54,15 @@ public enum JsonError
 ///
 /// The first failure is retained; later ones are ignored, so the reported
 /// position is where the document actually went wrong.
+/// Outcome of reading the separator that follows a collection element.
+///
+/// Module-private: it names a step of the parser's control flow, not part of
+/// the `Json` surface, so it carries no `@non_exhaustive` obligation.
+enum ElementSeparator
+    Continue
+    Closed
+    Invalid
+
 class JsonParser
     private var source String
     private var position int
@@ -323,11 +332,13 @@ public enum Json
                 None
                     return None
             parser.skip_whitespace()
-            let separator = Json.separator(parser, 93)
-            if separator < 0
-                return None
-            if separator == 0
-                building = false
+            match Json.separator(parser, 93)
+                ElementSeparator.Invalid
+                    return None
+                ElementSeparator.Closed
+                    building = false
+                ElementSeparator.Continue
+                    building = true
         Some(Json.Array(items))
 
     private static fn object_value(parser JsonParser, depth int) Json?
@@ -355,11 +366,13 @@ public enum Json
                 None
                     return None
             parser.skip_whitespace()
-            let separator = Json.separator(parser, 125)
-            if separator < 0
-                return None
-            if separator == 0
-                building = false
+            match Json.separator(parser, 125)
+                ElementSeparator.Invalid
+                    return None
+                ElementSeparator.Closed
+                    building = false
+                ElementSeparator.Continue
+                    building = true
         Some(Json.Object(fields))
 
     /// Reads the colon and the value that follow an object member's key.
@@ -371,25 +384,26 @@ public enum Json
         parser.advance()
         Json.value(parser, depth + 1)
 
-    /// Reads the separator after a collection element: 1 to continue, 0 when
-    /// the closing character was consumed, -1 when the input was invalid.
-    private static fn separator(parser JsonParser, closing int) int
+    /// Reads the separator that follows a collection element, reporting whether
+    /// the collection continues, closed, or was malformed. A malformed input has
+    /// already been recorded on the parser before this returns.
+    private static fn separator(parser JsonParser, closing int) ElementSeparator
         let current = parser.peek()
         if current == 44
             parser.advance()
             parser.skip_whitespace()
             if parser.peek() == closing
                 parser.fail(JsonError.UnexpectedCharacter(Json.describe(closing), parser.line_number(), parser.column_number()))
-                return -1
-            return 1
+                return ElementSeparator.Invalid
+            return ElementSeparator.Continue
         if current == closing
             parser.advance()
-            return 0
+            return ElementSeparator.Closed
         if current < 0
             parser.fail(JsonError.UnexpectedEnd(parser.line_number(), parser.column_number()))
-            return -1
+            return ElementSeparator.Invalid
         parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
-        -1
+        ElementSeparator.Invalid
 
     private static fn string_body(parser JsonParser) String?
         let open_line = parser.line_number()

@@ -40,11 +40,11 @@ public trait Queryable<T> extends Iterable<T>
             i += 1
         return false
 
-    /// Returns the index of the first occurrence of `item`, or -1 if not found.
-    public fn index_of(item T) int
+    /// Returns the index of the first occurrence of `item`, or None if not found.
+    public fn index_of(item T) int?
         var i = 0
         let len = self.length()
         while i < len
-            if self.element_at(i) == item: return i
+            if self.element_at(i) == item: return Some(i)
             i += 1
-        return -1
+        return None
