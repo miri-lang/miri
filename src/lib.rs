@@ -19,5 +19,7 @@ pub mod parser;
 pub mod pipeline;
 /// Runtime function name constants (`miri_rt_*` symbols).
 pub mod runtime_fns;
+/// Test discovery and execution for `@test` functions.
+pub mod test_runner;
 /// Type checker and inference engine.
 pub mod type_checker;

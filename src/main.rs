@@ -3,10 +3,8 @@
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
-use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
-use walkdir::WalkDir;
 
 use miri::cli::{Cli, Commands, TestFormat};
 use miri::pipeline::{BuildOptions, Pipeline};
@@ -169,108 +167,23 @@ fn check_file(path: PathBuf, _verbose: u8, verify_mir: bool) -> Result<()> {
     }
 }
 
-#[derive(Serialize)]
-struct TestResult {
-    path: String,
-    status: String,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct TestSummary {
-    total: usize,
-    passed: usize,
-    failed: usize,
-    results: Vec<TestResult>,
-}
-
 fn run_tests(
     filter: Option<String>,
     format: TestFormat,
     dir: PathBuf,
     _verbose: u8,
-    verify_mir: bool,
+    _verify_mir: bool,
 ) -> Result<()> {
-    let pipeline = Pipeline::new().with_verify_mir(verify_mir);
-    let mut results = Vec::new();
-
-    let test_files = WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let path = e.path();
-            let is_miri_file = path.extension().is_some_and(|ext| ext == "mi");
-            let in_tests_dir = path.to_string_lossy().contains("tests/");
-            let has_test_in_name = path.to_string_lossy().contains("test");
-
-            is_miri_file && (in_tests_dir || has_test_in_name)
-        })
-        .filter(|e| {
-            filter
-                .as_ref()
-                .is_none_or(|f| e.path().to_string_lossy().contains(f))
-        });
-
-    for entry in test_files {
-        let path = entry.path();
-        let source_res = fs::read_to_string(path);
-
-        let result = match source_res {
-            Ok(source) => match pipeline.frontend(&source) {
-                Ok(_) => TestResult {
-                    path: path.to_string_lossy().into(),
-                    status: "ok".to_string(),
-                    error: None,
-                },
-                Err(e) => TestResult {
-                    path: path.to_string_lossy().into(),
-                    status: "fail".to_string(),
-                    error: Some(e.report(&source)),
-                },
-            },
-            Err(e) => TestResult {
-                path: path.to_string_lossy().into(),
-                status: "fail".to_string(),
-                error: Some(format!("Failed to read file: {}", e)),
-            },
-        };
-        results.push(result);
-    }
-
-    let total = results.len();
-    let passed = results.iter().filter(|r| r.status == "ok").count();
-    let failed = total - passed;
-
-    let summary = TestSummary {
-        total,
-        passed,
-        failed,
-        results,
+    let test_format = match format {
+        TestFormat::Pretty => miri::test_runner::TestFormat::Pretty,
+        TestFormat::Json => miri::test_runner::TestFormat::Json,
     };
 
-    match format {
-        TestFormat::Pretty => print_pretty_test_summary(&summary),
-        TestFormat::Json => println!("{}", serde_json::to_string_pretty(&summary)?),
-    }
+    let summary = miri::test_runner::run_tests(&dir, filter.as_deref(), test_format)?;
 
-    if failed > 0 {
+    if !summary.is_green() {
         std::process::exit(101);
     }
 
     Ok(())
-}
-
-fn print_pretty_test_summary(summary: &TestSummary) {
-    for result in &summary.results {
-        println!("test {} ... {}", result.path, result.status);
-        if let Some(err) = &result.error {
-            eprintln!("---- error ----\n{}\n", err);
-        }
-    }
-    println!(
-        "\ntest result: {}. {} passed; {} failed",
-        if summary.failed > 0 { "failed" } else { "ok" },
-        summary.passed,
-        summary.failed
-    );
 }
