@@ -47,6 +47,7 @@ use crate::ast::types::{
     Type, TypeDeclarationKind, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
 };
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -93,7 +94,7 @@ impl TypeChecker {
 
     fn report_gpu_context_deprecation(&mut self, span: Span) {
         self.report_warning(
-            "W0004",
+            DiagnosticCode::NamDeprecatedKernelContextIdentifier,
             "Deprecated Kernel Context Identifier".to_string(),
             format!(
                 "`{}` is deprecated; use `{}` instead",
@@ -236,13 +237,21 @@ impl TypeChecker {
                 } else {
                     "Variable"
                 };
-                self.report_error(format!("{} '{}' is not visible", kind, name), span);
+                self.report_error(
+                    DiagnosticCode::TypNameNotVisible,
+                    format!("{} '{}' is not visible", kind, name),
+                    span,
+                );
                 return Some(ast_factory::make_type(TypeKind::Error));
             }
 
             if let TypeKind::Linear(_) = &info.ty.kind {
                 if context.mark_consumed(name) {
-                    self.report_error(format!("Use of moved value: '{}'", name), span);
+                    self.report_error(
+                        DiagnosticCode::OwnUseOfMovedValue,
+                        format!("Use of moved value: '{}'", name),
+                        span,
+                    );
                     return Some(ast_factory::make_type(TypeKind::Error));
                 }
             }
@@ -272,6 +281,7 @@ impl TypeChecker {
         if let Some(class_name) = &context.current_class {
             if let Some((member_kind, hint)) = self.find_self_member_hint(name, class_name) {
                 self.report_error_with_help(
+                    DiagnosticCode::TypUndefinedName,
                     format!("Undefined {}: {}", member_kind, name),
                     span,
                     hint,
@@ -315,12 +325,17 @@ impl TypeChecker {
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
+                DiagnosticCode::TypUndefinedName,
                 format!("Undefined {}: {}", entity_kind, name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
-            self.report_error(format!("Undefined {}: {}", entity_kind, name), span);
+            self.report_error(
+                DiagnosticCode::TypUndefinedName,
+                format!("Undefined {}: {}", entity_kind, name),
+                span,
+            );
         }
     }
 
@@ -329,7 +344,11 @@ impl TypeChecker {
     /// `self` refers to the current class instance. It can only be used inside a class method.
     pub(crate) fn infer_self(&mut self, span: Span, context: &Context) -> Type {
         if context.in_static_method {
-            self.report_error("'self' cannot be used in static methods".to_string(), span);
+            self.report_error(
+                DiagnosticCode::TypStaticMethodRestriction,
+                "'self' cannot be used in static methods".to_string(),
+                span,
+            );
             return ast_factory::make_type(TypeKind::Error);
         }
 
@@ -337,6 +356,7 @@ impl TypeChecker {
             class_type.clone()
         } else {
             self.report_error(
+                DiagnosticCode::TypClassDefinition,
                 "'self' can only be used inside a class method".to_string(),
                 span,
             );
@@ -378,6 +398,7 @@ impl TypeChecker {
     pub(crate) fn infer_super(&mut self, span: Span, context: &Context) -> Type {
         if context.current_class.is_none() {
             self.report_error(
+                DiagnosticCode::TypClassDefinition,
                 "'super' can only be used inside a class method".to_string(),
                 span,
             );
@@ -388,6 +409,7 @@ impl TypeChecker {
             ast_factory::make_type(TypeKind::Custom(base_class.clone(), None))
         } else {
             self.report_error(
+                DiagnosticCode::TypClassDefinition,
                 "'super' can only be used in a class that extends another class".to_string(),
                 span,
             );

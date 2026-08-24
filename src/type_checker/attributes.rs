@@ -215,6 +215,7 @@ pub(crate) fn has_attribute(attributes: &[Attribute], name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ast::AttributeSpelling;
+    use crate::diagnostics::DiagnosticCode;
     use crate::error::syntax::Span;
 
     fn attribute(name: &str, argument: Option<&str>) -> Attribute {
@@ -237,7 +238,10 @@ mod tests {
         let attributes = [attribute("nonexistent", None)];
         let errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0112");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypUnknownAttribute
+        );
     }
 
     #[test]
@@ -245,7 +249,10 @@ mod tests {
         let attributes = [attribute(NON_EXHAUSTIVE_ATTRIBUTE, None)];
         let errors = validate_attributes(&attributes, AttributeTarget::Function);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0113");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypAttributeNotValidOnTarget
+        );
     }
 
     #[test]
@@ -253,7 +260,10 @@ mod tests {
         let attributes = [attribute(MUST_USE_ATTRIBUTE, Some("why"))];
         let errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0114");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypAttributeArgumentExtra
+        );
     }
 
     #[test]
@@ -271,7 +281,10 @@ mod tests {
         let attributes = [attribute(DEPRECATED_ATTRIBUTE, None)];
         let errors = validate_attributes(&attributes, AttributeTarget::Function);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0114");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypAttributeArgumentMissing
+        );
     }
 
     #[test]
@@ -292,11 +305,17 @@ mod tests {
         let attributes = [attribute(DEPRECATED_ATTRIBUTE, None)];
         let class_errors = validate_attributes(&attributes, AttributeTarget::Class);
         assert_eq!(class_errors.len(), 1);
-        assert_eq!(class_errors[0].kind.properties().code, "E0114");
+        assert_eq!(
+            class_errors[0].kind.properties().code,
+            DiagnosticCode::TypAttributeArgumentMissing
+        );
 
         let enum_errors = validate_attributes(&attributes, AttributeTarget::Enum);
         assert_eq!(enum_errors.len(), 1);
-        assert_eq!(enum_errors[0].kind.properties().code, "E0114");
+        assert_eq!(
+            enum_errors[0].kind.properties().code,
+            DiagnosticCode::TypAttributeArgumentMissing
+        );
     }
 
     #[test]
@@ -310,7 +329,10 @@ mod tests {
         let attributes = [attribute(IGNORE_ATTRIBUTE, Some("reason"))];
         let errors = validate_attributes(&attributes, AttributeTarget::Function);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0117");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypMissingRequiredAttribute
+        );
     }
 
     #[test]
@@ -318,7 +340,10 @@ mod tests {
         let attributes = [attribute(XFAIL_ATTRIBUTE, Some("reason"))];
         let errors = validate_attributes(&attributes, AttributeTarget::Function);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].kind.properties().code, "E0117");
+        assert_eq!(
+            errors[0].kind.properties().code,
+            DiagnosticCode::TypMissingRequiredAttribute
+        );
     }
 
     #[test]

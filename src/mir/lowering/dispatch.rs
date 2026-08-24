@@ -5,6 +5,7 @@
 
 use crate::ast::expression::Expression;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
@@ -924,7 +925,8 @@ fn lower_gpu_slice(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let ExpressionKind::Range(start, Some(end), _) = &range.node else {
-        return Err(LoweringError::custom(
+        return Err(LoweringError::coded(
+            DiagnosticCode::TypGpuSliceRangeNotBounded,
             "slice expects a bounded range argument".to_string(),
             *span,
             None,

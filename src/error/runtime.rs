@@ -6,6 +6,7 @@
 //! These error messages are used by both the interpreter and compiled code
 //! to ensure consistent error reporting.
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use std::fmt;
 
@@ -25,14 +26,14 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            Self::DivisionByZero => ErrorProperties::simple("E0400", "Division by Zero")
+            Self::DivisionByZero => ErrorProperties::simple(DiagnosticCode::RtDivisionByZero)
                 .with_message("attempt to divide by zero"),
-            Self::RemainderByZero => ErrorProperties::simple("E0401", "Remainder by Zero")
+            Self::RemainderByZero => ErrorProperties::simple(DiagnosticCode::RtRemainderByZero)
                 .with_message("attempt to calculate the remainder with a divisor of zero"),
-            Self::Overflow => ErrorProperties::simple("E0402", "Integer Overflow")
+            Self::Overflow => ErrorProperties::simple(DiagnosticCode::RtIntegerOverflow)
                 .with_message("integer overflow"),
             Self::InvalidOperand { op, operand } => {
-                ErrorProperties::simple("E0405", "Invalid Operand")
+                ErrorProperties::simple(DiagnosticCode::RtInvalidOperand)
                     .with_message(format!("Invalid operand for {}: {}", op, operand))
             }
         }

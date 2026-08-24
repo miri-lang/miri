@@ -46,6 +46,7 @@ use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, REGEX_TYPE_NAME};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::Context;
@@ -102,6 +103,7 @@ impl TypeChecker {
         };
         if value > max {
             self.report_error(
+                DiagnosticCode::TypIntegerLiteralOutOfRange,
                 format!(
                     "Integer literal '{}' is out of range for the default int type (i64, max {})",
                     value,
@@ -119,7 +121,7 @@ impl TypeChecker {
         };
 
         if context.in_gpu_function {
-            self.report_error(
+            self.report_error(DiagnosticCode::TypFunctionSignature,
                 "Regex literals cannot be used inside a GPU function; use Regex.compile() at host level and pass it as a parameter"
                     .to_string(),
                 span,
@@ -197,6 +199,7 @@ impl TypeChecker {
                 && !self.can_interpolate(&part_type.kind)
             {
                 self.report_error(
+                    DiagnosticCode::TypStringInterpolationType,
                     format!(
                         "Type '{}' cannot be used in string interpolation",
                         part_type

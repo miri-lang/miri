@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
     Context, MethodInfo, SymbolInfo, TraitDefinition, TypeDefinition,
@@ -66,7 +67,11 @@ impl TypeChecker {
         let name = match self.extract_type_name(name_expr) {
             Ok(n) => n.to_string(),
             Err(_) => {
-                self.report_error("Invalid trait name".to_string(), name_expr.span);
+                self.report_error(
+                    DiagnosticCode::TypTraitDefinition,
+                    "Invalid trait name".to_string(),
+                    name_expr.span,
+                );
                 return;
             }
         };
@@ -80,7 +85,11 @@ impl TypeChecker {
                 && self.modules.pre_registered_types.contains(&name));
 
             if !is_placeholder {
-                self.report_error(format!("Type '{}' is already defined", name), span);
+                self.report_error(
+                    DiagnosticCode::TypTypeAlreadyDefined,
+                    format!("Type '{}' is already defined", name),
+                    span,
+                );
                 return;
             }
         }
@@ -145,6 +154,7 @@ impl TypeChecker {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
                 if !self.is_type_visible(trait_name) {
                     self.report_error(
+                        DiagnosticCode::TypTraitDefinition,
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
@@ -158,7 +168,7 @@ impl TypeChecker {
                             TypeDefinition::Generic(_) => "a generic type",
                             TypeDefinition::Trait(_) => unreachable!(),
                         };
-                        self.report_error_with_help(
+                        self.report_error_with_help(DiagnosticCode::TypTraitDefinition,
                             format!("'{}' is not a trait", trait_name),
                             trait_expr.span,
                             format!(
@@ -208,6 +218,7 @@ impl TypeChecker {
                     // Reject static methods in traits
                     if decl.properties.is_static {
                         self.report_error(
+                            DiagnosticCode::TypStaticMethodRestriction,
                             "Static methods are not allowed in trait declarations".to_string(),
                             stmt.span,
                         );
@@ -252,6 +263,7 @@ impl TypeChecker {
                 }
                 _ => {
                     self.report_error(
+                        DiagnosticCode::TypTraitDefinition,
                         "Only method declarations are allowed in trait body".to_string(),
                         stmt.span,
                     );

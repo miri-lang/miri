@@ -4,42 +4,17 @@
 //! Core diagnostic types for unified error and warning reporting.
 //!
 //! This module provides the foundational types for the error infrastructure:
-//! - [`Severity`] - Error, Warning, or Note level
+//! - [`Severity`] - Error, Warning, or Note level (re-exported from diagnostics)
 //! - [`Diagnostic`] - Rich diagnostic message with all context
 //! - [`Reportable`] - Trait for types that can produce diagnostics
 
+pub use crate::diagnostics::Severity;
+
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 
 /// The official URL for reporting internal compiler errors.
 pub const BUG_REPORT_URL: &str = "https://github.com/miri-lang/miri/issues";
-
-/// Diagnostic severity level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    /// Hard error - compilation stops.
-    Error,
-    /// Warning - compilation continues, user should address.
-    Warning,
-    /// Note - additional context for another diagnostic.
-    Note,
-}
-
-impl Severity {
-    /// Get the display name for this severity level.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Note => "note",
-        }
-    }
-}
-
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
 
 /// A rich, user-facing diagnostic message.
 ///
@@ -54,7 +29,7 @@ impl std::fmt::Display for Severity {
 pub struct Diagnostic {
     /// Severity level (error, warning, note).
     pub severity: Severity,
-    /// Error code for documentation/tooling (e.g., "E0001", "W0012").
+    /// Error code for documentation/tooling (e.g., "MER_NAM_001", "MER_TYP_024").
     pub code: Option<&'static str>,
     /// Short, human-readable title (e.g., "Undefined Variable").
     pub title: String,
@@ -74,18 +49,21 @@ pub struct Diagnostic {
 /// Consolidated error properties to keep widely scattered match statements in check.
 #[derive(Debug, Clone)]
 pub struct ErrorProperties {
-    pub code: &'static str,
+    pub code: DiagnosticCode,
     pub title: &'static str,
     pub message: Option<String>,
     pub help: Option<String>,
 }
 
 impl ErrorProperties {
-    /// Build with only a code and title; message and help left empty.
-    pub fn simple(code: &'static str, title: &'static str) -> Self {
+    /// Build from a registry code; message and help left empty.
+    ///
+    /// The title is read from the registry rather than passed in, so an error's
+    /// code and the text shown beside it cannot drift apart.
+    pub fn simple(code: DiagnosticCode) -> Self {
         Self {
             code,
-            title,
+            title: code.title(),
             message: None,
             help: None,
         }
@@ -102,6 +80,31 @@ impl ErrorProperties {
         self.help = Some(help.into());
         self
     }
+
+    /// Set the help text when there is one, leaving it unset otherwise.
+    ///
+    /// Coded diagnostics carry help as `Option<String>` because it comes from
+    /// the call site rather than the registry; this keeps that from expanding
+    /// into a `match` at every such arm.
+    pub fn with_optional_help(mut self, help: Option<String>) -> Self {
+        if let Some(help) = help {
+            self.help = Some(help);
+        }
+        self
+    }
+}
+
+/// Builds the properties for a coded diagnostic: the registry supplies the
+/// title, the call site supplies the message and any help. Shared by every
+/// error kind that carries a `Coded` variant.
+pub fn coded_properties(
+    code: DiagnosticCode,
+    message: &str,
+    help: &Option<String>,
+) -> ErrorProperties {
+    ErrorProperties::simple(code)
+        .with_message(message.to_string())
+        .with_optional_help(help.clone())
 }
 
 impl Diagnostic {
@@ -137,7 +140,7 @@ impl Diagnostic {
         let message = props.message.unwrap_or_else(|| title.clone());
         Self {
             severity: Severity::Error,
-            code: Some(props.code),
+            code: Some(props.code.as_str()),
             title,
             message,
             span,

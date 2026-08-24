@@ -47,6 +47,7 @@ use crate::ast::factory::make_type;
 use crate::ast::math_intrinsic::MathIntrinsic;
 use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::utils::{is_gpu_compatible, is_perceus_managed};
@@ -97,7 +98,11 @@ impl TypeChecker {
             match &arg.node {
                 ExpressionKind::NamedArgument(name, value) => {
                     if named_args.contains_key(name) {
-                        self.report_error(format!("Duplicate argument '{}'", name), arg.span);
+                        self.report_error(
+                            DiagnosticCode::TypArgumentCountMismatch,
+                            format!("Duplicate argument '{}'", name),
+                            arg.span,
+                        );
                     } else {
                         let ty = self.infer_expression(value, context);
                         named_args.insert(name.clone(), (value.as_ref(), ty, arg.span));
@@ -106,6 +111,7 @@ impl TypeChecker {
                 _ => {
                     if !named_args.is_empty() {
                         self.report_error(
+                            DiagnosticCode::TypArgumentOrderError,
                             "Positional arguments cannot follow named arguments".to_string(),
                             arg.span,
                         );
@@ -204,6 +210,7 @@ impl TypeChecker {
         }
         let target = Self::call_func_name(func).unwrap_or("this call");
         self.report_error_with_help(
+            DiagnosticCode::TarGpuCodeRestriction,
             format!(
                 "'{target}' returns an optional value, which cannot be represented in device code"
             ),
@@ -324,6 +331,7 @@ impl TypeChecker {
             _ if matches!(func_type.kind, TypeKind::Error) => make_type(TypeKind::Error),
             _ => {
                 self.report_error(
+                    DiagnosticCode::TypNotCallable,
                     format!("Expression is not callable: {}", func_type),
                     func.span,
                 );
@@ -373,6 +381,7 @@ impl TypeChecker {
             MathIntrinsic::Abs => {
                 if positional_args.len() != 1 {
                     self.report_error(
+                        DiagnosticCode::TypVectorBuiltin,
                         format!(
                             "abs expects exactly one argument, but got {}",
                             positional_args.len()
@@ -385,6 +394,7 @@ impl TypeChecker {
             MathIntrinsic::Min | MathIntrinsic::Max => {
                 if positional_args.len() != 2 {
                     self.report_error(
+                        DiagnosticCode::TypArgumentCountMismatch,
                         format!(
                             "{} expects exactly two arguments, but got {}",
                             func_name,
@@ -404,6 +414,7 @@ impl TypeChecker {
 
         if !self.is_numeric_type(&first_arg_type.kind) {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type '{}' is not numeric: {} only accepts int or float arguments",
                     first_arg_type, func_name
@@ -417,6 +428,7 @@ impl TypeChecker {
         for (arg_expr, arg_type) in positional_args {
             if !self.are_compatible(first_arg_type, arg_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Type mismatch in {}: expected {}, got {}",
                         func_name, first_arg_type, arg_type
@@ -454,6 +466,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 2 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "dot expects exactly two arguments, but got {}",
                     positional_args.len()
@@ -466,6 +479,7 @@ impl TypeChecker {
         let elem_type = self.extract_vec_elem_type(vec_args)?;
         if !matches!(elem_type.kind, TypeKind::F32) {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "dot expects vector with f32 elements, got {}",
                     first_arg_type
@@ -478,6 +492,7 @@ impl TypeChecker {
         let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
         if second_arg_type != first_arg_type {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "dot expects both vector arguments to have the same type, got {} and {}",
                     first_arg_type, second_arg_type
@@ -499,6 +514,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 1 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "length expects exactly one argument, but got {}",
                     positional_args.len()
@@ -511,6 +527,7 @@ impl TypeChecker {
         let elem_type = self.extract_vec_elem_type(vec_args)?;
         if !matches!(elem_type.kind, TypeKind::F32) {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "length expects vector with f32 elements, got {}",
                     first_arg_type
@@ -532,6 +549,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 1 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "normalize expects exactly one argument, but got {}",
                     positional_args.len()
@@ -544,6 +562,7 @@ impl TypeChecker {
         let elem_type = self.extract_vec_elem_type(vec_args)?;
         if !matches!(elem_type.kind, TypeKind::F32) {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "normalize expects vector with f32 elements, got {}",
                     first_arg_type
@@ -565,6 +584,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 2 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "cross expects exactly two arguments, but got {}",
                     positional_args.len()
@@ -576,6 +596,7 @@ impl TypeChecker {
 
         if vec_dimension != 3 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!("cross expects Vec3 arguments, got {}", first_arg_type),
                 span,
             );
@@ -594,6 +615,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 2 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "reflect expects exactly two arguments, but got {}",
                     positional_args.len()
@@ -606,6 +628,7 @@ impl TypeChecker {
         let elem_type = self.extract_vec_elem_type(vec_args)?;
         if !matches!(elem_type.kind, TypeKind::F32) {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "reflect expects vector with f32 elements, got {}",
                     first_arg_type
@@ -618,6 +641,7 @@ impl TypeChecker {
         let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
         if second_arg_type != first_arg_type {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "reflect expects both vector arguments to have the same type, got {} and {}",
                     first_arg_type, second_arg_type
@@ -639,6 +663,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         if positional_args.len() != 3 {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "mix expects exactly three arguments, but got {}",
                     positional_args.len()
@@ -651,6 +676,7 @@ impl TypeChecker {
         let elem_type = self.extract_vec_elem_type(vec_args)?;
         if !matches!(elem_type.kind, TypeKind::F32) {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "mix expects vector with f32 elements, got {}",
                     first_arg_type
@@ -663,6 +689,7 @@ impl TypeChecker {
         let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
         if second_arg_type != first_arg_type {
             self.report_error(
+                DiagnosticCode::TypVectorBuiltin,
                 format!(
                     "mix expects both vector arguments to have the same type, got {} and {}",
                     first_arg_type, second_arg_type
@@ -838,6 +865,7 @@ impl TypeChecker {
         // This IS a warp shuffle_down call. Validate the offset argument (arg1).
         if positional_args.len() < 2 {
             self.report_error(
+                DiagnosticCode::TypArgumentCountMismatch,
                 "shuffle_down requires 2 arguments (value, offset)".to_string(),
                 span,
             );
@@ -853,6 +881,7 @@ impl TypeChecker {
                 let offset_i128 = lit_val.to_i128();
                 if !(0..=128).contains(&offset_i128) {
                     self.report_error(
+                        DiagnosticCode::TarShuffleOffsetTooLarge,
                         format!(
                             "shuffle offset {} exceeds the maximum subgroup size (128)",
                             offset_i128
@@ -863,6 +892,7 @@ impl TypeChecker {
             }
             _ => {
                 self.report_error(
+                    DiagnosticCode::TarShuffleOffsetTooLarge,
                     "shuffle offset must be a compile-time literal".to_string(),
                     offset_span,
                 );
@@ -887,7 +917,7 @@ impl TypeChecker {
                 continue;
             }
             if !is_gpu_compatible(&arg_type.kind) {
-                self.report_error(
+                self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
                     format!(
                         "Type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may cross a call boundary inside a 'gpu fn'",
                         arg_type
@@ -941,6 +971,7 @@ impl TypeChecker {
         // declared return type returns `void`, which has no WGSL representation.
         let Some(ret_type_expr) = &func_data.return_type else {
             self.report_error(
+                DiagnosticCode::TarGpuIncompatibleSignature,
                 format!(
                     "Function '{}' returns 'void' which is not GPU-compatible",
                     func_name
@@ -953,6 +984,7 @@ impl TypeChecker {
             let ret_type = self.resolve_type_expression(ret_type_expr, context);
             if !self.is_gpu_scalar(&ret_type.kind) {
                 self.report_error(
+                    DiagnosticCode::TarGpuIncompatibleSignature,
                     format!(
                         "Function '{}' returns '{}' which is not GPU-compatible",
                         func_name, ret_type
@@ -970,6 +1002,7 @@ impl TypeChecker {
             // Reject out parameters in GPU callees
             if param.is_out {
                 self.report_error(
+                    DiagnosticCode::TarGpuIncompatibleSignature,
                     format!(
                         "Function '{}' has 'out' parameter '{}' which is not GPU-compatible",
                         func_name, param.name
@@ -982,6 +1015,7 @@ impl TypeChecker {
             // Reject non-scalar parameter types (arrays, lists, etc.)
             if !self.is_gpu_scalar(&param_type.kind) {
                 self.report_error(
+                    DiagnosticCode::TarGpuIncompatibleSignature,
                     format!(
                         "Function '{}' parameter '{}' has type '{}' which is not GPU-compatible",
                         func_name, param.name, param_type
@@ -1012,6 +1046,7 @@ impl TypeChecker {
         let mut visited = std::collections::HashSet::new();
         if self.check_recursion(func_name, &mut visited) {
             self.report_error(
+                DiagnosticCode::TarGpuCodeRestriction,
                 "recursion is not allowed in GPU code".to_string(),
                 Span::default(),
             );
@@ -1023,6 +1058,7 @@ impl TypeChecker {
         self.scan_for_host_calls(body, &mut has_host_calls);
         if has_host_calls {
             self.report_error(
+                DiagnosticCode::TarGpuIncompatibleSignature,
                 "Function calls host-only intrinsic which is not GPU-compatible".to_string(),
                 Span::default(),
             );
@@ -1369,6 +1405,7 @@ impl TypeChecker {
         let _ = self.infer_expression(range, context);
         if !matches!(&range.node, ExpressionKind::Range(_, Some(_), _)) {
             self.report_error(
+                DiagnosticCode::TypSliceOperation,
                 "slice expects a bounded range argument, e.g. 'g.slice(0..10)'".to_string(),
                 span,
             );
@@ -1410,6 +1447,7 @@ impl TypeChecker {
             return None;
         }
         self.report_error_with_help(
+            DiagnosticCode::TarGpuResidencyViolation,
             format!(
                 "cannot call method '{method_name}' on gpu-resident '{name}' from host context; \
                  a buffer-touching method would require a readback"
@@ -1535,6 +1573,7 @@ impl TypeChecker {
                 };
 
                 self.report_error(
+                    DiagnosticCode::TarGpuResidencyViolation,
                     format!(
                         "cannot pass gpu-resident '{}' to host function '{}'",
                         arg_name, callee
@@ -1574,7 +1613,7 @@ impl TypeChecker {
                     continue;
                 }
                 Some(crate::type_checker::FnResidency::HostOnly) => {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TarGpuResidencyViolation,
                         format!(
                             "cannot pass gpu-resident '{}' to host-only function '{}' (buffer-touching or host-forcing operations)",
                             arg_name, callee
@@ -1584,7 +1623,7 @@ impl TypeChecker {
                 }
                 None => {
                     // Residency unknown: buffer-touching operations need device-handle ABI
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TarGpuResidencyViolation,
                         format!(
                             "passing gpu-resident '{}' to function '{}' that indexes, calls methods on, forwards, or returns the array is not yet supported (requires device-handle argument passing)",
                             arg_name, callee
@@ -1691,6 +1730,7 @@ impl TypeChecker {
                     );
                 } else if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for argument '{}': expected {}, got {}",
                             param.name, concrete_param_type, arg_type
@@ -1704,6 +1744,7 @@ impl TypeChecker {
                 }
             } else if param.default_value.is_none() {
                 self.report_error(
+                    DiagnosticCode::TypArgumentCountMismatch,
                     format!("Missing argument for parameter '{}'", param.name),
                     span,
                 );
@@ -1712,6 +1753,7 @@ impl TypeChecker {
 
         if pos_iter.next().is_some() {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Too many positional arguments: expected {}, got {}",
                     func_data.params.len(),
@@ -1722,7 +1764,11 @@ impl TypeChecker {
         }
 
         for (name, (_, _, span)) in named_args.drain() {
-            self.report_error(format!("Unknown argument '{}'", name), span);
+            self.report_error(
+                DiagnosticCode::TypArgumentCountMismatch,
+                format!("Unknown argument '{}'", name),
+                span,
+            );
         }
     }
 
@@ -1760,7 +1806,7 @@ impl TypeChecker {
                 ) => {
                     let arg_name = self.gpu_resident_identifier(arg_expr, context);
                     if let Some(name) = arg_name {
-                        self.report_error(
+                        self.report_error(DiagnosticCode::TarGpuResidencyViolation,
                             format!(
                                 "parameter '{}' is explicitly marked 'host' but received gpu-resident '{}'",
                                 param.name, name
@@ -1773,7 +1819,7 @@ impl TypeChecker {
                     crate::ast::statement::BindingResidency::Gpu,
                     Some(crate::ast::statement::BindingResidency::Host),
                 ) => {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypFunctionSignature,
                         format!(
                             "parameter '{}' is explicitly marked 'gpu' but received host-resident argument",
                             param.name
@@ -1859,7 +1905,7 @@ impl TypeChecker {
         match arg_expr.map(|e| &e.node) {
             Some(ExpressionKind::Identifier(var_name, _)) => {
                 if !context.is_mutable(var_name) {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypImmutabilityViolation,
                         format!(
                             "expected mutable variable for 'out' parameter '{}': '{}' is immutable (declare with 'var')",
                             param_name, var_name
@@ -1869,6 +1915,7 @@ impl TypeChecker {
                 }
                 if !seen_out_vars.insert(var_name.clone()) {
                     self.report_error(
+                        DiagnosticCode::TypOutParameterMisuse,
                         format!(
                             "same variable passed twice as 'out': '{}' appears more than once",
                             var_name
@@ -1878,7 +1925,7 @@ impl TypeChecker {
                 }
             }
             Some(_) => {
-                self.report_error(
+                self.report_error(DiagnosticCode::TypFunctionSignature,
                     format!(
                         "expected mutable variable for 'out' parameter '{}', but got a non-variable expression",
                         param_name
@@ -1904,6 +1951,7 @@ impl TypeChecker {
             || param_type == arg_type;
         if !exact_match {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type mismatch for argument '{}': expected {}, got {}",
                     param_name, param_type, arg_type
@@ -1926,7 +1974,7 @@ impl TypeChecker {
 
             if let Some(TypeDefinition::Class(def)) = &type_def {
                 if def.is_abstract {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypClassDefinition,
                         format!(
                             "Cannot instantiate abstract class '{}'. Abstract classes cannot be instantiated directly.",
                             name
@@ -2030,7 +2078,11 @@ impl TypeChecker {
                 return make_type(TypeKind::Error);
             }
         }
-        self.report_error(format!("Type '{}' is not callable", inner_type), span);
+        self.report_error(
+            DiagnosticCode::TypNotCallable,
+            format!("Type '{}' is not callable", inner_type),
+            span,
+        );
         make_type(TypeKind::Error)
     }
 
@@ -2086,6 +2138,7 @@ impl TypeChecker {
                 )));
             } else {
                 self.report_error(
+                    DiagnosticCode::TypGenericArgumentCount,
                     format!(
                         "Class 'List<T>' expects 1 generic argument, got {}",
                         args.len()
@@ -2108,7 +2161,7 @@ impl TypeChecker {
                     self.resolve_type_expression(&cargs[0], context)
                 }
                 _ => {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
                         format!(
                             "List(...) expects an array literal argument, got '{}'. Use 'List<T>()' for an empty list or 'List([...])' to convert an array",
                             arg_type
@@ -2125,6 +2178,7 @@ impl TypeChecker {
         }
 
         self.report_error(
+            DiagnosticCode::TypGenericArgumentCount,
             "Cannot instantiate generic class 'List<T>' without explicit type arguments"
                 .to_string(),
             span,
@@ -2157,6 +2211,7 @@ impl TypeChecker {
                 )));
             } else {
                 self.report_error(
+                    DiagnosticCode::TypGenericArgumentCount,
                     format!(
                         "Class 'Map<K, V>' expects 2 generic arguments, got {}",
                         args.len()
@@ -2169,7 +2224,7 @@ impl TypeChecker {
 
         if let Some((arg_expr, arg_type)) = positional_args.first() {
             if !matches!(&arg_expr.node, ExpressionKind::Map(_)) {
-                self.report_error(
+                self.report_error(DiagnosticCode::TypBuiltinConstructor,
                     "Map(...) only accepts a map literal argument like '{\"key\": value}'. Use 'Map<K, V>()' for an empty map".to_string(),
                     span,
                 );
@@ -2189,6 +2244,7 @@ impl TypeChecker {
         }
 
         self.report_error(
+            DiagnosticCode::TypGenericArgumentCount,
             "Cannot instantiate generic class 'Map<K, V>' without explicit type arguments"
                 .to_string(),
             span,
@@ -2217,6 +2273,7 @@ impl TypeChecker {
                 )));
             } else {
                 self.report_error(
+                    DiagnosticCode::TypGenericArgumentCount,
                     format!(
                         "Class 'Set<T>' expects 1 generic argument, got {}",
                         args.len()
@@ -2229,7 +2286,7 @@ impl TypeChecker {
 
         if let Some((arg_expr, arg_type)) = positional_args.first() {
             if !matches!(&arg_expr.node, ExpressionKind::Set(_)) {
-                self.report_error(
+                self.report_error(DiagnosticCode::TypBuiltinConstructor,
                     "Set(...) only accepts a set literal argument like '{1, 2, 3}'. Use 'Set<T>()' for an empty set".to_string(),
                     span,
                 );
@@ -2249,6 +2306,7 @@ impl TypeChecker {
         }
 
         self.report_error(
+            DiagnosticCode::TypGenericArgumentCount,
             "Cannot instantiate generic class 'Set<T>' without explicit type arguments".to_string(),
             span,
         );
@@ -2269,6 +2327,7 @@ impl TypeChecker {
             if let Some(args) = type_args {
                 if generics.len() != args.len() {
                     self.report_error(
+                        DiagnosticCode::TypGenericArgumentCount,
                         format!(
                             "Class '{}' expects {} generic arguments, got {}",
                             signature,
@@ -2280,6 +2339,7 @@ impl TypeChecker {
                 }
             } else {
                 self.report_error(
+                    DiagnosticCode::TypGenericArgumentCount,
                     format!(
                         "Cannot instantiate generic class '{}' without explicit type arguments",
                         signature
@@ -2289,6 +2349,7 @@ impl TypeChecker {
             }
         } else if type_args.is_some() {
             self.report_error(
+                DiagnosticCode::TypGenericArgumentCount,
                 format!("Class '{}' does not take generic arguments", name),
                 span,
             );
@@ -2393,6 +2454,7 @@ impl TypeChecker {
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for field '{}': expected {}, got {}",
                             field_name, concrete_field_type, arg_type
@@ -2405,6 +2467,7 @@ impl TypeChecker {
 
         if pos_iter.next().is_some() {
             self.report_error(
+                DiagnosticCode::TypBuiltinConstructor,
                 format!(
                     "Too many arguments for '{}' constructor: expected {}, got {}",
                     def.name,
@@ -2416,7 +2479,11 @@ impl TypeChecker {
         }
 
         for (arg_name, (_, _, arg_span)) in named_args.drain() {
-            self.report_error(format!("Unknown argument '{}'", arg_name), arg_span);
+            self.report_error(
+                DiagnosticCode::TypArgumentCountMismatch,
+                format!("Unknown argument '{}'", arg_name),
+                arg_span,
+            );
         }
     }
 
@@ -2472,6 +2539,7 @@ impl TypeChecker {
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for argument '{}': expected {}, got {}",
                             param_name, concrete_param_type, arg_type
@@ -2481,6 +2549,7 @@ impl TypeChecker {
                 }
             } else {
                 self.report_error(
+                    DiagnosticCode::TypArgumentCountMismatch,
                     format!("Missing argument for parameter '{}'", param_name),
                     span,
                 );
@@ -2489,6 +2558,7 @@ impl TypeChecker {
 
         if pos_iter.next().is_some() {
             self.report_error(
+                DiagnosticCode::TypBuiltinConstructor,
                 format!(
                     "Too many arguments for '{}' constructor: expected {}, got {}",
                     def.name,
@@ -2500,7 +2570,11 @@ impl TypeChecker {
         }
 
         for (arg_name, (_, _, arg_span)) in named_args.drain() {
-            self.report_error(format!("Unknown argument '{}'", arg_name), arg_span);
+            self.report_error(
+                DiagnosticCode::TypArgumentCountMismatch,
+                format!("Unknown argument '{}'", arg_name),
+                arg_span,
+            );
         }
     }
 
@@ -2558,6 +2632,7 @@ impl TypeChecker {
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for field '{}': expected {}, got {}",
                             field_name, concrete_field_type, arg_type
@@ -2566,12 +2641,17 @@ impl TypeChecker {
                     );
                 }
             } else {
-                self.report_error(format!("Missing argument for field '{}'", field_name), span);
+                self.report_error(
+                    DiagnosticCode::TypArgumentCountMismatch,
+                    format!("Missing argument for field '{}'", field_name),
+                    span,
+                );
             }
         }
 
         if pos_iter.next().is_some() {
             self.report_error(
+                DiagnosticCode::TypBuiltinConstructor,
                 format!(
                     "Too many positional arguments for struct constructor: expected {}, got {}",
                     def.fields.len(),
@@ -2582,7 +2662,11 @@ impl TypeChecker {
         }
 
         for (field_name, (_, _, arg_span)) in named_args {
-            self.report_error(format!("Unknown field '{}'", field_name), arg_span);
+            self.report_error(
+                DiagnosticCode::TypFieldNotFound,
+                format!("Unknown field '{}'", field_name),
+                arg_span,
+            );
         }
 
         let generic_args = def.generics.as_ref().map(|gens| {
@@ -2624,7 +2708,7 @@ impl TypeChecker {
                 let Some(size_value) =
                     TypeChecker::try_eval_const_int_with_context(&size_expr, context)
                 else {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
                         "Array<T, N>() requires a compile-time constant size; use integer literals or simple arithmetic like '4 * 4'".to_string(),
                         size_expr.span,
                     );
@@ -2637,7 +2721,7 @@ impl TypeChecker {
 
                 // Reject managed element types at type-check time
                 if is_perceus_managed(&elem_type.kind, &self.type_table.global_type_definitions) {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
                         format!(
                             "Array<T, N>() is not yet supported for managed element type '{}'; use an array literal",
                             elem_type
@@ -2653,6 +2737,7 @@ impl TypeChecker {
                 )));
             } else {
                 self.report_error(
+                    DiagnosticCode::TypGenericArgumentCount,
                     format!(
                         "Class 'Array<T, N>' expects 2 generic arguments, got {}",
                         args.len()
@@ -2666,7 +2751,7 @@ impl TypeChecker {
         // Array() with no arguments but explicit type args should have been caught above.
         // If we get here with positional args, it's an error.
         if !positional_args.is_empty() {
-            self.report_error(
+            self.report_error(DiagnosticCode::TypBuiltinConstructor,
                 "Array(...) with a positional argument is not supported. Use Array<T, N>() with explicit type arguments for a sized array, or use an array literal like [1, 2, 3]".to_string(),
                 span,
             );
@@ -2674,6 +2759,7 @@ impl TypeChecker {
         }
 
         self.report_error(
+            DiagnosticCode::TypGenericArgumentCount,
             "Cannot instantiate generic class 'Array<T, N>' without explicit type arguments"
                 .to_string(),
             span,

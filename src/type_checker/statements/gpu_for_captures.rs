@@ -18,6 +18,7 @@
 //!     `var<storage>` bindings, so an `Array<Boolean, N>` capture would
 //!     round-trip as invalid shader source.
 
+use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::LeftHandSideExpression;
@@ -78,7 +79,7 @@ impl TypeChecker {
 
     fn report_capture_violation(&mut self, violation: CaptureViolation) {
         match violation {
-            CaptureViolation::HostResident { name, span } => self.report_error_with_help(
+            CaptureViolation::HostResident { name, span } => self.report_error_with_help(DiagnosticCode::TarGpuResidencyViolation,
                 format!("'gpu forall' capture '{}' must be gpu-resident.", name),
                 span,
                 format!(
@@ -90,7 +91,7 @@ impl TypeChecker {
                 name,
                 elem_ty,
                 span,
-            } => self.report_error(
+            } => self.report_error(DiagnosticCode::TarGpuParallelConstruct,
                 format!(
                     "'gpu forall' capture '{}' has element type '{}' which is not a valid WGSL storage-buffer element. WGSL storage buffers require a numeric scalar (i32 / u32 / i64 / u64 / f32 / f64); 'bool' must be packed to 'i32' or 'u32'",
                     name, elem_ty
@@ -98,7 +99,7 @@ impl TypeChecker {
                 span,
             ),
             CaptureViolation::UnsupportedScalarCapture { name, ty, span } => {
-                self.report_error(
+                self.report_error(DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "'gpu forall' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
                          Supported types are: int/i32, i16, i8, bool, float, and f32. Unsupported: i64, f64, String.",

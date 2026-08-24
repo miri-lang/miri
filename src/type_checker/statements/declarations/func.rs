@@ -45,6 +45,7 @@ use crate::ast::types::{
     KERNEL_TYPE_NAME,
 };
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::statements::{check_returns, ReturnStatus};
@@ -243,6 +244,7 @@ impl TypeChecker {
                 let default_val_type = self.infer_expression(default_val, context);
                 if !self.are_compatible(&param_type, &default_val_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for default value: expected {}, got {}",
                             param_type, default_val_type
@@ -292,6 +294,7 @@ impl TypeChecker {
 
                 if !matches!(guard_type.kind, TypeKind::Boolean) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!("Type mismatch: guard must be boolean, got {}", guard_type),
                         guard.span,
                     );
@@ -317,6 +320,7 @@ impl TypeChecker {
 
         if let Some(rt_expr) = return_type_expr {
             self.report_error(
+                DiagnosticCode::TarGpuIncompatibleSignature,
                 "GPU functions must not have an explicit return type".to_string(),
                 rt_expr.span,
             );
@@ -362,7 +366,7 @@ impl TypeChecker {
         let Some(conflict) = crate::mir::backend::gpu::wgsl_name_conflict(name) else {
             return;
         };
-        self.report_error_with_help(
+        self.report_error_with_help(DiagnosticCode::TarGpuIncompatibleSignature,
             format!(
                 "GPU function name '{}' {}, so it cannot be lowered to a valid GPU shader",
                 name,
@@ -411,7 +415,7 @@ impl TypeChecker {
             if is_gpu_signature_type(&param_type.kind) {
                 continue;
             }
-            self.report_error(
+            self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
                 format!(
                     "Parameter '{}' has type '{}' which is not GPU-compatible: only numeric primitives, booleans, and GPU types may appear in a 'gpu fn' signature",
                     param.name, param_type
@@ -516,6 +520,7 @@ impl TypeChecker {
                     let expr_type = self.infer_expression(expr, context);
                     if !self.are_compatible(return_type, &expr_type, context) {
                         self.report_error(
+                            DiagnosticCode::TypTypeMismatch,
                             format!(
                                 "Invalid return type: expected {}, got {}",
                                 return_type, expr_type
@@ -543,6 +548,7 @@ impl TypeChecker {
             && !self.are_compatible(return_type, &expr_type, context)
         {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
                     return_type, expr_type
@@ -560,7 +566,11 @@ impl TypeChecker {
         if !matches!(return_type.kind, TypeKind::Void) {
             let status = check_returns(body);
             if status == ReturnStatus::None {
-                self.report_error("Missing return statement".to_string(), body.span);
+                self.report_error(
+                    DiagnosticCode::TypFunctionSignature,
+                    "Missing return statement".to_string(),
+                    body.span,
+                );
             }
         }
     }
@@ -1189,7 +1199,7 @@ impl TypeChecker {
         if properties.is_gpu {
             for param in params {
                 if let Some(crate::ast::statement::BindingResidency::Host) = param.residency {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypFunctionSignature,
                         format!(
                             "conflict: parameter '{}' cannot be explicitly marked 'host' in a gpu function",
                             param.name

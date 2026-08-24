@@ -43,6 +43,7 @@ use crate::ast::factory::make_type;
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::utils::{
@@ -74,6 +75,7 @@ impl TypeChecker {
     ) {
         if !context.in_gpu_function {
             self.report_error(
+                DiagnosticCode::TypSharedVariable,
                 "Shared variables can only be declared inside 'gpu' functions".to_string(),
                 span,
             );
@@ -85,6 +87,7 @@ impl TypeChecker {
                 || matches!(&resolved_type.kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array));
             if !is_array {
                 self.report_error(
+                    DiagnosticCode::TypSharedVariable,
                     format!(
                         "Shared variable '{}' must be an array, got {}",
                         decl.name, resolved_type
@@ -94,6 +97,7 @@ impl TypeChecker {
             }
         } else {
             self.report_error(
+                DiagnosticCode::TypSharedVariable,
                 format!("Shared variable '{}' must have an explicit type", decl.name),
                 span,
             );
@@ -101,6 +105,7 @@ impl TypeChecker {
 
         if decl.initializer.is_some() {
             self.report_error(
+                DiagnosticCode::TypSharedVariable,
                 format!("Shared variable '{}' cannot have an initializer", decl.name),
                 span,
             );
@@ -176,7 +181,7 @@ impl TypeChecker {
         if is_gpu_compatible(&inferred_type.kind) {
             return;
         }
-        self.report_error(
+        self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
             format!(
                 "Variable '{}' has type '{}' which is not GPU-compatible: only numeric primitives, booleans, and GPU types may be used inside a 'gpu fn'",
                 name, inferred_type
@@ -212,6 +217,7 @@ impl TypeChecker {
             return;
         }
         self.report_error(
+            DiagnosticCode::TarGpuTypeNotAccelerable,
             format!(
                 "'{}' does not implement 'Accelerable' and cannot be gpu-resident.",
                 inferred_type
@@ -238,7 +244,7 @@ impl TypeChecker {
         if !type_mentions_f16(&inferred_type.kind) {
             return;
         }
-        self.report_error(
+        self.report_error(DiagnosticCode::TarGpuParallelConstruct,
             format!(
                 "'{}' uses 'f16', a GPU-only type with no host representation; use it inside a 'gpu' binding or a 'gpu fn'/'gpu forall'",
                 inferred_type
@@ -306,6 +312,7 @@ impl TypeChecker {
             if let Some(val) = Self::try_eval_const_int_with_context(elem, context) {
                 if val < i32::MIN as i128 || val > i32::MAX as i128 {
                     self.report_error(
+                        DiagnosticCode::TarGpuValueOutOfRange,
                         format!(
                             "Array element {} has value {} which exceeds i32 range [{}, {}]; \
                             use Array<i32, N> for explicit 32-bit GPU storage",
@@ -335,6 +342,7 @@ impl TypeChecker {
         // Rule 4: Constant shadowing is not allowed in any scope (declaring a NEW constant)
         if is_constant && existing_info.is_some() {
             self.report_error(
+                DiagnosticCode::TypShadowingNotAllowed,
                 format!(
                     "Cannot shadow existing variable/constant '{}' with a constant.",
                     name
@@ -347,7 +355,11 @@ impl TypeChecker {
         // Rule 5: Cannot shadow an existing constant (declaring any variable shadowing a constant)
         if let Some(existing) = existing_info {
             if existing.is_constant {
-                self.report_error(format!("Cannot shadow constant '{}'.", name), span);
+                self.report_error(
+                    DiagnosticCode::TypShadowingNotAllowed,
+                    format!("Cannot shadow constant '{}'.", name),
+                    span,
+                );
                 return;
             }
         }
@@ -357,7 +369,7 @@ impl TypeChecker {
             if let Some(existing_info) = current_scope.get(name) {
                 // Rule 2: var may not shadow in the same scope
                 if is_mutable {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypShadowingNotAllowed,
                         format!("Variable '{}' is already defined in this scope. 'var' cannot shadow existing variables.", name),
                         span,
                     );
@@ -366,7 +378,7 @@ impl TypeChecker {
                 // We already know new is not mutable (from Rule 2 check above), so new is 'let'.
                 // If existing is 'var' (mutable), then we are switching var -> let, which is disallowed.
                 else if existing_info.mutable {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypShadowingNotAllowed,
                         format!("Cannot shadow mutable variable '{}' with an immutable one in the same scope.", name),
                         span,
                     );
@@ -411,6 +423,7 @@ impl TypeChecker {
             self.resolve_type_expression(type_expr, context)
         } else {
             self.report_error(
+                DiagnosticCode::TypTypeInference,
                 format!("Cannot infer type for variable '{}'", decl.name),
                 span,
             );
@@ -442,6 +455,7 @@ impl TypeChecker {
 
                 if !compatible {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for variable '{}': expected {}, got {}",
                             decl.name, declared_type, inferred_type
@@ -456,7 +470,7 @@ impl TypeChecker {
                         // If inferred type is NOT optional (and not None), warn
                         if !matches!(inferred_type.kind, TypeKind::Option(_)) {
                             self.report_warning(
-                                "W0003",
+                                DiagnosticCode::TypUnnecessaryOptionalDeclaration,
                                 "Unnecessary Optional Declaration".to_string(),
                                 format!(
                                     "Unnecessary optional declaration for variable '{}'",

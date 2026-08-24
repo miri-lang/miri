@@ -11,7 +11,7 @@ fn test_runtime_error_reportable() {
     let diag = error.to_diagnostic();
 
     check_diagnostic(&diag, Severity::Error, true, false); // No span for runtime errors
-    assert_eq!(diag.code.unwrap(), "E0400");
+    assert_eq!(diag.code.unwrap(), "MER_RT_001");
 }
 
 #[test]

@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::TypeChecker;
@@ -214,6 +215,7 @@ impl TypeChecker {
             let ends_with_return = self.body_ends_with_return(body);
             if !ends_with_return {
                 self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Invalid return type: expected {}, got {}",
                         expected, implicit_return_type
@@ -225,6 +227,7 @@ impl TypeChecker {
             && !matches!(expected.kind, TypeKind::Void)
         {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
                     expected, implicit_return_type
@@ -260,6 +263,7 @@ impl TypeChecker {
             } else if !matches!(ret_ty.kind, TypeKind::Void) {
                 if !self.are_compatible(&candidate, &ret_ty, context) {
                     self.report_error(
+                        DiagnosticCode::TypClassInheritance,
                         format!(
                             "Incompatible return types in lambda: {} and {}",
                             candidate, ret_ty
@@ -269,6 +273,7 @@ impl TypeChecker {
                 }
             } else {
                 self.report_error(
+                    DiagnosticCode::TypClassInheritance,
                     format!(
                         "Incompatible return types in lambda: {} and {}",
                         candidate, ret_ty

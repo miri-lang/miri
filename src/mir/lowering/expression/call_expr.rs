@@ -6,6 +6,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{vec_dim, Type, TypeKind};
 use crate::ast::BuiltinCollectionKind;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::backend::gpu::GpuAtomicOp;
 use crate::mir::backend::BackendMetadata;
@@ -247,7 +248,8 @@ fn try_lower_gpu_shuffle_down(
                 Literal::Integer(i) => {
                     let val = i.to_i128() as u32;
                     if val > 128 {
-                        return Err(LoweringError::custom(
+                        return Err(LoweringError::coded(
+                            DiagnosticCode::TarShuffleOffsetTooLarge,
                             format!(
                                 "shuffle offset {} exceeds the maximum subgroup size (128)",
                                 val
@@ -403,7 +405,8 @@ fn try_lower_atomic_builtin(
 
     let buffer_ty = resolve_type(ctx.type_checker, &args[0]);
     if !is_atomic_u32_i32_buffer(&buffer_ty.kind) {
-        return Err(LoweringError::custom(
+        return Err(LoweringError::coded(
+            DiagnosticCode::TypAtomicBufferTypeMismatch,
             format!("{name} requires an Array<Atomic<u32|i32>, N> buffer, got {buffer_ty}"),
             expr.span,
             None,

@@ -12,6 +12,7 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
 use crate::ast::operator::BinaryOp;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::{BackendMetadata, GpuBodyMetadata};
@@ -1052,7 +1053,9 @@ fn assemble_reduce_launch_args(
 
     let arg_read_only = vec![true, false];
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+        .map_err(|e| {
+            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, span)
+        })?;
 
     Ok((scalar_ops, launch_args))
 }

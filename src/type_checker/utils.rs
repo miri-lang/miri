@@ -20,6 +20,7 @@ use crate::ast::types::{
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
@@ -1659,12 +1660,20 @@ impl TypeChecker {
                         return elem_ty;
                     }
                 }
-                self.report_error(format!("Type {} is not iterable", ty), span);
+                self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
+                    format!("Type {} is not iterable", ty),
+                    span,
+                );
                 Self::error_type()
             }
             TypeKind::Error => Self::error_type(),
             _ => {
-                self.report_error(format!("Type {} is not iterable", ty), span);
+                self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
+                    format!("Type {} is not iterable", ty),
+                    span,
+                );
                 Self::error_type()
             }
         }
@@ -1730,7 +1739,7 @@ impl TypeChecker {
         match self.extract_type_from_expression(expr) {
             Ok(t) => self.resolve_type_kind(t, expr, context),
             Err(msg) => {
-                self.report_error(msg, expr.span);
+                self.report_error(DiagnosticCode::TypTypeNotFound, msg, expr.span);
                 Self::error_type()
             }
         }
@@ -1762,7 +1771,11 @@ impl TypeChecker {
     fn resolve_set_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
         let resolved_inner = self.resolve_type_expression(&inner, context);
         if let TypeKind::Option(_) = resolved_inner.kind {
-            self.report_error("Set elements cannot be optional".to_string(), inner.span);
+            self.report_error(
+                DiagnosticCode::TypCollectionElementType,
+                "Set elements cannot be optional".to_string(),
+                inner.span,
+            );
         }
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
@@ -1778,7 +1791,11 @@ impl TypeChecker {
     ) -> Type {
         let rk = self.resolve_type_expression(&k, context);
         if let TypeKind::Option(_) = rk.kind {
-            self.report_error("Map keys cannot be optional".to_string(), k.span);
+            self.report_error(
+                DiagnosticCode::TypCollectionElementType,
+                "Map keys cannot be optional".to_string(),
+                k.span,
+            );
         }
         let rv = self.resolve_type_expression(&v, context);
         make_type(TypeKind::Custom(
@@ -1859,6 +1876,7 @@ impl TypeChecker {
                 return class_type.clone();
             }
             self.report_error(
+                DiagnosticCode::TypTraitDefinition,
                 "'Self' can only be used inside a class or trait".to_string(),
                 expr.span,
             );
@@ -1890,7 +1908,11 @@ impl TypeChecker {
             // we check its top-level visibility now.
             if let Some(sym) = self.type_table.global_scope.get(name) {
                 if !self.check_visibility(&sym.visibility, &sym.module) {
-                    self.report_error(format!("Type '{}' is not visible", name), expr.span);
+                    self.report_error(
+                        DiagnosticCode::TypNameNotVisible,
+                        format!("Type '{}' is not visible", name),
+                        expr.span,
+                    );
                     return Self::error_type();
                 }
             }
@@ -1947,7 +1969,11 @@ impl TypeChecker {
         }
         let k = self.resolve_type_expression(&args[0], context);
         if let TypeKind::Option(_) = k.kind {
-            self.report_error("Map keys cannot be optional".to_string(), args[0].span);
+            self.report_error(
+                DiagnosticCode::TypCollectionElementType,
+                "Map keys cannot be optional".to_string(),
+                args[0].span,
+            );
         }
         let v = self.resolve_type_expression(&args[1], context);
         Some(make_type(TypeKind::Custom(
@@ -2008,7 +2034,11 @@ impl TypeChecker {
         }
         let t = self.resolve_type_expression(&args[0], context);
         if let TypeKind::Option(_) = t.kind {
-            self.report_error("Set elements cannot be optional".to_string(), args[0].span);
+            self.report_error(
+                DiagnosticCode::TypCollectionElementType,
+                "Set elements cannot be optional".to_string(),
+                args[0].span,
+            );
         }
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
@@ -2084,6 +2114,7 @@ impl TypeChecker {
             TypeDefinition::Generic(gen_def) => {
                 if resolved_args.is_some() {
                     self.report_error(
+                        DiagnosticCode::TypGenericArgumentCount,
                         "Generic type parameter cannot have generic arguments".to_string(),
                         expr.span,
                     );
@@ -2166,7 +2197,7 @@ impl TypeChecker {
                 name, expected, provided
             )
         };
-        self.report_error(message, expr.span);
+        self.report_error(DiagnosticCode::TypGenericArgumentCount, message, expr.span);
     }
 
     /// Reports an unknown type error with suggestions.
@@ -2192,12 +2223,17 @@ impl TypeChecker {
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
+                DiagnosticCode::TypTypeNotFound,
                 format!("Unknown type: {}", name),
                 expr.span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
-            self.report_error(format!("Unknown type: {}", name), expr.span);
+            self.report_error(
+                DiagnosticCode::TypTypeNotFound,
+                format!("Unknown type: {}", name),
+                expr.span,
+            );
         }
     }
 
@@ -2388,26 +2424,34 @@ impl TypeChecker {
         }
     }
 
-    pub(crate) fn report_error(&mut self, message: String, span: Span) {
+    /// Records a type error under `code`. Every diagnosis must name the registry
+    /// family it belongs to, so a new call site cannot go out uncoded.
+    pub(crate) fn report_error(&mut self, code: DiagnosticCode, message: String, span: Span) {
         if self.suppress_diagnostics {
             return;
         }
         let key = (message.clone(), span);
         if self.diagnostics.mark_reported(key) {
-            let mut err = TypeError::custom(message, span, None);
+            let mut err = TypeError::coded(code, message, span, None);
             err.source_override = self.modules.current_source_override.clone();
             self.diagnostics.push_error(err);
         }
     }
 
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
-    pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
+    pub(crate) fn report_error_with_help(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: String,
+    ) {
         if self.suppress_diagnostics {
             return;
         }
         let key = (message.clone(), span);
         if self.diagnostics.mark_reported(key) {
-            let mut err = TypeError::custom(message, span, Some(help));
+            let mut err = TypeError::coded(code, message, span, Some(help));
             err.source_override = self.modules.current_source_override.clone();
             self.diagnostics.push_error(err);
         }
@@ -2429,9 +2473,11 @@ impl TypeChecker {
     }
 
     /// Reports a type warning with an error code, title, message, and help text.
+    /// Records a warning under `code`. Typed for the same reason errors are:
+    /// a mistyped code string would otherwise ship silently.
     pub(crate) fn report_warning(
         &mut self,
-        code: &'static str,
+        code: DiagnosticCode,
         title: String,
         message: String,
         span: Span,
@@ -2443,7 +2489,7 @@ impl TypeChecker {
         use crate::error::diagnostic::{Diagnostic, Severity};
         self.diagnostics.push_warning(Diagnostic {
             severity: Severity::Warning,
-            code: Some(code),
+            code: Some(code.as_str()),
             title,
             message,
             span: Some(span),

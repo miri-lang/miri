@@ -129,7 +129,7 @@ fn main()
     let codes: Vec<&str> = warnings.iter().filter_map(|w| w.code).collect();
     assert_eq!(
         codes,
-        vec!["W0002"],
+        vec!["MER_TYP_024"],
         "the decrement warning must survive the failing check, not be dropped with it"
     );
     assert_eq!(
@@ -156,7 +156,7 @@ fn main()
         .iter()
         .filter_map(|w| w.code)
         .collect();
-    assert_eq!(codes, vec!["W0002"]);
+    assert_eq!(codes, vec!["MER_TYP_024"]);
 }
 
 #[test]

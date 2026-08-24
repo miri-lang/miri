@@ -46,6 +46,7 @@ use crate::ast::factory as ast_factory;
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -75,7 +76,7 @@ impl TypeChecker {
         let right_ty = self.infer_expression(right, context);
 
         if let Some(error) = self.detect_residency_mismatch(left, op, right, context) {
-            self.report_error(error, span);
+            self.report_error(DiagnosticCode::TarGpuResidencyViolation, error, span);
             return ast_factory::make_type(TypeKind::Error);
         }
 
@@ -88,7 +89,11 @@ impl TypeChecker {
                 _ => false,
             };
             if is_zero {
-                self.report_error("Division by zero".to_string(), right.span);
+                self.report_error(
+                    DiagnosticCode::TypConstEvalArithmetic,
+                    "Division by zero".to_string(),
+                    right.span,
+                );
                 return ast_factory::make_type(TypeKind::Error);
             }
         }
@@ -113,7 +118,7 @@ impl TypeChecker {
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {
-                self.report_error(msg, span);
+                self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
                 ast_factory::make_type(TypeKind::Error)
             }
         }
@@ -192,6 +197,7 @@ impl TypeChecker {
 
         if !self.are_compatible(&lhs_type, &rhs_type, context) {
             self.report_error(
+                DiagnosticCode::TypImmutabilityViolation,
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
                     rhs_type, lhs_type
@@ -233,7 +239,11 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let ExpressionKind::Identifier(name, _) = &id_expr.node else {
-            self.report_error("Invalid assignment target".to_string(), span);
+            self.report_error(
+                DiagnosticCode::TypImmutabilityViolation,
+                "Invalid assignment target".to_string(),
+                span,
+            );
             return ast_factory::make_type(TypeKind::Error);
         };
         if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
@@ -242,7 +252,7 @@ impl TypeChecker {
             } else {
                 format!("Cannot assign to immutable variable '{}'", name)
             };
-            self.report_error(msg, span);
+            self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span);
         }
         self.infer_identifier(name, id_expr.span, context)
     }
@@ -258,6 +268,7 @@ impl TypeChecker {
         };
         if !self.is_mutable_expression(obj, context) {
             self.report_error(
+                DiagnosticCode::TypImmutabilityViolation,
                 "Cannot assign to field of immutable variable".to_string(),
                 span,
             );
@@ -276,6 +287,7 @@ impl TypeChecker {
         };
         if !self.is_mutable_expression(obj, context) {
             self.report_error(
+                DiagnosticCode::TypImmutabilityViolation,
                 "Cannot assign to element of immutable variable".to_string(),
                 span,
             );
@@ -289,7 +301,11 @@ impl TypeChecker {
         }
         if let ExpressionKind::Literal(lit) = &rhs.node {
             if lit.is_zero() {
-                self.report_error("Division by zero".to_string(), rhs.span);
+                self.report_error(
+                    DiagnosticCode::TypConstEvalArithmetic,
+                    "Division by zero".to_string(),
+                    rhs.span,
+                );
             }
         }
     }

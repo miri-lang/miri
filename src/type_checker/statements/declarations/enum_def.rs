@@ -6,6 +6,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::TypeKind;
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::attributes;
 use crate::type_checker::context::{
     Context, EnumDefinition, GenericDefinition, MethodInfo, SymbolInfo, TypeDefinition,
@@ -29,7 +30,11 @@ impl TypeChecker {
         let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
             n.clone()
         } else {
-            self.report_error("Invalid enum name".to_string(), name_expr.span);
+            self.report_error(
+                DiagnosticCode::TypEnumDefinition,
+                "Invalid enum name".to_string(),
+                name_expr.span,
+            );
             return;
         };
 
@@ -41,6 +46,7 @@ impl TypeChecker {
             };
             if !is_placeholder {
                 self.report_error(
+                    DiagnosticCode::TypTypeAlreadyDefined,
                     format!("Type '{}' is already defined", name),
                     name_expr.span,
                 );
@@ -137,12 +143,17 @@ impl TypeChecker {
                     variant_map.insert(variant_name.clone(), types);
                 } else {
                     self.report_error(
+                        DiagnosticCode::TypEnumVariant,
                         "Invalid enum variant name".to_string(),
                         variant_name_expr.span,
                     );
                 }
             } else {
-                self.report_error("Invalid enum variant definition".to_string(), variant.span);
+                self.report_error(
+                    DiagnosticCode::TypEnumVariant,
+                    "Invalid enum variant definition".to_string(),
+                    variant.span,
+                );
             }
         }
         variant_map
@@ -174,7 +185,7 @@ impl TypeChecker {
 
                 // Check for collision with variant names if this is a static method
                 if decl.properties.is_static && variants.contains_key(&decl.name) {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypEnumVariant,
                         format!(
                             "Static method '{}' has the same name as an enum variant - collision between static method and variant",
                             decl.name
@@ -188,6 +199,7 @@ impl TypeChecker {
                 if decl.properties.is_static {
                     if decl.properties.is_async {
                         self.report_error(
+                            DiagnosticCode::TypStaticMethodRestriction,
                             "Static methods cannot be async".to_string(),
                             method_stmt.span,
                         );
@@ -195,6 +207,7 @@ impl TypeChecker {
                     }
                     if decl.properties.is_gpu {
                         self.report_error(
+                            DiagnosticCode::TarGpuCodeRestriction,
                             "Static methods cannot be GPU kernels".to_string(),
                             method_stmt.span,
                         );
@@ -203,6 +216,7 @@ impl TypeChecker {
                     // Reject `self` as a parameter in static methods
                     if !decl.params.is_empty() && decl.params[0].name == "self" {
                         self.report_error(
+                            DiagnosticCode::TypStaticMethodRestriction,
                             "Static methods cannot have a 'self' parameter".to_string(),
                             method_stmt.span,
                         );

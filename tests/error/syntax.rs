@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use miri::diagnostics::DiagnosticCode;
+use std::str::FromStr;
+
 use super::utils::check_diagnostic;
 use miri::error::diagnostic::{Reportable, Severity};
 use miri::error::syntax::{find_line_info, Span, SyntaxErrorKind};
@@ -12,9 +15,11 @@ fn test_syntax_error_reportable() {
     let diag = error.to_diagnostic();
 
     check_diagnostic(&diag, Severity::Error, true, true);
+    let code = diag.code.expect("syntax errors always carry a code");
+    assert_eq!(code, DiagnosticCode::LexInvalidToken.as_str());
     assert!(
-        diag.code.unwrap().starts_with("E"),
-        "Syntax error code should start with E"
+        DiagnosticCode::from_str(code).is_ok(),
+        "emitted code {code} is not in the registry"
     );
 }
 
@@ -24,7 +29,6 @@ fn test_syntax_error_all_variants_have_codes() {
         (SyntaxErrorKind::InvalidToken, Span::new(0, 1)),
         (SyntaxErrorKind::UnclosedMultilineComment, Span::new(0, 5)),
         (SyntaxErrorKind::IndentationMismatch, Span::new(0, 1)),
-        (SyntaxErrorKind::UnclosedStringLiteral, Span::new(0, 5)),
         (
             SyntaxErrorKind::UnexpectedToken {
                 expected: "foo".to_string(),
@@ -33,8 +37,6 @@ fn test_syntax_error_all_variants_have_codes() {
             Span::new(0, 3),
         ),
         (SyntaxErrorKind::UnexpectedEOF, Span::new(0, 0)),
-        (SyntaxErrorKind::InvalidAssignmentTarget, Span::new(0, 3)),
-        (SyntaxErrorKind::IntegerLiteralOverflow, Span::new(0, 10)),
     ];
 
     for (kind, span) in variants {

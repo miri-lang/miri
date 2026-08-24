@@ -49,6 +49,7 @@ use crate::ast::types::{
     WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -77,6 +78,7 @@ impl TypeChecker {
             if let Some(name) = self.gpu_resident_identifier(obj, context) {
                 let name = name.to_string();
                 self.report_error_with_help(
+                    DiagnosticCode::TarGpuResidencyViolation,
                     format!(
                         "cannot read element of gpu-resident '{name}' from host context; \
                          a per-element read would require a readback"
@@ -102,6 +104,7 @@ impl TypeChecker {
                         let range_inner = self.resolve_type_expression(&args[0], context);
                         if !matches!(range_inner.kind, TypeKind::Int) {
                             self.report_error(
+                                DiagnosticCode::TypSliceOperation,
                                 "Slice range must be of integer type".to_string(),
                                 index.span,
                             );
@@ -147,7 +150,11 @@ impl TypeChecker {
                 self.infer_index_with_range_tuple(elements, span, context)
             }
             _ => {
-                self.report_error(format!("Type {} is not sliceable", obj_type), span);
+                self.report_error(
+                    DiagnosticCode::TypSliceOperation,
+                    format!("Type {} is not sliceable", obj_type),
+                    span,
+                );
                 make_type(TypeKind::Error)
             }
         }
@@ -222,7 +229,11 @@ impl TypeChecker {
                 Some(vec![self.create_type_expression(first)]),
             ))
         } else {
-            self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
+            self.report_error(
+                DiagnosticCode::TypSliceOperation,
+                "Cannot slice heterogeneous tuple".to_string(),
+                span,
+            );
             make_type(TypeKind::Error)
         }
     }
@@ -255,11 +266,13 @@ impl TypeChecker {
         if let Some(start_val) = Self::try_eval_const_int_with_context(start, context) {
             if start_val < 0 {
                 self.report_error(
+                    DiagnosticCode::TypIndexOperation,
                     "Slice start index must be a non-negative integer".to_string(),
                     start.span,
                 );
             } else if start_val > size {
                 self.report_error(
+                    DiagnosticCode::TypIndexOperation,
                     format!(
                         "Slice start index out of bounds: index {} but array has {} elements",
                         start_val, size
@@ -275,11 +288,13 @@ impl TypeChecker {
         if let Some(end_val) = Self::try_eval_const_int_with_context(end_expr, context) {
             if end_val < 0 {
                 self.report_error(
+                    DiagnosticCode::TypIndexOperation,
                     "Slice end index must be a non-negative integer".to_string(),
                     end_expr.span,
                 );
             } else if end_val > size {
                 self.report_error(
+                    DiagnosticCode::TypIndexOperation,
                     format!(
                         "Slice end index out of bounds: index {} but array has {} elements",
                         end_val, size
@@ -304,6 +319,7 @@ impl TypeChecker {
         ) {
             if s > e {
                 self.report_error(
+                    DiagnosticCode::TypSliceOperation,
                     format!(
                         "Slice start index ({}) is greater than end index ({})",
                         s, e
@@ -345,14 +361,22 @@ impl TypeChecker {
             }
             TypeKind::String => {
                 if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error("String index must be an integer".to_string(), index.span);
+                    self.report_error(
+                        DiagnosticCode::TypIndexOperation,
+                        "String index must be an integer".to_string(),
+                        index.span,
+                    );
                     return make_type(TypeKind::Error);
                 }
                 make_type(TypeKind::String)
             }
             TypeKind::Error => make_type(TypeKind::Error),
             _ => {
-                self.report_error(format!("Type {} is not indexable", obj_type), span);
+                self.report_error(
+                    DiagnosticCode::TypIndexOperation,
+                    format!("Type {} is not indexable", obj_type),
+                    span,
+                );
                 make_type(TypeKind::Error)
             }
         }
@@ -368,7 +392,11 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if !matches!(index_type.kind, TypeKind::Int) {
-            self.report_error(format!("{} index must be an integer", name), index.span);
+            self.report_error(
+                DiagnosticCode::TypIndexOperation,
+                format!("{} index must be an integer", name),
+                index.span,
+            );
             return make_type(TypeKind::Error);
         }
 
@@ -397,6 +425,7 @@ impl TypeChecker {
 
         if idx_val < 0 {
             self.report_error(
+                DiagnosticCode::TypIndexOperation,
                 "Index must be a non-negative integer".to_string(),
                 index_expr.span,
             );
@@ -411,6 +440,7 @@ impl TypeChecker {
         let sz = size as usize;
         if idx >= sz {
             self.report_error(
+                DiagnosticCode::TypIndexOperation,
                 format!(
                     "Index out of bounds: index {} but collection has {} elements",
                     idx, sz
@@ -506,7 +536,11 @@ impl TypeChecker {
             if args.len() >= 2 {
                 let key_type = self.resolve_type_expression(&args[0], context);
                 if !self.are_compatible(&key_type, index_type, context) {
-                    self.report_error("Invalid map key type".to_string(), index.span);
+                    self.report_error(
+                        DiagnosticCode::TypCollectionElementType,
+                        "Invalid map key type".to_string(),
+                        index.span,
+                    );
                     return make_type(TypeKind::Error);
                 }
                 return self.resolve_type_expression(&args[1], context);
@@ -551,18 +585,30 @@ impl TypeChecker {
 
         if is_homogeneous {
             if !matches!(index_type.kind, TypeKind::Int) {
-                self.report_error("Tuple index must be an integer".to_string(), index.span);
+                self.report_error(
+                    DiagnosticCode::TypIndexOperation,
+                    "Tuple index must be an integer".to_string(),
+                    index.span,
+                );
                 return make_type(TypeKind::Error);
             }
             if element_type_exprs.is_empty() {
-                self.report_error("Tuple index out of bounds (empty tuple)".to_string(), span);
+                self.report_error(
+                    DiagnosticCode::TypIndexOperation,
+                    "Tuple index out of bounds (empty tuple)".to_string(),
+                    span,
+                );
                 return make_type(TypeKind::Error);
             }
 
             if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
                 let idx = val.to_usize();
                 if idx >= element_type_exprs.len() {
-                    self.report_error("Tuple index out of bounds".to_string(), span);
+                    self.report_error(
+                        DiagnosticCode::TypIndexOperation,
+                        "Tuple index out of bounds".to_string(),
+                        span,
+                    );
                     return make_type(TypeKind::Error);
                 }
             }
@@ -574,11 +620,16 @@ impl TypeChecker {
             if idx < element_type_exprs.len() {
                 self.resolve_type_expression(&element_type_exprs[idx], context)
             } else {
-                self.report_error("Tuple index out of bounds".to_string(), span);
+                self.report_error(
+                    DiagnosticCode::TypIndexOperation,
+                    "Tuple index out of bounds".to_string(),
+                    span,
+                );
                 make_type(TypeKind::Error)
             }
         } else {
             self.report_error(
+                DiagnosticCode::TypIndexOperation,
                 "Tuple index must be an integer literal for heterogeneous tuples".to_string(),
                 index.span,
             );
@@ -604,7 +655,7 @@ impl TypeChecker {
         if crate::type_checker::utils::is_gpu_compatible(&obj_type.kind) {
             return;
         }
-        self.report_error(
+        self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
             format!(
                 "Receiver of type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may appear as a member-access receiver inside a 'gpu fn'",
                 obj_type
@@ -656,7 +707,11 @@ impl TypeChecker {
                 if idx < element_types.len() {
                     return self.resolve_type_expression(&element_types[idx], context);
                 } else {
-                    self.report_error("Tuple index out of bounds".to_string(), span);
+                    self.report_error(
+                        DiagnosticCode::TypIndexOperation,
+                        "Tuple index out of bounds".to_string(),
+                        span,
+                    );
                     return make_type(TypeKind::Error);
                 }
             }
@@ -666,6 +721,7 @@ impl TypeChecker {
             name
         } else {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 "Member property must be an identifier".to_string(),
                 prop.span,
             );
@@ -709,7 +765,11 @@ impl TypeChecker {
                 self.infer_member_meta(inner_type, prop_name, span, context)
             }
             _ => {
-                self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                self.report_error(
+                    DiagnosticCode::TypFieldNotFound,
+                    format!("Type '{}' does not have members", obj_type),
+                    span,
+                );
                 make_type(TypeKind::Error)
             }
         }
@@ -754,6 +814,7 @@ impl TypeChecker {
             None => {
                 if let Some(module) = self.suggest_module_for_type(type_name) {
                     self.report_error_with_help(
+                        DiagnosticCode::TypFieldNotFound,
                         format!("Type '{}' does not have members", obj_type),
                         span,
                         format!(
@@ -762,7 +823,11 @@ impl TypeChecker {
                         ),
                     );
                 } else {
-                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                    self.report_error(
+                        DiagnosticCode::TypFieldNotFound,
+                        format!("Type '{}' does not have members", obj_type),
+                        span,
+                    );
                 }
                 Some(make_type(TypeKind::Error))
             }
@@ -782,6 +847,7 @@ impl TypeChecker {
             name.clone()
         } else {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 "Member property must be an identifier".to_string(),
                 prop.span,
             );
@@ -799,13 +865,18 @@ impl TypeChecker {
             .cloned()
         {
             if !self.check_visibility(&info.visibility, &info.module) {
-                self.report_error(format!("'{}' is not visible", prop_name), span);
+                self.report_error(
+                    DiagnosticCode::TypNameNotVisible,
+                    format!("'{}' is not visible", prop_name),
+                    span,
+                );
                 return make_type(TypeKind::Error);
             }
             return info.ty.clone();
         }
 
         self.report_error(
+            DiagnosticCode::TypUndefinedName,
             format!("'{}' is not defined in module '{}'", prop_name, module_path),
             span,
         );
@@ -850,6 +921,7 @@ impl TypeChecker {
             }
             TypeKind::Generic(name, None, _) => {
                 self.report_error(
+                    DiagnosticCode::TypGenericTypeStructure,
                     format!(
                         "Generic type '{}' without constraints has no known members",
                         name
@@ -994,7 +1066,11 @@ impl TypeChecker {
             def.fields.iter().find(|(n, _, _)| n == prop_name)
         {
             if !self.check_visibility(visibility, &def.module) {
-                self.report_error(format!("Field '{}' is not visible", prop_name), span);
+                self.report_error(
+                    DiagnosticCode::TypNameNotVisible,
+                    format!("Field '{}' is not visible", prop_name),
+                    span,
+                );
                 return make_type(TypeKind::Error);
             }
 
@@ -1019,12 +1095,14 @@ impl TypeChecker {
         let candidates: Vec<&str> = def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
             self.report_error_with_help(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field '{}'", type_name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
             self.report_error(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field '{}'", type_name, prop_name),
                 span,
             );
@@ -1130,6 +1208,7 @@ impl TypeChecker {
                     Some(name),
                 ) {
                     self.report_error(
+                        DiagnosticCode::TypNameNotVisible,
                         format!(
                             "Field '{}' of class '{}' is {:?} and cannot be accessed from here",
                             prop_name, search_class_def.name, field_info.visibility
@@ -1161,7 +1240,7 @@ impl TypeChecker {
             .map(|method_info| {
                 // Reject calling static methods on instances
                 if method_info.is_static {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypStaticMethodRestriction,
                         format!(
                             "Static method '{}' cannot be called on an instance. Use '{}.{}()' instead.",
                             prop_name, search_class_def.name, prop_name
@@ -1177,7 +1256,7 @@ impl TypeChecker {
                     context.current_class.as_deref(),
                     Some(name),
                 ) {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypNameNotVisible,
                         format!(
                             "Method '{}' of class '{}' is {:?} and cannot be accessed from here",
                             prop_name, search_class_def.name, method_info.visibility
@@ -1283,12 +1362,14 @@ impl TypeChecker {
 
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
             self.report_error_with_help(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field or method '{}'", name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
             self.report_error(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field or method '{}'", name, prop_name),
                 span,
             );
@@ -1533,12 +1614,14 @@ impl TypeChecker {
         let all_methods = self.collect_trait_methods_for_access(name);
         if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
             self.report_error_with_help(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Trait '{}' has no method '{}'", name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
             self.report_error(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Trait '{}' has no method '{}'", name, prop_name),
                 span,
             );
@@ -1575,6 +1658,7 @@ impl TypeChecker {
     ) -> Type {
         let Some(method_info) = enum_def.methods.get(prop_name) else {
             self.report_error(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Enum '{}' has no method '{}'", name, prop_name),
                 span,
             );
@@ -1678,6 +1762,7 @@ impl TypeChecker {
     ) -> Type {
         let TypeKind::Custom(name, _) = &inner_type.kind else {
             self.report_error(
+                DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' does not have static members", inner_type),
                 span,
             );
@@ -1707,6 +1792,7 @@ impl TypeChecker {
                         None,
                     ) {
                         self.report_error(
+                            DiagnosticCode::TypNameNotVisible,
                             format!(
                                 "Static method '{}' is {} and cannot be accessed",
                                 prop_name,
@@ -1766,6 +1852,7 @@ impl TypeChecker {
                         None, // No receiver object for static method access
                     ) {
                         self.report_error(
+                            DiagnosticCode::TypNameNotVisible,
                             format!(
                                 "Static method '{}' is {} and cannot be accessed",
                                 prop_name,
@@ -1802,7 +1889,7 @@ impl TypeChecker {
                         )),
                     })));
                 } else {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypNotCallable,
                         format!(
                             "Cannot call instance method '{}' on type (did you mean to create an instance?)",
                             prop_name
@@ -1815,6 +1902,7 @@ impl TypeChecker {
         }
 
         self.report_error(
+            DiagnosticCode::TypFieldNotFound,
             format!("Type '{}' does not have static members", name),
             span,
         );
@@ -1853,12 +1941,14 @@ impl TypeChecker {
         let candidates: Vec<&str> = def.variants.keys().map(|s| s.as_str()).collect();
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
             self.report_error_with_help(
+                DiagnosticCode::TypEnumVariant,
                 format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
             self.report_error(
+                DiagnosticCode::TypEnumVariant,
                 format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
                 span,
             );

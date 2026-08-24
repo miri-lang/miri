@@ -3,6 +3,7 @@
 
 //! Error types for MIR lowering.
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, BUG_REPORT_URL};
 use crate::error::syntax::Span;
 
@@ -48,7 +49,11 @@ pub enum LoweringErrorKind {
         field: String,
         struct_name: String,
     },
-    Custom {
+    /// A lowering error identified by a registry code, carrying the specific
+    /// message for this occurrence. The code names the family of failure; the
+    /// message describes the individual case within it.
+    Coded {
+        code: DiagnosticCode,
         message: String,
         help: Option<String>,
     },
@@ -59,7 +64,7 @@ impl LoweringErrorKind {
     pub fn properties(&self) -> ErrorProperties {
         match self {
             Self::UnsupportedExpression { desc } => {
-                ErrorProperties::simple("E0200", "Unsupported Expression")
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedExpression)
                     .with_message(format!("Unsupported expression: {}", desc))
                     .with_help(
                         "This expression is not yet supported by the compiler. \
@@ -67,7 +72,7 @@ impl LoweringErrorKind {
                     )
             }
             Self::UnsupportedStatement { desc } => {
-                ErrorProperties::simple("E0201", "Unsupported Statement")
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedStatement)
                     .with_message(format!("Unsupported statement: {}", desc))
                     .with_help(
                         "This statement is not yet supported by the compiler. \
@@ -75,39 +80,41 @@ impl LoweringErrorKind {
                     )
             }
             Self::UndefinedVariable { name } => {
-                ErrorProperties::simple("E0202", "Undefined Variable")
+                ErrorProperties::simple(DiagnosticCode::MirUndefinedVariable)
                     .with_message(format!("Undefined variable: {}", name))
                     .with_help("Ensure the variable is defined before use.")
             }
-            Self::TypeNotFound { .. } => ErrorProperties::simple("E0203", "Type Not Found")
+            Self::TypeNotFound { .. } => ErrorProperties::simple(DiagnosticCode::MirTypeNotFound)
                 .with_message(
                     "Could not determine the type of this expression. \
                      This is an internal compiler error — please report it.",
                 )
                 .with_help(format!("Please report this at {}", BUG_REPORT_URL)),
-            Self::BreakOutsideLoop => ErrorProperties::simple("E0204", "Break Outside Loop")
+            Self::BreakOutsideLoop => ErrorProperties::simple(DiagnosticCode::MirBreakOutsideLoop)
                 .with_message("break statement outside of loop")
                 .with_help("Move the break statement inside a loop."),
-            Self::ContinueOutsideLoop => ErrorProperties::simple("E0205", "Continue Outside Loop")
-                .with_message("continue statement outside of loop")
-                .with_help("Move the continue statement inside a loop."),
+            Self::ContinueOutsideLoop => {
+                ErrorProperties::simple(DiagnosticCode::MirContinueOutsideLoop)
+                    .with_message("continue statement outside of loop")
+                    .with_help("Move the continue statement inside a loop.")
+            }
             Self::UnsupportedLhs { desc } => {
-                ErrorProperties::simple("E0206", "Unsupported Left-Hand Side")
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedLeftHandSide)
                     .with_message(format!("Unsupported left-hand side: {}", desc))
                     .with_help("This expression cannot be assigned to.")
             }
             Self::UnsupportedOperator { op } => {
-                ErrorProperties::simple("E0207", "Unsupported Operator")
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedOperator)
                     .with_message(format!("Unsupported operator: {}", op))
                     .with_help("Supported operators: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||.")
             }
             Self::UnsupportedRangeType => {
-                ErrorProperties::simple("E0208", "Unsupported Range Type")
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedRangeType)
                     .with_message("Unsupported range type for loop")
                     .with_help("Use exclusive (..) or inclusive (..=) ranges.")
             }
             Self::InvalidGpuLaunchArgs { expected, got } => {
-                ErrorProperties::simple("E0209", "Invalid GPU Launch Arguments")
+                ErrorProperties::simple(DiagnosticCode::MirInvalidGpuLaunchArguments)
                     .with_message(format!(
                         "GPU launch expects {} arguments, got {}",
                         expected, got
@@ -116,23 +123,27 @@ impl LoweringErrorKind {
                         "GPU launch requires exactly 2 arguments: grid and block dimensions.",
                     )
             }
-            Self::UnsupportedType { desc } => ErrorProperties::simple("E0210", "Unsupported Type")
-                .with_message(format!("Unsupported type: {}", desc))
-                .with_help(
-                    "This type is not yet supported by the compiler. \
+            Self::UnsupportedType { desc } => {
+                ErrorProperties::simple(DiagnosticCode::MirUnsupportedType)
+                    .with_message(format!("Unsupported type: {}", desc))
+                    .with_help(
+                        "This type is not yet supported by the compiler. \
                      Use a supported type instead.",
-                ),
+                    )
+            }
             Self::MissingStructField { field, struct_name } => {
-                ErrorProperties::simple("E0211", "Missing Struct Field")
+                ErrorProperties::simple(DiagnosticCode::MirMissingStructField)
                     .with_message(format!(
                         "Missing field '{}' in struct '{}' constructor",
                         field, struct_name
                     ))
                     .with_help("Provide a value for all required struct fields.")
             }
-            Self::Custom { message, .. } => {
-                ErrorProperties::simple("E0299", "Lowering Error").with_message(message.clone())
-            }
+            Self::Coded {
+                code,
+                message,
+                help,
+            } => crate::error::diagnostic::coded_properties(*code, message, help),
         }
     }
 }
@@ -143,12 +154,33 @@ impl LoweringError {
         Self { kind, span }
     }
 
-    /// Creates a custom lowering error with a freeform message.
-    pub fn custom(message: String, span: Span, help: Option<String>) -> Self {
+    /// Creates a lowering error under the given registry code.
+    pub fn coded(code: DiagnosticCode, message: String, span: Span, help: Option<String>) -> Self {
         Self {
-            kind: LoweringErrorKind::Custom { message, help },
+            kind: LoweringErrorKind::Coded {
+                code,
+                message,
+                help,
+            },
             span,
         }
+    }
+
+    /// Creates a lowering error for a broken *internal* invariant.
+    ///
+    /// The user cannot act on these: they mean lowering produced something
+    /// malformed, so the only useful response is a bug report. The message is
+    /// marked as an internal compiler error and the help carries the report
+    /// URL, matching how [`LoweringErrorKind::TypeNotFound`] presents itself.
+    /// Routing every such site through this constructor is what stops the
+    /// marking from being forgotten at the next one.
+    pub fn internal(code: DiagnosticCode, message: impl std::fmt::Display, span: Span) -> Self {
+        Self::coded(
+            code,
+            format!("internal compiler error: {}", message),
+            span,
+            Some(format!("Please report this at {}", BUG_REPORT_URL)),
+        )
     }
 
     /// Creates an unsupported expression error.
@@ -250,11 +282,7 @@ impl LoweringError {
 
 impl Reportable for LoweringError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let mut props = self.kind.properties();
-        if let LoweringErrorKind::Custom { help, .. } = &self.kind {
-            props.help = help.clone();
-        }
-        Diagnostic::from_props(props, Some(self.span), None)
+        Diagnostic::from_props(self.kind.properties(), Some(self.span), None)
     }
 }
 

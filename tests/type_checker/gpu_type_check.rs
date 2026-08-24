@@ -181,14 +181,14 @@ fn test_gpu_context_alias_emits_one_deprecation_per_use() {
 gpu fn my_kernel()
     let tx = gpu_context.thread_idx.x
 ";
-    assert_eq!(count_warnings_with_code(one_use, "W0004"), 1);
+    assert_eq!(count_warnings_with_code(one_use, "MER_NAM_001"), 1);
 
     let two_uses = "
 gpu fn my_kernel()
     let tx = gpu_context.thread_idx.x
     let bx = gpu_context.block_idx.x
 ";
-    assert_eq!(count_warnings_with_code(two_uses, "W0004"), 2);
+    assert_eq!(count_warnings_with_code(two_uses, "MER_NAM_001"), 2);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn test_kernel_identifier_emits_no_deprecation() {
 gpu fn my_kernel()
     let tx = kernel.thread_idx.x
 ";
-    assert_eq!(count_warnings_with_code(input, "W0004"), 0);
+    assert_eq!(count_warnings_with_code(input, "MER_NAM_001"), 0);
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn host()
     let gpu_context = 5
     let x = gpu_context + 1
 ";
-    assert_eq!(count_warnings_with_code(input, "W0004"), 0);
+    assert_eq!(count_warnings_with_code(input, "MER_NAM_001"), 0);
 }
 
 #[test]
