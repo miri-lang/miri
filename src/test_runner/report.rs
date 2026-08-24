@@ -24,14 +24,6 @@ pub fn format_pretty(summary: &TestSummary) -> String {
     output
 }
 
-/// Render a run as JSON for a machine.
-pub fn format_json(summary: &TestSummary) -> String {
-    // A summary is plain data — strings, integers and simple enums — so
-    // serialization has no failure mode worth propagating to the caller.
-    serde_json::to_string_pretty(summary)
-        .unwrap_or_else(|error| format!("{{\"error\":\"could not serialize: {}\"}}", error))
-}
-
 /// The trailing verdict on one test's line.
 fn status_line(result: &TestResult) -> String {
     match result.outcome {
@@ -203,18 +195,5 @@ mod tests {
         assert!(rendered.contains("---- bad.mi ----"));
         assert!(rendered.contains("test result: FAILED."));
         assert!(rendered.contains("1 file(s) not run"));
-    }
-
-    #[test]
-    fn json_carries_the_counts_and_outcomes() {
-        let rendered = format_json(&summary_of(
-            vec![
-                result("test_a", Outcome::Passed, None),
-                result("test_b", Outcome::ExpectedFailure, Some("known")),
-            ],
-            Vec::new(),
-        ));
-        assert!(rendered.contains("\"passed\": 2"));
-        assert!(rendered.contains("\"expected_failure\""));
     }
 }

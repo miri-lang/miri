@@ -10,6 +10,7 @@
 
 pub use crate::diagnostics::Severity;
 
+use crate::diagnostics::json::{JsonDiagnostic, JsonRelated};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 
@@ -44,6 +45,10 @@ pub struct Diagnostic {
     /// Optional (file_path, source_text) for errors originating from imported files.
     /// When present, the formatter uses this source instead of the main file's source.
     pub source_override: Option<(String, String)>,
+    /// Expected type/value for type mismatch errors.
+    pub expected: Option<String>,
+    /// Actual type/value for type mismatch errors.
+    pub actual: Option<String>,
 }
 
 /// Consolidated error properties to keep widely scattered match statements in check.
@@ -147,6 +152,8 @@ impl Diagnostic {
             help: props.help,
             notes: Vec::new(),
             source_override,
+            expected: None,
+            actual: None,
         }
     }
 }
@@ -162,6 +169,8 @@ pub struct DiagnosticBuilder {
     help: Option<String>,
     notes: Vec<String>,
     source_override: Option<(String, String)>,
+    expected: Option<String>,
+    actual: Option<String>,
 }
 
 impl DiagnosticBuilder {
@@ -176,6 +185,8 @@ impl DiagnosticBuilder {
             help: None,
             notes: Vec::new(),
             source_override: None,
+            expected: None,
+            actual: None,
         }
     }
 
@@ -230,6 +241,18 @@ impl DiagnosticBuilder {
         self
     }
 
+    /// Set the expected value for type mismatch errors.
+    pub fn expected(mut self, expected: impl Into<String>) -> Self {
+        self.expected = Some(expected.into());
+        self
+    }
+
+    /// Set the actual value for type mismatch errors.
+    pub fn actual(mut self, actual: impl Into<String>) -> Self {
+        self.actual = Some(actual.into());
+        self
+    }
+
     /// Build the diagnostic.
     pub fn build(self) -> Diagnostic {
         Diagnostic {
@@ -241,6 +264,8 @@ impl DiagnosticBuilder {
             help: self.help,
             notes: self.notes,
             source_override: self.source_override,
+            expected: self.expected,
+            actual: self.actual,
         }
     }
 }
@@ -256,5 +281,55 @@ pub trait Reportable {
     /// Format the diagnostic for terminal output.
     fn report(&self, source: &str) -> String {
         self.to_diagnostic().format(source)
+    }
+}
+
+/// Convert a Diagnostic to its JSON representation.
+///
+/// The `source` parameter is the main source file's content; when a diagnostic
+/// has a `source_override`, line/column are computed against that override
+/// instead. The `source_path` is used as the file path for diagnostics that
+/// do not carry an override.
+pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> JsonDiagnostic {
+    use crate::error::format::effective_source_and_label;
+
+    let (effective_source, file_label) = effective_source_and_label(diag, source, source_path);
+
+    let (line, column, length) = if let Some(span) = diag.span {
+        let (line_num, col_num, _) =
+            crate::error::syntax::find_line_info(effective_source, span.start);
+        let len = span.end.saturating_sub(span.start);
+        (Some(line_num), Some(col_num), Some(len))
+    } else {
+        (None, None, None)
+    };
+
+    let related = diag
+        .notes
+        .iter()
+        .map(|note| JsonRelated {
+            severity: "note".to_string(),
+            message: note.clone(),
+            code: None,
+            path: None,
+            line: None,
+            column: None,
+        })
+        .collect();
+
+    JsonDiagnostic {
+        severity: diag.severity.as_str().to_string(),
+        code: diag.code.map(|c| c.to_string()),
+        message: diag.message.clone(),
+        path: file_label.map(|p| p.to_string()),
+        line,
+        column,
+        length,
+        expected: diag.expected.clone(),
+        actual: diag.actual.clone(),
+        help: diag.help.clone(),
+        fix_safety: None,
+        repair: None,
+        related,
     }
 }

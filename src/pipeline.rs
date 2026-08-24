@@ -609,13 +609,19 @@ impl Pipeline {
         Ok(PipelineResult { ast, type_checker })
     }
 
-    /// Compile and execute the source, returning the process exit code.
+    /// Compile and execute the source, capturing and returning output.
+    ///
+    /// Returns a tuple of (exit_code, stdout_bytes, stderr_bytes).
     ///
     /// `program_args` become the spawned program's `argv[1..]`; the program path
     /// itself is `argv[0]`, as for any executable. They are an input to this one
     /// execution rather than to compilation, which is why they are a parameter
     /// instead of builder state like the source directory or the verifier flag.
-    pub fn run(&self, source: &str, program_args: &[String]) -> Result<i32, CompilerError> {
+    pub fn run_and_capture(
+        &self,
+        source: &str,
+        program_args: &[String],
+    ) -> Result<(i32, Vec<u8>, Vec<u8>), CompilerError> {
         let temp_dir = tempfile::tempdir()
             .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
         let executable_path = temp_dir.path().join("program");
@@ -650,14 +656,31 @@ impl Pipeline {
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
-        if !output.stdout.is_empty() {
-            print!("{}", String::from_utf8_lossy(&output.stdout));
+        let exit_code = output.status.code().unwrap_or(-1);
+        Ok((exit_code, output.stdout, output.stderr))
+    }
+
+    /// Compile and execute the source, returning the process exit code.
+    ///
+    /// In pretty mode, this prints stdout and stderr directly, matching
+    /// traditional program output. The returned exit code is from the
+    /// spawned process.
+    ///
+    /// `program_args` become the spawned program's `argv[1..]`; the program path
+    /// itself is `argv[0]`, as for any executable. They are an input to this one
+    /// execution rather than to compilation, which is why they are a parameter
+    /// instead of builder state like the source directory or the verifier flag.
+    pub fn run(&self, source: &str, program_args: &[String]) -> Result<i32, CompilerError> {
+        let (exit_code, stdout, stderr) = self.run_and_capture(source, program_args)?;
+
+        if !stdout.is_empty() {
+            print!("{}", String::from_utf8_lossy(&stdout));
         }
-        if !output.stderr.is_empty() {
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        if !stderr.is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&stderr));
         }
 
-        Ok(output.status.code().unwrap_or(-1))
+        Ok(exit_code)
     }
 
     /// Compile source code to a native executable, returning the artifact path.

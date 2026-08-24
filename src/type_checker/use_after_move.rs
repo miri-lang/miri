@@ -277,6 +277,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                     ),
                     notes: Vec::new(),
                     source_override: None,
+                    expected: None,
+                    actual: None,
                 });
             }
         }

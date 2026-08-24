@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::diagnostic::{Diagnostic, Reportable, Severity, BUG_REPORT_URL};
-use crate::error::format::format_diagnostic;
+use crate::error::format::{format_diagnostic, format_diagnostic_with_color, ColorChoice};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
@@ -18,6 +18,8 @@ fn simple_diag(title: &str, message: String, help: Option<String>) -> Diagnostic
         help,
         notes: Vec::new(),
         source_override: None,
+        expected: None,
+        actual: None,
     }
 }
 
@@ -62,6 +64,53 @@ pub enum CompilerError {
 }
 
 impl CompilerError {
+    /// Converts this error into a Vec of Diagnostics.
+    ///
+    /// This is the conversion funnel point: every CompilerError variant maps to
+    /// one or more Diagnostic values. An EXHAUSTIVE match is required (no `_ =>`).
+    pub fn to_diagnostics(&self) -> Vec<Diagnostic> {
+        match self {
+            CompilerError::Lexer(e) | CompilerError::Parser(e) => {
+                vec![e.to_diagnostic()]
+            }
+            CompilerError::Type(e) => vec![e.to_diagnostic()],
+            CompilerError::TypeErrors { errors, warnings } => {
+                let mut diags: Vec<Diagnostic> = warnings.clone();
+                diags.extend(errors.iter().map(|e| e.to_diagnostic()));
+                diags
+            }
+            CompilerError::Lowering(e) => vec![e.to_diagnostic()],
+            CompilerError::Io(e) => {
+                vec![simple_diag("I/O Error", format!("{}", e), None)]
+            }
+            CompilerError::FileNotFound(path) => vec![simple_diag(
+                "File Not Found",
+                format!("File not found: {}", path),
+                None,
+            )],
+            CompilerError::Internal(msg) => vec![simple_diag(
+                "Internal Compiler Error",
+                msg.clone(),
+                Some(format!("Please report this at {}", BUG_REPORT_URL)),
+            )],
+            CompilerError::Codegen(msg) => {
+                vec![simple_diag("Code Generation Error", msg.clone(), None)]
+            }
+            CompilerError::Runtime(msg) => {
+                vec![simple_diag("Runtime Error", msg.clone(), None)]
+            }
+            CompilerError::MirVerification(msg) => vec![simple_diag(
+                "MIR Verification Error",
+                msg.clone(),
+                Some(
+                    "This indicates a bug in MIR lowering or Perceus RC insertion. \
+                     Please report it."
+                        .to_string(),
+                ),
+            )],
+        }
+    }
+
     /// Formats this error for terminal display using the given source code.
     ///
     /// All variants are routed through [`format_diagnostic_full`] to ensure
@@ -74,39 +123,27 @@ impl CompilerError {
     /// in error locations when no per-diagnostic `source_override` is set.
     pub fn report_with_path(&self, source: &str, source_path: Option<&str>) -> String {
         let fmt = |diag: &Diagnostic| format_diagnostic(source, diag, source_path);
-        match self {
-            CompilerError::Lexer(e) | CompilerError::Parser(e) => fmt(&e.to_diagnostic()),
-            CompilerError::Type(e) => fmt(&e.to_diagnostic()),
-            CompilerError::TypeErrors { errors, warnings } => {
-                let mut parts: Vec<String> = warnings.iter().map(&fmt).collect();
-                parts.extend(errors.iter().map(|e| fmt(&e.to_diagnostic())));
-                parts.join("\n")
-            }
-            CompilerError::Lowering(e) => fmt(&e.to_diagnostic()),
-            CompilerError::Io(e) => fmt(&simple_diag("I/O Error", format!("{}", e), None)),
-            CompilerError::FileNotFound(path) => fmt(&simple_diag(
-                "File Not Found",
-                format!("File not found: {}", path),
-                None,
-            )),
-            CompilerError::Internal(msg) => fmt(&simple_diag(
-                "Internal Compiler Error",
-                msg.clone(),
-                Some(format!("Please report this at {}", BUG_REPORT_URL)),
-            )),
-            CompilerError::Codegen(msg) => {
-                fmt(&simple_diag("Code Generation Error", msg.clone(), None))
-            }
-            CompilerError::Runtime(msg) => fmt(&simple_diag("Runtime Error", msg.clone(), None)),
-            CompilerError::MirVerification(msg) => fmt(&simple_diag(
-                "MIR Verification Error",
-                msg.clone(),
-                Some(
-                    "This indicates a bug in MIR lowering or Perceus RC insertion. \
-                     Please report it."
-                        .to_string(),
-                ),
-            )),
-        }
+        self.to_diagnostics()
+            .iter()
+            .map(&fmt)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Like [`report_with_path`](Self::report_with_path), but respects the given color choice.
+    pub fn report_with_path_and_color(
+        &self,
+        source: &str,
+        source_path: Option<&str>,
+        color_choice: ColorChoice,
+    ) -> String {
+        let fmt = |diag: &Diagnostic| {
+            format_diagnostic_with_color(source, diag, source_path, color_choice)
+        };
+        self.to_diagnostics()
+            .iter()
+            .map(&fmt)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

@@ -7,7 +7,9 @@
 //! It is the inner layer; `src/error/` imports from here, never the reverse.
 
 pub mod codes;
+pub mod json;
 pub mod severity;
 
 pub use codes::DiagnosticCode;
+pub use json::DiagnosticsEnvelope;
 pub use severity::Severity;

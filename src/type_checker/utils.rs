@@ -2496,6 +2496,8 @@ impl TypeChecker {
             help,
             notes: Vec::new(),
             source_override: self.modules.current_source_override.clone(),
+            expected: None,
+            actual: None,
         });
     }
 

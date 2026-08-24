@@ -109,6 +109,39 @@ pub enum TypeErrorKind {
 }
 
 impl TypeErrorKind {
+    /// Returns the expected and actual values for type mismatch errors, if applicable.
+    ///
+    /// Note: Family-coded variants (Coded and ParseError) do not carry structured
+    /// expected/actual values; they return (None, None) even when the message text
+    /// may describe a type mismatch. See notes/PLAN.md for follow-up to extract
+    /// structured pairs from family-coded error messages.
+    pub fn expected_actual(&self) -> (Option<String>, Option<String>) {
+        match self {
+            Self::TypeMismatch { expected, found } => (Some(expected.clone()), Some(found.clone())),
+            Self::MissingReturn { expected } => (Some(expected.clone()), None),
+            Self::ArityMismatch { expected, found } => {
+                (Some(expected.to_string()), Some(found.to_string()))
+            }
+            Self::IncompatibleTypes { lhs, rhs, .. } => (Some(lhs.clone()), Some(rhs.clone())),
+            Self::UndefinedVariable { .. } => (None, None),
+            Self::UnknownType { .. } => (None, None),
+            Self::MissingField { .. } => (None, None),
+            Self::MissingVariant { .. } => (None, None),
+            Self::ImmutableAssignment { .. } => (None, None),
+            Self::InvalidCall { .. } => (None, None),
+            Self::Coded { .. } => (None, None),
+            Self::NonExhaustiveEnumNeedsCatchAll { .. } => (None, None),
+            Self::UnknownAttribute { .. } => (None, None),
+            Self::AttributeNotValid { .. } => (None, None),
+            Self::AttributeArgumentMissing { .. } => (None, None),
+            Self::AttributeArgumentExtra { .. } => (None, None),
+            Self::InvalidRegexLiteral { .. } => (None, None),
+            Self::InvalidTestFunctionSignature { .. } => (None, None),
+            Self::MissingRequiredAttribute { .. } => (None, None),
+            Self::ParseError { .. } => (None, None),
+        }
+    }
+
     /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
@@ -290,11 +323,15 @@ impl TypeError {
 
 impl Reportable for TypeError {
     fn to_diagnostic(&self) -> Diagnostic {
-        Diagnostic::from_props(
+        let mut diag = Diagnostic::from_props(
             self.kind.properties(),
             Some(self.span),
             self.source_override.clone(),
-        )
+        );
+        let (expected, actual) = self.kind.expected_actual();
+        diag.expected = expected;
+        diag.actual = actual;
+        diag
     }
 }
 

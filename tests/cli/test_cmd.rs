@@ -353,20 +353,31 @@ fn test_json_format_reports_outcomes_and_counts() {
     let parsed: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("the output parses as JSON");
 
-    assert_eq!(parsed["total"], 2);
-    assert_eq!(parsed["passed"], 2);
-    assert_eq!(parsed["failed"], 0);
-    assert_eq!(parsed["ignored"], 0);
-    assert_eq!(parsed["rejected_files"].as_array().map(Vec::len), Some(0));
+    // Verify envelope structure
+    assert_eq!(parsed["command"], "test");
+    assert!(parsed["ok"].is_boolean());
+    assert!(parsed["schemaVersion"].is_number());
+    assert!(parsed["exitCode"].is_number());
+    assert!(parsed["durationMs"].is_number());
 
-    let results = parsed["results"].as_array().expect("results is an array");
+    // Test summary is nested under "tests"
+    let tests = &parsed["tests"];
+    assert!(tests.is_object());
+
+    assert_eq!(tests["total"], 2);
+    assert_eq!(tests["passed"], 2);
+    assert_eq!(tests["failed"], 0);
+    assert_eq!(tests["ignored"], 0);
+    assert_eq!(tests["rejectedFiles"].as_array().map(Vec::len), Some(0));
+
+    let results = tests["results"].as_array().expect("results is an array");
     assert_eq!(results.len(), 2);
     for entry in results {
         assert!(entry["path"].is_string());
         assert!(entry["name"].is_string());
         assert!(entry["outcome"].is_string());
-        // `detail` is always present, and null when there is nothing to say.
-        assert!(entry.get("detail").is_some());
+        // `detail` is present when there is something to say (e.g., ignore reason, error output),
+        // or absent when the test simply passed or failed.
     }
     assert_eq!(results[0]["outcome"], "passed");
     assert_eq!(results[1]["outcome"], "expected_failure");
