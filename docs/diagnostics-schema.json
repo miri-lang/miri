@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Miri Diagnostics Envelope",
+  "description": "JSON envelope emitted by Miri compiler commands (check, build, run, test) when --format json is specified. All diagnostic messages include a stable code for tooling integration.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "description": "Version of this schema. Currently 1.",
+      "minimum": 1
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "True if the command succeeded; false if there were errors that prevented completion."
+    },
+    "command": {
+      "type": "string",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', or 'test'.",
+      "enum": ["check", "build", "run", "test"]
+    },
+    "diagnostics": {
+      "type": "array",
+      "description": "Array of diagnostic messages (errors, warnings, notes).",
+      "items": {
+        "$ref": "#/$defs/JsonDiagnostic"
+      }
+    },
+    "artifact": {
+      "type": ["string", "null"],
+      "description": "Path to the build artifact (for build/run commands only). Absent or null if no artifact was produced."
+    },
+    "exitCode": {
+      "type": ["integer", "null"],
+      "description": "Process exit code (for build/run/test commands only). Absent or null for check command."
+    },
+    "stdoutTail": {
+      "type": ["string", "null"],
+      "description": "Last N bytes of the program's stdout (for run/test commands only). Absent or null if not captured."
+    },
+    "stderrTail": {
+      "type": ["string", "null"],
+      "description": "Last N bytes of the program's stderr (for run/test commands only). Absent or null if not captured."
+    },
+    "stdoutTruncated": {
+      "type": ["boolean", "null"],
+      "description": "True if stdoutTail was truncated; false if complete. Absent or null if stdout was not captured."
+    },
+    "stderrTruncated": {
+      "type": ["boolean", "null"],
+      "description": "True if stderrTail was truncated; false if complete. Absent or null if stderr was not captured."
+    },
+    "durationMs": {
+      "type": ["integer", "null"],
+      "description": "Elapsed time in milliseconds for the command execution. Absent or null if not measured."
+    },
+    "tests": {
+      "type": ["object", "null"],
+      "description": "Test summary (for test command only). Absent or null for other commands.",
+      "$ref": "#/$defs/JsonTestSummary"
+    }
+  },
+  "required": ["schemaVersion", "ok", "command", "diagnostics"],
+  "$defs": {
+    "JsonDiagnostic": {
+      "type": "object",
+      "description": "A single diagnostic message (error, warning, or note).",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "description": "Severity level of the diagnostic.",
+          "enum": ["error", "warning", "note"]
+        },
+        "code": {
+          "type": ["string", "null"],
+          "description": "Stable diagnostic code (e.g., 'MER_TYP_010') for documentation and tooling. Absent or null for some synthetic diagnostics."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable diagnostic message."
+        },
+        "path": {
+          "type": ["string", "null"],
+          "description": "Source file path where the issue occurred. Absent or null for diagnostics without a source location."
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "description": "1-indexed line number in source where the issue occurred. Absent or null if no source location."
+        },
+        "column": {
+          "type": ["integer", "null"],
+          "description": "1-indexed column number in source where the issue occurred. Absent or null if no source location."
+        },
+        "length": {
+          "type": ["integer", "null"],
+          "description": "Length in bytes of the error span. Absent or null if no source location."
+        },
+        "expected": {
+          "type": ["string", "null"],
+          "description": "Expected type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
+        },
+        "actual": {
+          "type": ["string", "null"],
+          "description": "Actual type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
+        },
+        "help": {
+          "type": ["string", "null"],
+          "description": "Actionable help text explaining how to resolve the issue. Absent or null if no help is available."
+        },
+        "fixSafety": {
+          "type": ["string", "null"],
+          "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions."
+        },
+        "repair": {
+          "type": ["object", "null"],
+          "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions.",
+          "$ref": "#/$defs/JsonRepair"
+        },
+        "related": {
+          "type": "array",
+          "description": "Related diagnostics (notes, additional context). Empty if no related diagnostics.",
+          "items": {
+            "$ref": "#/$defs/JsonRelated"
+          }
+        }
+      },
+      "required": ["severity", "message", "related"]
+    },
+    "JsonRepair": {
+      "type": "object",
+      "description": "Repair suggestion (reserved for future versions). Always absent in schema version 1.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this repair suggestion."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Human-readable summary of the repair."
+        }
+      }
+    },
+    "JsonRelated": {
+      "type": "object",
+      "description": "A related diagnostic (typically a note providing additional context).",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "description": "Severity level of the related diagnostic.",
+          "enum": ["error", "warning", "note"]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable message for the related diagnostic."
+        },
+        "code": {
+          "type": ["string", "null"],
+          "description": "Diagnostic code if applicable. Absent or null if no code."
+        },
+        "path": {
+          "type": ["string", "null"],
+          "description": "Source file path. Absent or null if no source location."
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "description": "1-indexed line number in source. Absent or null if no source location."
+        },
+        "column": {
+          "type": ["integer", "null"],
+          "description": "1-indexed column number in source. Absent or null if no source location."
+        }
+      },
+      "required": ["severity", "message"]
+    },
+    "JsonTestSummary": {
+      "type": "object",
+      "description": "Summary of test results (test command only).",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "description": "Total number of tests run (including passed, failed, ignored, etc)."
+        },
+        "passed": {
+          "type": "integer",
+          "description": "Number of tests that passed."
+        },
+        "failed": {
+          "type": "integer",
+          "description": "Number of tests that failed."
+        },
+        "ignored": {
+          "type": "integer",
+          "description": "Number of tests that were ignored."
+        },
+        "results": {
+          "type": "array",
+          "description": "Individual test results.",
+          "items": {
+            "$ref": "#/$defs/JsonTestResult"
+          }
+        },
+        "rejectedFiles": {
+          "type": "array",
+          "description": "Files that were rejected from the test run (e.g., unparseable or declaring main).",
+          "items": {
+            "$ref": "#/$defs/JsonRejectedFile"
+          }
+        }
+      },
+      "required": ["total", "passed", "failed", "ignored", "results", "rejectedFiles"]
+    },
+    "JsonTestResult": {
+      "type": "object",
+      "description": "Result of a single test.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the test file."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the test."
+        },
+        "outcome": {
+          "type": "string",
+          "description": "Outcome of the test.",
+          "enum": ["passed", "failed", "ignored", "expected_failure", "unexpected_pass", "crashed", "runner_fault"]
+        },
+        "detail": {
+          "type": ["string", "null"],
+          "description": "Additional detail about the test result (e.g., error message or timing). Absent or null if no detail."
+        }
+      },
+      "required": ["path", "name", "outcome"]
+    },
+    "JsonRejectedFile": {
+      "type": "object",
+      "description": "A file that was rejected from the test run.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the rejected file."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason the file was rejected.",
+          "enum": ["unparseable", "declares_main", "top_level_statements"]
+        }
+      },
+      "required": ["path", "reason"]
+    }
+  }
+}

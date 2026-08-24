@@ -13,17 +13,10 @@ use std::path::Path;
 
 mod discovery;
 mod harness;
-mod report;
+pub mod report;
 mod runner;
 
 pub use discovery::{RejectedFile, RejectionReason};
-
-/// Output format for test results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestFormat {
-    Pretty,
-    Json,
-}
 
 /// One `@test` function found in a source file.
 ///
@@ -137,11 +130,8 @@ impl TestSummary {
 /// Discover and run every `@test` function under `dir`.
 ///
 /// `filter` keeps only tests whose `<path>::<name>` contains the substring.
-pub fn run_tests(
-    dir: &Path,
-    filter: Option<&str>,
-    format: TestFormat,
-) -> std::io::Result<TestSummary> {
+/// Formatting is delegated to the caller (CLI layer in main.rs).
+pub fn run_tests(dir: &Path, filter: Option<&str>) -> std::io::Result<TestSummary> {
     let discovered = discovery::discover(dir)?;
     let mut results = Vec::new();
 
@@ -155,10 +145,6 @@ pub fn run_tests(
     }
 
     let summary = TestSummary::from_results(results, discovered.rejected);
-    match format {
-        TestFormat::Pretty => print!("{}", report::format_pretty(&summary)),
-        TestFormat::Json => println!("{}", report::format_json(&summary)),
-    }
     Ok(summary)
 }
 

@@ -7,6 +7,38 @@ use std::path::PathBuf;
 use crate::cli::version::version_ref;
 pub use crate::codegen::{BuildTarget, CpuBackend};
 
+/// Output format for commands (pretty-printed or JSON).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Format {
+    /// Pretty-printed output (default).
+    #[default]
+    Pretty,
+    /// JSON-formatted output.
+    Json,
+}
+
+/// Color output mode.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorMode {
+    /// Detect color support based on whether stderr is a TTY (default).
+    #[default]
+    Auto,
+    /// Always emit ANSI color codes.
+    Always,
+    /// Never emit ANSI color codes.
+    Never,
+}
+
+impl From<ColorMode> for crate::error::format::ColorChoice {
+    fn from(mode: ColorMode) -> Self {
+        match mode {
+            ColorMode::Auto => crate::error::format::ColorChoice::Auto,
+            ColorMode::Always => crate::error::format::ColorChoice::Always,
+            ColorMode::Never => crate::error::format::ColorChoice::Never,
+        }
+    }
+}
+
 /// Top-level CLI argument definition parsed by clap.
 #[derive(Parser, Debug)]
 #[command(name = "miri", version = version_ref(), about = "Miri Compiler", author = "Slavik Shynkarenko <slavik@slavikdev.com>")]
@@ -24,6 +56,15 @@ pub struct Cli {
     /// by default. Also enabled by setting MIRI_VERIFY_MIR to any non-empty value in the environment.
     #[arg(long, global = true)]
     pub verify_mir: bool,
+
+    /// Control ANSI color codes in diagnostic output.
+    ///
+    /// `auto` (default) detects TTY and emits colors only if stderr is a terminal.
+    /// `always` forces color codes on; useful for piping to another tool that supports them.
+    /// `never` disables all color codes.
+    /// Note: JSON format (`--format json`) never emits ANSI codes regardless of this setting.
+    #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
+    pub color: ColorMode,
 }
 
 #[derive(Subcommand, Debug)]
@@ -33,6 +74,10 @@ pub enum Commands {
         /// Path to the Miri source file to run
         #[arg(required = true)]
         path: PathBuf,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
 
         /// Arguments to pass to the program
         #[arg(last = true)]
@@ -66,6 +111,10 @@ pub enum Commands {
         /// dispatches `gpu fn` kernels through WebGPU/WGSL.
         #[arg(long, value_enum, default_value_t = BuildTarget::Native)]
         target: BuildTarget,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
     },
 
     /// Check a Miri source file for errors (type-check only, no code generation)
@@ -73,6 +122,10 @@ pub enum Commands {
         /// Path to the Miri source file to check
         #[arg(required = true)]
         path: PathBuf,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
     },
 
     /// Run tests
@@ -82,21 +135,11 @@ pub enum Commands {
         filter: Option<String>,
 
         /// Output format for test results
-        #[arg(long, value_enum, default_value_t = TestFormat::Pretty)]
-        format: TestFormat,
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
 
         /// Directory to search for tests
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
-}
-
-/// Output format for test results.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TestFormat {
-    /// Pretty-printed test output (default)
-    #[default]
-    Pretty,
-    /// JSON-formatted test output
-    Json,
 }

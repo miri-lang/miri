@@ -15,6 +15,19 @@ use std::io::IsTerminal;
 use crate::error::diagnostic::{Diagnostic, Severity};
 use crate::error::syntax::find_line_info;
 
+/// Color output choice, independent of the CLI layer.
+/// This enum is defined in the error layer and never imports from the CLI layer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorChoice {
+    /// Detect color support based on whether stderr is a TTY (default).
+    #[default]
+    Auto,
+    /// Always emit ANSI color codes.
+    Always,
+    /// Never emit ANSI color codes.
+    Never,
+}
+
 /// ANSI color scheme that resolves to real escape codes on a TTY
 /// or empty strings when output is redirected.
 ///
@@ -42,6 +55,16 @@ impl ColorScheme {
             Self::colored()
         } else {
             Self::plain()
+        }
+    }
+
+    /// Selects a color scheme based on the given ColorChoice.
+    /// `Auto` detects TTY, `Always` forces colors, `Never` forces no colors.
+    pub fn from_choice(choice: ColorChoice) -> Self {
+        match choice {
+            ColorChoice::Auto => Self::detect(),
+            ColorChoice::Always => Self::colored(),
+            ColorChoice::Never => Self::plain(),
         }
     }
 
@@ -94,6 +117,37 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     format_diagnostic(source, diag, None)
 }
 
+/// Formats a diagnostic with a specific color choice.
+/// This is the core formatting function used by the CLI when the user specifies a color preference.
+pub fn format_diagnostic_with_color(
+    source: &str,
+    diag: &Diagnostic,
+    source_path: Option<&str>,
+    color_choice: ColorChoice,
+) -> String {
+    let colors = ColorScheme::from_choice(color_choice);
+    let (effective_source, file_label) = effective_source_and_label(diag, source, source_path);
+
+    let mut output = String::new();
+    append_header(&mut output, diag, &colors);
+
+    let span_in_source = diag.span.filter(|s| s.start <= effective_source.len());
+    match span_in_source {
+        Some(span) => append_span_context(
+            &mut output,
+            diag,
+            effective_source,
+            file_label,
+            span,
+            &colors,
+        ),
+        None => append_spanless_body(&mut output, diag),
+    }
+
+    append_notes(&mut output, diag, &colors);
+    output
+}
+
 /// Formats a diagnostic with an optional fallback file path for the main
 /// source file.  When `source_path` is `Some`, errors that do *not* carry
 /// their own `source_override` (i.e. errors from the entry-point file) will
@@ -122,7 +176,7 @@ pub fn format_diagnostic(source: &str, diag: &Diagnostic, source_path: Option<&s
     output
 }
 
-fn effective_source_and_label<'a>(
+pub(crate) fn effective_source_and_label<'a>(
     diag: &'a Diagnostic,
     main_source: &'a str,
     main_path: Option<&'a str>,
