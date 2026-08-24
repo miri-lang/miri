@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{TypeDeclarationKind, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::attributes::{DeprecatedKind, Deprecation};
@@ -148,7 +149,7 @@ impl TypeChecker {
                 continue;
             }
             self.report_warning(
-                "W0005",
+                DiagnosticCode::TypDeprecatedAttributeSpelling,
                 "Deprecated Attribute Spelling".to_string(),
                 format!(
                     "the `{}` keyword is deprecated; use `@{}` instead",
@@ -245,7 +246,13 @@ impl TypeChecker {
                 deprecation.reason
             ),
         );
-        self.report_warning("W0006", title, message, span, None);
+        self.report_warning(
+            DiagnosticCode::TypDeprecatedAttribute,
+            title,
+            message,
+            span,
+            None,
+        );
     }
 
     /// Records a `@deprecated` type declaration under its declared name. A name
@@ -392,6 +399,7 @@ impl TypeChecker {
                 {
                     if def.must_use {
                         self.report_error(
+                            DiagnosticCode::OwnUnusedValue,
                             format!(
                                 "Unused value of type '{}': this value must be used",
                                 type_name
@@ -420,7 +428,7 @@ impl TypeChecker {
         if crate::type_checker::utils::is_gpu_compatible(&expr_type.kind) {
             return;
         }
-        self.report_error(
+        self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
             format!(
                 "Discarded value of type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may be produced inside a 'gpu fn'",
                 expr_type
@@ -558,7 +566,7 @@ impl TypeChecker {
             {
                 if let Ok(name) = self.extract_name(name_expr) {
                     if *kind == TypeDeclarationKind::None && target_expr.is_none() {
-                        self.report_error(
+                        self.report_error(DiagnosticCode::TypClassDefinition,
                             format!(
                                 "Incomplete type declaration '{}'. Use 'is', 'extends', 'implements', or 'includes' to define the type.",
                                 name
@@ -654,7 +662,7 @@ impl TypeChecker {
         span: Span,
     ) {
         if self.is_type_visible(name) {
-            self.report_error(
+            self.report_error(DiagnosticCode::TypTypeAlreadyDefined,
                 format!(
                     "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
                     name, kind
@@ -667,6 +675,7 @@ impl TypeChecker {
         if let Ok(target_name) = self.extract_type_name(target) {
             if !self.is_type_visible(target_name) {
                 self.report_error(
+                    DiagnosticCode::TypTypeNotFound,
                     format!("Unknown type '{}' in type declaration", target_name),
                     target.span,
                 );

@@ -7,6 +7,7 @@
 //! (Cranelift, LLVM, etc.). Errors are consolidated here for consistent
 //! formatting and reporting.
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use std::fmt;
 
@@ -41,35 +42,43 @@ pub enum CodegenError {
 impl CodegenError {
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            CodegenError::TargetIsa(msg) => ErrorProperties::simple("E0300", "Target ISA Error")
-                .with_message(format!("Failed to create target ISA: {}", msg)),
-            CodegenError::Module(msg) => ErrorProperties::simple("E0301", "Module Creation Error")
-                .with_message(format!("Failed to create module: {}", msg)),
+            CodegenError::TargetIsa(msg) => {
+                ErrorProperties::simple(DiagnosticCode::CgTargetIsaCreationFailed)
+                    .with_message(format!("Failed to create target ISA: {}", msg))
+            }
+            CodegenError::Module(msg) => {
+                ErrorProperties::simple(DiagnosticCode::CgModuleCreationFailed)
+                    .with_message(format!("Failed to create module: {}", msg))
+            }
             CodegenError::DeclareFunction { name, details } => {
-                ErrorProperties::simple("E0302", "Function Declaration Error").with_message(
+                ErrorProperties::simple(DiagnosticCode::CgFunctionDeclarationFailed).with_message(
                     format!("Failed to declare function '{}': {}", name, details),
                 )
             }
             CodegenError::DefineFunction { name, details } => {
-                ErrorProperties::simple("E0303", "Function Definition Error")
+                ErrorProperties::simple(DiagnosticCode::CgFunctionDefinitionFailed)
                     .with_message(format!("Failed to define function '{}': {}", name, details))
             }
             CodegenError::Translation { name, details } => {
-                ErrorProperties::simple("E0304", "Translation Error").with_message(format!(
-                    "Failed to translate function '{}': {}",
-                    name, details
-                ))
+                ErrorProperties::simple(DiagnosticCode::CgTranslationToBackendIrFailed)
+                    .with_message(format!(
+                        "Failed to translate function '{}': {}",
+                        name, details
+                    ))
             }
-            CodegenError::Emit(msg) => ErrorProperties::simple("E0305", "Emit Error")
-                .with_message(format!("Failed to emit object file: {}", msg)),
-            CodegenError::NotSupported { backend } => {
-                ErrorProperties::simple("E0306", "Backend Not Supported").with_message(format!(
-                    "{} backend is not yet available. Use the Cranelift backend (default) instead.",
-                    backend
-                ))
+            CodegenError::Emit(msg) => {
+                ErrorProperties::simple(DiagnosticCode::CgObjectFileEmissionFailed)
+                    .with_message(format!("Failed to emit object file: {}", msg))
             }
+            CodegenError::NotSupported { backend } => ErrorProperties::simple(
+                DiagnosticCode::CgBackendNotSupported,
+            )
+            .with_message(format!(
+                "{} backend is not yet available. Use the Cranelift backend (default) instead.",
+                backend
+            )),
             CodegenError::Internal(msg) => {
-                ErrorProperties::simple("E0307", "Internal Codegen Error")
+                ErrorProperties::simple(DiagnosticCode::CgInternalCodegenError)
                     .with_message(format!("Internal codegen error: {}", msg))
             }
         }

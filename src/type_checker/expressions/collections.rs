@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
@@ -64,6 +65,7 @@ impl TypeChecker {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
                     "Array elements must have the same type".to_string(),
                     element.span,
                 );
@@ -105,6 +107,7 @@ impl TypeChecker {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
                     "Array elements must have the same type".to_string(),
                     element.span,
                 );
@@ -147,11 +150,19 @@ impl TypeChecker {
             let v_type = self.infer_expression(val, context);
 
             if !self.are_compatible(&key_type, &k_type, context) {
-                self.report_error("Map keys must have the same type".to_string(), key.span);
+                self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
+                    "Map keys must have the same type".to_string(),
+                    key.span,
+                );
                 has_error = true;
             }
             if !self.are_compatible(&val_type, &v_type, context) {
-                self.report_error("Map values must have the same type".to_string(), val.span);
+                self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
+                    "Map values must have the same type".to_string(),
+                    val.span,
+                );
                 has_error = true;
             }
         }
@@ -184,6 +195,7 @@ impl TypeChecker {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
                     "Set elements must have the same type".to_string(),
                     element.span,
                 );
@@ -197,6 +209,7 @@ impl TypeChecker {
 
         if let TypeKind::Option(_) = first_type.kind {
             self.report_error(
+                DiagnosticCode::TypCollectionElementType,
                 "Set elements cannot be optional".to_string(),
                 elements[0].span,
             );

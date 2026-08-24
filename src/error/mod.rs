@@ -17,9 +17,9 @@ pub mod type_error;
 
 pub use codegen::CodegenError;
 pub use compiler::CompilerError;
-pub use diagnostic::{
-    Diagnostic, DiagnosticBuilder, ErrorProperties, Reportable, Severity, BUG_REPORT_URL,
-};
+pub use diagnostic::{Diagnostic, DiagnosticBuilder, ErrorProperties, Reportable, BUG_REPORT_URL};
+// Re-export Severity from diagnostics to maintain backward compatibility
+pub use crate::diagnostics::Severity;
 pub use format::{
     find_best_match, format_diagnostic, format_diagnostic_full, levenshtein_distance, ColorScheme,
 };

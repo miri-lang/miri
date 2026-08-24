@@ -5,6 +5,7 @@
 
 use crate::ast::expression::Expression;
 use crate::ast::{ExpressionKind, Type, TypeKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{GpuLaunchArgs, Operand, TerminatorKind};
@@ -67,7 +68,7 @@ pub(super) fn process_gpu_buffer_args(
                     crate::mir::body::BindingResidency::Gpu
                 ) {
                     let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
-                    return Err(LoweringError::custom(
+                    return Err(LoweringError::coded(DiagnosticCode::TypGpuFunctionHostBufferMismatch,
                         format!("cannot pass host-resident array '{}' to gpu function", buffer_name),
                         span,
                         Some(format!(
@@ -254,7 +255,8 @@ pub(crate) fn try_lower_kernel_launch(
 
     if let Some(ref kernel_name) = kernel_name {
         let workgroup_size = try_extract_dim3_literal(&args[1]).ok_or_else(|| {
-            LoweringError::custom(
+            LoweringError::coded(
+                DiagnosticCode::TypGpuLaunchBlockSizeNotLiteral,
                 "gpu fn launch block size must be a compile-time literal Dim3".to_string(),
                 *span,
                 Some("use a compile-time literal, e.g., block: Dim3(16, 16, 1)".to_string()),
@@ -262,7 +264,8 @@ pub(crate) fn try_lower_kernel_launch(
         })?;
 
         if workgroup_size.contains(&0) {
-            return Err(LoweringError::custom(
+            return Err(LoweringError::coded(
+                DiagnosticCode::TypGpuLaunchBlockDimensionsInvalid,
                 "gpu fn launch block dimensions must all be >0".to_string(),
                 *span,
                 Some("each dimension must be at least 1".to_string()),
@@ -275,7 +278,9 @@ pub(crate) fn try_lower_kernel_launch(
     }
 
     let launch_args = GpuLaunchArgs::new(call_args, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), *span, None))?;
+        .map_err(|e| {
+            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, *span)
+        })?;
 
     ctx.set_terminator(crate::mir::Terminator::new(
         TerminatorKind::GpuLaunch {

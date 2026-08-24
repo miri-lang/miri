@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME, STRING_TYPE_NAME};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
     ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
@@ -134,7 +135,11 @@ impl TypeChecker {
         let name = match self.extract_type_name(name_expr) {
             Ok(n) => n.to_string(),
             Err(_) => {
-                self.report_error("Invalid class name".to_string(), name_expr.span);
+                self.report_error(
+                    DiagnosticCode::TypClassDefinition,
+                    "Invalid class name".to_string(),
+                    name_expr.span,
+                );
                 return None;
             }
         };
@@ -142,7 +147,11 @@ impl TypeChecker {
             let is_placeholder = matches!(existing, TypeDefinition::Class(_))
                 && self.modules.pre_registered_types.contains(&name);
             if !is_placeholder {
-                self.report_error(format!("Type '{}' is already defined", name), span);
+                self.report_error(
+                    DiagnosticCode::TypTypeAlreadyDefined,
+                    format!("Type '{}' is already defined", name),
+                    span,
+                );
                 return None;
             }
         }
@@ -307,6 +316,7 @@ impl TypeChecker {
                 Ok(base_name) => {
                     if !self.is_type_visible(base_name) {
                         self.report_error(
+                            DiagnosticCode::TypClassInheritance,
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
                         );
@@ -322,6 +332,7 @@ impl TypeChecker {
                                 TypeDefinition::Class(_) => unreachable!(),
                             };
                             self.report_error_with_help(
+                                DiagnosticCode::TypClassDefinition,
                                 format!("'{}' is not a class", base_name),
                                 base_expr.span,
                                 format!(
@@ -334,7 +345,11 @@ impl TypeChecker {
                     Some(base_name.to_string())
                 }
                 Err(_) => {
-                    self.report_error("Invalid base class name".to_string(), base_expr.span);
+                    self.report_error(
+                        DiagnosticCode::TypClassInheritance,
+                        "Invalid base class name".to_string(),
+                        base_expr.span,
+                    );
                     None
                 }
             }
@@ -357,6 +372,7 @@ impl TypeChecker {
             loop {
                 if visited.contains(current) {
                     self.report_error(
+                        DiagnosticCode::TypClassInheritance,
                         format!(
                             "Circular inheritance detected: class '{}' eventually extends itself",
                             name
@@ -419,7 +435,7 @@ impl TypeChecker {
             if permits_accelerable(&field_ty.kind, &self.type_table.global_type_definitions) {
                 continue;
             }
-            self.report_error(
+            self.report_error(DiagnosticCode::TarGpuTypeNotAccelerable,
                 format!(
                     "'{}' implements 'Accelerable' but field '{}' has type '{}', which is not accelerable; every field of an 'Accelerable' type must itself be accelerable.",
                     name, field_name, field_ty
@@ -440,6 +456,7 @@ impl TypeChecker {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
                 if !self.is_type_visible(trait_name) {
                     self.report_error(
+                        DiagnosticCode::TypTraitDefinition,
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
@@ -454,6 +471,7 @@ impl TypeChecker {
                             TypeDefinition::Trait(_) => unreachable!(),
                         };
                         self.report_error_with_help(
+                            DiagnosticCode::TypTraitDefinition,
                             format!("'{}' is not a trait", trait_name),
                             trait_expr.span,
                             format!(
@@ -534,6 +552,7 @@ impl TypeChecker {
                 StatementKind::Empty => {}
                 _ => {
                     self.report_error(
+                        DiagnosticCode::TypClassDefinition,
                         "Only field and method declarations are allowed in class body".to_string(),
                         stmt.span,
                     );
@@ -559,7 +578,11 @@ impl TypeChecker {
             } else if let Some(init) = &decl.initializer {
                 self.infer_expression(init, context)
             } else {
-                self.report_error(format!("Cannot infer type for field '{}'", decl.name), span);
+                self.report_error(
+                    DiagnosticCode::TypTypeInference,
+                    format!("Cannot infer type for field '{}'", decl.name),
+                    span,
+                );
                 make_type(TypeKind::Error)
             };
 
@@ -601,6 +624,7 @@ impl TypeChecker {
                     stmt.span
                 };
                 self.report_error(
+                    DiagnosticCode::TypStaticMethodRestriction,
                     format!(
                         "Method '{}' cannot be both instance and static method",
                         decl.name
@@ -615,16 +639,22 @@ impl TypeChecker {
         if decl.properties.is_static {
             if decl.name == "init" {
                 self.report_error(
+                    DiagnosticCode::TypBuiltinConstructor,
                     "Static constructors are not supported - constructor cannot be static"
                         .to_string(),
                     stmt.span,
                 );
             }
             if decl.properties.is_async {
-                self.report_error("Static methods cannot be async".to_string(), stmt.span);
+                self.report_error(
+                    DiagnosticCode::TypStaticMethodRestriction,
+                    "Static methods cannot be async".to_string(),
+                    stmt.span,
+                );
             }
             if decl.properties.is_gpu {
                 self.report_error(
+                    DiagnosticCode::TarGpuCodeRestriction,
                     "Static methods cannot be GPU kernels".to_string(),
                     stmt.span,
                 );
@@ -632,6 +662,7 @@ impl TypeChecker {
             // Reject `self` as a parameter in static methods
             if !decl.params.is_empty() && decl.params[0].name == "self" {
                 self.report_error(
+                    DiagnosticCode::TypStaticMethodRestriction,
                     "Static methods cannot have a 'self' parameter".to_string(),
                     stmt.span,
                 );
@@ -669,6 +700,7 @@ impl TypeChecker {
                             self.find_generic_in_resolved_type(&param_types[i].1, &class_gen_names)
                         {
                             self.report_error(
+                                DiagnosticCode::TypStaticMethodRestriction,
                                 Self::static_method_generic_reference_error(&decl.name, &gen_name),
                                 param.typ.span,
                             );
@@ -682,6 +714,7 @@ impl TypeChecker {
                     {
                         if let Some(return_type_expr) = &decl.return_type {
                             self.report_error(
+                                DiagnosticCode::TypStaticMethodRestriction,
                                 Self::static_method_generic_reference_error(&decl.name, &gen_name),
                                 return_type_expr.span,
                             );
@@ -797,6 +830,7 @@ impl TypeChecker {
         for (method_name, method_info) in methods {
             if method_info.is_abstract {
                 self.report_error(
+                    DiagnosticCode::TypClassDefinition,
                     format!(
                         "Non-abstract class '{}' cannot have abstract method '{}'",
                         name, method_name
@@ -879,7 +913,7 @@ impl TypeChecker {
         name_expr: &Expression,
     ) {
         if child_method.params.len() != parent_method.params.len() {
-            self.report_error(
+            self.report_error(DiagnosticCode::TypClassInheritance,
                 format!(
                     "Method '{}' has incompatible parameter count: parent has {} parameters, child has {}",
                     method_name,
@@ -897,7 +931,7 @@ impl TypeChecker {
             {
                 let parent_substituted = self.substitute_type(parent_type, ancestor_subst);
                 if child_type.kind != parent_substituted.kind {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypClassInheritance,
                         format!(
                             "Method '{}' has incompatible parameter type for '{}' (position {}): expected {}, got {}",
                             method_name,
@@ -915,7 +949,7 @@ impl TypeChecker {
                 let parent_out = parent_method.is_param_out(i);
                 let child_out = child_method.is_param_out(i);
                 if parent_out != child_out {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypOutParameterMisuse,
                         format!(
                             "Method '{}' has incompatible 'out' modifier for parameter '{}' (position {}): parent declares {}, child declares {}",
                             method_name,
@@ -934,6 +968,7 @@ impl TypeChecker {
             self.substitute_type(&parent_method.return_type, ancestor_subst);
         if child_method.return_type.kind != parent_return_substituted.kind {
             self.report_error(
+                DiagnosticCode::TypClassInheritance,
                 format!(
                     "Method '{}' has incompatible return type: expected {}, got {}",
                     method_name, parent_return_substituted, child_method.return_type
@@ -969,7 +1004,7 @@ impl TypeChecker {
                 }
 
                 if !found_super_init && !child_init.is_abstract {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
                         format!(
                             "Constructor 'init' in class '{}' must call super.init() because parent class '{}' has a constructor",
                             name, base_name
@@ -1041,6 +1076,7 @@ impl TypeChecker {
             for method_name in &abstract_method_names {
                 if !methods.contains_key(method_name) {
                     self.report_error(
+                        DiagnosticCode::TypClassDefinition,
                         format!(
                             "Class '{}' must implement abstract method '{}' from class '{}'",
                             name, method_name, class_name
@@ -1092,6 +1128,7 @@ impl TypeChecker {
 
         for (method_name, origin_trait) in missing_methods {
             self.report_error(
+                DiagnosticCode::TypTraitDefinition,
                 format!(
                     "Class '{}' must implement method '{}' from trait '{}'",
                     name, method_name, origin_trait
@@ -1102,6 +1139,7 @@ impl TypeChecker {
 
         for (method_name, origin_trait, expected_sig) in mismatched_methods {
             self.report_error(
+                DiagnosticCode::TypTraitDefinition,
                 format!(
                     "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
                     method_name, name, origin_trait, expected_sig

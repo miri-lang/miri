@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 
 /// Byte offset range in source code, used for error reporting and AST spans.
@@ -30,14 +31,9 @@ pub enum SyntaxErrorKind {
     InvalidToken,
     UnclosedMultilineComment,
     IndentationMismatch,
-    UnclosedStringLiteral,
 
     // Parser errors
     UnexpectedToken {
-        expected: String,
-        found: String,
-    },
-    UnexpectedOperator {
         expected: String,
         found: String,
     },
@@ -47,8 +43,6 @@ pub enum SyntaxErrorKind {
         expected: String,
     },
     InvalidLeftHandSideExpression,
-    InvalidAssignmentTarget,
-    IntegerLiteralOverflow,
     InvalidNumberLiteral,
     InvalidIntegerLiteral,
     InvalidBinaryLiteral,
@@ -116,91 +110,84 @@ impl SyntaxErrorKind {
         use SyntaxErrorKind as K;
         let p = ErrorProperties::simple;
         match self {
-            K::InvalidToken => p("E0001", "Invalid Token").with_help(HELP_INVALID_TOKEN),
-            K::UnclosedMultilineComment => {
-                p("E0002", "Unclosed Multiline Comment").with_help("Add '*/' to close the comment.")
-            }
-            K::IndentationMismatch => p("E0003", "Indentation Mismatch")
+            K::InvalidToken => p(DiagnosticCode::LexInvalidToken).with_help(HELP_INVALID_TOKEN),
+            K::UnclosedMultilineComment => p(DiagnosticCode::LexUnclosedMultilineComment)
+                .with_help("Add '*/' to close the comment."),
+            K::IndentationMismatch => p(DiagnosticCode::LexIndentationMismatch)
                 .with_help("Ensure the indentation level matches the surrounding code block."),
-            K::UnclosedStringLiteral => p("E0004", "Unclosed String Literal")
-                .with_help("Add a closing quote to the string literal."),
-            K::UnexpectedToken { expected, found } => p("E0005", "Unexpected Token")
+            K::UnexpectedToken { expected, found } => p(DiagnosticCode::ParUnexpectedToken)
                 .with_message(format!("Expected {}, but found {}", expected, found)),
-            K::UnexpectedEOF => p("E0006", "Unexpected End of File")
+            K::UnexpectedEOF => p(DiagnosticCode::ParUnexpectedEndOfFile)
                 .with_message("Unexpected end of file")
                 .with_help(HELP_UNEXPECTED_EOF),
-            K::InvalidTypeDeclaration { .. } => p("E0007", "Invalid Type Declaration")
+            K::InvalidTypeDeclaration { .. } => p(DiagnosticCode::ParInvalidTypeDeclaration)
                 .with_help("Types must be declared with a valid identifier."),
-            K::InvalidAssignmentTarget => p("E0008", "Invalid Assignment Target")
-                .with_help("You can only assign values to variables or mutable properties."),
-            K::IntegerLiteralOverflow => p("E0009", "Integer Overflow")
-                .with_help("The integer literal is too large for the target type."),
-            K::InvalidIntegerLiteral => p("E0010", "Invalid Integer Literal")
+            K::InvalidIntegerLiteral => p(DiagnosticCode::ParInvalidIntegerLiteral)
                 .with_help("Ensure the integer literal format is correct."),
-            K::InvalidBinaryLiteral => p("E0011", "Invalid Binary Literal")
+            K::InvalidBinaryLiteral => p(DiagnosticCode::LexInvalidBinaryLiteral)
                 .with_help("Binary literals must start with '0b' followed by 0s and 1s."),
-            K::InvalidOctalLiteral => p("E0012", "Invalid Octal Literal")
+            K::InvalidOctalLiteral => p(DiagnosticCode::LexInvalidOctalLiteral)
                 .with_help("Octal literals must start with '0o' followed by digits 0-7."),
-            K::InvalidHexLiteral => p("E0013", "Invalid Hex Literal")
+            K::InvalidHexLiteral => p(DiagnosticCode::LexInvalidHexLiteral)
                 .with_help("Hexadecimal literals must start with '0x' followed by hex digits."),
-            K::InvalidFloatLiteral => p("E0014", "Invalid Float Literal")
+            K::InvalidFloatLiteral => p(DiagnosticCode::ParInvalidFloatLiteral)
                 .with_help("Ensure the float literal format is correct."),
-            K::InvalidStringLiteral => p("E0015", "Invalid String Literal")
+            K::InvalidStringLiteral => p(DiagnosticCode::ParInvalidStringLiteral)
                 .with_help("Ensure the string literal is properly quoted and escaped."),
-            K::InvalidBooleanLiteral => p("E0016", "Invalid Boolean Literal")
+            K::InvalidBooleanLiteral => p(DiagnosticCode::ParInvalidBooleanLiteral)
                 .with_help("Boolean literals must be 'true' or 'false'."),
-            K::UnexpectedOperator { .. } => p("E0017", "Unexpected Operator")
-                .with_help("This operator cannot be used in this context."),
-            K::InvalidLeftHandSideExpression => p("E0018", "Invalid Left-Hand Side Expression")
+            K::InvalidLeftHandSideExpression => p(DiagnosticCode::ParInvalidLeftHandSide)
                 .with_help("The expression on the left side of the assignment is not valid."),
-            K::MissingStructMemberType => p("E0019", "Missing Struct Member Type")
+            K::MissingStructMemberType => p(DiagnosticCode::ParMissingStructMemberType)
                 .with_help("Struct members must have a type annotation."),
-            K::InvalidInheritanceIdentifier => p("E0020", "Invalid Inheritance Identifier")
+            K::InvalidInheritanceIdentifier => p(DiagnosticCode::ParInvalidInheritanceIdentifier)
                 .with_help("Parent type in inheritance must be a valid identifier."),
-            K::DuplicateMatchPattern => p("E0021", "Duplicate Match Pattern")
+            K::DuplicateMatchPattern => p(DiagnosticCode::ParDuplicateMatchPattern)
                 .with_help("This pattern is already covered in a previous branch."),
-            K::MissingMatchBranches => p("E0022", "Missing Match Branches")
+            K::MissingMatchBranches => p(DiagnosticCode::ParMissingMatchBranches)
                 .with_help("The match expression must cover all possible cases."),
-            K::InvalidRegexLiteral => {
-                p("E0023", "Invalid Regex Literal").with_help("Ensure the regex pattern is valid.")
-            }
-            K::InvalidFormattedString => p("E0024", "Invalid Formatted String")
+            K::InvalidRegexLiteral => p(DiagnosticCode::LexInvalidRegexLiteral)
+                .with_help("Ensure the regex pattern is valid."),
+            K::InvalidFormattedString => p(DiagnosticCode::LexInvalidFormattedString)
                 .with_help("The format string syntax is incorrect."),
             K::InvalidFormattedStringExpression => {
-                p("E0025", "Invalid Formatted String Expression")
+                p(DiagnosticCode::LexInvalidFormattedStringExpression)
                     .with_help("The expression inside the format string is invalid.")
             }
-            K::BackslashInFStringExpression => p("E0026", "Backslash in Format String")
+            K::BackslashInFStringExpression => p(DiagnosticCode::LexBackslashInFormatString)
                 .with_help("Backslashes are not allowed in format string expressions."),
-            K::InvalidNumberLiteral => p("E0027", "Invalid Number Literal")
+            K::InvalidNumberLiteral => p(DiagnosticCode::LexInvalidNumberLiteral)
                 .with_help("Ensure the number literal format is correct."),
-            K::MissingStructMembers => p("E0028", "Missing Struct Members")
+            K::MissingStructMembers => p(DiagnosticCode::ParMissingStructMembers)
                 .with_help("All struct fields must be initialized."),
-            K::MissingEnumMembers => {
-                p("E0029", "Missing Enum Members").with_help("All enum variants must be handled.")
-            }
-            K::UnsupportedAttributeTarget => p("E0036", "Unsupported Attribute Target")
+            K::MissingEnumMembers => p(DiagnosticCode::ParMissingEnumMembers)
+                .with_help("All enum variants must be handled."),
+            K::UnsupportedAttributeTarget => p(DiagnosticCode::ParUnsupportedAttributeTarget)
                 .with_help("Attributes may only precede an enum, function, or class declaration."),
-            K::MissingTypeExpression => p("E0030", "Missing Type Expression")
+            K::MissingTypeExpression => p(DiagnosticCode::ParMissingTypeExpression)
                 .with_help("A type expression is expected here."),
-            K::InvalidModifierCombination { .. } => p("E0031", "Invalid Modifier Combination")
-                .with_help("These modifiers cannot be used together."),
-            K::UnknownRuntime { name } => p("E0032", "Unknown Runtime")
+            K::InvalidModifierCombination { .. } => {
+                p(DiagnosticCode::ParInvalidModifierCombination)
+                    .with_help("These modifiers cannot be used together.")
+            }
+            K::UnknownRuntime { name } => p(DiagnosticCode::ParUnknownRuntime)
                 .with_message(format!("Unknown runtime '{}'", name))
                 .with_help("Known runtimes: \"core\"."),
-            K::MissingConstantInitializer { name } => p("E0033", "Missing Constant Initializer")
-                .with_message(format!(
-                    "Constant '{}' must be initialized with a value",
-                    name
-                ))
-                .with_help("Add '= <value>' after the constant name, e.g. 'const X = 1'."),
+            K::MissingConstantInitializer { name } => {
+                p(DiagnosticCode::ParMissingConstantInitializer)
+                    .with_message(format!(
+                        "Constant '{}' must be initialized with a value",
+                        name
+                    ))
+                    .with_help("Add '= <value>' after the constant name, e.g. 'const X = 1'.")
+            }
             K::UnsupportedCStyleOperator { found, suggestion } => {
-                p("E0034", "Unsupported C-Style Operator")
+                p(DiagnosticCode::ParUnsupportedCStyleOperator)
                     .with_message(format!("'{}' is not a valid operator in Miri", found))
                     .with_help(format!("Use '{}' instead of '{}'.", suggestion, found))
             }
             K::RecursionLimitExceeded => {
-                p("E0035", "Recursion Limit Exceeded").with_help(HELP_RECURSION_LIMIT)
+                p(DiagnosticCode::ParRecursionLimitExceeded).with_help(HELP_RECURSION_LIMIT)
             }
         }
     }

@@ -45,6 +45,7 @@
 use crate::ast::factory as ast_factory;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -70,7 +71,7 @@ impl TypeChecker {
         if matches!(op, UnaryOp::Negate) {
             if let ExpressionKind::Unary(UnaryOp::Negate, _) = &operand.node {
                 self.report_warning(
-                    "W0001",
+                    DiagnosticCode::TypUnnecessaryDoubleNegation,
                     "Unnecessary Double Negation".to_string(),
                     "Unnecessary double negation".to_string(),
                     span,
@@ -82,7 +83,7 @@ impl TypeChecker {
             }
         } else if matches!(op, UnaryOp::Decrement) {
             self.report_warning(
-                "W0002",
+                DiagnosticCode::TypDecrementOperatorNotSupported,
                 "Decrement Operator Not Supported".to_string(),
                 "Decrement operator not supported".to_string(),
                 span,
@@ -96,6 +97,7 @@ impl TypeChecker {
         // Validate await context: allowed outside functions or inside async functions
         if matches!(op, UnaryOp::Await) && context.in_function && !context.in_async_function {
             self.report_error(
+                DiagnosticCode::TypAsyncAwait,
                 "'await' can only be used in async functions or at the top level".to_string(),
                 span,
             );
@@ -106,7 +108,7 @@ impl TypeChecker {
         match self.check_unary_op_types(op, &expr_ty) {
             Ok(t) => t,
             Err(msg) => {
-                self.report_error(msg, span);
+                self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
                 ast_factory::make_type(TypeKind::Error)
             }
         }

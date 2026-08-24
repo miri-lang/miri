@@ -3,6 +3,7 @@
 
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Expression;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -21,6 +22,7 @@ impl TypeChecker {
 
         if !self.is_numeric_type(&source_ty.kind) {
             self.report_error(
+                DiagnosticCode::TypInvalidCast,
                 format!(
                     "cannot cast from non-numeric type '{}' to '{}'",
                     source_ty, target_ty
@@ -32,6 +34,7 @@ impl TypeChecker {
 
         if !self.is_numeric_type(&target_ty.kind) {
             self.report_error(
+                DiagnosticCode::TypInvalidCast,
                 format!(
                     "cannot cast from '{}' to non-numeric type '{}'",
                     source_ty, target_ty

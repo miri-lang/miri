@@ -16,6 +16,7 @@
 //! `grid_dim` are uniform across a workgroup, so guards built only from them
 //! stay uniform and their barriers compile.
 
+use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
@@ -102,6 +103,7 @@ impl TypeChecker {
         if is_barrier_call(expr) {
             if divergent {
                 self.report_error(
+                    DiagnosticCode::TarGpuBarrierControl,
                     "'kernel.barrier()' under thread-divergent control flow deadlocks the \
                      workgroup: some threads reach the barrier and others do not. Move the \
                      barrier to uniform control flow (reached by every thread in the workgroup)."

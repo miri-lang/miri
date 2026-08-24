@@ -56,7 +56,7 @@ fn main()
     check_error_output(
         code,
         &[
-            "error[E0110]",
+            "error[MER_TYP_033]",
             "Type 'Point' has no field 'z'",
             "let v = p.z",
             "        ^^^",
@@ -77,7 +77,7 @@ fn main()
     check_error_output(
         code,
         &[
-            "error[E0110]",
+            "error[MER_TYP_038]",
             "Enum 'Status' has no variant 'Errr'",
             "help: Did you mean 'Error'?",
             "let s = Status.Errr",

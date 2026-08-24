@@ -19,6 +19,7 @@ use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression}
 use crate::ast::literal::Literal;
 use crate::ast::operator::{BinaryOp, UnaryOp};
 use crate::ast::statement::{Statement, StatementKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::TypeChecker;
 
@@ -186,6 +187,7 @@ impl TypeChecker {
     /// Emit the out-of-range diagnostic with a cast/clamp fix-it suggestion.
     fn report_div_mod_out_of_range(&mut self, span: Span) {
         self.report_error_with_help(
+            DiagnosticCode::TarGpuDivModRange,
             "GPU '/' or '%' operand is an integer literal outside the 32-bit range \
              representable on the GPU; the WGSL backend would silently narrow it to \
              i32 and divide by a different value"

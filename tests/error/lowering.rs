@@ -2,16 +2,26 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::check_diagnostic;
+use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::{Reportable, Severity};
 use miri::error::syntax::Span;
 use miri::error::{LoweringError, LoweringErrorKind};
 
 #[test]
 fn test_lowering_error_reportable() {
-    let error = LoweringError::custom("unsupported expression".to_string(), Span::new(0, 5), None);
+    let error = LoweringError::coded(
+        DiagnosticCode::MirUnsupportedExpression,
+        "unsupported expression".to_string(),
+        Span::new(0, 5),
+        None,
+    );
     let diag = error.to_diagnostic();
 
     check_diagnostic(&diag, Severity::Error, true, true);
+    assert_eq!(
+        diag.code,
+        Some(DiagnosticCode::MirUnsupportedExpression.as_str())
+    );
 }
 
 #[test]
@@ -27,7 +37,7 @@ fn test_lowering_error_unsupported_operator() {
 
     let diag = error.to_diagnostic();
     assert_eq!(diag.severity, Severity::Error);
-    assert_eq!(diag.code, Some("E0207"));
+    assert_eq!(diag.code, Some("MER_MIR_008"));
     assert_eq!(diag.title, "Unsupported Operator");
     assert!(diag.message.contains("@"));
     assert_eq!(diag.span, Some(span));

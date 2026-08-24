@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
@@ -130,6 +131,7 @@ impl TypeChecker {
             let mut missing: Vec<_> = remaining_variants.into_iter().collect();
             missing.sort();
             self.report_error(
+                DiagnosticCode::TypEnumVariant,
                 format!(
                     "Non-exhaustive match on Enum '{}'. Missing variants: {}",
                     name,
@@ -229,6 +231,7 @@ impl TypeChecker {
                 missing.push("None");
             }
             self.report_error(
+                DiagnosticCode::TypEnumVariant,
                 format!(
                     "Non-exhaustive match on Option. Missing variants: {}",
                     missing.join(", ")
@@ -315,6 +318,7 @@ impl TypeChecker {
             if let Some(first) = &first_branch_type {
                 if !self.are_compatible(first, &body_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Match branch types mismatch: expected {}, got {}",
                             first, body_type
@@ -341,6 +345,7 @@ impl TypeChecker {
         let cond_type = self.infer_expression(cond_expr, context);
         if !matches!(cond_type.kind, TypeKind::Boolean | TypeKind::Error) {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!("Conditional condition must be a boolean, got {}", cond_type),
                 cond_expr.span,
             );
@@ -352,6 +357,7 @@ impl TypeChecker {
             let else_type = self.infer_expression(else_expr, context);
             if !self.are_compatible(&then_type, &else_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Conditional branches must have the same type: expected {}, got {}",
                         then_type, else_type
@@ -363,6 +369,7 @@ impl TypeChecker {
         } else {
             if !self.are_compatible(&then_type, &make_type(TypeKind::Void), context) {
                 self.report_error(
+                    DiagnosticCode::TypPatternMatch,
                     format!(
                         "Conditional expression without else branch must return Void, got {}",
                         then_type
@@ -435,6 +442,7 @@ impl TypeChecker {
         let lit_type = self.infer_literal(lit, context);
         if !self.are_compatible(subject_type, &lit_type, context) {
             self.report_error(
+                DiagnosticCode::TypPatternMatch,
                 format!(
                     "Pattern type mismatch: expected {}, got {}",
                     subject_type, lit_type
@@ -477,6 +485,7 @@ impl TypeChecker {
         if let TypeKind::Tuple(elem_types) = &subject_type.kind {
             if patterns.len() != elem_types.len() {
                 self.report_error(
+                    DiagnosticCode::TypPatternMatch,
                     format!(
                         "Tuple pattern length mismatch: expected {}, got {}",
                         elem_types.len(),
@@ -494,6 +503,7 @@ impl TypeChecker {
             }
         } else {
             self.report_error(
+                DiagnosticCode::TypPatternMatch,
                 format!(
                     "Expected tuple type for tuple pattern, got {}",
                     subject_type
@@ -524,6 +534,7 @@ impl TypeChecker {
             if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
                 if !enum_def.variants.contains_key(member) {
                     self.report_error(
+                        DiagnosticCode::TypEnumVariant,
                         format!("Enum '{}' has no variant '{}'", parent_name, member),
                         span,
                     );
@@ -531,6 +542,7 @@ impl TypeChecker {
                 let expected_type = self.build_enum_member_type(parent_name, subject_type);
                 if !self.are_compatible(subject_type, &expected_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypPatternMatch,
                         format!(
                             "Pattern type mismatch: expected {}, got {}",
                             subject_type, expected_type
@@ -539,10 +551,15 @@ impl TypeChecker {
                     );
                 }
             } else {
-                self.report_error(format!("'{}' is not an Enum", parent_name), span);
+                self.report_error(
+                    DiagnosticCode::TypEnumDefinition,
+                    format!("'{}' is not an Enum", parent_name),
+                    span,
+                );
             }
         } else {
             self.report_error(
+                DiagnosticCode::TypPatternMatch,
                 "Complex member patterns are not supported".to_string(),
                 span,
             );
@@ -563,6 +580,7 @@ impl TypeChecker {
     fn check_pattern_regex(&mut self, subject_type: &Type, span: Span) {
         if !matches!(subject_type.kind, TypeKind::String) {
             self.report_error(
+                DiagnosticCode::TypPatternMatch,
                 format!(
                     "Regex pattern requires string subject, got {}",
                     subject_type
@@ -631,6 +649,7 @@ impl TypeChecker {
     ) {
         if bindings.len() != 1 {
             self.report_error(
+                DiagnosticCode::TypPatternMatch,
                 format!("Some pattern expects 1 binding, got {}", bindings.len()),
                 span,
             );
@@ -654,6 +673,7 @@ impl TypeChecker {
                     Some((name.clone(), variant.clone()))
                 } else {
                     self.report_error(
+                        DiagnosticCode::TypPatternMatch,
                         "Complex member patterns are not supported".to_string(),
                         span,
                     );
@@ -662,13 +682,18 @@ impl TypeChecker {
             }
             Pattern::Identifier(name) => {
                 self.report_error(
+                    DiagnosticCode::TypEnumVariant,
                     format!("Expected enum variant pattern like EnumName.{}", name),
                     span,
                 );
                 None
             }
             _ => {
-                self.report_error("Invalid enum variant pattern".to_string(), span);
+                self.report_error(
+                    DiagnosticCode::TypEnumVariant,
+                    "Invalid enum variant pattern".to_string(),
+                    span,
+                );
                 None
             }
         }
@@ -691,6 +716,7 @@ impl TypeChecker {
             if let Some(variant_types) = enum_def.variants.get(variant_name) {
                 if bindings.len() != variant_types.len() {
                     self.report_error(
+                        DiagnosticCode::TypEnumVariant,
                         format!(
                             "Enum variant '{}' expects {} bindings, got {}",
                             variant_name,
@@ -718,6 +744,7 @@ impl TypeChecker {
                 let expected_type = self.build_enum_variant_type(enum_name, subject_type);
                 if !self.are_compatible(subject_type, &expected_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypPatternMatch,
                         format!(
                             "Pattern type mismatch: expected {}, got {}",
                             subject_type, expected_type
@@ -727,12 +754,17 @@ impl TypeChecker {
                 }
             } else {
                 self.report_error(
+                    DiagnosticCode::TypEnumVariant,
                     format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
                     span,
                 );
             }
         } else {
-            self.report_error(format!("'{}' is not an Enum", enum_name), span);
+            self.report_error(
+                DiagnosticCode::TypEnumDefinition,
+                format!("'{}' is not an Enum", enum_name),
+                span,
+            );
         }
     }
 

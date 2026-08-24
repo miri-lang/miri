@@ -44,6 +44,7 @@ use crate::ast::factory::make_type;
 use crate::ast::statement;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::utils::is_residency_gated_buffer;
@@ -60,6 +61,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -78,6 +80,7 @@ impl TypeChecker {
         let cond_type = self.infer_expression(cond, context);
         if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!("If condition must be a boolean, got {}", cond_type),
                 cond.span,
             );
@@ -100,6 +103,7 @@ impl TypeChecker {
         let unconsumed_then = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed_then {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -119,6 +123,7 @@ impl TypeChecker {
             let unconsumed_else = context.get_unconsumed_linear_vars();
             for (name, span) in unconsumed_else {
                 self.report_error(
+                    DiagnosticCode::OwnLinearVariableNotConsumed,
                     format!("Linear variable '{}' must be consumed exactly once", name),
                     span,
                 );
@@ -144,7 +149,7 @@ impl TypeChecker {
             for (name, consumed_then) in scope {
                 if let Some((_, consumed_else)) = else_scope.iter().find(|(n, _)| n == name) {
                     if *consumed_then != *consumed_else {
-                        self.report_error(
+                        self.report_error(DiagnosticCode::OwnLinearVariableNotConsumed,
                              format!(
                                  "Linear variable '{}' is consumed in one branch but not the other. Linear variables must be consistently consumed.",
                                  name
@@ -167,6 +172,7 @@ impl TypeChecker {
         let cond_type = self.infer_expression(cond, context);
         if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!("While condition must be a boolean, got {}", cond_type),
                 cond.span,
             );
@@ -178,6 +184,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -207,6 +214,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -227,6 +235,7 @@ impl TypeChecker {
     ) {
         if let Some(accum_name) = detect_reduction(body, vars, context) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 format!(
                     "loop-carried accumulator '{}' makes 'forall' iterations order-dependent; \
                     'forall' requires independent iterations (reductions are not yet supported)",
@@ -244,7 +253,7 @@ impl TypeChecker {
             ForallTarget::Cpu => self.check_forall_cpu(vars, iterable, body, context),
             ForallTarget::GpuRequiredButAbsent => {
                 self.check_gpu_for_captures(vars, body, context);
-                self.report_error(
+                self.report_error(DiagnosticCode::TarGpuResidencyViolation,
                     "'gpu forall' requires at least one gpu-resident buffer; none found (annotate data with 'gpu let')"
                         .to_string(),
                     stmt_span,
@@ -265,6 +274,7 @@ impl TypeChecker {
             2 => self.check_forall_cpu_2d(decls, iterable, body, context),
             3 => self.check_forall_cpu_3d(decls, iterable, body, context),
             _ => self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 format!(
                     "forall: expected 1, 2, or 3 loop variables, got {}",
                     decls.len()
@@ -294,6 +304,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -312,6 +323,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Tuple(ranges) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "2D forall requires two comma-separated ranges".to_string(),
                 iterable.span,
             );
@@ -320,6 +332,7 @@ impl TypeChecker {
 
         if ranges.len() != 2 {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "2D forall requires exactly two ranges".to_string(),
                 iterable.span,
             );
@@ -338,6 +351,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -356,6 +370,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Tuple(ranges) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "3D forall requires three comma-separated ranges".to_string(),
                 iterable.span,
             );
@@ -364,6 +379,7 @@ impl TypeChecker {
 
         if ranges.len() != 3 {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "3D forall requires exactly three ranges".to_string(),
                 iterable.span,
             );
@@ -382,6 +398,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -400,6 +417,7 @@ impl TypeChecker {
         for (i, range_expr) in ranges.iter().enumerate() {
             let ExpressionKind::Range(start, Some(end), _) = &range_expr.node else {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "forall dimension {}: range must be a bounded numeric range like '0..n'",
                         i
@@ -412,6 +430,7 @@ impl TypeChecker {
             let start_type = self.infer_expression(start, context);
             if !matches!(start_type.kind, TypeKind::Int) {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "forall dimension {}: range start must be Int, got {}",
                         i, start_type
@@ -424,6 +443,7 @@ impl TypeChecker {
             let end_type = self.infer_expression(end, context);
             if !matches!(end_type.kind, TypeKind::Int) {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "forall dimension {}: range end must be Int, got {}",
                         i, end_type
@@ -469,6 +489,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Tuple(ranges) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "3D gpu forall requires three comma-separated ranges".to_string(),
                 iterable.span,
             );
@@ -477,6 +498,7 @@ impl TypeChecker {
 
         if ranges.len() != 3 {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "3D gpu forall requires exactly three ranges".to_string(),
                 iterable.span,
             );
@@ -530,6 +552,7 @@ impl TypeChecker {
             3 => self.check_gpu_for_3d(decls, iterable, body, context, stmt_span),
             _ => {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     "gpu forall requires 1, 2, or 3 loop variables".to_string(),
                     stmt_span,
                 );
@@ -549,6 +572,7 @@ impl TypeChecker {
         for (i, range_expr) in ranges.iter().enumerate() {
             let ExpressionKind::Range(start, Some(end), range_type) = &range_expr.node else {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
                         .to_string(),
                     range_expr.span,
@@ -560,6 +584,7 @@ impl TypeChecker {
                 RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
             ) {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
                         .to_string(),
                     range_expr.span,
@@ -569,6 +594,7 @@ impl TypeChecker {
             let start_type = self.infer_expression(start, context);
             if !matches!(start_type.kind, TypeKind::Int) {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "'gpu forall' range {} start must be Int, got {}",
                         dim_names[i], start_type.kind
@@ -581,6 +607,7 @@ impl TypeChecker {
             let end_type = self.infer_expression(end, context);
             if !matches!(end_type.kind, TypeKind::Int) {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "'gpu forall' range {} end must be Int, got {}",
                         dim_names[i], end_type.kind
@@ -601,6 +628,7 @@ impl TypeChecker {
                 let declared_type = self.resolve_type_expression(type_expr, context);
                 if !self.are_compatible(&declared_type, &int_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for loop variable '{}': expected Int, got {}",
                             decl.name, declared_type
@@ -634,6 +662,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -652,6 +681,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
@@ -662,6 +692,7 @@ impl TypeChecker {
             RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
         ) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
@@ -670,6 +701,7 @@ impl TypeChecker {
         let start_type = self.infer_expression(start, context);
         if !matches!(start_type.kind, TypeKind::Int) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 format!(
                     "'gpu forall' range start must be Int, got {}",
                     start_type.kind
@@ -682,6 +714,7 @@ impl TypeChecker {
         let end_type = self.infer_expression(end, context);
         if !matches!(end_type.kind, TypeKind::Int) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 format!("'gpu forall' range end must be Int, got {}", end_type.kind),
                 end.span,
             );
@@ -713,6 +746,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Tuple(ranges) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "2D forall requires two comma-separated ranges".to_string(),
                 iterable.span,
             );
@@ -721,6 +755,7 @@ impl TypeChecker {
 
         if ranges.len() != 2 {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "2D forall requires exactly two ranges".to_string(),
                 iterable.span,
             );
@@ -755,6 +790,7 @@ impl TypeChecker {
         // `gpu frame` must have exactly 1 loop variable (enforced in parser)
         if decls.len() != 1 {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "gpu frame requires exactly 1 loop variable".to_string(),
                 stmt_span,
             );
@@ -763,6 +799,7 @@ impl TypeChecker {
 
         let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu frame' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
@@ -773,6 +810,7 @@ impl TypeChecker {
             RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
         ) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu frame' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
@@ -780,6 +818,7 @@ impl TypeChecker {
         }
         if !is_int_literal(start) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu frame' requires Int-literal range start".to_string(),
                 iterable.span,
             );
@@ -790,6 +829,7 @@ impl TypeChecker {
         let end_type = self.infer_expression(end, context);
         if !matches!(end_type.kind, TypeKind::Int) {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 format!("'gpu frame' range end must be Int, got {}", end_type.kind),
                 end.span,
             );
@@ -841,6 +881,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -860,6 +901,7 @@ impl TypeChecker {
             StatementKind::Block(stmts) => stmts,
             _ => {
                 self.report_error(
+                    DiagnosticCode::TarGpuParallelConstruct,
                     "gpu frame block body must be a block statement".to_string(),
                     block.span,
                 );
@@ -869,6 +911,7 @@ impl TypeChecker {
 
         if stmts.is_empty() {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu frame' block must contain at least one 'gpu forall' pass".to_string(),
                 stmt_span,
             );
@@ -880,7 +923,7 @@ impl TypeChecker {
         let passes = match crate::mir::lowering::gpu_frame::flatten_frame_passes(stmts) {
             Ok(passes) => passes,
             Err((msg, sp)) => {
-                self.report_error(msg, sp);
+                self.report_error(DiagnosticCode::TarGpuParallelConstruct, msg, sp);
                 return;
             }
         };
@@ -922,7 +965,7 @@ impl TypeChecker {
                     resolve_forall_device(body, *device, decls, context),
                     ForallTarget::Cpu
                 ) {
-                    self.report_error(
+                    self.report_error(DiagnosticCode::TarGpuParallelConstruct,
                         "'gpu frame' block may only contain 'gpu forall' passes or a literal-count 'for _ in 0..k' repeat around them".to_string(),
                         pass.span,
                     );
@@ -941,6 +984,7 @@ impl TypeChecker {
         let unconsumed = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed {
             self.report_error(
+                DiagnosticCode::OwnLinearVariableNotConsumed,
                 format!("Linear variable '{}' must be consumed exactly once", name),
                 span,
             );
@@ -964,6 +1008,7 @@ impl TypeChecker {
 
         if write_set.is_empty() {
             self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
                 "'gpu frame' pass must write at least one gpu buffer".to_string(),
                 stmt_span,
             );
@@ -974,7 +1019,7 @@ impl TypeChecker {
         let mut race_buffers: Vec<_> = read_set.iter().filter(|b| write_set.contains(*b)).collect();
         if !race_buffers.is_empty() {
             race_buffers.sort();
-            self.report_error(
+            self.report_error(DiagnosticCode::TarGpuParallelConstruct,
                 format!(
                     "'gpu frame' pass creates a data race: buffer '{}' is both read and written in the same pass (use a separate ping-pong buffer)",
                     race_buffers[0]
@@ -997,7 +1042,11 @@ impl TypeChecker {
         match decls.len() {
             1 => self.bind_single_loop_variable(&decls[0], element_type, context),
             2 => self.bind_pair_loop_variables(decls, element_type, iterable_type, span, context),
-            _ => self.report_error("Invalid number of loop variables".to_string(), span),
+            _ => self.report_error(
+                DiagnosticCode::TypArgumentCountMismatch,
+                "Invalid number of loop variables".to_string(),
+                span,
+            ),
         }
     }
 
@@ -1011,6 +1060,7 @@ impl TypeChecker {
             let declared_type = self.resolve_type_expression(type_expr, context);
             if !self.are_compatible(&declared_type, element_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Type mismatch for loop variable '{}': expected {}, got {}",
                         decl.name, declared_type, element_type
@@ -1063,6 +1113,7 @@ impl TypeChecker {
     ) {
         if exprs.len() != 2 {
             self.report_error(
+                DiagnosticCode::TypStructDefinition,
                 "Destructuring mismatch: expected tuple of size 2".to_string(),
                 span,
             );
@@ -1190,7 +1241,11 @@ impl TypeChecker {
             } else {
                 "Break statement outside of loop"
             };
-            self.report_error(msg.to_string(), span);
+            self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
+                msg.to_string(),
+                span,
+            );
         }
     }
 
@@ -1201,7 +1256,7 @@ impl TypeChecker {
             } else {
                 "Continue statement outside of loop"
             };
-            self.report_error(msg.to_string(), span);
+            self.report_error(DiagnosticCode::TypLoopControlFlow, msg.to_string(), span);
         }
     }
 
@@ -1231,6 +1286,7 @@ impl TypeChecker {
 
         if !self.are_compatible(&expected_return_type, &actual_return_type, context) {
             self.report_error(
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
                     expected_return_type, actual_return_type

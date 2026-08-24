@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use crate::error::syntax::Span;
 
@@ -52,7 +53,11 @@ pub enum TypeErrorKind {
         expected: usize,
         found: usize,
     },
-    Custom {
+    /// A type error identified by a registry code, carrying the specific
+    /// message for this occurrence. The code names the family of failure; the
+    /// message describes the individual case within it.
+    Coded {
+        code: DiagnosticCode,
         message: String,
         help: Option<String>,
     },
@@ -95,11 +100,10 @@ pub enum TypeErrorKind {
         required_attribute: String,
     },
     /// A syntax/parse error that originated in an imported module, preserved
-    /// with its original error code and title rather than being downgraded to
-    /// a generic "Type Error".
+    /// with its original error code rather than being downgraded to a generic
+    /// type error. The title comes from the registry entry for `code`.
     ParseError {
-        code: &'static str,
-        title: &'static str,
+        code: DiagnosticCode,
         message: String,
     },
 }
@@ -109,25 +113,25 @@ impl TypeErrorKind {
     pub fn properties(&self) -> ErrorProperties {
         match self {
             Self::UndefinedVariable { name } => {
-                ErrorProperties::simple("E0100", "Undefined Variable")
+                ErrorProperties::simple(DiagnosticCode::TypUndefinedVariable)
                     .with_message(format!("Undefined variable: {}", name))
                     .with_help("Ensure the variable is defined and in scope.")
             }
             Self::TypeMismatch { expected, found } => {
-                ErrorProperties::simple("E0101", "Type Mismatch")
+                ErrorProperties::simple(DiagnosticCode::TypTypeMismatch)
                     .with_message(format!("Expected type {}, but got {}", expected, found))
                     .with_help("Ensure the types match the expected values.")
             }
-            Self::UnknownType { name } => ErrorProperties::simple("E0102", "Unknown Type")
+            Self::UnknownType { name } => ErrorProperties::simple(DiagnosticCode::TypUnknownType)
                 .with_message(format!("Unknown type: {}", name))
                 .with_help("Ensure the type is defined and imported correctly."),
             Self::MissingField { field, type_name } => {
-                ErrorProperties::simple("E0103", "Missing Field")
+                ErrorProperties::simple(DiagnosticCode::TypMissingField)
                     .with_message(format!("Missing field '{}' in type {}", field, type_name))
                     .with_help("Ensure all required fields are initialized.")
             }
             Self::MissingVariant { variant, enum_name } => {
-                ErrorProperties::simple("E0104", "Missing Variant")
+                ErrorProperties::simple(DiagnosticCode::TypMissingVariant)
                     .with_message(format!(
                         "Missing variant '{}' in type {}",
                         variant, enum_name
@@ -135,23 +139,23 @@ impl TypeErrorKind {
                     .with_help("Ensure the variant is defined in the enum.")
             }
             Self::IncompatibleTypes { lhs, rhs, .. } => {
-                ErrorProperties::simple("E0105", "Incompatible Types")
+                ErrorProperties::simple(DiagnosticCode::TypIncompatibleTypesInOperation)
                     .with_message(format!("Types {} and {} are incompatible", lhs, rhs))
                     .with_help("These types cannot be used together in this operation.")
             }
             Self::ImmutableAssignment { name } => {
-                ErrorProperties::simple("E0106", "Immutable Assignment")
+                ErrorProperties::simple(DiagnosticCode::TypImmutableAssignment)
                     .with_message(format!("Cannot assign to immutable variable: {}", name))
                     .with_help("Declare the variable as mutable using 'mut'.")
             }
-            Self::MissingReturn { expected } => ErrorProperties::simple("E0107", "Missing Return")
+            Self::MissingReturn { expected } => ErrorProperties::simple(DiagnosticCode::TypMissingReturnStatement)
                 .with_message(format!("Missing return statement of type {}", expected))
                 .with_help("Ensure the function returns a value on all paths."),
-            Self::InvalidCall { reason } => ErrorProperties::simple("E0108", "Invalid Call")
+            Self::InvalidCall { reason } => ErrorProperties::simple(DiagnosticCode::TypInvalidCall)
                 .with_message(format!("Invalid call: {}", reason))
                 .with_help("Ensure you are calling a function or closure."),
             Self::ArityMismatch { expected, found } => {
-                ErrorProperties::simple("E0109", "Arity Mismatch")
+                ErrorProperties::simple(DiagnosticCode::TypArityMismatch)
                     .with_message(format!(
                         "Function expects {} arguments, but got {}",
                         expected, found
@@ -160,11 +164,13 @@ impl TypeErrorKind {
                         "Check the function signature and provide the correct number of arguments.",
                     )
             }
-            Self::Custom { message, .. } => {
-                ErrorProperties::simple("E0110", "Type Error").with_message(message.clone())
-            }
+            Self::Coded {
+                code,
+                message,
+                help,
+            } => crate::error::diagnostic::coded_properties(*code, message, help),
             Self::NonExhaustiveEnumNeedsCatchAll { enum_name, module } => {
-                ErrorProperties::simple("E0111", "Non-Exhaustive Enum Match")
+                ErrorProperties::simple(DiagnosticCode::TypNonExhaustiveMatchNeedsDefault)
                     .with_message(format!(
                         "Match on `@non_exhaustive` enum '{}' requires a `default` arm outside its defining module '{}'",
                         enum_name, module
@@ -175,7 +181,7 @@ impl TypeErrorKind {
                     ))
             }
             Self::UnknownAttribute { name, known } => {
-                ErrorProperties::simple("E0112", "Unknown Attribute")
+                ErrorProperties::simple(DiagnosticCode::TypUnknownAttribute)
                     .with_message(format!("Unknown attribute: @{}", name))
                     .with_help(format!(
                         "Attributes are a closed set. Known attributes: {}.",
@@ -192,12 +198,12 @@ impl TypeErrorKind {
                 } else {
                     format!("Attributes valid on {}: {}.", target, accepted.join(", "))
                 };
-                ErrorProperties::simple("E0113", "Attribute Not Valid")
+                ErrorProperties::simple(DiagnosticCode::TypAttributeNotValidOnTarget)
                     .with_message(format!("Attribute @{} is not valid on {}", name, target))
                     .with_help(help)
             }
             Self::AttributeArgumentMissing { name } => {
-                ErrorProperties::simple("E0114", "Attribute Argument Missing")
+                ErrorProperties::simple(DiagnosticCode::TypAttributeArgumentMissing)
                     .with_message(format!(
                         "Attribute @{} requires a string literal argument",
                         name
@@ -205,19 +211,19 @@ impl TypeErrorKind {
                     .with_help(format!("Provide an argument: @{}(\"value\")", name))
             }
             Self::AttributeArgumentExtra { name } => {
-                ErrorProperties::simple("E0114", "Attribute Argument Extra")
+                ErrorProperties::simple(DiagnosticCode::TypAttributeArgumentExtra)
                     .with_message(format!("Attribute @{} does not take an argument", name))
                     .with_help(format!("Remove the argument: @{}", name))
             }
             Self::InvalidRegexLiteral { reason } => {
-                ErrorProperties::simple("E0115", "Invalid Regex Literal")
+                ErrorProperties::simple(DiagnosticCode::TypInvalidRegexLiteral)
                     .with_message(format!("Invalid regex literal: {}", reason))
             }
             Self::InvalidTestFunctionSignature {
                 function_name,
                 reason,
             } => {
-                ErrorProperties::simple("E0116", "Invalid Test Function Signature")
+                ErrorProperties::simple(DiagnosticCode::TypInvalidTestFunctionSignature)
                     .with_message(format!(
                         "Invalid test function signature for '{}': {}",
                         function_name, reason
@@ -227,17 +233,15 @@ impl TypeErrorKind {
                 attribute_name,
                 required_attribute,
             } => {
-                ErrorProperties::simple("E0117", "Missing Required Attribute")
+                ErrorProperties::simple(DiagnosticCode::TypMissingRequiredAttribute)
                     .with_message(format!(
                         "Attribute @{} requires @{} to be present on the same declaration",
                         attribute_name, required_attribute
                     ))
             }
-            Self::ParseError {
-                code,
-                title,
-                message,
-            } => ErrorProperties::simple(code, title).with_message(message.clone()),
+            Self::ParseError { code, message } => {
+                ErrorProperties::simple(*code).with_message(message.clone())
+            }
         }
     }
 }
@@ -258,7 +262,6 @@ impl TypeError {
         Self {
             kind: TypeErrorKind::ParseError {
                 code: props.code,
-                title: props.title,
                 message: props.message.unwrap_or_else(|| props.title.to_string()),
             },
             span: syntax_err.span,
@@ -266,10 +269,14 @@ impl TypeError {
         }
     }
 
-    /// Creates a custom type error with a freeform message.
-    pub fn custom(message: String, span: Span, help: Option<String>) -> Self {
+    /// Creates a type error under the given registry code.
+    pub fn coded(code: DiagnosticCode, message: String, span: Span, help: Option<String>) -> Self {
         Self {
-            kind: TypeErrorKind::Custom { message, help },
+            kind: TypeErrorKind::Coded {
+                code,
+                message,
+                help,
+            },
             span,
             source_override: None,
         }
@@ -283,11 +290,11 @@ impl TypeError {
 
 impl Reportable for TypeError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let mut props = self.kind.properties();
-        if let TypeErrorKind::Custom { help, .. } = &self.kind {
-            props.help = help.clone();
-        }
-        Diagnostic::from_props(props, Some(self.span), self.source_override.clone())
+        Diagnostic::from_props(
+            self.kind.properties(),
+            Some(self.span),
+            self.source_override.clone(),
+        )
     }
 }
 

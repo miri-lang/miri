@@ -15,6 +15,7 @@ use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
 use crate::ast::{Expression, ExpressionKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
 
@@ -565,6 +566,7 @@ impl TypeChecker {
                 return;
             }
             self.report_error(
+                DiagnosticCode::TypGenericArgumentCount,
                 format!(
                     "Generic argument count mismatch: expected {}, got {}",
                     params_len, args_len
@@ -591,6 +593,7 @@ impl TypeChecker {
                 if let Some(constraint) = &param_def.constraint {
                     if !self.satisfies_constraint(&arg_type, constraint, &param_def.kind, context) {
                         self.report_error(
+                            DiagnosticCode::TypGenericTypeStructure,
                             format!(
                                 "Type {} does not satisfy constraint {} {}",
                                 arg_type, param_def.kind, constraint

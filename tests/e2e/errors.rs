@@ -17,7 +17,7 @@ fn example_err_01_type_mismatch() {
     assert_compile_fails(
         include_str!("./err_01_type_mismatch.mi"),
         &[
-            "error[E0110]",
+            "error[MER_TYP_002]",
             "if arr[mid] == target: return \"found\"",
             "|                                       ^^^^^^^ Invalid return type: expected int, got String",
         ],
@@ -29,7 +29,7 @@ fn example_err_02_undefined_function() {
     assert_compile_fails(
         include_str!("./err_02_undefined_function.mi"),
         &[
-            "error[E0110]",
+            "error[MER_TYP_034]",
             "help: Did you mean 'bubble_sort'?",
             "let sorted = buble_sort(data)",
             "|                  ^^^^^^^^^^ Undefined variable: buble_sort",
@@ -42,7 +42,7 @@ fn example_err_03_indentation() {
     assert_compile_fails(
         include_str!("./err_03_indentation.mi"),
         &[
-            "error[E0003]: Indentation Mismatch",
+            "error[MER_LEX_003]: Indentation Mismatch",
             "return n * factorial(n - 1)",
             "help: Ensure the indentation level matches the surrounding code block.",
         ],
@@ -54,7 +54,7 @@ fn example_err_04_missing_argument() {
     assert_compile_fails(
         include_str!("./err_04_missing_argument.mi"),
         &[
-            "error[E0110]",
+            "error[MER_TYP_030]",
             "println(f\"gcd(48, 18) = {gcd(48)}\")",
             "|                              ^^^^^^^ Missing argument for parameter 'b'",
         ],

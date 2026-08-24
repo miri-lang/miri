@@ -19,6 +19,7 @@ use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
 use crate::ast::types::{
     frame_input_param_key, FrameFieldKind, Type, TypeKind, FRAME_INPUT_FIELDS,
 };
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
@@ -465,7 +466,9 @@ fn emit_gpu_frame_launch_literal(
         .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+        .map_err(|e| {
+            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, span)
+        })?;
 
     let mut all_scalar_ops = Vec::new();
     if uses_frame {
@@ -553,7 +556,9 @@ fn emit_gpu_frame_launch_runtime(
         .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+        .map_err(|e| {
+            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, span)
+        })?;
 
     let mut all_scalar_ops = Vec::new();
     if uses_frame {

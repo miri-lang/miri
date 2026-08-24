@@ -17,6 +17,7 @@ use crate::ast::pattern::Pattern;
 use crate::ast::statement::{BindingResidency, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, Severity};
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
@@ -263,7 +264,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             if !consumed.contains_key(var_name.as_str()) {
                 self.warnings.push(Diagnostic {
                     severity: Severity::Warning,
-                    code: Some("W0004"),
+                    code: Some("MER_OWN_001"),
                     title: "resource not consumed at scope exit".to_string(),
                     message: format!(
                         "resource '{}' of type '{}' was not consumed before scope exit",
@@ -409,7 +410,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 format!("\n  consumed because:\n{}", info.chain.join("\n"))
             };
             self.errors.push(TypeError {
-                kind: TypeErrorKind::Custom {
+                kind: TypeErrorKind::Coded {
+                    code: DiagnosticCode::OwnUseOfMovedValue,
                     message: format!(
                         "'{}' was consumed by '{}' and cannot be used again{}\n  fix: call .clone() to keep your copy independent",
                         name, info.by_fn, chain_section

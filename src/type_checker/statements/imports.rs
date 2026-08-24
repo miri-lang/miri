@@ -40,6 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -60,13 +61,21 @@ impl TypeChecker {
         let (path_str, import_kind) = match Self::extract_import_path_with_kind(path) {
             Some(result) => result,
             None => {
-                self.report_error("Invalid import path".to_string(), path.span);
+                self.report_error(
+                    DiagnosticCode::NamImportPathError,
+                    "Invalid import path".to_string(),
+                    path.span,
+                );
                 return;
             }
         };
 
         if path_str.contains("..") || path_str.contains('/') || path_str.contains('\\') {
-            self.report_error("Invalid characters in import path".to_string(), path.span);
+            self.report_error(
+                DiagnosticCode::NamImportPathError,
+                "Invalid characters in import path".to_string(),
+                path.span,
+            );
             return;
         }
 
@@ -209,6 +218,7 @@ impl TypeChecker {
     ) -> bool {
         for name in names {
             self.report_error(
+                DiagnosticCode::ImpNameConflict,
                 format!(
                     "Type '{}' is declared in this program and also provided by '{}'. \
                      Rename the declaration.",
@@ -334,7 +344,11 @@ impl TypeChecker {
         let source = match fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
-                self.report_error(format!("Failed to read module '{}': {}", path_str, e), span);
+                self.report_error(
+                    DiagnosticCode::NamModuleNotFound,
+                    format!("Failed to read module '{}': {}", path_str, e),
+                    span,
+                );
                 return None;
             }
         };
@@ -394,7 +408,11 @@ impl TypeChecker {
             }
         }
 
-        self.report_error(format!("Module '{}' not found", path_str), span);
+        self.report_error(
+            DiagnosticCode::NamModuleNotFound,
+            format!("Module '{}' not found", path_str),
+            span,
+        );
         None
     }
 
@@ -410,6 +428,7 @@ impl TypeChecker {
             .map(|s| s.as_str())
             .collect();
         self.report_error(
+            DiagnosticCode::ImpCircularImport,
             format!(
                 "Circular import detected: '{}' is already being loaded. Import chain: {} -> {}",
                 path_str,
@@ -567,6 +586,7 @@ impl TypeChecker {
                     if let Some(info) = self.type_table.global_scope.get(sel_name) {
                         if info.module == module_name {
                             self.report_error(
+                                DiagnosticCode::ImpNameConflict,
                                 format!(
                                     "Name '{}' conflicts with an existing definition from \
                                      module '{}'. Use selective imports with an alias to \
@@ -593,6 +613,7 @@ impl TypeChecker {
             collisions.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, old_module) in collisions {
                 self.report_error(
+                    DiagnosticCode::ImpNameConflict,
                     format!(
                         "Name '{}' conflicts with an existing definition from module \
                          '{}'. Use selective imports to avoid ambiguity, e.g. \
@@ -714,6 +735,7 @@ impl TypeChecker {
 
                 if !in_scope && !in_types {
                     self.report_error(
+                        DiagnosticCode::ImpNameNotFoundInModule,
                         format!("Name '{}' not found in module '{}'", sel_name, module_name),
                         *sel_span,
                     );
@@ -993,6 +1015,7 @@ impl TypeChecker {
         match self.suggest_module_for_type(type_name) {
             Some(module) => {
                 self.report_error_with_help(
+                    DiagnosticCode::TypTypeNotFound,
                     format!("Unknown type: {}", type_name),
                     span,
                     format!("Consider importing '{}'", module),

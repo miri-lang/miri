@@ -299,7 +299,7 @@ fn test_compile_error_is_rendered_as_a_diagnostic() {
         .arg(dir.path())
         .assert()
         .failure()
-        .stdout(predicates::str::contains("error[E0110]"))
+        .stdout(predicates::str::contains("error[MER_TYP_034]"))
         .stdout(predicates::str::contains("Undefined variable: assert"))
         // The span must point at the user's own line, not into the appended
         // dispatcher, and never at a debug dump of the error value.
@@ -507,7 +507,7 @@ fn test_compile_error_fails_every_test_in_the_file() {
         .arg(dir.path())
         .assert()
         .failure()
-        .stdout(predicates::str::contains("error[E0110]"))
+        .stdout(predicates::str::contains("error[MER_TYP_034]"))
         .stdout(predicates::str::contains(
             "test result: FAILED. 0 passed; 2 failed; 0 ignored",
         ));
@@ -530,7 +530,7 @@ fn test_file_with_only_ignored_tests_is_never_compiled() {
         .assert()
         .success()
         .stdout(predicates::str::contains("ignored, not ready"))
-        .stdout(predicates::str::contains("error[E0110]").not())
+        .stdout(predicates::str::contains("error[MER_TYP_034]").not())
         .stdout(predicates::str::contains(
             "test result: ok. 0 passed; 0 failed; 1 ignored",
         ));

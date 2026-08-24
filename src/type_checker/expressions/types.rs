@@ -46,6 +46,7 @@ use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::TypeChecker;
@@ -87,7 +88,11 @@ impl TypeChecker {
         match id_name {
             "Ok" => {
                 if values.len() != 1 {
-                    self.report_error("Ok expects exactly 1 argument".to_string(), span);
+                    self.report_error(
+                        DiagnosticCode::TypArgumentCountMismatch,
+                        "Ok expects exactly 1 argument".to_string(),
+                        span,
+                    );
                     return Some(ast_factory::make_type(TypeKind::Error));
                 }
                 let val_type = self.infer_expression(&values[0], context);
@@ -101,7 +106,11 @@ impl TypeChecker {
             }
             "Err" => {
                 if values.len() != 1 {
-                    self.report_error("Err expects exactly 1 argument".to_string(), span);
+                    self.report_error(
+                        DiagnosticCode::TypArgumentCountMismatch,
+                        "Err expects exactly 1 argument".to_string(),
+                        span,
+                    );
                     return Some(ast_factory::make_type(TypeKind::Error));
                 }
                 let val_type = self.infer_expression(&values[0], context);
@@ -141,7 +150,11 @@ impl TypeChecker {
                     context,
                 );
             } else {
-                self.report_error(format!("'{}' is not an Enum", enum_name), span);
+                self.report_error(
+                    DiagnosticCode::TypEnumDefinition,
+                    format!("'{}' is not an Enum", enum_name),
+                    span,
+                );
                 return Some(ast_factory::make_type(TypeKind::Error));
             }
         }
@@ -159,6 +172,7 @@ impl TypeChecker {
     ) -> Option<Type> {
         let Some(variant_types) = enum_def.variants.get(variant_name) else {
             self.report_error(
+                DiagnosticCode::TypEnumVariant,
                 format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
                 span,
             );
@@ -167,6 +181,7 @@ impl TypeChecker {
 
         if values.len() != variant_types.len() {
             self.report_error(
+                DiagnosticCode::TypEnumVariant,
                 format!(
                     "Enum variant '{}.{}' expects {} arguments, got {}",
                     enum_name,
@@ -262,6 +277,7 @@ impl TypeChecker {
                 let val_type = self.infer_expression(val, context);
                 if !self.are_compatible(&val_type, var_type, context) {
                     self.report_error(
+                        DiagnosticCode::TypEnumVariant,
                         format!(
                             "Type mismatch in enum variant '{}.{}': expected {}, got {}",
                             enum_name, variant_name, var_type, val_type
@@ -288,6 +304,7 @@ impl TypeChecker {
             let substituted = self.substitute_type(var_type, generic_mapping);
             if !self.are_compatible(&val_type, &substituted, context) {
                 self.report_error(
+                    DiagnosticCode::TypEnumVariant,
                     format!(
                         "Type mismatch in enum variant '{}.{}': expected {}, got {}",
                         enum_name, variant_name, substituted, val_type
@@ -318,7 +335,11 @@ impl TypeChecker {
                         return self.instantiate_generic_type(&inner, args, span, context);
                     }
                     _ => {
-                        self.report_error("Expected generic function or type".to_string(), span);
+                        self.report_error(
+                            DiagnosticCode::TypGenericTypeStructure,
+                            "Expected generic function or type".to_string(),
+                            span,
+                        );
                         return make_type(TypeKind::Error);
                     }
                 }
@@ -343,7 +364,11 @@ impl TypeChecker {
         let mut mapping = HashMap::new();
 
         if params.len() != args.len() {
-            self.report_error("Generic argument count mismatch".to_string(), span);
+            self.report_error(
+                DiagnosticCode::TypGenericArgumentCount,
+                "Generic argument count mismatch".to_string(),
+                span,
+            );
             return make_type(TypeKind::Error);
         }
 
@@ -428,7 +453,11 @@ impl TypeChecker {
                 Some(resolved_args),
             )))))
         } else {
-            self.report_error("Expected generic type".to_string(), span);
+            self.report_error(
+                DiagnosticCode::TypGenericTypeStructure,
+                "Expected generic type".to_string(),
+                span,
+            );
             make_type(TypeKind::Error)
         }
     }

@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -68,6 +69,7 @@ impl TypeChecker {
             let end_type = self.infer_expression(end_expr, context);
             if !self.are_compatible(&start_type, &end_type, context) {
                 self.report_error(
+                    DiagnosticCode::TypRangeTypeMismatch,
                     format!("Range types mismatch: {} and {}", start_type, end_type),
                     span,
                 );

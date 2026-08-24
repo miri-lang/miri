@@ -78,7 +78,7 @@ fn main()
     let t = nanotime()
     println("nanotime works")
 "#,
-        "W0006",
+        "MER_TYP_027",
     );
 }
 

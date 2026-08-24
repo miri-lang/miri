@@ -31,6 +31,7 @@
 //! rejected. The escape hatch is an atomic element (`Array<Atomic<T>, N>`),
 //! whose writes are race-free by construction and exempt from this pass.
 
+use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::captures::collect_free_identifiers_excluding;
@@ -353,6 +354,7 @@ impl TypeChecker {
     /// non-injective index.
     fn report_concurrent_write(&mut self, buffer: &str, span: Span) {
         self.report_error(
+            DiagnosticCode::TarGpuParallelConstruct,
             format!(
                 "concurrent write to gpu buffer '{buffer}': the index is not provably unique per \
                  thread, so parallel threads may write the same element. Index by the per-thread \

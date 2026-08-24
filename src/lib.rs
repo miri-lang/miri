@@ -7,6 +7,8 @@ pub mod ast;
 pub mod cli;
 /// Code generation backends (Cranelift, LLVM).
 pub mod codegen;
+/// Diagnostic code registry and severity levels.
+pub mod diagnostics;
 /// Error and diagnostic types for all compiler phases.
 pub mod error;
 /// Lexer (tokenizer) for Miri source code.

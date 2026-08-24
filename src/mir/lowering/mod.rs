@@ -31,6 +31,7 @@ pub mod variable;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
@@ -1323,10 +1324,10 @@ fn finalize_body(
 
     // Validate the body
     if let Err(msg) = ctx.body.validate() {
-        return Err(LoweringError::custom(
-            format!("MIR Validation Error: {}", msg),
+        return Err(LoweringError::internal(
+            DiagnosticCode::MirValidationFailed,
+            format!("MIR body failed validation: {}", msg),
             span,
-            None,
         ));
     }
 

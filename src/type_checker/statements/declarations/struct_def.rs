@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::TypeKind;
 use crate::ast::*;
+use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::{
     Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
@@ -126,6 +127,7 @@ impl TypeChecker {
                 continue;
             };
             self.report_error(
+                DiagnosticCode::TypStructDefinition,
                 format!(
                     "Struct '{}' cannot define methods other than 'drop' (found '{}'). \
                      Use a class for methods, or a free function that takes the struct.",
@@ -140,7 +142,11 @@ impl TypeChecker {
         if let ExpressionKind::Identifier(n, _) = &name_expr.node {
             Some(n.clone())
         } else {
-            self.report_error("Invalid struct name".to_string(), name_expr.span);
+            self.report_error(
+                DiagnosticCode::TypStructDefinition,
+                "Invalid struct name".to_string(),
+                name_expr.span,
+            );
             None
         }
     }
@@ -153,6 +159,7 @@ impl TypeChecker {
             };
             if !is_placeholder {
                 self.report_error(
+                    DiagnosticCode::TypTypeAlreadyDefined,
                     format!("Type '{}' is already defined", name),
                     name_expr.span,
                 );
@@ -202,12 +209,17 @@ impl TypeChecker {
                     fields_vec.push((field_name.clone(), field_type, MemberVisibility::Public));
                 } else {
                     self.report_error(
+                        DiagnosticCode::TypStructDefinition,
                         "Invalid struct field name".to_string(),
                         field_name_expr.span,
                     );
                 }
             } else {
-                self.report_error("Invalid struct field definition".to_string(), field.span);
+                self.report_error(
+                    DiagnosticCode::TypStructDefinition,
+                    "Invalid struct field definition".to_string(),
+                    field.span,
+                );
             }
         }
         fields_vec
@@ -221,7 +233,7 @@ impl TypeChecker {
     ) -> bool {
         for (field_name, field_type, _) in fields_vec {
             if self.is_infinite_recursive_type(name, &field_type.kind) {
-                self.report_error(
+                self.report_error(DiagnosticCode::TypStructDefinition,
                     format!(
                         "Infinite recursive type: field '{}' of struct '{}' contains '{}' without indirection",
                         field_name, name, name

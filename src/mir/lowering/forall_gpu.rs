@@ -19,6 +19,7 @@
 //!   buffers (`Array<T, N>`); all such captures are exposed as read-write
 //!   storage buffers.
 
+use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -898,7 +899,9 @@ fn assemble_gpu_launch_terminator(
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
-        .map_err(|e| LoweringError::custom(e.to_string(), span, None))?;
+        .map_err(|e| {
+            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, span)
+        })?;
 
     let void_ty = Type::new(TypeKind::Void, span);
     let dest_local = ctx.push_temp(void_ty, span);
