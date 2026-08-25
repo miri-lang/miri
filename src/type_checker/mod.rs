@@ -618,7 +618,7 @@ impl TypeChecker {
             }
             let prev = self.suppress_diagnostics;
             self.suppress_diagnostics = true;
-            self.register_variable_decl(decl, visibility, context, span);
+            self.register_variable_decl(decl, visibility, context, span, None);
             self.suppress_diagnostics = prev;
         }
     }

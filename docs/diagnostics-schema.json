@@ -15,13 +15,14 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', or 'explain'.",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', or 'fix'.",
       "enum": [
         "check",
         "build",
         "run",
         "test",
-        "explain"
+        "explain",
+        "fix"
       ]
     },
     "diagnostics": {
@@ -208,17 +209,57 @@
     },
     "JsonRepair": {
       "type": "object",
-      "description": "Repair suggestion (reserved for future versions). Always absent in schema version 1.",
+      "description": "A repair the compiler determined for this diagnostic, with the edits that carry it out.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique identifier for this repair suggestion."
+          "description": "Stable identifier for the repair shape: 'let-to-var', 'add-import', or 'drop-extra-arguments'."
         },
         "summary": {
           "type": "string",
           "description": "Human-readable summary of the repair."
+        },
+        "edits": {
+          "type": "array",
+          "description": "The edits that carry out this repair, in source order. Never empty: a repair exists only when the compiler determined the edit.",
+          "items": {
+            "$ref": "#/$defs/JsonEdit"
+          }
         }
-      }
+      },
+      "required": [
+        "id",
+        "summary",
+        "edits"
+      ]
+    },
+    "JsonEdit": {
+      "type": "object",
+      "description": "A single edit to apply as part of a repair.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path (absolute or relative) to edit."
+        },
+        "start": {
+          "type": "integer",
+          "description": "Start byte offset (inclusive)."
+        },
+        "end": {
+          "type": "integer",
+          "description": "End byte offset (exclusive)."
+        },
+        "replacement": {
+          "type": "string",
+          "description": "Text replacing the range. Empty to delete the range; the range may be empty to insert."
+        }
+      },
+      "required": [
+        "path",
+        "start",
+        "end",
+        "replacement"
+      ]
     },
     "JsonRelated": {
       "type": "object",

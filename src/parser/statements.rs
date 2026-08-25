@@ -232,16 +232,20 @@ impl<'source> Parser<'source> {
         &mut self,
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
-        let (token, declaration_type) = match &self.lookahead {
-            Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
-            Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
-            Some((Token::Const, _)) => (Token::Const, VariableDeclarationType::Constant),
+        let (token, declaration_type, keyword_span) = match &self.lookahead {
+            Some((Token::Let, span)) => (Token::Let, VariableDeclarationType::Immutable, *span),
+            Some((Token::Var, span)) => (Token::Var, VariableDeclarationType::Mutable, *span),
+            Some((Token::Const, span)) => (Token::Const, VariableDeclarationType::Constant, *span),
             _ => Err(self.error_unexpected_lookahead_token("let, var or const"))?,
         };
 
         self.eat_token(&token)?;
         let declarations = self.variable_declaration_list(&declaration_type)?;
-        Ok(ast::variable_statement(declarations, visibility))
+        Ok(ast::variable_statement_with_span(
+            declarations,
+            visibility,
+            keyword_span,
+        ))
     }
 
     /*

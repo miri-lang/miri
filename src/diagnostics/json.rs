@@ -127,6 +127,7 @@ pub enum JsonCommand {
     Run,
     Test,
     Explain,
+    Fix,
 }
 
 /// A single diagnostic (error, warning, or note).
@@ -186,6 +187,25 @@ pub struct JsonDiagnostic {
 pub struct JsonRepair {
     pub id: String,
     pub summary: String,
+    /// The edits that carry out this repair, in source order.
+    ///
+    /// Never empty: a repair exists only when the compiler determined the edit,
+    /// so a repair that describes no change is not representable.
+    pub edits: Vec<JsonEdit>,
+}
+
+/// A single edit to apply as part of a repair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonEdit {
+    /// File path (absolute or relative).
+    pub path: String,
+    /// Start byte offset (inclusive).
+    pub start: usize,
+    /// End byte offset (exclusive).
+    pub end: usize,
+    /// Replacement text.
+    pub replacement: String,
 }
 
 /// A related diagnostic (typically a note).

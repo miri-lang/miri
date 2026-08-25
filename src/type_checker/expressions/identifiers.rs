@@ -48,6 +48,7 @@ use crate::ast::types::{
 };
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -323,19 +324,33 @@ impl TypeChecker {
                 .map(|s| s.as_str()),
         );
 
+        let message = format!("Undefined {}: {}", entity_kind, name);
+
+        // A name declared by exactly one module is repaired by importing it.
+        // Two or more candidates is a choice the author has to make, so those
+        // keep the diagnostic and get no repair.
+        if let [module] = Self::modules_declaring_function(name).as_slice() {
+            self.report_error_with_repair(
+                DiagnosticCode::TypUndefinedName,
+                message,
+                span,
+                RepairRequest::AddImport {
+                    module: module.clone(),
+                    name: name.to_string(),
+                },
+            );
+            return;
+        }
+
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
                 DiagnosticCode::TypUndefinedName,
-                format!("Undefined {}: {}", entity_kind, name),
+                message,
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
-            self.report_error(
-                DiagnosticCode::TypUndefinedName,
-                format!("Undefined {}: {}", entity_kind, name),
-                span,
-            );
+            self.report_error(DiagnosticCode::TypUndefinedName, message, span);
         }
     }
 

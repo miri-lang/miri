@@ -1026,6 +1026,61 @@ impl TypeChecker {
         }
     }
 
+    /// Every stdlib module declaring `name` as a top-level function, sorted.
+    ///
+    /// The result is sorted so it does not depend on directory iteration order,
+    /// which no filesystem guarantees. A caller that acts on the answer needs
+    /// the same answer every run.
+    ///
+    /// No module or symbol name is written here: the search reads whatever the
+    /// stdlib tree actually declares.
+    pub(crate) fn modules_declaring_function(name: &str) -> Vec<String> {
+        let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+
+        let mut found = Vec::new();
+        for root in stdlib_search_roots(env_override, exe_dir.as_deref()) {
+            if root.is_dir() {
+                Self::collect_modules_declaring_function(&root, name, &root, &mut found);
+            }
+            // The first existing root wins, matching how a module path resolves.
+            if !found.is_empty() {
+                break;
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    /// Recursively collects module paths under `dir` declaring `fn <name>`.
+    fn collect_modules_declaring_function(
+        dir: &Path,
+        name: &str,
+        base: &Path,
+        found: &mut Vec<String>,
+    ) {
+        let Ok(read_dir) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                Self::collect_modules_declaring_function(&path, name, base, found);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("mi") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if declares_function(&content, name) {
+                        if let Some(module) = module_path_of(&path, base) {
+                            found.push(module);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Recursively scans `dir` for a `.mi` file whose top-level declarations
     /// include `class <type_name>`.  Returns the dot-separated module path
     /// (e.g. `"system.collections.array"`) derived from the file's position
@@ -1163,4 +1218,46 @@ mod stdlib_search_root_tests {
         assert!(roots.contains(&PathBuf::from("/stdlib")));
         assert!(!roots.iter().any(|r| r.ends_with("lib/miri/stdlib")));
     }
+}
+
+/// Whether `source` declares `name` as a top-level function.
+///
+/// Reads the declaration form the language actually uses rather than any
+/// particular library's contents: an optional visibility modifier, `fn`, then
+/// the name, with generic parameters stripped.
+fn declares_function(source: &str, name: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            return false;
+        }
+        // A top-level declaration sits at column zero; an indented `fn` is a
+        // method on a type and is not importable on its own.
+        if line.starts_with(char::is_whitespace) {
+            return false;
+        }
+        let mut words = trimmed.split_whitespace();
+        while let Some(word) = words.next() {
+            if word != "fn" {
+                continue;
+            }
+            let declared = words.next().and_then(|next| next.split(['<', '(']).next());
+            if declared == Some(name) {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// The dot-separated module path for `path` relative to `base`.
+fn module_path_of(path: &Path, base: &Path) -> Option<String> {
+    let relative = path.strip_prefix(base).ok()?;
+    let mut parts: Vec<String> = relative
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
+        .collect();
+    let last = parts.pop()?;
+    parts.push(last.trim_end_matches(".mi").to_string());
+    Some(parts.join("."))
 }

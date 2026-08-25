@@ -3,6 +3,7 @@
 
 pub mod args;
 pub mod explain;
+pub mod fix;
 pub mod version;
 
 use crate::diagnostics::json::DiagnosticsEnvelope;

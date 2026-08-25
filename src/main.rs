@@ -76,6 +76,13 @@ fn run_command(cli: Cli) -> Result<()> {
                 check_file(path, format, cli.verbose, cli.verify_mir, cli.color)
             }
             Commands::Explain { code, format } => explain_code(&code, format, cli.color),
+            Commands::Fix {
+                path,
+                plan: _plan,
+                apply,
+                yes,
+                format,
+            } => fix_file(path, apply, yes, format),
             Commands::Test {
                 filter,
                 format,
@@ -358,6 +365,14 @@ fn explain_code(code: &str, format: Format, color_mode: ColorMode) -> Result<()>
     match miri::cli::explain::run(code, format, color_mode) {
         miri::cli::explain::Outcome::Explained => Ok(()),
         miri::cli::explain::Outcome::UnknownCode => std::process::exit(1),
+    }
+}
+
+/// Run the fix command: emit repair suggestions or apply them.
+fn fix_file(path: PathBuf, apply: bool, yes: bool, format: Format) -> Result<()> {
+    match miri::cli::fix::run(&path, apply, yes, format) {
+        miri::cli::fix::Outcome::Succeeded => Ok(()),
+        miri::cli::fix::Outcome::Refused | miri::cli::fix::Outcome::Failed => std::process::exit(1),
     }
 }
 
