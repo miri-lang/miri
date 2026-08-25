@@ -173,6 +173,12 @@ pub enum Commands {
         #[arg(long, action = ArgAction::SetTrue)]
         yes: bool,
 
+        /// Allow applying repairs classified as risky (api-changing, target-changing,
+        /// or requires-human-review). Without this flag, `--apply` refuses to apply
+        /// such repairs.
+        #[arg(long, action = ArgAction::SetTrue)]
+        allow_risky: bool,
+
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
         format: Format,

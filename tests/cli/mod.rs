@@ -7,6 +7,7 @@ pub mod color;
 pub mod explain;
 pub mod explain_snippets;
 pub mod fix;
+pub mod fix_safety;
 pub mod help;
 pub mod json_envelope;
 pub mod run;

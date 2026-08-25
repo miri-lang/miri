@@ -81,8 +81,9 @@ fn run_command(cli: Cli) -> Result<()> {
                 plan: _plan,
                 apply,
                 yes,
+                allow_risky,
                 format,
-            } => fix_file(path, apply, yes, format),
+            } => fix_file(path, apply, yes, allow_risky, format),
             Commands::Test {
                 filter,
                 format,
@@ -369,8 +370,14 @@ fn explain_code(code: &str, format: Format, color_mode: ColorMode) -> Result<()>
 }
 
 /// Run the fix command: emit repair suggestions or apply them.
-fn fix_file(path: PathBuf, apply: bool, yes: bool, format: Format) -> Result<()> {
-    match miri::cli::fix::run(&path, apply, yes, format) {
+fn fix_file(
+    path: PathBuf,
+    apply: bool,
+    yes: bool,
+    allow_risky: bool,
+    format: Format,
+) -> Result<()> {
+    match miri::cli::fix::run(&path, apply, yes, allow_risky, format) {
         miri::cli::fix::Outcome::Succeeded => Ok(()),
         miri::cli::fix::Outcome::Refused | miri::cli::fix::Outcome::Failed => std::process::exit(1),
     }

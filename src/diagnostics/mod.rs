@@ -8,12 +8,16 @@
 
 pub mod codes;
 pub mod explain;
+pub mod fix_safety;
 pub mod json;
+pub mod refusal;
 pub mod repair;
 pub mod severity;
 
 pub use codes::DiagnosticCode;
 pub use explain::Explanation;
+pub use fix_safety::FixSafety;
 pub use json::DiagnosticsEnvelope;
+pub use refusal::{compute_refused_repairs, repair_fix_safety, RefusedRepair};
 pub use repair::{RepairId, RepairRequest};
 pub use severity::Severity;

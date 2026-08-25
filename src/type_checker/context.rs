@@ -64,6 +64,12 @@ pub struct SymbolInfo {
     /// binding and no other. A statement binding several names shares one
     /// keyword, so none of its bindings record an offset.
     pub declaration_keyword_start: Option<usize>,
+    /// True if this symbol was declared at module scope (public API).
+    ///
+    /// Used to determine repair safety: a module-scope binding is an API surface
+    /// that other functions and modules observe, so changing it from `let` to `var`
+    /// is api-changing and requires human approval.
+    pub module_scope: bool,
 }
 
 impl SymbolInfo {
@@ -88,6 +94,7 @@ impl SymbolInfo {
             residency: BindingResidency::Host,
             is_gpu_fn: false,
             declaration_keyword_start: None,
+            module_scope: false,
         }
     }
 
@@ -105,6 +112,7 @@ impl SymbolInfo {
             residency: BindingResidency::Host,
             is_gpu_fn: false,
             declaration_keyword_start: None,
+            module_scope: false,
         }
     }
 }
