@@ -20,6 +20,7 @@ fn simple_diag(title: &str, message: String, help: Option<String>) -> Diagnostic
         source_override: None,
         expected: None,
         actual: None,
+        repair: None,
     }
 }
 

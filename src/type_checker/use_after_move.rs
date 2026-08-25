@@ -279,6 +279,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     source_override: None,
                     expected: None,
                     actual: None,
+                    repair: None,
                 });
             }
         }
@@ -422,6 +423,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 },
                 span: expr.span,
                 source_override: None,
+                repair: None,
             });
         }
     }

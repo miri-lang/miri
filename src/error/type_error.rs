@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::RepairRequest;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use crate::error::syntax::Span;
 
@@ -12,6 +13,10 @@ pub struct TypeError {
     pub span: Span,
     /// When set, this error originates from an imported file (file_path, source_text).
     pub source_override: Option<(String, String)>,
+    /// A repair recorded by the check that raised this error, when the correct
+    /// edit is determined. Absent for every condition whose repair would have
+    /// to be guessed.
+    pub repair: Option<RepairRequest>,
 }
 
 /// All possible type error variants produced by the type checker.
@@ -286,6 +291,7 @@ impl TypeError {
             kind,
             span,
             source_override: None,
+            repair: None,
         }
     }
 
@@ -299,6 +305,7 @@ impl TypeError {
             },
             span: syntax_err.span,
             source_override: None,
+            repair: None,
         }
     }
 
@@ -312,6 +319,7 @@ impl TypeError {
             },
             span,
             source_override: None,
+            repair: None,
         }
     }
 
@@ -331,6 +339,7 @@ impl Reportable for TypeError {
         let (expected, actual) = self.kind.expected_actual();
         diag.expected = expected;
         diag.actual = actual;
+        diag.repair = self.repair.clone();
         diag
     }
 }

@@ -48,6 +48,7 @@ use crate::ast::math_intrinsic::MathIntrinsic;
 use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::utils::{is_gpu_compatible, is_perceus_managed};
@@ -1752,15 +1753,20 @@ impl TypeChecker {
         }
 
         if pos_iter.next().is_some() {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!(
-                    "Too many positional arguments: expected {}, got {}",
-                    func_data.params.len(),
-                    positional_args.len()
-                ),
-                span,
+            let message = format!(
+                "Too many positional arguments: expected {}, got {}",
+                func_data.params.len(),
+                positional_args.len()
             );
+            match surplus_argument_range(positional_args, func_data.params.len()) {
+                Some((start, end)) => self.report_error_with_repair(
+                    DiagnosticCode::TypTypeMismatch,
+                    message,
+                    span,
+                    RepairRequest::DropExtraArguments { start, end },
+                ),
+                None => self.report_error(DiagnosticCode::TypTypeMismatch, message, span),
+            }
         }
 
         for (name, (_, _, span)) in named_args.drain() {
@@ -2786,4 +2792,25 @@ fn type_arg_is_concrete(ty: &Type) -> bool {
         TypeKind::Option(inner) => type_arg_is_concrete(inner),
         _ => true,
     }
+}
+
+/// The byte range covering the positional arguments past `declared`.
+///
+/// When the callee declares at least one parameter the range opens at the end
+/// of the last argument it does declare, so deleting it also removes the comma
+/// separating the two. When the callee declares none the range opens at the
+/// first argument instead, leaving the parentheses untouched.
+fn surplus_argument_range(
+    positional_args: &[(&Expression, Type)],
+    declared: usize,
+) -> Option<(usize, usize)> {
+    let last_extra = positional_args.last()?.0.span.end;
+    let start = match declared {
+        0 => positional_args.first()?.0.span.start,
+        _ => positional_args.get(declared.checked_sub(1)?)?.0.span.end,
+    };
+    if start >= last_extra {
+        return None;
+    }
+    Some((start, last_extra))
 }

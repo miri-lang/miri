@@ -57,6 +57,13 @@ pub struct SymbolInfo {
     pub residency: BindingResidency,
     /// True if this symbol represents a `gpu fn` (GPU kernel function).
     pub is_gpu_fn: bool,
+    /// Byte offset of the `let` keyword that introduced this binding.
+    ///
+    /// Set only for an immutable local declared alone in its statement, which
+    /// is exactly the case where rewriting that keyword as `var` affects this
+    /// binding and no other. A statement binding several names shares one
+    /// keyword, so none of its bindings record an offset.
+    pub declaration_keyword_start: Option<usize>,
 }
 
 impl SymbolInfo {
@@ -80,6 +87,7 @@ impl SymbolInfo {
             is_intrinsic: false,
             residency: BindingResidency::Host,
             is_gpu_fn: false,
+            declaration_keyword_start: None,
         }
     }
 
@@ -96,6 +104,7 @@ impl SymbolInfo {
             is_intrinsic: true,
             residency: BindingResidency::Host,
             is_gpu_fn: false,
+            declaration_keyword_start: None,
         }
     }
 }

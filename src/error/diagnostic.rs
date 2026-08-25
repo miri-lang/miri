@@ -11,6 +11,7 @@
 pub use crate::diagnostics::Severity;
 
 use crate::diagnostics::json::{JsonDiagnostic, JsonRelated};
+use crate::diagnostics::repair::RepairRequest;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 
@@ -49,6 +50,9 @@ pub struct Diagnostic {
     pub expected: Option<String>,
     /// Actual type/value for type mismatch errors.
     pub actual: Option<String>,
+    /// A repair recorded where this diagnostic was raised, when the correct
+    /// edit is determined.
+    pub repair: Option<RepairRequest>,
 }
 
 /// Consolidated error properties to keep widely scattered match statements in check.
@@ -154,6 +158,7 @@ impl Diagnostic {
             source_override,
             expected: None,
             actual: None,
+            repair: None,
         }
     }
 }
@@ -171,6 +176,7 @@ pub struct DiagnosticBuilder {
     source_override: Option<(String, String)>,
     expected: Option<String>,
     actual: Option<String>,
+    repair: Option<RepairRequest>,
 }
 
 impl DiagnosticBuilder {
@@ -187,6 +193,7 @@ impl DiagnosticBuilder {
             source_override: None,
             expected: None,
             actual: None,
+            repair: None,
         }
     }
 
@@ -253,6 +260,12 @@ impl DiagnosticBuilder {
         self
     }
 
+    /// Attach a repair recorded by the check raising this diagnostic.
+    pub fn repair(mut self, repair: RepairRequest) -> Self {
+        self.repair = Some(repair);
+        self
+    }
+
     /// Build the diagnostic.
     pub fn build(self) -> Diagnostic {
         Diagnostic {
@@ -266,6 +279,7 @@ impl DiagnosticBuilder {
             source_override: self.source_override,
             expected: self.expected,
             actual: self.actual,
+            repair: self.repair,
         }
     }
 }
@@ -329,7 +343,10 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
         actual: diag.actual.clone(),
         help: diag.help.clone(),
         fix_safety: None,
-        repair: None,
+        repair: diag
+            .repair
+            .as_ref()
+            .and_then(|request| request.project(file_label.unwrap_or_default(), effective_source)),
         related,
     }
 }

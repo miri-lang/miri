@@ -59,11 +59,18 @@ impl TypeChecker {
         context: &mut Context,
         span: Span,
     ) {
+        // A statement binding one name owns its `let` keyword outright, so that
+        // keyword can be rewritten for that binding alone. A statement binding
+        // several shares one keyword between them and records none.
+        let keyword_start = match decls {
+            [_] => Some(span.start),
+            _ => None,
+        };
         for decl in decls {
             if decl.is_shared {
                 self.validate_shared_variable(decl, context, span);
             }
-            self.register_variable_decl(decl, visibility, context, span);
+            self.register_variable_decl(decl, visibility, context, span, keyword_start);
         }
     }
 
@@ -118,6 +125,7 @@ impl TypeChecker {
         visibility: &MemberVisibility,
         context: &mut Context,
         span: Span,
+        keyword_start: Option<usize>,
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
@@ -156,6 +164,12 @@ impl TypeChecker {
             const_value,
         );
         info.residency = decl.residency;
+        // Only an immutable binding can be repaired into a mutable one. A
+        // constant is a different declaration form, so rewriting `let` there
+        // would not compile.
+        if matches!(decl.declaration_type, VariableDeclarationType::Immutable) {
+            info.declaration_keyword_start = keyword_start;
+        }
 
         if context.scopes.len() == 1 {
             self.type_table

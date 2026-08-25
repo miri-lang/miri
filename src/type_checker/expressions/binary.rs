@@ -47,6 +47,7 @@ use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
@@ -247,12 +248,30 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         };
         if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
-            let msg = if context.is_constant(name) {
+            let is_constant = context.is_constant(name);
+            let msg = if is_constant {
                 format!("Cannot assign to constant '{}'", name)
             } else {
                 format!("Cannot assign to immutable variable '{}'", name)
             };
-            self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span);
+            // A constant is not repaired into a `var`: it is a different
+            // declaration form, so rewriting the keyword would not compile.
+            let keyword_start = if is_constant {
+                None
+            } else {
+                context
+                    .resolve_info(name)
+                    .and_then(|info| info.declaration_keyword_start)
+            };
+            match keyword_start {
+                Some(keyword_start) => self.report_error_with_repair(
+                    DiagnosticCode::TypImmutabilityViolation,
+                    msg,
+                    span,
+                    RepairRequest::LetToVar { keyword_start },
+                ),
+                None => self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span),
+            }
         }
         self.infer_identifier(name, id_expr.span, context)
     }

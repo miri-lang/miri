@@ -19,6 +19,18 @@ pub fn variable_statement(
     stmt(StatementKind::Variable(declarations, visibility))
 }
 
+/// Creates a variable declaration statement spanning from its keyword.
+///
+/// The span starts at `let`, `var` or `const` rather than at the first name, so
+/// a diagnostic about the declaration points at the form that introduced it.
+pub fn variable_statement_with_span(
+    declarations: Vec<VariableDeclaration>,
+    visibility: MemberVisibility,
+    span: crate::error::syntax::Span,
+) -> Statement {
+    stmt_with_span(StatementKind::Variable(declarations, visibility), span)
+}
+
 /// Creates an expression statement (expression used as a statement).
 pub fn expression_statement(expression: Expression) -> Statement {
     let span = expression.span;

@@ -21,6 +21,7 @@ use crate::ast::types::{
 use crate::ast::ExpressionKind;
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
@@ -2438,6 +2439,30 @@ impl TypeChecker {
         }
     }
 
+    /// Records a type error together with the repair that resolves it.
+    ///
+    /// The caller supplies the repair because only the check that raised the
+    /// error knows the facts it rests on; nothing downstream re-derives them
+    /// from the message text.
+    pub(crate) fn report_error_with_repair(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        repair: RepairRequest,
+    ) {
+        if self.suppress_diagnostics {
+            return;
+        }
+        let key = (message.clone(), span);
+        if self.diagnostics.mark_reported(key) {
+            let mut err = TypeError::coded(code, message, span, None);
+            err.source_override = self.modules.current_source_override.clone();
+            err.repair = Some(repair);
+            self.diagnostics.push_error(err);
+        }
+    }
+
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(
         &mut self,
@@ -2498,6 +2523,7 @@ impl TypeChecker {
             source_override: self.modules.current_source_override.clone(),
             expected: None,
             actual: None,
+            repair: None,
         });
     }
 

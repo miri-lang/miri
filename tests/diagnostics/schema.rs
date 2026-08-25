@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::diagnostics::json::{
-    DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonExplanation, JsonRejectedFile,
+    DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonEdit, JsonExplanation, JsonRejectedFile,
     JsonRelated, JsonRepair, JsonTestResult, JsonTestSummary,
 };
 use serde_json::Value;
@@ -153,6 +153,12 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             repair: Some(JsonRepair {
                 id: "convert-to-int".to_string(),
                 summary: "Convert the string to an integer".to_string(),
+                edits: vec![JsonEdit {
+                    path: "example.mi".to_string(),
+                    start: 0,
+                    end: 6,
+                    replacement: "toString()".to_string(),
+                }],
             }),
             related: vec![JsonRelated {
                 severity: "note".to_string(),

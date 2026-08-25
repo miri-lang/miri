@@ -9,9 +9,11 @@
 pub mod codes;
 pub mod explain;
 pub mod json;
+pub mod repair;
 pub mod severity;
 
 pub use codes::DiagnosticCode;
 pub use explain::Explanation;
 pub use json::DiagnosticsEnvelope;
+pub use repair::{RepairId, RepairRequest};
 pub use severity::Severity;

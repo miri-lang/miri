@@ -153,4 +153,28 @@ pub enum Commands {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
+
+    /// Emit repair suggestions for compiler diagnostics
+    Fix {
+        /// Path to the Miri source file to fix
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Report the repairs without modifying any file. This is the default.
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "apply")]
+        plan: bool,
+
+        /// Apply repairs to the source file
+        #[arg(long, action = ArgAction::SetTrue)]
+        apply: bool,
+
+        /// Confirm applying the repairs. Required by `--apply` when there is no
+        /// terminal to confirm at.
+        #[arg(long, action = ArgAction::SetTrue)]
+        yes: bool,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
 }
