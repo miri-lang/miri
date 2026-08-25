@@ -1,0 +1,168 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! Rendering for the `explain` command.
+//!
+//! Colour and terminal presentation belong here rather than in
+//! `crate::diagnostics`, which is the inner layer and must not depend on the CLI.
+//! This module reads an `Explanation` and turns it into either human-readable
+//! text or the JSON envelope shared with the other commands.
+
+use std::str::FromStr;
+
+use crate::cli::{serialize_envelope, ColorMode, Format};
+use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
+use crate::diagnostics::{DiagnosticCode, Explanation, Severity};
+use crate::error::format::ColorScheme;
+
+/// What the caller should do once the command has written its output.
+pub enum Outcome {
+    /// The code was found and explained.
+    Explained,
+    /// The argument was not a code in the registry.
+    UnknownCode,
+}
+
+/// Explain one diagnostic code, writing the result to stdout or stderr.
+///
+/// An unknown code is itself reported as a diagnostic, so a machine consumer
+/// gets a coded failure from the command whose subject is codes.
+pub fn run(code: &str, format: Format, color_mode: ColorMode) -> Outcome {
+    match DiagnosticCode::from_str(code) {
+        Ok(found) => {
+            let explanation = found.explanation();
+            match format {
+                Format::Json => println!("{}", render_json(&explanation)),
+                Format::Pretty => println!("{}", render_pretty(&explanation, color_mode)),
+            }
+            Outcome::Explained
+        }
+        Err(_) => {
+            report_unknown_code(code, format, color_mode);
+            Outcome::UnknownCode
+        }
+    }
+}
+
+/// Serialize an explanation into the envelope shared with the other commands.
+fn render_json(explanation: &Explanation) -> String {
+    let envelope = DiagnosticsEnvelope::new(JsonCommand::Explain, true, vec![])
+        .with_exit_code(0)
+        .with_explanation(explanation.to_json());
+    serialize_envelope(&envelope)
+}
+
+/// Render an explanation as human-readable text.
+fn render_pretty(explanation: &Explanation, color_mode: ColorMode) -> String {
+    let scheme = ColorScheme::from_choice(color_mode.into());
+    let code = explanation.code;
+    let accent = match code.severity() {
+        Severity::Error => scheme.red,
+        Severity::Warning => scheme.yellow,
+        Severity::Note => scheme.cyan,
+    };
+
+    let mut out = format!(
+        "{}{}{}{} {}{}\n{}\n",
+        scheme.bold,
+        accent,
+        code.as_str(),
+        scheme.reset,
+        code.title(),
+        scheme.reset,
+        code.severity().as_str(),
+    );
+
+    if code.is_reserved() {
+        out.push_str(&format!(
+            "\n{}This code is retired and is no longer emitted. Its number stays \
+             reserved so it is never handed to a different diagnosis.{}\n",
+            scheme.blue, scheme.reset
+        ));
+    }
+
+    out.push_str(&section(&scheme, "Rule", &explanation.rule));
+    if let Some(before) = &explanation.example_before {
+        out.push_str(&section(&scheme, "Before", before));
+    }
+    if let Some(after) = &explanation.example_after {
+        out.push_str(&section(&scheme, "After", after));
+    }
+    if let Some(reference) = &explanation.reference {
+        out.push_str(&section(&scheme, "Reference", reference));
+    }
+    out
+}
+
+/// Render one titled block of the explanation.
+fn section(scheme: &ColorScheme, heading: &str, body: &str) -> String {
+    format!(
+        "\n{}{}{}{}\n{}\n",
+        scheme.bold, scheme.blue, heading, scheme.reset, body
+    )
+}
+
+/// Make an arbitrary argument safe to echo to a terminal.
+///
+/// The rejected argument is quoted back to the user, and it is entirely under
+/// their control. Escape sequences passed straight through would let a crafted
+/// argument repaint or rewrite the surrounding terminal output, so control
+/// characters are shown as escapes rather than executed. Printable text of any
+/// script is left alone. JSON needs no such treatment: the serializer already
+/// escapes control characters.
+fn sanitize_for_terminal(argument: &str) -> String {
+    argument
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+/// Report an argument that is not a code in the registry.
+fn report_unknown_code(code: &str, format: Format, color_mode: ColorMode) {
+    let unknown = DiagnosticCode::BldUnknownDiagnosticCode;
+    let message = format!("unknown diagnostic code: {}", sanitize_for_terminal(code));
+    let help = "codes have the form MER_<AREA>_<NUM>, for example MER_TYP_030. \
+                Run `miri explain` with a code from the registry."
+        .to_string();
+
+    match format {
+        Format::Json => {
+            let diagnostic = JsonDiagnostic {
+                severity: unknown.severity().as_str().to_string(),
+                code: Some(unknown.as_str().to_string()),
+                message,
+                path: None,
+                line: None,
+                column: None,
+                length: None,
+                expected: None,
+                actual: None,
+                help: Some(help),
+                fix_safety: None,
+                repair: None,
+                related: vec![],
+            };
+            let envelope = DiagnosticsEnvelope::new(JsonCommand::Explain, false, vec![diagnostic])
+                .with_exit_code(1);
+            println!("{}", serialize_envelope(&envelope));
+        }
+        Format::Pretty => {
+            let scheme = ColorScheme::from_choice(color_mode.into());
+            eprintln!(
+                "{}{}error[{}]{}: {}\n  {}",
+                scheme.bold,
+                scheme.red,
+                unknown.as_str(),
+                scheme.reset,
+                message,
+                help,
+            );
+        }
+    }
+}

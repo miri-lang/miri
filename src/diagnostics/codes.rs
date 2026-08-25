@@ -24,6 +24,7 @@
 //! - CG: Code generation
 //! - RT: Runtime traps and failures
 //! - TAR: Target-specific capabilities and limits
+//! - BLD: Build and command-invocation diagnostics
 
 use crate::diagnostics::Severity;
 use std::str::FromStr;
@@ -90,6 +91,20 @@ macro_rules! diagnostics {
                 &[
                     $(Self::$variant),*
                 ]
+            }
+
+            /// Get the embedded documentation for this diagnostic code.
+            pub fn doc(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => include_str!(
+                        concat!("../../docs/diagnostics/MER_", $area, "_", $num, ".md")
+                    )),*
+                }
+            }
+
+            /// Parse the embedded documentation into a structured explanation.
+            pub fn explanation(&self) -> crate::diagnostics::Explanation {
+                crate::diagnostics::Explanation::parse(*self, self.doc())
             }
         }
 
@@ -423,7 +438,7 @@ diagnostics!(
     TypUndefinedVariable,
     "Undefined Variable",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "002",
     TypTypeMismatch,
@@ -435,49 +450,49 @@ diagnostics!(
     TypUnknownType,
     "Unknown Type",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "004",
     TypMissingField,
     "Missing Field",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "005",
     TypMissingVariant,
     "Missing Variant",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "006",
     TypIncompatibleTypesInOperation,
     "Incompatible Types",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "007",
     TypImmutableAssignment,
     "Immutable Assignment",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "008",
     TypMissingReturnStatement,
     "Missing Return",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "009",
     TypInvalidCall,
     "Invalid Call",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "010",
     TypArityMismatch,
     "Arity Mismatch",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "011",
     TypNonExhaustiveMatchNeedsDefault,
@@ -687,13 +702,13 @@ diagnostics!(
     TypVariableAlreadyDefined,
     "Variable Already Defined",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "046",
     TypKeywordContextError,
     "Keyword Used in Invalid Context",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "047",
     TypClassInheritance,
@@ -783,7 +798,7 @@ diagnostics!(
     TypTypeInheritability,
     "Type Not Inheritable",
     Severity::Error,
-    false,
+    true,
     "TYP",
     "062",
     TypPatternMatch,
@@ -1069,6 +1084,13 @@ diagnostics!(
     "009",
     TarGpuValueOutOfRange,
     "Value Out of Range for GPU Storage",
+    Severity::Error,
+    false,
+    // BLD — Build and command-invocation diagnostics (1 code: 001)
+    "BLD",
+    "001",
+    BldUnknownDiagnosticCode,
+    "Unknown Diagnostic Code",
     Severity::Error,
     false,
 );

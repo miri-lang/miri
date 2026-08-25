@@ -123,9 +123,26 @@ const EXPECTED_RESERVED: &[&str] = &[
     // constructs a standalone "unexpected operator".
     "MER_PAR_022",
     "MER_PAR_023",
+    // Superseded when the type checker's per-variant errors were regrouped into
+    // semantic families. Each names the code that now reports the same
+    // condition; the old numbers stay burned so they are never reissued.
+    "MER_TYP_001", // now reported as MER_TYP_034
+    "MER_TYP_003", // now reported as MER_TYP_043
+    "MER_TYP_004", // now reported as MER_TYP_033
+    "MER_TYP_005", // now reported as MER_TYP_038
+    "MER_TYP_006", // now reported as MER_TYP_002
+    "MER_TYP_007", // now reported as MER_TYP_042
+    "MER_TYP_008", // now reported as MER_TYP_054
+    "MER_TYP_009", // now reported as MER_TYP_032
+    "MER_TYP_010", // now reported as MER_TYP_030
     // The untyped escape hatches, retired once every call site was promoted to
     // a family code.
     "MER_TYP_028",
+    // The checks for these type-checker rules were never wired up; the codes
+    // stay burned so the numbers are not handed out again.
+    "MER_TYP_045",
+    "MER_TYP_046",
+    "MER_TYP_061",
     "MER_MIR_015",
 ];
 

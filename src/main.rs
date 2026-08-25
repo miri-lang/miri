@@ -75,6 +75,7 @@ fn run_command(cli: Cli) -> Result<()> {
             Commands::Check { path, format } => {
                 check_file(path, format, cli.verbose, cli.verify_mir, cli.color)
             }
+            Commands::Explain { code, format } => explain_code(&code, format, cli.color),
             Commands::Test {
                 filter,
                 format,
@@ -125,9 +126,7 @@ fn run_file(
                     .with_stdout(stdout_tail, stdout_truncated)
                     .with_stderr(stderr_tail, stderr_truncated);
 
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
 
                 if exit_code != 0 {
@@ -146,9 +145,7 @@ fn run_file(
                     .with_exit_code(1)
                     .with_duration_ms(elapsed_ms);
 
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
                 std::process::exit(1);
             }
@@ -234,9 +231,7 @@ fn build_file(
                     .with_artifact(artifact_path.display().to_string())
                     .with_exit_code(0)
                     .with_duration_ms(elapsed_ms);
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
             } else {
                 println!("Build successful. Artifact at: {}", artifact_path.display());
@@ -254,9 +249,7 @@ fn build_file(
                 let envelope = DiagnosticsEnvelope::new(JsonCommand::Build, false, json_diags)
                     .with_exit_code(1)
                     .with_duration_ms(elapsed_ms);
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
             } else {
                 eprintln!(
@@ -305,9 +298,7 @@ fn check_file(
                 let envelope = DiagnosticsEnvelope::new(JsonCommand::Check, true, json_diags)
                     .with_exit_code(0)
                     .with_duration_ms(elapsed_ms);
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
             } else {
                 for warning in result.type_checker.warnings() {
@@ -344,9 +335,7 @@ fn check_file(
                 let envelope = DiagnosticsEnvelope::new(JsonCommand::Check, false, json_diags)
                     .with_exit_code(1)
                     .with_duration_ms(elapsed_ms);
-                let output = serde_json::to_string_pretty(&envelope).unwrap_or_else(|error| {
-                    format!("{{\"error\":\"could not serialize: {}\"}}", error)
-                });
+                let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);
             } else {
                 eprintln!(
@@ -360,6 +349,15 @@ fn check_file(
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Explain one diagnostic code. Rendering lives in the CLI layer; this arm only
+/// maps the outcome onto a process exit code.
+fn explain_code(code: &str, format: Format, color_mode: ColorMode) -> Result<()> {
+    match miri::cli::explain::run(code, format, color_mode) {
+        miri::cli::explain::Outcome::Explained => Ok(()),
+        miri::cli::explain::Outcome::UnknownCode => std::process::exit(1),
     }
 }
 
@@ -433,8 +431,7 @@ fn run_tests(
             .with_tests(json_summary)
             .with_exit_code(if summary.is_green() { 0 } else { 101 });
 
-        let output = serde_json::to_string_pretty(&envelope)
-            .unwrap_or_else(|error| format!("{{\"error\":\"could not serialize: {}\"}}", error));
+        let output = miri::cli::serialize_envelope(&envelope);
         println!("{}", output);
     } else {
         print!("{}", miri::test_runner::report::format_pretty(&summary));

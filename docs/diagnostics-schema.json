@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Miri Diagnostics Envelope",
-  "description": "JSON envelope emitted by Miri compiler commands (check, build, run, test) when --format json is specified. All diagnostic messages include a stable code for tooling integration.",
+  "description": "JSON envelope emitted by Miri compiler commands (check, build, run, test, explain) when --format json is specified. All diagnostic messages include a stable code for tooling integration.",
   "type": "object",
   "properties": {
     "schemaVersion": {
@@ -15,8 +15,14 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', or 'test'.",
-      "enum": ["check", "build", "run", "test"]
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', or 'explain'.",
+      "enum": [
+        "check",
+        "build",
+        "run",
+        "test",
+        "explain"
+      ]
     },
     "diagnostics": {
       "type": "array",
@@ -26,40 +32,77 @@
       }
     },
     "artifact": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Path to the build artifact (for build/run commands only). Absent or null if no artifact was produced."
     },
     "exitCode": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "Process exit code (for build/run/test commands only). Absent or null for check command."
     },
     "stdoutTail": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Last N bytes of the program's stdout (for run/test commands only). Absent or null if not captured."
     },
     "stderrTail": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Last N bytes of the program's stderr (for run/test commands only). Absent or null if not captured."
     },
     "stdoutTruncated": {
-      "type": ["boolean", "null"],
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "True if stdoutTail was truncated; false if complete. Absent or null if stdout was not captured."
     },
     "stderrTruncated": {
-      "type": ["boolean", "null"],
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "True if stderrTail was truncated; false if complete. Absent or null if stderr was not captured."
     },
     "durationMs": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "Elapsed time in milliseconds for the command execution. Absent or null if not measured."
     },
     "tests": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Test summary (for test command only). Absent or null for other commands.",
       "$ref": "#/$defs/JsonTestSummary"
+    },
+    "explanation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Documentation for one diagnostic code (for explain command only). Absent or null for other commands.",
+      "$ref": "#/$defs/JsonExplanation"
     }
   },
-  "required": ["schemaVersion", "ok", "command", "diagnostics"],
+  "required": [
+    "schemaVersion",
+    "ok",
+    "command",
+    "diagnostics"
+  ],
   "$defs": {
     "JsonDiagnostic": {
       "type": "object",
@@ -68,10 +111,17 @@
         "severity": {
           "type": "string",
           "description": "Severity level of the diagnostic.",
-          "enum": ["error", "warning", "note"]
+          "enum": [
+            "error",
+            "warning",
+            "note"
+          ]
         },
         "code": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Stable diagnostic code (e.g., 'MER_TYP_010') for documentation and tooling. Absent or null for some synthetic diagnostics."
         },
         "message": {
@@ -79,39 +129,66 @@
           "description": "Human-readable diagnostic message."
         },
         "path": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Source file path where the issue occurred. Absent or null for diagnostics without a source location."
         },
         "line": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "1-indexed line number in source where the issue occurred. Absent or null if no source location."
         },
         "column": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "1-indexed column number in source where the issue occurred. Absent or null if no source location."
         },
         "length": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "Length in bytes of the error span. Absent or null if no source location."
         },
         "expected": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Expected type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
         },
         "actual": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Actual type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
         },
         "help": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Actionable help text explaining how to resolve the issue. Absent or null if no help is available."
         },
         "fixSafety": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions."
         },
         "repair": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions.",
           "$ref": "#/$defs/JsonRepair"
         },
@@ -123,7 +200,11 @@
           }
         }
       },
-      "required": ["severity", "message", "related"]
+      "required": [
+        "severity",
+        "message",
+        "related"
+      ]
     },
     "JsonRepair": {
       "type": "object",
@@ -146,30 +227,49 @@
         "severity": {
           "type": "string",
           "description": "Severity level of the related diagnostic.",
-          "enum": ["error", "warning", "note"]
+          "enum": [
+            "error",
+            "warning",
+            "note"
+          ]
         },
         "message": {
           "type": "string",
           "description": "Human-readable message for the related diagnostic."
         },
         "code": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Diagnostic code if applicable. Absent or null if no code."
         },
         "path": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Source file path. Absent or null if no source location."
         },
         "line": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "1-indexed line number in source. Absent or null if no source location."
         },
         "column": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "description": "1-indexed column number in source. Absent or null if no source location."
         }
       },
-      "required": ["severity", "message"]
+      "required": [
+        "severity",
+        "message"
+      ]
     },
     "JsonTestSummary": {
       "type": "object",
@@ -206,7 +306,14 @@
           }
         }
       },
-      "required": ["total", "passed", "failed", "ignored", "results", "rejectedFiles"]
+      "required": [
+        "total",
+        "passed",
+        "failed",
+        "ignored",
+        "results",
+        "rejectedFiles"
+      ]
     },
     "JsonTestResult": {
       "type": "object",
@@ -223,14 +330,29 @@
         "outcome": {
           "type": "string",
           "description": "Outcome of the test.",
-          "enum": ["passed", "failed", "ignored", "expected_failure", "unexpected_pass", "crashed", "runner_fault"]
+          "enum": [
+            "passed",
+            "failed",
+            "ignored",
+            "expected_failure",
+            "unexpected_pass",
+            "crashed",
+            "runner_fault"
+          ]
         },
         "detail": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Additional detail about the test result (e.g., error message or timing). Absent or null if no detail."
         }
       },
-      "required": ["path", "name", "outcome"]
+      "required": [
+        "path",
+        "name",
+        "outcome"
+      ]
     },
     "JsonRejectedFile": {
       "type": "object",
@@ -243,10 +365,71 @@
         "reason": {
           "type": "string",
           "description": "Reason the file was rejected.",
-          "enum": ["unparseable", "declares_main", "top_level_statements"]
+          "enum": [
+            "unparseable",
+            "declares_main",
+            "top_level_statements"
+          ]
         }
       },
-      "required": ["path", "reason"]
+      "required": [
+        "path",
+        "reason"
+      ]
+    },
+    "JsonExplanation": {
+      "type": "object",
+      "description": "A diagnostic code's documentation. Code, title, severity and reserved status come from the code registry; the remaining fields are parsed from the documentation file embedded for that code.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Wire string of the code being explained, e.g. 'MER_TYP_030'."
+        },
+        "title": {
+          "type": "string",
+          "description": "Short title of the code, from the registry."
+        },
+        "severity": {
+          "type": "string",
+          "description": "Severity of the code: 'error', 'warning', or 'note'."
+        },
+        "reserved": {
+          "type": "boolean",
+          "description": "True when the code is retired and no longer emitted by any check."
+        },
+        "rule": {
+          "type": "string",
+          "description": "The rule the check enforces."
+        },
+        "exampleBefore": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Source showing the problem. Absent for a reserved code, which has no reproduction."
+        },
+        "exampleAfter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The same source, repaired. Absent for a reserved code."
+        },
+        "reference": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Relative path to the reference page covering this area."
+        }
+      },
+      "required": [
+        "code",
+        "title",
+        "severity",
+        "reserved",
+        "rule"
+      ]
     }
   }
 }
