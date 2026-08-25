@@ -183,7 +183,15 @@
             "string",
             "null"
           ],
-          "description": "Always absent in schema version 1; reserved for the repair-plan surface in future versions."
+          "description": "Fix-safety level of this diagnostic's repair, if the diagnostic carries a repair. One of: 'format-only', 'behavior-preserving', 'local-edit', 'api-changing', 'target-changing', or 'requires-human-review'. Absent or null if the diagnostic carries no repair.",
+          "enum": [
+            "format-only",
+            "behavior-preserving",
+            "local-edit",
+            "api-changing",
+            "target-changing",
+            "requires-human-review"
+          ]
         },
         "repair": {
           "type": [

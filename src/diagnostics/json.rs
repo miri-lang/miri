@@ -170,10 +170,13 @@ pub struct JsonDiagnostic {
     /// Actionable help text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
-    /// Always absent in schema version 1; reserved for the repair-plan surface.
+    /// The fix-safety level of this diagnostic's repair (if any), indicating the
+    /// risk level of applying the repair. One of: format-only, behavior-preserving,
+    /// local-edit, api-changing, target-changing, or requires-human-review.
+    /// Absent or null if the diagnostic carries no repair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix_safety: Option<String>,
-    /// Always absent in schema version 1; reserved for the repair-plan surface.
+    /// The repair available for this diagnostic, if the compiler determined one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<JsonRepair>,
     /// Related diagnostics (notes from the original).

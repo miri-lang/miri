@@ -45,6 +45,7 @@
 use crate::ast::factory as ast_factory;
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind};
+use crate::ast::MemberVisibility;
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
@@ -256,19 +257,28 @@ impl TypeChecker {
             };
             // A constant is not repaired into a `var`: it is a different
             // declaration form, so rewriting the keyword would not compile.
-            let keyword_start = if is_constant {
-                None
+            let (keyword_start, module_scope, is_public) = if is_constant {
+                (None, false, false)
             } else {
-                context
-                    .resolve_info(name)
-                    .and_then(|info| info.declaration_keyword_start)
+                let info = context.resolve_info(name);
+                (
+                    info.as_ref().and_then(|i| i.declaration_keyword_start),
+                    info.as_ref().map(|i| i.module_scope).unwrap_or(false),
+                    info.as_ref()
+                        .map(|i| matches!(i.visibility, MemberVisibility::Public))
+                        .unwrap_or(false),
+                )
             };
             match keyword_start {
                 Some(keyword_start) => self.report_error_with_repair(
                     DiagnosticCode::TypImmutabilityViolation,
                     msg,
                     span,
-                    RepairRequest::LetToVar { keyword_start },
+                    RepairRequest::LetToVar {
+                        keyword_start,
+                        module_scope,
+                        is_public,
+                    },
                 ),
                 None => self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span),
             }

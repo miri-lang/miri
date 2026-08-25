@@ -62,7 +62,16 @@ pub enum RepairRequest {
     /// such as `let a = 1, b = 2` shares one keyword between its bindings, so
     /// rewriting it would make every binding mutable rather than the one the
     /// diagnostic names.
-    LetToVar { keyword_start: usize },
+    ///
+    /// The `module_scope` flag records whether the binding was declared at module
+    /// scope. The `is_public` flag records whether the binding is publicly visible.
+    /// Only module-scope public bindings are api-changing; module-scope private
+    /// bindings and all function-local bindings are local-edit.
+    LetToVar {
+        keyword_start: usize,
+        module_scope: bool,
+        is_public: bool,
+    },
     /// Import `name` from `module`.
     ///
     /// Recorded only when exactly one module exports `name`. An ambiguous name
@@ -100,9 +109,11 @@ impl RepairRequest {
     /// be verified is simply not offered.
     pub fn project(&self, path: &str, source: &str) -> Option<JsonRepair> {
         match self {
-            Self::LetToVar { keyword_start } => {
-                Self::project_let_to_var(path, source, *keyword_start)
-            }
+            Self::LetToVar {
+                keyword_start,
+                module_scope: _,
+                is_public: _,
+            } => Self::project_let_to_var(path, source, *keyword_start),
             Self::AddImport { module, name } => {
                 Self::project_add_import(path, source, module, name)
             }
@@ -209,7 +220,11 @@ mod tests {
 
     #[test]
     fn test_rewriting_a_keyword_requires_that_keyword_to_be_there() {
-        let request = RepairRequest::LetToVar { keyword_start: 0 };
+        let request = RepairRequest::LetToVar {
+            keyword_start: 0,
+            module_scope: false,
+            is_public: false,
+        };
 
         assert!(request.project("main.mi", "let a = 1\n").is_some());
         assert!(

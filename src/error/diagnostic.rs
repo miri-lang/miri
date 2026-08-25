@@ -331,6 +331,23 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
         })
         .collect();
 
+    // Compute the effective fix-safety label.
+    let fix_safety = diag.code.and_then(|code_str| {
+        // Parse the code string to get the DiagnosticCode.
+        code_str.parse::<DiagnosticCode>().ok().map(|code| {
+            // The code's fix_safety is the floor (minimum risk); the repair's
+            // actual safety may be equal or higher. The effective risk is the
+            // maximum (riskier) of the two.
+            let code_floor = code.fix_safety();
+            let repair_safety = diag
+                .repair
+                .as_ref()
+                .map(crate::diagnostics::repair_fix_safety);
+            let effective = code_floor.join(repair_safety.unwrap_or(code_floor));
+            effective.to_string()
+        })
+    });
+
     JsonDiagnostic {
         severity: diag.severity.as_str().to_string(),
         code: diag.code.map(|c| c.to_string()),
@@ -342,7 +359,7 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
         expected: diag.expected.clone(),
         actual: diag.actual.clone(),
         help: diag.help.clone(),
-        fix_safety: None,
+        fix_safety,
         repair: diag
             .repair
             .as_ref()

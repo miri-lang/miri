@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::{serialize_envelope, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonEdit};
+use crate::diagnostics::{DiagnosticCode, RefusedRepair};
 use crate::error::diagnostic::to_json;
 use crate::pipeline::Pipeline;
 
@@ -60,7 +61,7 @@ impl ApplyRefusal {
 }
 
 /// Run the command against `path`.
-pub fn run(path: &Path, apply: bool, yes: bool, format: Format) -> Outcome {
+pub fn run(path: &Path, apply: bool, yes: bool, allow_risky: bool, format: Format) -> Outcome {
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => {
@@ -72,7 +73,7 @@ pub fn run(path: &Path, apply: bool, yes: bool, format: Format) -> Outcome {
     let (diagnostics, ok) = collect_diagnostics(path, &source);
 
     if apply {
-        return apply_repairs(path, &source, &diagnostics, yes, format, ok);
+        return apply_repairs(path, &source, &diagnostics, yes, allow_risky, format, ok);
     }
 
     report_plan(&diagnostics, &source, ok, format);
@@ -175,6 +176,7 @@ fn apply_repairs(
     planned_source: &str,
     diagnostics: &[JsonDiagnostic],
     yes: bool,
+    allow_risky: bool,
     format: Format,
     ok: bool,
 ) -> Outcome {
@@ -184,12 +186,12 @@ fn apply_repairs(
     }
 
     let mut edits = group_edits_by_file(diagnostics);
-    for (path, skipped) in take_edits_outside(&mut edits, target) {
-        eprintln!(
-            "note: skipped {} repair(s) in {}; run the command on that file to apply them",
-            skipped.len(),
-            path
-        );
+    report_skipped_files(take_edits_outside(&mut edits, target));
+
+    let refused = judge_repairs_to_be_written(diagnostics, &edits, allow_risky);
+    if !refused.is_empty() {
+        report_refusal(&refused, diagnostics, format);
+        return Outcome::Refused;
     }
 
     if edits.is_empty() {
@@ -225,6 +227,104 @@ fn apply_repairs(
     }
 
     Outcome::Succeeded
+}
+
+/// Note the files whose repairs this run leaves alone.
+fn report_skipped_files(skipped: BTreeMap<String, Vec<JsonEdit>>) {
+    for (path, edits) in skipped {
+        eprintln!(
+            "note: skipped {} repair(s) in {}; run the command on that file to apply them",
+            edits.len(),
+            path
+        );
+    }
+}
+
+/// Judge the safety of only those repairs this run would actually write.
+///
+/// A repair for a diagnostic raised inside an imported file was already dropped,
+/// so letting it refuse would withhold edits over a change this run was never
+/// going to make.
+///
+/// One refused repair withholds all of them rather than applying the safe
+/// subset. That matches how this command already treats a file: edits are
+/// validated together and written only if every one of them is sound, so a
+/// partial application would be the single outcome the caller cannot undo by
+/// simply re-running.
+fn judge_repairs_to_be_written(
+    diagnostics: &[JsonDiagnostic],
+    retained: &BTreeMap<String, Vec<JsonEdit>>,
+    allow_risky: bool,
+) -> Vec<RefusedRepair> {
+    crate::diagnostics::compute_refused_repairs(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| edits_land_in_target(diagnostic, retained)),
+        allow_risky,
+    )
+}
+
+/// Report repairs that were withheld, naming each one and why.
+///
+/// In JSON the refusal joins the diagnostics as one more entry, carrying the
+/// code that names it, so a consumer reads it the same way it reads every other
+/// diagnostic rather than parsing the text written for a human.
+fn report_refusal(refused: &[RefusedRepair], diagnostics: &[JsonDiagnostic], format: Format) {
+    for repair in refused {
+        eprintln!(
+            "error: [{}] repair classified as {} ({})",
+            repair.code,
+            repair.fix_safety,
+            repair.code.title()
+        );
+    }
+
+    let refusal = DiagnosticCode::BldRefusedRepairs;
+    eprintln!(
+        "error[{}]: {} (pass --allow-risky to override)",
+        refusal,
+        refusal.title()
+    );
+
+    if format != Format::Json {
+        return;
+    }
+
+    let mut reported = diagnostics.to_vec();
+    reported.push(JsonDiagnostic {
+        severity: refusal.severity().as_str().to_string(),
+        code: Some(refusal.to_string()),
+        message: refusal.title().to_string(),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: Some("Pass --allow-risky to apply these repairs anyway.".to_string()),
+        fix_safety: Some(refusal.fix_safety().as_str().to_string()),
+        repair: None,
+        related: vec![],
+    });
+
+    let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
+    println!("{}", serialize_envelope(&envelope));
+}
+
+/// Whether this diagnostic's repair edits a file this run is going to write.
+///
+/// A diagnostic carrying no repair edits nothing, so it is not judged for
+/// safety at all.
+fn edits_land_in_target(
+    diagnostic: &JsonDiagnostic,
+    retained: &BTreeMap<String, Vec<JsonEdit>>,
+) -> bool {
+    diagnostic.repair.as_ref().is_some_and(|repair| {
+        repair
+            .edits
+            .iter()
+            .any(|edit| retained.contains_key(&edit.path))
+    })
 }
 
 /// Collect every repair edit, keyed by the file it edits.
@@ -420,6 +520,55 @@ mod tests {
             "a refusal must leave the file untouched"
         );
         let _ = fs::remove_file(&path);
+    }
+
+    /// A diagnostic carrying one repair that edits `path`.
+    fn diagnostic_repairing(path: &str, label: &str) -> JsonDiagnostic {
+        JsonDiagnostic {
+            severity: "error".to_string(),
+            code: Some("MER_TYP_042".to_string()),
+            message: "Cannot assign to immutable variable".to_string(),
+            path: Some(path.to_string()),
+            line: Some(1),
+            column: Some(1),
+            length: None,
+            expected: None,
+            actual: None,
+            help: None,
+            fix_safety: Some(label.to_string()),
+            repair: Some(crate::diagnostics::json::JsonRepair {
+                id: "let-to-var".to_string(),
+                summary: "Declare the variable with `var`.".to_string(),
+                edits: vec![JsonEdit {
+                    path: path.to_string(),
+                    start: 0,
+                    end: 3,
+                    replacement: "var".to_string(),
+                }],
+            }),
+            related: vec![],
+        }
+    }
+
+    #[test]
+    fn test_a_risky_repair_in_a_file_this_run_skips_does_not_withhold_the_others() {
+        // A repair raised inside an imported file is dropped before anything is
+        // written, so judging it would withhold edits over a change this run was
+        // never going to make.
+        let mut retained: BTreeMap<String, Vec<JsonEdit>> = BTreeMap::new();
+        retained.insert("main.mi".to_string(), vec![edit(0, 3, "var")]);
+
+        let imported = diagnostic_repairing("imported.mi", "api-changing");
+        let target = diagnostic_repairing("main.mi", "local-edit");
+
+        assert!(
+            !edits_land_in_target(&imported, &retained),
+            "a repair for a file this run skips is not judged"
+        );
+        assert!(
+            edits_land_in_target(&target, &retained),
+            "a repair for the named file is judged"
+        );
     }
 
     #[test]

@@ -171,7 +171,11 @@ impl TypeChecker {
             info.declaration_keyword_start = keyword_start;
         }
 
-        if context.scopes.len() == 1 {
+        // Track whether this binding is at module scope (public API surface).
+        let is_at_module_scope = context.scopes.len() == 1;
+        info.module_scope = is_at_module_scope;
+
+        if is_at_module_scope {
             self.type_table
                 .global_scope
                 .insert(decl.name.clone(), info.clone());
