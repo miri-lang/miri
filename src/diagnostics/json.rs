@@ -47,6 +47,9 @@ pub struct DiagnosticsEnvelope {
     /// Test summary (test command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests: Option<JsonTestSummary>,
+    /// Explanation of a diagnostic code (explain command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<JsonExplanation>,
 }
 
 impl DiagnosticsEnvelope {
@@ -66,6 +69,7 @@ impl DiagnosticsEnvelope {
             stderr_truncated: None,
             duration_ms: None,
             tests: None,
+            explanation: None,
         }
     }
 
@@ -106,6 +110,12 @@ impl DiagnosticsEnvelope {
         self.tests = Some(summary);
         self
     }
+
+    /// Set the diagnostic code explanation.
+    pub fn with_explanation(mut self, explanation: JsonExplanation) -> Self {
+        self.explanation = Some(explanation);
+        self
+    }
 }
 
 /// Command type for the JSON envelope.
@@ -116,6 +126,7 @@ pub enum JsonCommand {
     Build,
     Run,
     Test,
+    Explain,
 }
 
 /// A single diagnostic (error, warning, or note).
@@ -197,6 +208,37 @@ pub struct JsonRelated {
     /// Column number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
+}
+
+/// A diagnostic code's documentation, rendered for machine consumption.
+///
+/// `code`, `title`, `severity` and `reserved` are read from the code registry,
+/// which is their single source of truth. The remaining fields are parsed from
+/// the documentation file embedded for that code. A retired code carries
+/// `reserved: true` and no example pair: the check no longer runs, so there is
+/// nothing to reproduce or repair.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonExplanation {
+    /// Wire string of the code being explained (e.g. "MER_TYP_010").
+    pub code: String,
+    /// Short title from the registry.
+    pub title: String,
+    /// Severity: "error", "warning", or "note".
+    pub severity: String,
+    /// True when the code is retired and no longer emitted.
+    pub reserved: bool,
+    /// The rule the check enforces.
+    pub rule: String,
+    /// Source showing the problem. Absent for a reserved code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example_before: Option<String>,
+    /// The same source, repaired. Absent for a reserved code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example_after: Option<String>,
+    /// Relative path to the reference page covering this area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// Test summary (mirrors TestSummary in camelCase).

@@ -2,8 +2,8 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::diagnostics::json::{
-    DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonRejectedFile, JsonRelated, JsonRepair,
-    JsonTestResult, JsonTestSummary,
+    DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonExplanation, JsonRejectedFile,
+    JsonRelated, JsonRepair, JsonTestResult, JsonTestSummary,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -185,6 +185,16 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 path: "tests/unparseable.mi".to_string(),
                 reason: "unparseable".to_string(),
             }],
+        }),
+        explanation: Some(JsonExplanation {
+            code: "MER_TYP_002".to_string(),
+            title: "Type Mismatch".to_string(),
+            severity: "error".to_string(),
+            reserved: false,
+            rule: "Both sides of the assignment must have the same type.".to_string(),
+            example_before: Some("let x = 1\nx = \"two\"\n".to_string()),
+            example_after: Some("let x = 1\nx = 2\n".to_string()),
+            reference: Some("../reference/types.md".to_string()),
         }),
     }
 }
