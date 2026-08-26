@@ -30,8 +30,8 @@ pub enum Outcome {
 }
 
 /// Why a set of edits cannot be applied.
-#[derive(Debug)]
-enum ApplyRefusal {
+#[derive(Debug, Clone)]
+pub enum ApplyRefusal {
     /// Two edits cover overlapping bytes, so their combination is undefined.
     OverlappingEdits { path: String },
     /// An edit names a range the file does not have.
@@ -43,7 +43,8 @@ enum ApplyRefusal {
 }
 
 impl ApplyRefusal {
-    fn describe(&self) -> String {
+    /// One line naming the file and what stopped it being written.
+    pub fn describe(&self) -> String {
         match self {
             Self::OverlappingEdits { path } => {
                 format!("repairs for {} overlap; none were applied", path)
@@ -60,6 +61,39 @@ impl ApplyRefusal {
     }
 }
 
+/// Why an apply stopped part-way.
+///
+/// The two are kept apart because they leave the tree in different states, and
+/// the caller reports them differently.
+#[derive(Debug, Clone)]
+pub enum ApplyFailure {
+    /// The edits could not be turned into new file contents. Nothing was
+    /// written, so the tree is exactly as it was.
+    Validation(ApplyRefusal),
+    /// A file could not be written. Files rewritten earlier in the same run are
+    /// already on disk.
+    Write(ApplyRefusal),
+}
+
+/// What an apply did, as data rather than as text on a stream.
+pub struct ApplyReport {
+    /// Repairs withheld because their safety could not be accepted.
+    pub refused: Vec<RefusedRepair>,
+    /// Edits belonging to files this run was never going to write, by path.
+    pub skipped: BTreeMap<String, Vec<JsonEdit>>,
+    /// The files this run rewrote.
+    pub applied: Vec<PathBuf>,
+    /// Why the apply stopped, when it did.
+    pub failure: Option<ApplyFailure>,
+}
+
+impl ApplyReport {
+    /// Whether every repair this run owned was written.
+    pub fn ok(&self) -> bool {
+        self.refused.is_empty() && self.failure.is_none()
+    }
+}
+
 /// Run the command against `path`.
 pub fn run(path: &Path, apply: bool, yes: bool, allow_risky: bool, format: Format) -> Outcome {
     let source = match fs::read_to_string(path) {
@@ -70,7 +104,7 @@ pub fn run(path: &Path, apply: bool, yes: bool, allow_risky: bool, format: Forma
         }
     };
 
-    let (diagnostics, ok) = collect_diagnostics(path, &source);
+    let (diagnostics, ok) = diagnose(path, &source);
 
     if apply {
         return apply_repairs(path, &source, &diagnostics, yes, allow_risky, format, ok);
@@ -81,7 +115,11 @@ pub fn run(path: &Path, apply: bool, yes: bool, allow_risky: bool, format: Forma
 }
 
 /// Type-check `path` and return its diagnostics plus whether it checked clean.
-fn collect_diagnostics(path: &Path, source: &str) -> (Vec<JsonDiagnostic>, bool) {
+///
+/// The repairs are already attached to the diagnostics that carry them: a check
+/// records a repair where it raises the diagnostic, so nothing here reads a
+/// message to decide what to edit.
+pub fn diagnose(path: &Path, source: &str) -> (Vec<JsonDiagnostic>, bool) {
     let mut pipeline = Pipeline::new();
     let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = absolute.parent() {
@@ -110,19 +148,177 @@ fn collect_diagnostics(path: &Path, source: &str) -> (Vec<JsonDiagnostic>, bool)
     }
 }
 
-/// Print the repairs without touching any file.
-fn report_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: Format) {
+/// Work out what applying the repairs would do, and do it.
+///
+/// Nothing here writes to a stream or ends the process; the outcome, including
+/// every refusal, comes back as data. The command line and a request over a
+/// long-lived connection therefore reach the same decisions through the same
+/// code.
+///
+/// A repair for a file this run was never going to write is set aside rather
+/// than judged, so it cannot withhold the repairs this run owns. One refused
+/// repair withholds all the rest instead of applying the safe subset: this
+/// command already validates a file's edits together and writes only if every
+/// one is sound, so a partial application would be the single outcome the
+/// caller cannot undo by re-running.
+pub fn apply(
+    target: &Path,
+    planned_source: &str,
+    diagnostics: &[JsonDiagnostic],
+    allow_risky: bool,
+) -> ApplyReport {
+    let mut edits = group_edits_by_file(diagnostics);
+    let skipped = take_edits_outside(&mut edits, target);
+
+    let refused = judge_repairs_to_be_written(diagnostics, &edits, allow_risky);
+    if !refused.is_empty() {
+        return ApplyReport {
+            refused,
+            skipped,
+            applied: Vec::new(),
+            failure: None,
+        };
+    }
+
+    // Every file is rewritten only after all of them validate, so a rejected
+    // edit set leaves the whole tree as it was.
+    let mut rewritten = Vec::new();
+    for (path, file_edits) in &edits {
+        match rewrite_file(path, file_edits, planned_source) {
+            Ok(contents) => rewritten.push((PathBuf::from(path), contents)),
+            Err(refusal) => {
+                return ApplyReport {
+                    refused: Vec::new(),
+                    skipped,
+                    applied: Vec::new(),
+                    failure: Some(ApplyFailure::Validation(refusal)),
+                }
+            }
+        }
+    }
+
+    let mut applied = Vec::new();
+    for (path, contents) in rewritten {
+        if let Err(refusal) = write_atomically(&path, &contents) {
+            return ApplyReport {
+                refused: Vec::new(),
+                skipped,
+                applied,
+                failure: Some(ApplyFailure::Write(refusal)),
+            };
+        }
+        applied.push(path);
+    }
+
+    ApplyReport {
+        refused: Vec::new(),
+        skipped,
+        applied,
+        failure: None,
+    }
+}
+
+/// The envelope reporting the repairs the compiler found, edited nothing.
+pub fn plan_envelope(diagnostics: &[JsonDiagnostic], ok: bool) -> DiagnosticsEnvelope {
+    DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec()).with_exit_code(0)
+}
+
+/// The envelope reporting what an apply did.
+///
+/// `ok` says whether the apply succeeded, not whether the file now compiles.
+/// The two are different questions and a caller needs both: the diagnostics
+/// that prompted the repairs travel in the same envelope, and a following
+/// `check` says what the file looks like now. Reporting the pre-apply verdict
+/// here would say `false` about an apply that did exactly what was asked.
+///
+/// A refusal is reported as one more diagnostic carrying the code that names
+/// it, so a consumer reads it the way it reads every other diagnostic instead
+/// of parsing text written for a person.
+pub fn apply_envelope(report: &ApplyReport, diagnostics: &[JsonDiagnostic]) -> DiagnosticsEnvelope {
+    if report.ok() {
+        return DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec())
+            .with_exit_code(0);
+    }
+
+    let mut reported = diagnostics.to_vec();
+    if !report.refused.is_empty() {
+        reported.push(refusal_diagnostic());
+    }
+    if let Some(failure) = &report.failure {
+        reported.push(failure_diagnostic(failure));
+    }
+    DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1)
+}
+
+/// The diagnostic that stands for a withheld set of repairs.
+fn refusal_diagnostic() -> JsonDiagnostic {
+    let refusal = DiagnosticCode::BldRefusedRepairs;
+    JsonDiagnostic {
+        severity: refusal.severity().as_str().to_string(),
+        code: Some(refusal.to_string()),
+        message: refusal.title().to_string(),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: Some("Pass --allow-risky to apply these repairs anyway.".to_string()),
+        fix_safety: Some(refusal.fix_safety().as_str().to_string()),
+        repair: None,
+        related: vec![],
+    }
+}
+
+/// The diagnostic describing why an apply stopped part-way.
+fn failure_diagnostic(failure: &ApplyFailure) -> JsonDiagnostic {
+    let (refusal, help) = match failure {
+        ApplyFailure::Validation(refusal) => {
+            (refusal, "Nothing was written; the files are as they were.")
+        }
+        ApplyFailure::Write(refusal) => (
+            refusal,
+            "A file could not be written; files rewritten earlier in this run are already on disk.",
+        ),
+    };
+    let code = DiagnosticCode::BldRefusedRepairs;
+    JsonDiagnostic {
+        severity: code.severity().as_str().to_string(),
+        code: Some(code.to_string()),
+        message: refusal.describe(),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: Some(help.to_string()),
+        fix_safety: Some(code.fix_safety().as_str().to_string()),
+        repair: None,
+        related: vec![],
+    }
+}
+
+/// Render the repairs without touching any file. Returns a string (JSON or pretty text).
+fn render_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: Format) -> String {
     match format {
         Format::Json => {
             let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec())
                 .with_exit_code(0);
-            println!("{}", serialize_envelope(&envelope));
+            serialize_envelope(&envelope)
         }
-        Format::Pretty => print_plan_text(diagnostics, source),
+        Format::Pretty => render_plan_text(diagnostics, source),
     }
 }
 
-fn print_plan_text(diagnostics: &[JsonDiagnostic], source: &str) {
+/// Print the repairs without touching any file.
+fn report_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: Format) {
+    let output = render_plan(diagnostics, source, ok, format);
+    println!("{}", output);
+}
+
+fn render_plan_text(diagnostics: &[JsonDiagnostic], source: &str) -> String {
+    let mut out = String::new();
     let mut repairs = 0;
     for diagnostic in diagnostics {
         let Some(repair) = &diagnostic.repair else {
@@ -133,21 +329,22 @@ fn print_plan_text(diagnostics: &[JsonDiagnostic], source: &str) {
             (Some(path), Some(line), Some(column)) => format!("{}:{}:{}", path, line, column),
             _ => "<unknown location>".to_string(),
         };
-        println!(
-            "{} [{}]",
+        out.push_str(&format!(
+            "{} [{}]\n",
             location,
             diagnostic.code.as_deref().unwrap_or("-")
-        );
-        println!("  {}", diagnostic.message);
-        println!("  repair {}: {}", repair.id, repair.summary);
+        ));
+        out.push_str(&format!("  {}\n", diagnostic.message));
+        out.push_str(&format!("  repair {}: {}\n", repair.id, repair.summary));
         for edit in &repair.edits {
-            println!("    {}", describe_edit(edit, source));
+            out.push_str(&format!("    {}\n", describe_edit(edit, source)));
         }
     }
 
     if repairs == 0 {
-        println!("No repairs available.");
+        out.push_str("No repairs available.\n");
     }
+    out
 }
 
 /// One line describing what an edit does to the text it covers.
@@ -165,12 +362,11 @@ fn describe_edit(edit: &JsonEdit, source: &str) -> String {
     }
 }
 
-/// Apply the repairs belonging to the file named on the command line.
+/// Apply the repairs belonging to the file named on the command line, and say
+/// what happened.
 ///
-/// A diagnostic raised inside an imported file carries that file's path, so its
-/// repair edits that file rather than this one. Applying it here would rewrite a
-/// file the caller never named, so those repairs are reported and skipped; the
-/// caller can run the command against that file directly.
+/// The decisions live in [`apply`]; this adds only the terminal confirmation
+/// the command line owes its user, and the writing.
 fn apply_repairs(
     target: &Path,
     planned_source: &str,
@@ -180,21 +376,35 @@ fn apply_repairs(
     format: Format,
     ok: bool,
 ) -> Outcome {
+    // A terminal to confirm at is a property of this transport, not of the
+    // repairs, so the check belongs here rather than in the shared core.
     if !yes && !io::stdin().is_terminal() {
         eprintln!("error: --apply needs --yes when there is no terminal to confirm at");
         return Outcome::Refused;
     }
 
-    let mut edits = group_edits_by_file(diagnostics);
-    report_skipped_files(take_edits_outside(&mut edits, target));
+    let report = apply(target, planned_source, diagnostics, allow_risky);
 
-    let refused = judge_repairs_to_be_written(diagnostics, &edits, allow_risky);
-    if !refused.is_empty() {
-        report_refusal(&refused, diagnostics, format);
+    report_skipped_files(&report.skipped);
+
+    if !report.refused.is_empty() {
+        report_refusal(&report.refused, diagnostics, format);
         return Outcome::Refused;
     }
 
-    if edits.is_empty() {
+    match report.failure {
+        Some(ApplyFailure::Validation(refusal)) => {
+            eprintln!("error: {}", refusal.describe());
+            return Outcome::Refused;
+        }
+        Some(ApplyFailure::Write(refusal)) => {
+            eprintln!("error: {}", refusal.describe());
+            return Outcome::Failed;
+        }
+        None => {}
+    }
+
+    if report.applied.is_empty() {
         if format == Format::Json {
             let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec())
                 .with_exit_code(0);
@@ -205,24 +415,7 @@ fn apply_repairs(
         return Outcome::Succeeded;
     }
 
-    // Every file is rewritten only after all of them validate, so a rejected
-    // edit set leaves the whole tree as it was.
-    let mut rewritten = Vec::new();
-    for (path, file_edits) in &edits {
-        match rewrite_file(path, file_edits, planned_source) {
-            Ok(contents) => rewritten.push((PathBuf::from(path), contents)),
-            Err(refusal) => {
-                eprintln!("error: {}", refusal.describe());
-                return Outcome::Refused;
-            }
-        }
-    }
-
-    for (path, contents) in rewritten {
-        if let Err(refusal) = write_atomically(&path, &contents) {
-            eprintln!("error: {}", refusal.describe());
-            return Outcome::Failed;
-        }
+    for path in &report.applied {
         println!("Applied repairs to {}", path.display());
     }
 
@@ -230,7 +423,7 @@ fn apply_repairs(
 }
 
 /// Note the files whose repairs this run leaves alone.
-fn report_skipped_files(skipped: BTreeMap<String, Vec<JsonEdit>>) {
+fn report_skipped_files(skipped: &BTreeMap<String, Vec<JsonEdit>>) {
     for (path, edits) in skipped {
         eprintln!(
             "note: skipped {} repair(s) in {}; run the command on that file to apply them",
@@ -291,21 +484,7 @@ fn report_refusal(refused: &[RefusedRepair], diagnostics: &[JsonDiagnostic], for
     }
 
     let mut reported = diagnostics.to_vec();
-    reported.push(JsonDiagnostic {
-        severity: refusal.severity().as_str().to_string(),
-        code: Some(refusal.to_string()),
-        message: refusal.title().to_string(),
-        path: None,
-        line: None,
-        column: None,
-        length: None,
-        expected: None,
-        actual: None,
-        help: Some("Pass --allow-risky to apply these repairs anyway.".to_string()),
-        fix_safety: Some(refusal.fix_safety().as_str().to_string()),
-        repair: None,
-        related: vec![],
-    });
+    reported.push(refusal_diagnostic());
 
     let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
     println!("{}", serialize_envelope(&envelope));

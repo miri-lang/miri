@@ -12,6 +12,7 @@ pub mod fix_safety;
 pub mod json;
 pub mod refusal;
 pub mod repair;
+pub mod rpc;
 pub mod severity;
 
 pub use codes::DiagnosticCode;

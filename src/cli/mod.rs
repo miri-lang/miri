@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod agent;
 pub mod args;
+pub mod check;
 pub mod explain;
 pub mod fix;
 pub mod version;

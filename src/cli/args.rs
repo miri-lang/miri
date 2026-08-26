@@ -154,6 +154,12 @@ pub enum Commands {
         dir: PathBuf,
     },
 
+    /// Serve JSON-RPC requests over stdin and stdout
+    ///
+    /// One compiler process answers many requests, so a tool driving the
+    /// compiler pays the start-up cost once instead of once per invocation.
+    Agent {},
+
     /// Emit repair suggestions for compiler diagnostics
     Fix {
         /// Path to the Miri source file to fix

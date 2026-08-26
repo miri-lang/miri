@@ -23,23 +23,40 @@ pub enum Outcome {
     UnknownCode,
 }
 
-/// Explain one diagnostic code, writing the result to stdout or stderr.
+/// The result of an explain: either an explanation or an unknown code error.
+pub enum ExplainResult {
+    /// The code was found and explained.
+    Found(Explanation),
+    /// The argument is not a code in the registry.
+    UnknownCode,
+}
+
+/// Explain one diagnostic code without side effects.
 ///
-/// An unknown code is itself reported as a diagnostic, so a machine consumer
-/// gets a coded failure from the command whose subject is codes.
-pub fn run(code: &str, format: Format, color_mode: ColorMode) -> Outcome {
+/// Returns either the explanation for a valid code or an error for an unknown code,
+/// with no printing or process exit.
+pub fn explain_core(code: &str) -> ExplainResult {
     match DiagnosticCode::from_str(code) {
-        Ok(found) => {
-            let explanation = found.explanation();
-            match format {
-                Format::Json => println!("{}", render_json(&explanation)),
-                Format::Pretty => println!("{}", render_pretty(&explanation, color_mode)),
-            }
-            Outcome::Explained
+        Ok(found) => ExplainResult::Found(found.explanation()),
+        Err(_) => ExplainResult::UnknownCode,
+    }
+}
+
+/// Build the envelope that answers a request to explain `code`.
+///
+/// An unknown code is answered as a diagnostic rather than as a failure of the
+/// transport, so a machine consumer reads it the way it reads every other
+/// diagnostic — including from the command whose whole subject is codes.
+pub fn envelope(code: &str) -> DiagnosticsEnvelope {
+    match explain_core(code) {
+        ExplainResult::Found(explanation) => {
+            DiagnosticsEnvelope::new(JsonCommand::Explain, true, vec![])
+                .with_exit_code(0)
+                .with_explanation(explanation.to_json())
         }
-        Err(_) => {
-            report_unknown_code(code, format, color_mode);
-            Outcome::UnknownCode
+        ExplainResult::UnknownCode => {
+            DiagnosticsEnvelope::new(JsonCommand::Explain, false, vec![unknown_code(code)])
+                .with_exit_code(1)
         }
     }
 }
@@ -102,6 +119,27 @@ fn section(scheme: &ColorScheme, heading: &str, body: &str) -> String {
     )
 }
 
+/// Explain one diagnostic code, writing the result to stdout or stderr.
+///
+/// An unknown code is itself reported as a diagnostic, so a machine consumer
+/// gets a coded failure from the command whose subject is codes.
+pub fn run(code: &str, format: Format, color_mode: ColorMode) -> Outcome {
+    match explain_core(code) {
+        ExplainResult::Found(explanation) => {
+            let output = match format {
+                Format::Json => render_json(&explanation),
+                Format::Pretty => render_pretty(&explanation, color_mode),
+            };
+            println!("{}", output);
+            Outcome::Explained
+        }
+        ExplainResult::UnknownCode => {
+            report_unknown_code(code, format, color_mode);
+            Outcome::UnknownCode
+        }
+    }
+}
+
 /// Make an arbitrary argument safe to echo to a terminal.
 ///
 /// The rejected argument is quoted back to the user, and it is entirely under
@@ -123,34 +161,41 @@ fn sanitize_for_terminal(argument: &str) -> String {
         .collect()
 }
 
+/// The help text offered alongside an unrecognised code.
+const UNKNOWN_CODE_HELP: &str = "codes have the form MER_<AREA>_<NUM>, for example MER_TYP_030. \
+                                 Run `miri explain` with a code from the registry.";
+
+/// Describe an argument that is not a code in the registry.
+///
+/// One definition serves both transports, so the command line and a request
+/// over a connection report the same thing.
+fn unknown_code(code: &str) -> JsonDiagnostic {
+    let unknown = DiagnosticCode::BldUnknownDiagnosticCode;
+    JsonDiagnostic {
+        severity: unknown.severity().as_str().to_string(),
+        code: Some(unknown.as_str().to_string()),
+        message: format!("unknown diagnostic code: {}", sanitize_for_terminal(code)),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: Some(UNKNOWN_CODE_HELP.to_string()),
+        fix_safety: None,
+        repair: None,
+        related: vec![],
+    }
+}
+
 /// Report an argument that is not a code in the registry.
 fn report_unknown_code(code: &str, format: Format, color_mode: ColorMode) {
     let unknown = DiagnosticCode::BldUnknownDiagnosticCode;
     let message = format!("unknown diagnostic code: {}", sanitize_for_terminal(code));
-    let help = "codes have the form MER_<AREA>_<NUM>, for example MER_TYP_030. \
-                Run `miri explain` with a code from the registry."
-        .to_string();
 
     match format {
         Format::Json => {
-            let diagnostic = JsonDiagnostic {
-                severity: unknown.severity().as_str().to_string(),
-                code: Some(unknown.as_str().to_string()),
-                message,
-                path: None,
-                line: None,
-                column: None,
-                length: None,
-                expected: None,
-                actual: None,
-                help: Some(help),
-                fix_safety: None,
-                repair: None,
-                related: vec![],
-            };
-            let envelope = DiagnosticsEnvelope::new(JsonCommand::Explain, false, vec![diagnostic])
-                .with_exit_code(1);
-            println!("{}", serialize_envelope(&envelope));
+            println!("{}", serialize_envelope(&envelope(code)));
         }
         Format::Pretty => {
             let scheme = ColorScheme::from_choice(color_mode.into());
@@ -161,7 +206,7 @@ fn report_unknown_code(code: &str, format: Format, color_mode: ColorMode) {
                 unknown.as_str(),
                 scheme.reset,
                 message,
-                help,
+                UNKNOWN_CODE_HELP,
             );
         }
     }
