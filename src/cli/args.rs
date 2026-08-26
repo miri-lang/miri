@@ -128,6 +128,17 @@ pub enum Commands {
         format: Format,
     },
 
+    /// Watch a file and re-check on changes
+    Dev {
+        /// Path to the Miri source file to watch
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
+
     /// Explain a diagnostic code
     Explain {
         /// Diagnostic code to explain (e.g. MER_TYP_010)

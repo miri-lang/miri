@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod args;
 pub mod check;
+pub mod dev;
 pub mod explain;
 pub mod fix;
 pub mod version;
