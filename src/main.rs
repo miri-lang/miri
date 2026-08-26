@@ -73,6 +73,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 cli.color,
             ),
             Commands::Check { path, format } => check_file(path, format, cli.verify_mir, cli.color),
+            Commands::Dev { path, format } => dev_watch(path, format, cli.verify_mir, cli.color),
             Commands::Agent {} => serve_agent(),
             Commands::Explain { code, format } => explain_code(&code, format, cli.color),
             Commands::Fix {
@@ -284,6 +285,14 @@ fn check_file(
     match miri::cli::check::run(&path, format, verify_mir, color_mode) {
         miri::cli::check::Outcome::Succeeded => Ok(()),
         miri::cli::check::Outcome::Failed => std::process::exit(1),
+    }
+}
+
+/// Watch a file for changes and re-check on each change.
+fn dev_watch(path: PathBuf, format: Format, verify_mir: bool, color_mode: ColorMode) -> Result<()> {
+    match miri::cli::dev::run(path, format, verify_mir, color_mode) {
+        miri::cli::dev::Outcome::Exited => Ok(()),
+        miri::cli::dev::Outcome::Failed => std::process::exit(1),
     }
 }
 
