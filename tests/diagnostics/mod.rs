@@ -5,4 +5,5 @@ pub mod explain;
 pub mod fix_safety;
 pub mod json;
 pub mod registry;
+pub mod rpc;
 pub mod schema;

@@ -11,6 +11,9 @@ The CLI provides the interface for evaluating, compiling, and testing Miri progr
 -   **`miri run <file.mi>`**: Compiles and executes a specified Miri program.
 -   **`miri build <file.mi>`**: Compiles a Miri program to a native executable binary.
 -   **`miri check <file.mi>`**: Runs the frontend (Lexer, Parser, Type Checker) to validate code correctness without generating an executable.
+-   **`miri explain <CODE>`**: Renders the registry entry for a diagnostic code — the rule it enforces, a before/after pair, and a reference link.
+-   **`miri fix <file.mi>`**: Reports the repairs the compiler recorded for a file (`--plan`, the default) or writes them (`--apply`). A repair classified as risky is refused unless `--allow-risky` is given.
+-   **`miri agent`**: Serves JSON-RPC 2.0 over stdin and stdout so one process answers many requests. See [`docs/agent-protocol.md`](../../docs/agent-protocol.md).
 -   **`miri test`**: Discovers `@test` functions in `.mi` files under a directory and runs each one in an isolated subprocess, with optional filtering by `<path>::<test_name>` and a selectable output format (pretty/json). Discovery, execution and reporting live in `src/test_runner/`; see its README.
 
 ## Output Formats
@@ -29,6 +32,20 @@ Control ANSI color codes in terminal output with the global `--color` flag:
 -   **`--color never`**: Disable all color codes.
 
 Note: JSON format (`--format json`) never emits ANSI escape codes regardless of the color setting.
+
+## One command, three concerns
+
+Each command module separates the work from the writing, because the command
+line is no longer the only caller. A command exposes:
+
+-   a **core** that runs the work and returns what it found — no printing, no
+    process exit, no panic, so a long-lived session can call it;
+-   a **rendering** step that turns that into text or an envelope;
+-   a thin **`run`** that joins the two and is what `main.rs` calls.
+
+`miri agent` calls the same cores, which is what keeps a session and the command
+line reporting the same thing. `main.rs` marshals arguments and maps an outcome
+onto an exit code; it holds no compilation logic.
 
 ## Architecture
 

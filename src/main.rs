@@ -72,9 +72,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 cli.verify_mir,
                 cli.color,
             ),
-            Commands::Check { path, format } => {
-                check_file(path, format, cli.verbose, cli.verify_mir, cli.color)
-            }
+            Commands::Check { path, format } => check_file(path, format, cli.verify_mir, cli.color),
+            Commands::Agent {} => serve_agent(),
             Commands::Explain { code, format } => explain_code(&code, format, cli.color),
             Commands::Fix {
                 path,
@@ -274,90 +273,27 @@ fn build_file(
     }
 }
 
+/// Check one file. The command's work and its rendering live in the CLI layer;
+/// this arm only maps the outcome onto a process exit code.
 fn check_file(
     path: PathBuf,
     format: Format,
-    _verbose: u8,
     verify_mir: bool,
     color_mode: ColorMode,
 ) -> Result<()> {
-    let source = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
-
-    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
-    let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-    if let Some(dir) = abs_path.parent() {
-        pipeline = pipeline.with_source_dir(dir.to_path_buf());
+    match miri::cli::check::run(&path, format, verify_mir, color_mode) {
+        miri::cli::check::Outcome::Succeeded => Ok(()),
+        miri::cli::check::Outcome::Failed => std::process::exit(1),
     }
-    pipeline = pipeline.with_source_path(abs_path.display().to_string());
+}
 
-    let start = std::time::Instant::now();
-    match pipeline.frontend(&source) {
-        Ok(result) => {
-            let elapsed_ms = start.elapsed().as_millis() as u64;
-            if format == Format::Json {
-                let warnings = result.type_checker.warnings();
-                let json_diags = warnings
-                    .iter()
-                    .map(|w| to_json(w, &source, pipeline.source_path()))
-                    .collect();
-                // ok = true when the frontend succeeded (no errors), regardless of warnings.
-                // Warnings do not fail a check; only errors do.
-                let envelope = DiagnosticsEnvelope::new(JsonCommand::Check, true, json_diags)
-                    .with_exit_code(0)
-                    .with_duration_ms(elapsed_ms);
-                let output = miri::cli::serialize_envelope(&envelope);
-                println!("{}", output);
-            } else {
-                for warning in result.type_checker.warnings() {
-                    eprintln!(
-                        "{}",
-                        miri::error::format::format_diagnostic_with_color(
-                            &source,
-                            warning,
-                            pipeline.source_path(),
-                            color_mode.into(),
-                        )
-                    );
-                }
-                let warning_count = result.type_checker.warnings().len();
-                if warning_count > 0 {
-                    println!(
-                        "Check passed. No errors found. {} warning(s) emitted.",
-                        warning_count
-                    );
-                } else {
-                    println!("Check passed. No errors or warnings found.");
-                }
-            }
-            Ok(())
-        }
-        Err(e) => {
-            let elapsed_ms = start.elapsed().as_millis() as u64;
-            if format == Format::Json {
-                let diags = e.to_diagnostics();
-                let json_diags = diags
-                    .iter()
-                    .map(|d| to_json(d, &source, pipeline.source_path()))
-                    .collect();
-                let envelope = DiagnosticsEnvelope::new(JsonCommand::Check, false, json_diags)
-                    .with_exit_code(1)
-                    .with_duration_ms(elapsed_ms);
-                let output = miri::cli::serialize_envelope(&envelope);
-                println!("{}", output);
-            } else {
-                eprintln!(
-                    "{}",
-                    e.report_with_path_and_color(
-                        &source,
-                        pipeline.source_path(),
-                        color_mode.into()
-                    )
-                );
-            }
-            std::process::exit(1);
-        }
-    }
+/// Serve JSON-RPC requests until the client closes stdin.
+///
+/// The session runs on this thread, which already has the stack the compiler's
+/// recursive passes need, so every request is served with the same headroom a
+/// one-shot command gets.
+fn serve_agent() -> Result<()> {
+    miri::cli::agent::run().context("the agent session ended in an I/O error")
 }
 
 /// Explain one diagnostic code. Rendering lives in the CLI layer; this arm only

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod agent;
 pub mod build;
 pub mod build_web_gpu;
 pub mod color;
