@@ -1,0 +1,6 @@
+// expect: MER_TYP_040
+// summary: Triggers MER_TYP_040: Invalid Index Operation.
+fn main() i32
+  let arr = [1, 2, 3]
+  let x = arr["invalid"]
+  0

@@ -1,0 +1,6 @@
+// expect: MER_TYP_023
+// summary: Triggers MER_TYP_023: Unnecessary Double Negation.
+fn main()
+    let x = 5
+    let y = - - x
+    println(f"{y}")

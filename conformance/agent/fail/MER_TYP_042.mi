@@ -1,0 +1,6 @@
+// expect: MER_TYP_042
+// summary: Triggers MER_TYP_042: Immutability Violation.
+fn main() i32
+  let x = 5
+  x = 10
+  0

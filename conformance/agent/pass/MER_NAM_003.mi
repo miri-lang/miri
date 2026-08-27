@@ -1,0 +1,2 @@
+// summary: Accepted counterpart of MER_NAM_003: Invalid Import Path does not fire.
+use system.io

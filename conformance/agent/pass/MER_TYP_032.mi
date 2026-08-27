@@ -1,0 +1,6 @@
+// summary: Callable function can be invoked
+fn f() int
+    42
+
+fn main()
+    f()

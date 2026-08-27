@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_MIR_010: Invalid GPU Launch Arguments does not fire.
+use system.gpu
+
+gpu fn my_kernel()
+    let x = 1
+
+fn main()
+    my_kernel().launch(Dim3(1, 1, 1), Dim3(1, 1, 1))

@@ -1,0 +1,6 @@
+// expect: MER_LEX_003
+// summary: Triggers MER_LEX_003: Indentation Mismatch.
+fn factorial(n int) int
+    if n <= 1
+        return 1
+      return n * factorial(n - 1)

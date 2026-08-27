@@ -1,0 +1,5 @@
+// expect: MER_LEX_006
+// summary: Triggers MER_LEX_006: Invalid Octal Literal.
+let x = 0o789
+let y = 0o_755
+let z = 0o755_

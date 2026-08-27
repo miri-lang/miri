@@ -1,0 +1,10 @@
+// expect: MER_TAR_007
+// summary: Triggers MER_TAR_007: Type Not Accelerable.
+use system.gpu
+
+class Point
+    x f32
+    name String
+
+fn main()
+    gpu let points = [Point(x: 1.0, name: "A")]

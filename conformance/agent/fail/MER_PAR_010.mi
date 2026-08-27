@@ -1,0 +1,6 @@
+// expect: MER_PAR_010
+// summary: Triggers MER_PAR_010: Duplicate Match Pattern.
+fn main()
+    match 1
+        1: println("one")
+        1: println("one again")

@@ -1,0 +1,4 @@
+// summary: Mutable variable can be reassigned
+fn main()
+    var x = 5
+    x = 10

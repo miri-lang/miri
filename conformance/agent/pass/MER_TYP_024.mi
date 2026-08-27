@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_TYP_024: Decrement Operator Not Supported does not fire.
+// expect-stdout: 9
+fn main()
+    var x = 10
+    x = x - 1
+    println(f"{x}")

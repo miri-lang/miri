@@ -1,0 +1,6 @@
+// expect: MER_TYP_065
+// summary: Triggers MER_TYP_065: Invalid Constant Arithmetic.
+let SIZE = 10 / 0
+
+fn main() i32
+  0

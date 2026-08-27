@@ -1,0 +1,5 @@
+// expect: MER_TYP_050
+// summary: A continue statement appears outside any enclosing loop.
+fn main()
+    var i = 0
+    continue

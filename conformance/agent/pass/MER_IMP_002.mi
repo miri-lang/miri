@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_IMP_002: Imported Name Conflict does not fire.
+use system.result
+
+enum HttpResult
+    Ok(i32)
+    Err(String)

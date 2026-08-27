@@ -1,0 +1,3 @@
+// summary: Defined variable can be referenced
+fn main()
+    let x = 42

@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_TYP_023: Unnecessary Double Negation does not fire.
+// expect-stdout: 5
+fn main()
+    let x = 5
+    let y = x
+    println(f"{y}")

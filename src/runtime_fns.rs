@@ -163,6 +163,9 @@ pub mod rt {
     /// cleanly without raising SIGTRAP/SIGILL (which on macOS would spawn the
     /// `ReportCrash` daemon and serialize parallel test runs).
     pub const DIV_BY_ZERO_PANIC: &str = "miri_rt_div_by_zero_panic";
+    /// Compiler-internal: prints "remainder by zero" and `_exit(1)`s.
+    /// Separate from division to distinguish MER_RT_001 from MER_RT_002.
+    pub const REM_BY_ZERO_PANIC: &str = "miri_rt_rem_by_zero_panic";
 
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -352,6 +355,7 @@ pub mod rt {
         ASSERT_EQ_FAIL,
         ASSERT_NE_FAIL,
         DIV_BY_ZERO_PANIC,
+        REM_BY_ZERO_PANIC,
         // Filesystem
         FS_STATUS,
         FS_ERROR_MESSAGE,
@@ -531,6 +535,7 @@ pub fn diverges(name: &str) -> bool {
             | rt::ASSERT_NE_FAIL
             | rt::ARRAY_PANIC_OOB
             | rt::DIV_BY_ZERO_PANIC
+            | rt::REM_BY_ZERO_PANIC
     )
 }
 

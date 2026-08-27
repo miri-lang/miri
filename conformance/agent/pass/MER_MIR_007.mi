@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_MIR_007: Unsupported Left-Hand Side does not fire.
+fn main()
+    var x = 42
+    x = 10

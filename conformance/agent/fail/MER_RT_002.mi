@@ -1,0 +1,6 @@
+// expect: MER_RT_002
+// command: run
+// summary: Triggers MER_RT_002: an integer remainder whose divisor is zero at run time.
+fn main()
+    var d = 0
+    let x = 10 % d

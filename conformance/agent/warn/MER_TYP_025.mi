@@ -1,0 +1,5 @@
+// expect: MER_TYP_025
+// summary: Triggers MER_TYP_025: Unnecessary Optional Declaration.
+fn main()
+    let x Option<int> = 42
+    println(f"{x}")

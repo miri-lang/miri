@@ -1,0 +1,10 @@
+// summary: Accepted counterpart of MER_OWN_004: Unused Value does not fire.
+// expect-stdout: Ok(42)
+@must_use
+enum Result
+    Ok(i32)
+    Err(String)
+
+fn main()
+    let r = Result.Ok(42)
+    println(f"{r}")

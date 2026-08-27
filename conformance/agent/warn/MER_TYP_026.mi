@@ -1,0 +1,5 @@
+// expect: MER_TYP_026
+// summary: Triggers MER_TYP_026: Deprecated Attribute Spelling.
+must_use enum Status
+    Ok
+    Error

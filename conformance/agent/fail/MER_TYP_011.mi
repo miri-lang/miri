@@ -1,0 +1,10 @@
+// expect: MER_TYP_011
+// summary: Triggers MER_TYP_011: Non-Exhaustive Enum Match.
+use system.os
+
+fn main()
+    let err = EnvError.InvalidName("test")
+    match err
+        EnvError.InvalidName(s): println(s)
+        EnvError.InvalidValue(s): println(s)
+        EnvError.Other(s): println(s)

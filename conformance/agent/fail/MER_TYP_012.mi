@@ -1,0 +1,6 @@
+// expect: MER_TYP_012
+// summary: Triggers MER_TYP_012: Unknown Attribute.
+@nonexistent
+enum Status
+    Ok
+    Error

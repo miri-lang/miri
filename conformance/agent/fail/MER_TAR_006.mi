@@ -1,0 +1,8 @@
+// expect: MER_TAR_006
+// summary: Triggers MER_TAR_006: GPU Residency Violation.
+use system.gpu
+
+fn main()
+    let data = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        let x = i + 1

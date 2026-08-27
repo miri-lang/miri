@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_MIR_008: Unsupported Operator does not fire.
+fn main()
+    let x = 5
+    let y = x / 4

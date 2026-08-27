@@ -1,0 +1,7 @@
+// expect: MER_PAR_019
+// summary: Triggers MER_PAR_019: Unsupported Attribute Target.
+@deprecated
+let old_value = 42
+
+@must_use
+var mutable_flag = true

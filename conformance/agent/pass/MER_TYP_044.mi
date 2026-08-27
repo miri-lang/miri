@@ -1,0 +1,10 @@
+// summary: Accepted counterpart of MER_TYP_044: Type Already Defined does not fire.
+// expect-stdout: done
+class Point
+    var x int
+
+class Label
+    var y int
+
+fn main()
+    println("done")

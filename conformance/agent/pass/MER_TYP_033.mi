@@ -1,0 +1,10 @@
+// summary: Accepted counterpart of MER_TYP_033: Field Not Found does not fire.
+// expect-stdout: 1
+class Point
+    public var x int
+    public var y int
+
+fn main()
+    let p = Point(1, 2)
+    let v = p.x
+    println(f"{v}")

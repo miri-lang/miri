@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_TYP_039: Invalid Collection Element Type does not fire.
+fn main() i32
+  let list = [1, 2, 3]
+  0

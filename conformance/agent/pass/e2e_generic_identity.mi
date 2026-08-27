@@ -1,0 +1,8 @@
+// summary: End-to-end identity function without generic
+use system.io
+
+fn identity(x int) int
+    x
+
+fn main()
+    let a = identity(42)

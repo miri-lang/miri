@@ -1,0 +1,3 @@
+// summary: Correct type annotation syntax without colon
+fn main()
+    let x int = 5

@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_PAR_012: Missing Struct Member Type does not fire.
+struct Point
+    x int
+    y int

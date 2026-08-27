@@ -1,0 +1,9 @@
+// expect: MER_OWN_004
+// summary: Triggers MER_OWN_004: Unused Value.
+@must_use
+enum Result
+    Ok(i32)
+    Err(String)
+
+fn main()
+    Result.Ok(42)

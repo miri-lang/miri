@@ -1,0 +1,3 @@
+// summary: Correct type in variable initialization - string assigned to string
+fn main()
+    let x = "hello"

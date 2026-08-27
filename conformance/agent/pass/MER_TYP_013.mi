@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_013: Attribute Not Valid does not fire.
+@non_exhaustive
+enum Status
+    Ok
+    Error

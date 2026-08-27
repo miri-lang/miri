@@ -1,0 +1,4 @@
+// expect: MER_PAR_016
+// summary: Triggers MER_PAR_016: Missing Constant Initializer.
+const MAX_SIZE
+const PI = 3.14

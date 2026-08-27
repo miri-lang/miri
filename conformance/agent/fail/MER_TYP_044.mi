@@ -1,0 +1,10 @@
+// expect: MER_TYP_044
+// summary: Triggers MER_TYP_044: Type Already Defined.
+class Point
+    var x int
+
+class Point
+    var y int
+
+fn main()
+    println("done")

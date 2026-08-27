@@ -1,0 +1,5 @@
+// expect: MER_TYP_013
+// summary: Triggers MER_TYP_013: Attribute Not Valid.
+@non_exhaustive
+fn foo()
+    let x = 1

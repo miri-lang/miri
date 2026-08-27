@@ -1,0 +1,6 @@
+// expect: MER_TYP_041
+// summary: Triggers MER_TYP_041: Invalid Slice Operation.
+fn main() i32
+  let s = "hello"
+  let sub = s[1.5..3.5]
+  0

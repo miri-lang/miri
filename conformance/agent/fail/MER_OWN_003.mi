@@ -1,0 +1,12 @@
+// expect: MER_OWN_003
+// summary: Triggers MER_OWN_003: Use of Moved Value.
+class Resource
+    fn drop(self)
+        return
+
+fn sink(x Resource)
+    return
+
+var r = Resource()
+sink(r)
+sink(r)

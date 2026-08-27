@@ -4,6 +4,7 @@
 pub mod ast;
 pub mod cli;
 pub mod codegen;
+pub mod conformance;
 pub mod diagnostics;
 pub mod e2e;
 pub mod error;

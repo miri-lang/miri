@@ -1,0 +1,5 @@
+// expect: MER_PAR_018
+// summary: Triggers MER_PAR_018: Unknown Runtime.
+fn increment(x int) int
+    runtime "unknown" fn do_increment(x int) int
+    return do_increment(x)

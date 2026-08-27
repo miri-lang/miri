@@ -215,6 +215,21 @@ pub mod ffi {
         }
     }
 
+    /// Records a runtime trap diagnostic code to a file (if the env var is set).
+    ///
+    /// The trap report path is passed via the `MIRI_TRAP_REPORT_PATH` env var.
+    /// On success, writes the diagnostic code (e.g., "MER_RT_001") and flushes.
+    /// Failures are silent — the report is best-effort, and the trap will exit
+    /// regardless of whether this succeeds.
+    fn write_trap_report(code: &str) {
+        use std::env;
+        use std::fs;
+
+        if let Ok(path) = env::var("MIRI_TRAP_REPORT_PATH") {
+            let _ = fs::write(&path, code);
+        }
+    }
+
     /// Clean-exit termination for user-facing runtime errors.
     ///
     /// Flushes stderr (so the preceding `eprintln!` is visible), then calls
@@ -308,10 +323,26 @@ pub mod ffi {
     /// Called from compiled Miri code in place of a Cranelift `trapz`
     /// hardware-trap instruction so the process terminates cleanly without
     /// raising SIGTRAP/SIGILL. Keeps macOS `ReportCrash` out of the picture.
+    /// Writes MER_RT_001 to the trap report file (if the env var is set).
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_div_by_zero_panic() {
         eprintln!("Runtime error: division by zero");
+        write_trap_report("MER_RT_001");
+        die();
+    }
+
+    /// Reports an integer remainder-by-zero error and `_exit(1)`s.
+    ///
+    /// Called from compiled Miri code in place of a Cranelift `trapz`
+    /// hardware-trap instruction so the process terminates cleanly without
+    /// raising SIGTRAP/SIGILL. Keeps macOS `ReportCrash` out of the picture.
+    /// Writes MER_RT_002 to the trap report file (if the env var is set).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_rem_by_zero_panic() {
+        eprintln!("Runtime error: remainder by zero");
+        write_trap_report("MER_RT_002");
         die();
     }
 

@@ -1,0 +1,5 @@
+// expect: MER_TYP_002
+// summary: Triggers MER_TYP_002: Type Mismatch.
+fn main()
+    let x int = "hello"
+    println(f"{x}")

@@ -1,0 +1,6 @@
+// summary: End-to-end hello world program
+// expect-stdout: Hello, World!
+use system.io
+
+fn main()
+    println("Hello, World!")

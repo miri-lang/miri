@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_TYP_051: Range Type Mismatch does not fire.
+fn main() i32
+  let r = 1..5
+  0

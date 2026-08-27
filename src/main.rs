@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format};
-use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand};
+use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
 use miri::error::diagnostic::to_json;
 use miri::pipeline::{BuildOptions, Pipeline};
 
@@ -145,17 +145,52 @@ fn run_file(
     if format == Format::Json {
         // In JSON mode, capture output and emit envelope
         match pipeline.run_and_capture(&source, &program_args) {
-            Ok((exit_code, stdout_bytes, stderr_bytes)) => {
+            Ok((exit_code, stdout_bytes, stderr_bytes, trap_code)) => {
                 let elapsed_ms = start.elapsed().as_millis() as u64;
 
                 let (stdout_tail, stdout_truncated) = tail_output(&stdout_bytes, 8192);
                 let (stderr_tail, stderr_truncated) = tail_output(&stderr_bytes, 8192);
 
-                let envelope = DiagnosticsEnvelope::new(JsonCommand::Run, exit_code == 0, vec![])
-                    .with_exit_code(exit_code)
-                    .with_duration_ms(elapsed_ms)
-                    .with_stdout(stdout_tail, stdout_truncated)
-                    .with_stderr(stderr_tail, stderr_truncated);
+                // A trap report is only meaningful for a run that actually died.
+                // A program that completed successfully cannot be carrying a
+                // trap, so its report is ignored rather than allowed to turn a
+                // successful run into a failed one.
+                let trap_code = trap_code.filter(|_| exit_code != 0);
+                let has_trap = trap_code.is_some();
+                let diagnostics = if let Some(code) = trap_code {
+                    let message = match code.as_str() {
+                        "MER_RT_001" => "division by zero",
+                        "MER_RT_002" => "remainder by zero",
+                        _ => "runtime trap",
+                    };
+                    vec![JsonDiagnostic {
+                        severity: "error".to_string(),
+                        code: Some(code),
+                        message: message.to_string(),
+                        path: None,
+                        line: None,
+                        column: None,
+                        length: None,
+                        expected: None,
+                        actual: None,
+                        help: None,
+                        fix_safety: None,
+                        repair: None,
+                        related: vec![],
+                    }]
+                } else {
+                    vec![]
+                };
+
+                let envelope = DiagnosticsEnvelope::new(
+                    JsonCommand::Run,
+                    exit_code == 0 && !has_trap,
+                    diagnostics,
+                )
+                .with_exit_code(exit_code)
+                .with_duration_ms(elapsed_ms)
+                .with_stdout(stdout_tail, stdout_truncated)
+                .with_stderr(stderr_tail, stderr_truncated);
 
                 let output = miri::cli::serialize_envelope(&envelope);
                 println!("{}", output);

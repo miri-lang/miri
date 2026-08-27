@@ -1,0 +1,6 @@
+// expect: MER_TYP_014
+// summary: Triggers MER_TYP_014: Attribute Argument Missing.
+@test
+@ignore
+fn bad_test()
+    println("test")

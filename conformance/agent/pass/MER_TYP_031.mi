@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_TYP_031: Argument Order Error does not fire.
+fn takes_args(a int, b int, c int) int
+    return a + b + c
+
+fn main()
+    let result = takes_args(1, c: 3, b: 2)

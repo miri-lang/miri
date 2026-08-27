@@ -1,0 +1,7 @@
+// expect: MER_LEX_002
+// summary: Triggers MER_LEX_002: Unclosed Multiline Comment.
+use system.io
+
+fn main()
+    /* This comment starts here
+    println("but never closes")

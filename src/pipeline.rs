@@ -11,6 +11,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::codegen::Backend;
 use crate::codegen::{BuildTarget, CpuBackend};
+use crate::diagnostics::codes::DiagnosticCode;
 use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
@@ -29,6 +30,9 @@ use crate::type_checker::TypeChecker;
 /// map used to substitute a method body, paired with the ordered name/type pairs
 /// used to mangle the per-instantiation symbol.
 type InstantiationSub = (std::collections::HashMap<String, Type>, Vec<(String, Type)>);
+
+/// Return type for `run_and_capture`: exit code, stdout, stderr, and optional trap code.
+type RunCaptureResult = (i32, Vec<u8>, Vec<u8>, Option<String>);
 
 fn has_main_function(program: &Program) -> bool {
     program.body.iter().any(|s| {
@@ -611,7 +615,9 @@ impl Pipeline {
 
     /// Compile and execute the source, capturing and returning output.
     ///
-    /// Returns a tuple of (exit_code, stdout_bytes, stderr_bytes).
+    /// Returns a tuple of (exit_code, stdout_bytes, stderr_bytes, trap_code).
+    /// trap_code is None if no trap occurred, or Some(code) with the diagnostic code
+    /// (e.g., "MER_RT_001") if a runtime trap was reported.
     ///
     /// `program_args` become the spawned program's `argv[1..]`; the program path
     /// itself is `argv[0]`, as for any executable. They are an input to this one
@@ -621,10 +627,11 @@ impl Pipeline {
         &self,
         source: &str,
         program_args: &[String],
-    ) -> Result<(i32, Vec<u8>, Vec<u8>), CompilerError> {
+    ) -> Result<RunCaptureResult, CompilerError> {
         let temp_dir = tempfile::tempdir()
             .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
         let executable_path = temp_dir.path().join("program");
+        let trap_report_path = temp_dir.path().join("trap");
 
         let build_opts = BuildOptions {
             out_path: Some(executable_path.clone()),
@@ -653,11 +660,15 @@ impl Pipeline {
 
         let output = Command::new(&canonical_executable)
             .args(program_args)
+            .env("MIRI_TRAP_REPORT_PATH", &trap_report_path)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
         let exit_code = output.status.code().unwrap_or(-1);
-        Ok((exit_code, output.stdout, output.stderr))
+
+        let trap_code = read_trap_report(&trap_report_path);
+
+        Ok((exit_code, output.stdout, output.stderr, trap_code))
     }
 
     /// Compile and execute the source, returning the process exit code.
@@ -671,7 +682,7 @@ impl Pipeline {
     /// execution rather than to compilation, which is why they are a parameter
     /// instead of builder state like the source directory or the verifier flag.
     pub fn run(&self, source: &str, program_args: &[String]) -> Result<i32, CompilerError> {
-        let (exit_code, stdout, stderr) = self.run_and_capture(source, program_args)?;
+        let (exit_code, stdout, stderr, _trap_code) = self.run_and_capture(source, program_args)?;
 
         if !stdout.is_empty() {
             print!("{}", String::from_utf8_lossy(&stdout));
@@ -2830,4 +2841,31 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
         "Could not find runtime library '{}'. Set MIRI_RUNTIME_DIR or build the runtime with `cargo build --release`.",
         runtime.library_name()
     )))
+}
+
+/// Longest trap report the runtime can legitimately leave: a diagnostic code
+/// plus a trailing newline.
+const MAX_TRAP_REPORT_LEN: u64 = 32;
+
+/// Read the diagnostic code a runtime trap handler left behind, if any.
+///
+/// The report is written by the spawned program, which is untrusted: it receives
+/// the report path in its own environment and can write whatever it likes there,
+/// or replace the file entirely. So the report is honoured only when it is a
+/// regular file rather than a link aimed somewhere else, is small enough to be a
+/// code, and names a code the runtime is actually able to raise. Anything else is
+/// discarded and the run is reported exactly as it would be with no report at
+/// all, so a program can never invent a diagnostic it did not trigger.
+fn read_trap_report(path: &std::path::Path) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_TRAP_REPORT_LEN {
+        return None;
+    }
+
+    let contents = std::fs::read_to_string(path).ok()?;
+    let code: DiagnosticCode = contents.trim().parse().ok()?;
+    if code.area() != "RT" {
+        return None;
+    }
+    Some(code.as_str().to_string())
 }

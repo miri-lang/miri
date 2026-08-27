@@ -1,0 +1,4 @@
+// expect: MER_PAR_015
+// summary: Triggers MER_PAR_015: Missing Type Expression.
+fn test(x)
+    return

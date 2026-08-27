@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire.
+use system.gpu
+
+gpu fn loop_kernel()
+    var n = 5
+    while n > 0
+        n = n - 1

@@ -1,0 +1,5 @@
+// expect: MER_TYP_060
+// summary: Triggers MER_TYP_060: Invalid Async or Await Usage.
+fn process() i32
+  let result = await async_operation()
+  0

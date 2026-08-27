@@ -1,0 +1,7 @@
+// expect: MER_LEX_001
+// summary: Triggers MER_LEX_001: Invalid Token.
+use system.io
+
+fn main()
+    let x = $ 5
+    println(x)

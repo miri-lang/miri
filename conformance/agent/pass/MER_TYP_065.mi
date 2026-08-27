@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_065: Invalid Constant Arithmetic does not fire.
+let SIZE = 10 / 2
+
+fn main() i32
+  0

@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_064: Shadowing Not Allowed does not fire.
+fn main() i32
+  let x = 5
+  var y = 10
+  0

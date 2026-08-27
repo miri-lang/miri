@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_017: Invalid Modifier Combination does not fire.
+gpu fn kernel()
+    return

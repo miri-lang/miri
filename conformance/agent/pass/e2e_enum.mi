@@ -1,0 +1,19 @@
+// summary: End-to-end enum match expression
+// expect-stdout: red
+use system.io
+
+enum Color
+    Red
+    Green
+    Blue
+
+fn describe(c Color) String
+    match c
+        Red: "red"
+        Green: "green"
+        Blue: "blue"
+
+fn main()
+    let color = Color.Red
+    let name = describe(color)
+    println(name)

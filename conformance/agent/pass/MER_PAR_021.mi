@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_021: Recursion Limit Exceeded does not fire.
+fn compute() int
+    return 5

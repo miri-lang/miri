@@ -1,0 +1,5 @@
+// summary: An ordinary local declaration outside a GPU function is accepted.
+// expect-stdout:
+fn main()
+    var x int = 0
+    x = x + 1

@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_MIR_005: Break Outside Loop does not fire.
+fn main()
+    var sum = 0
+    while sum < 5
+        sum = sum + 1
+        break

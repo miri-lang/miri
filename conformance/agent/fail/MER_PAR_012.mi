@@ -1,0 +1,5 @@
+// expect: MER_PAR_012
+// summary: Triggers MER_PAR_012: Missing Struct Member Type.
+struct Point
+    x
+    y

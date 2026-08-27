@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_LEX_005: Invalid Binary Literal does not fire.
+let x = 0b1010
+let y = 0b101
+let z = 0b101

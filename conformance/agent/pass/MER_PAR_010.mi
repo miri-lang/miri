@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_PAR_010: Duplicate Match Pattern does not fire.
+// expect-stdout: one
+fn main()
+    match 1
+        1: println("one")
+        2: println("two")

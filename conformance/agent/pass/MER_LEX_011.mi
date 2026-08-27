@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_LEX_011: Backslash in Format String does not fire.
+// expect-stdout: path = C:\Users\name
+let path = "C:\\Users\\name"
+let msg = f"path = {path}"
+println(msg)

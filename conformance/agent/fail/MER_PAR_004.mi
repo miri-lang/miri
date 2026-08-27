@@ -1,0 +1,6 @@
+// expect: MER_PAR_004
+// summary: Triggers MER_PAR_004: Invalid Left-Hand Side Expression.
+fn main()
+    5 = 10
+    (x + y) = 20
+    get_value() = 30

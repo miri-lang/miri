@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_MIR_012: Missing Struct Field does not fire.
+struct Point
+    x i32
+    y i32
+
+fn main()
+    let p = Point(x: 10, y: 20)

@@ -1,0 +1,2 @@
+// summary: Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire.
+let x = (5)
