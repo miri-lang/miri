@@ -1,0 +1,4 @@
+// expect: MER_PAR_001
+// summary: Triggers MER_PAR_001: Unexpected Token.
+fn main)
+    println("Hello")

@@ -1,0 +1,2 @@
+// summary: Accepted counterpart of MER_PAR_005: Invalid Integer Literal does not fire.
+let x = 100

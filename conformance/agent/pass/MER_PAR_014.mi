@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_014: Missing Enum Members does not fire.
+enum Empty
+    Value

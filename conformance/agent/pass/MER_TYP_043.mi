@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_043: Type Not Found does not fire.
+// expect-stdout: 1
+fn main()
+    let value int = 1
+    println(f"{value}")

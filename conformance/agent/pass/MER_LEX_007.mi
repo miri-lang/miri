@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_LEX_007: Invalid Hex Literal does not fire.
+let x = 0xFFFF
+let y = 0xABCD
+let z = 0xABCD

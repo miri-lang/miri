@@ -1,0 +1,9 @@
+// expect: MER_TAR_008
+// summary: Triggers MER_TAR_008: GPU-Incompatible Function Signature.
+use system.gpu
+
+gpu fn my_kernel() i32
+    return 42
+
+gpu fn another(s String)
+    let x = s

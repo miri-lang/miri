@@ -1990,6 +1990,49 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Emits an explicit branch: if `rhs == 0`, call `miri_rt_rem_by_zero_panic`
+    /// (which prints the runtime error and `_exit(1)`s) then trap as unreachable;
+    /// otherwise fall through to the continuation block. Avoids Cranelift `trapz`
+    /// so the process terminates via clean exit instead of SIGTRAP/SIGILL — keeps
+    /// macOS `ReportCrash` from spawning under parallel test load.
+    fn emit_rem_by_zero_check(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        rhs: Value,
+        ty: cl_types::Type,
+    ) -> Result<(), CodegenError> {
+        let zero = builder.ins().iconst(ty, 0);
+        let is_zero = builder.ins().icmp(IntCC::Equal, rhs, zero);
+
+        let panic_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_zero, panic_block, &[], cont_block, &[]);
+
+        builder.switch_to_block(panic_block);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::REM_BY_ZERO_PANIC,
+                param_types: &[],
+                return_types: &[],
+                args: &[],
+            },
+        )?;
+        // `miri_rt_rem_by_zero_panic` is `noreturn` semantically; the helper
+        // calls `_exit(1)`. Emit a trap here only to terminate the block
+        // unreachably so the Cranelift verifier is happy.
+        builder.ins().trap(TrapCode::unwrap_user(1));
+        builder.seal_block(panic_block);
+
+        builder.switch_to_block(cont_block);
+        builder.seal_block(cont_block);
+        Ok(())
+    }
+
     /// Emit `Add`/`Sub`/`Mul`/`Div`/`Rem` for the matched operand pair.
     /// Integer `Div`/`Rem` check for division by zero by calling
     /// `miri_rt_div_by_zero_panic` (a clean `_exit(1)`) rather than emitting a
@@ -2024,7 +2067,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             BinOp::Rem if is_float => return Self::emit_float_rem(builder, ctx, ty, lhs, rhs),
             BinOp::Rem => {
-                Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
+                Self::emit_rem_by_zero_check(builder, ctx, rhs, ty)?;
                 if is_unsigned {
                     builder.ins().urem(lhs, rhs)
                 } else {

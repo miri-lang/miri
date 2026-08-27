@@ -1,0 +1,9 @@
+// summary: Function called with required argument
+// expect-stdout: world
+use system.io
+
+fn greet(name String)
+    println(name)
+
+fn main()
+    greet("world")

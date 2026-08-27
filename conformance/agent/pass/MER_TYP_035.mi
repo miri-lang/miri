@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TYP_035: Name Not Visible does not fire.
+// expect-stdout: visible
+use system.io.{print, println}
+
+fn main() i32
+  print("visible")
+  0

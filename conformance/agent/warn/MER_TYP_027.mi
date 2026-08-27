@@ -1,0 +1,9 @@
+// expect: MER_TYP_027
+// summary: Triggers MER_TYP_027: @deprecated Attribute.
+@deprecated("use new_function instead")
+fn old_function() int
+    42
+
+fn main()
+    let x = old_function()
+    println(f"{x}")

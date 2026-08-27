@@ -1,0 +1,7 @@
+// expect: MER_TYP_054
+// summary: Triggers MER_TYP_054: Invalid Function Signature.
+fn add(a int, b int) int
+    let x = a + b
+
+fn main()
+    println("ok")

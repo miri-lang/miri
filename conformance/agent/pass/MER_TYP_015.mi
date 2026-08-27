@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_015: Attribute Argument Extra does not fire.
+@must_use
+enum Result
+    Ok
+    Err

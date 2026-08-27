@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_PAR_011: Missing Match Branches does not fire.
+// expect-stdout: any
+fn main()
+    match 1
+        default: println("any")

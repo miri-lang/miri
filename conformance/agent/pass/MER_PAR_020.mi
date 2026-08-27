@@ -1,0 +1,2 @@
+// summary: Accepted counterpart of MER_PAR_020: Unsupported C-Style Operator does not fire.
+let x = true and true

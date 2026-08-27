@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_LEX_006: Invalid Octal Literal does not fire.
+let x = 0o755
+let y = 0o755
+let z = 0o755

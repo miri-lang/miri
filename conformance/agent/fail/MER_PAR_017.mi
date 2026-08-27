@@ -1,0 +1,4 @@
+// expect: MER_PAR_017
+// summary: Triggers MER_PAR_017: Invalid Modifier Combination.
+async gpu fn kernel()
+    return

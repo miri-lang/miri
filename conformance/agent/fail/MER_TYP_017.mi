@@ -1,0 +1,5 @@
+// expect: MER_TYP_017
+// summary: Triggers MER_TYP_017: Invalid Test Function Signature.
+@test
+fn bad_test(x int) int
+    return x * 2

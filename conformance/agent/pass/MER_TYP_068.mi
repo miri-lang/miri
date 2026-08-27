@@ -1,0 +1,3 @@
+// summary: Small integer literal fits in range
+fn main()
+    let x = 42

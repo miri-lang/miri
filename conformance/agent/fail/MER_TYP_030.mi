@@ -1,0 +1,7 @@
+// expect: MER_TYP_030
+// summary: Triggers MER_TYP_030: Argument Count Mismatch.
+fn takes_two(a int, b int) int
+    return a + b
+
+fn main()
+    let x = takes_two(1)

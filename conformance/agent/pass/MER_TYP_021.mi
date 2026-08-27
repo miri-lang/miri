@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_TYP_021: GPU Function Host Buffer Mismatch does not fire.
+use system.collections.array
+
+gpu fn my_kernel(a Array<f32,4>)
+    let x = 1
+
+fn main()
+    gpu let buf = [1.0, 2.0, 3.0, 4.0]
+    my_kernel(buf).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))

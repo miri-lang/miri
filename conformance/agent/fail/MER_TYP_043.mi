@@ -1,0 +1,5 @@
+// expect: MER_TYP_043
+// summary: Triggers MER_TYP_043: Type Not Found.
+fn main()
+    let value Widget = 1
+    println(f"{value}")

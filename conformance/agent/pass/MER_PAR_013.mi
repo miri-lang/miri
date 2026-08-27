@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_013: Missing Struct Members does not fire.
+struct Empty
+    value i32

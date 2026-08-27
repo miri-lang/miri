@@ -1,0 +1,6 @@
+// expect: MER_TYP_063
+// summary: Triggers MER_TYP_063: Invalid Cast.
+fn main() i32
+  let x = "hello"
+  let y = x as i32
+  0

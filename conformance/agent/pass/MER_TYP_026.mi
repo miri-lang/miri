@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_026: Deprecated Attribute Spelling does not fire.
+@must_use
+enum Status
+    Ok
+    Error

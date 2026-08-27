@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TYP_054: Invalid Function Signature does not fire.
+// expect-stdout: ok
+fn add(a int, b int) int
+    return a + b
+
+fn main()
+    println("ok")

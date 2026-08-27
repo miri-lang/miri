@@ -1,0 +1,6 @@
+// expect: MER_TYP_024
+// summary: Triggers MER_TYP_024: Decrement Operator Not Supported.
+fn main()
+    var x = 10
+    let y = --x
+    println(f"{y}")

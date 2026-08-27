@@ -1,0 +1,5 @@
+// expect: MER_TYP_068
+// summary: Triggers MER_TYP_068: Integer Literal Out of Range.
+fn main()
+    let x i64 = 9223372036854775808
+    println(f"{x}")

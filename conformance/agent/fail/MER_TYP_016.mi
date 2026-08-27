@@ -1,0 +1,5 @@
+// expect: MER_TYP_016
+// summary: Triggers MER_TYP_016: Invalid Regex Literal.
+fn main()
+    let pattern = re"[invalid("
+    println(f"{pattern}")

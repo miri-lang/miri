@@ -1,0 +1,10 @@
+// expect: MER_TYP_033
+// summary: Triggers MER_TYP_033: Field Not Found.
+class Point
+    public var x int
+    public var y int
+
+fn main()
+    let p = Point(1, 2)
+    let v = p.unknown_field
+    println(f"{v}")

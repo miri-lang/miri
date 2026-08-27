@@ -1,0 +1,6 @@
+// expect: MER_RT_001
+// command: run
+// summary: Triggers MER_RT_001: an integer division whose divisor is zero at run time.
+fn main()
+    var d = 0
+    let x = 10 / d

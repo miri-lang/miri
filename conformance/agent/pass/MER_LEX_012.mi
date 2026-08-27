@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_LEX_012: Invalid Formatted String Expression does not fire.
+let x = 5
+let msg = f"value = {x + 1}"

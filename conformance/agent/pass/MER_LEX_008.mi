@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_LEX_008: Invalid Number Literal does not fire.
+let x = 1
+let y = 123
+let z = 1000

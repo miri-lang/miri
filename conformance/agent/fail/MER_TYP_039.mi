@@ -1,0 +1,5 @@
+// expect: MER_TYP_039
+// summary: Triggers MER_TYP_039: Invalid Collection Element Type.
+fn main() i32
+  let list = [1, 2, "three"]
+  0

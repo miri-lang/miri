@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_048: Type Inference Failure does not fire.
+// expect-stdout: ok
+fn main()
+    let x = 5
+    println("ok")

@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_015: Missing Type Expression does not fire.
+fn test(x i32)
+    return

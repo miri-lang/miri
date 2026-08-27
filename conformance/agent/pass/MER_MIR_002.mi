@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_MIR_002: Unsupported Statement does not fire.
+// expect-stdout: work done
+// expect-stdout: cleanup
+fn main()
+    println("work done")
+    println("cleanup")

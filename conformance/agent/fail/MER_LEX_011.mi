@@ -1,0 +1,4 @@
+// expect: MER_LEX_011
+// summary: Triggers MER_LEX_011: Backslash in Format String.
+let path = "C:\\Users\\name"
+let msg = f"path = {path\n}"

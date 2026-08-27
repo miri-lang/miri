@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_012: Unknown Attribute does not fire.
+@must_use
+enum Status
+    Ok
+    Error

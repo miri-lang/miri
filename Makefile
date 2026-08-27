@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit gpu-browser-check runtimes
+.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -143,3 +143,9 @@ audit:
 	done 2>/dev/null || true
 	@echo
 	@echo "─── End audit. For graded scoring + proposed diffs, run the miri-audit skill. ───"
+
+# Run the published agent conformance corpus (conformance/agent/) against the
+# compiler. The same harness also runs as part of `make test`; this target is
+# the named entry point for CI and for downstream consumers pinning a toolchain.
+conformance-agent:
+	cargo test --test mod conformance

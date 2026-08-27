@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_RT_002: a non-zero divisor yields a remainder.
+// expect-stdout: 1
+use system.io
+
+fn main()
+    var d = 3
+    let x = 10 % d
+    println(f"{x}")

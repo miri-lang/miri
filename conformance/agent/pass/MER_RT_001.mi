@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_RT_001: a non-zero divisor divides normally.
+// expect-stdout: 5
+use system.io
+
+fn main()
+    var d = 2
+    let x = 10 / d
+    println(f"{x}")

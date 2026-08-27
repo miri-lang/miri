@@ -1,0 +1,6 @@
+// expect: MER_TYP_032
+// summary: Triggers MER_TYP_032: Not Callable.
+fn main()
+    let x = 42
+    let result = x()
+    println(f"{result}")

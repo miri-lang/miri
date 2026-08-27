@@ -1,0 +1,5 @@
+// expect: MER_TYP_051
+// summary: Triggers MER_TYP_051: Range Type Mismatch.
+fn main() i32
+  let r = 1..5.5
+  0

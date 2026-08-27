@@ -359,6 +359,106 @@ fn test_run_format_json_runtime_failure() {
     );
 }
 
+#[test]
+fn test_run_format_json_division_by_zero_trap() {
+    let div_by_zero = r#"fn main() int
+    var x = 0
+    10 / x
+"#;
+    let file = create_test_file(div_by_zero);
+    let path = file.path().to_str().unwrap();
+
+    let output = miri_cmd()
+        .arg("run")
+        .arg(path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["schemaVersion"], 1);
+    assert_eq!(
+        parsed["ok"], false,
+        "ok should be false when division by zero trap occurs"
+    );
+    assert_eq!(parsed["command"], "run");
+    assert_eq!(
+        parsed["exitCode"], 1,
+        "exitCode should be 1 for runtime trap"
+    );
+
+    let diags = parsed["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diags.len(),
+        1,
+        "should have exactly one diagnostic for division by zero"
+    );
+
+    let trap_diag = &diags[0];
+    assert_eq!(trap_diag["severity"], "error");
+    assert_eq!(
+        trap_diag["code"], "MER_RT_001",
+        "code should be MER_RT_001 for division by zero"
+    );
+    assert_eq!(trap_diag["message"], "division by zero");
+
+    assert_eq!(output.status.code(), Some(1), "process should exit with 1");
+}
+
+#[test]
+fn test_run_format_json_remainder_by_zero_trap() {
+    let rem_by_zero = r#"fn main() int
+    var x = 0
+    10 % x
+"#;
+    let file = create_test_file(rem_by_zero);
+    let path = file.path().to_str().unwrap();
+
+    let output = miri_cmd()
+        .arg("run")
+        .arg(path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["schemaVersion"], 1);
+    assert_eq!(
+        parsed["ok"], false,
+        "ok should be false when remainder by zero trap occurs"
+    );
+    assert_eq!(parsed["command"], "run");
+    assert_eq!(
+        parsed["exitCode"], 1,
+        "exitCode should be 1 for runtime trap"
+    );
+
+    let diags = parsed["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diags.len(),
+        1,
+        "should have exactly one diagnostic for remainder by zero"
+    );
+
+    let trap_diag = &diags[0];
+    assert_eq!(trap_diag["severity"], "error");
+    assert_eq!(
+        trap_diag["code"], "MER_RT_002",
+        "code should be MER_RT_002 for remainder by zero"
+    );
+    assert_eq!(trap_diag["message"], "remainder by zero");
+
+    assert_eq!(output.status.code(), Some(1), "process should exit with 1");
+}
+
 // Round-trip end-to-end tests that verify the real binary emits valid JSON
 // without any unknown fields (enforced by deny_unknown_fields on the DTOs)
 

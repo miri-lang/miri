@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_TYP_022: GPU Launch Block Size Not Literal does not fire.
+use system.gpu
+
+gpu fn my_kernel()
+    let x = 1
+
+fn main()
+    my_kernel().launch(Dim3(1, 1, 1), Dim3(16, 16, 1))

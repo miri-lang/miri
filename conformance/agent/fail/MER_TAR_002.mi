@@ -1,0 +1,7 @@
+// expect: MER_TAR_002
+// summary: Triggers MER_TAR_002: Unsupported Operation in GPU Code.
+use system.gpu
+
+gpu fn recursive_kernel(n i32)
+    if n > 0
+        recursive_kernel(n - 1)

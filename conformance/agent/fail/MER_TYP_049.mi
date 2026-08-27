@@ -1,0 +1,4 @@
+// expect: MER_TYP_049
+// summary: A shared variable is declared outside a GPU function.
+fn main()
+    shared x int

@@ -1,0 +1,8 @@
+// expect: MER_TYP_031
+// summary: Triggers MER_TYP_031: Argument Order Error.
+fn takes_args(a int, b int, c int) int
+    return a + b + c
+
+fn main()
+    let result = takes_args(1, b: 2, 3)
+

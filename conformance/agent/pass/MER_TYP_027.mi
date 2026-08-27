@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_TYP_027: @deprecated Attribute does not fire.
+// expect-stdout: 42
+fn new_function() int
+    42
+
+fn main()
+    let x = new_function()
+    println(f"{x}")

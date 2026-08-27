@@ -1,0 +1,10 @@
+// expect: MER_TYP_067
+// summary: Triggers MER_TYP_067: Type Not Valid in String Interpolation.
+class Point
+    public var x int
+    public var y int
+
+fn main()
+    let p = Point(1, 2)
+    let s = f"point: {p}"
+    println(f"{s}")

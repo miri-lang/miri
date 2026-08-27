@@ -1,0 +1,7 @@
+// expect: MER_IMP_002
+// summary: Triggers MER_IMP_002: Imported Name Conflict.
+use system.result
+
+enum Result
+    Ok(i32)
+    Err(String)

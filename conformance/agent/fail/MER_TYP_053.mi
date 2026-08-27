@@ -1,0 +1,9 @@
+// expect: MER_TYP_053
+// summary: Triggers MER_TYP_053: Invalid Vector Builtin.
+use system.gpu.vector
+
+fn main()
+    let v1 = Vec2<f32>(1.0, 2.0)
+    let v2 = Vec2<f32>(3.0, 4.0)
+    let result = dot(v1, v2, 5.0)
+    println("ok")

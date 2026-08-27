@@ -1,0 +1,5 @@
+// expect: MER_LEX_008
+// summary: Triggers MER_LEX_008: Invalid Number Literal.
+let x = 1_
+let y = _123
+let z = 1__000

@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_025: Unnecessary Optional Declaration does not fire.
+// expect-stdout: 42
+fn main()
+    let x = 42
+    println(f"{x}")

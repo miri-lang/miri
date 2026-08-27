@@ -1,0 +1,6 @@
+// expect: MER_TYP_015
+// summary: Triggers MER_TYP_015: Attribute Argument Extra.
+@must_use("extra")
+enum Result
+    Ok
+    Err

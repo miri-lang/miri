@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_006: Invalid Float Literal does not fire.
+let x = 1.0e308
+let y = 0.5

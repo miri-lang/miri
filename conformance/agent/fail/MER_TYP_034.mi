@@ -1,0 +1,5 @@
+// expect: MER_TYP_034
+// summary: Triggers MER_TYP_034: Undefined Name.
+fn main()
+    let x = undefined_identifier
+    println(f"{x}")

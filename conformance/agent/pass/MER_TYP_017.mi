@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_TYP_017: Invalid Test Function Signature does not fire.
+@test
+fn good_test()
+    println("test ran")

@@ -1,0 +1,4 @@
+// expect: MER_PAR_011
+// summary: Triggers MER_PAR_011: Missing Match Branches.
+fn main()
+    match 1

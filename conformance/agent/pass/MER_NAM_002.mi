@@ -1,0 +1,2 @@
+// summary: Accepted counterpart of MER_NAM_002: Module Not Found does not fire.
+use system.io

@@ -1,0 +1,3 @@
+// summary: Accepted counterpart of MER_PAR_016: Missing Constant Initializer does not fire.
+const MAX_SIZE = 100
+const PI = 3.14

@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_018: Missing Required Attribute does not fire.
+@test
+@ignore("flaky")
+fn ignored_test()
+    println("test")

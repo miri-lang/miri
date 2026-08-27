@@ -1,0 +1,10 @@
+// summary: A continue statement inside a loop skips the current iteration.
+// expect-stdout: 0
+// expect-stdout: 2
+use system.io
+
+fn main()
+    for i in 0..3
+        if i == 1
+            continue
+        println(f"{i}")

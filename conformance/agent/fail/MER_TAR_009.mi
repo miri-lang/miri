@@ -1,0 +1,6 @@
+// expect: MER_TAR_009
+// summary: Triggers MER_TAR_009: Value Out of Range for GPU Storage.
+use system.gpu
+
+fn main()
+    gpu let data = [9223372036854775807, 100, 200]

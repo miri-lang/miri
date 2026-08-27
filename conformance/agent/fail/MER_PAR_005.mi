@@ -1,0 +1,3 @@
+// expect: MER_PAR_005
+// summary: Triggers MER_PAR_005: Invalid Integer Literal.
+let x = 170141183460469231731687303715884105728

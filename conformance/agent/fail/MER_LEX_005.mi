@@ -1,0 +1,5 @@
+// expect: MER_LEX_005
+// summary: Triggers MER_LEX_005: Invalid Binary Literal.
+let x = 0b1012
+let y = 0b_101
+let z = 0b101_

@@ -1,0 +1,5 @@
+// expect: MER_LEX_007
+// summary: Triggers MER_LEX_007: Invalid Hex Literal.
+let x = 0xGGGG
+let y = 0x_ABCD
+let z = 0xABCD_
