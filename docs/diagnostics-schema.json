@@ -22,7 +22,8 @@
         "run",
         "test",
         "explain",
-        "fix"
+        "fix",
+        "determinism"
       ]
     },
     "diagnostics": {

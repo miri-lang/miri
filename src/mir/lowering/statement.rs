@@ -491,7 +491,7 @@ fn lower_nested_function_decl(
     let mut nested_ctx = super::LoweringContext::new(nested_body, ctx.type_checker, ctx.is_release);
     // Inherit the compilation-wide kernel-name allocator so any kernel lowered
     // inside this nested body stays deterministic and collision-free.
-    nested_ctx.use_kernel_namer(ctx.kernel_namer.clone());
+    nested_ctx.use_compilation_ids(ctx.compilation_ids.clone());
     for param in params.iter() {
         let param_ty = super::resolve_type(ctx.type_checker, &param.typ);
         nested_ctx.push_local(param.name.clone(), param_ty, param.typ.span);

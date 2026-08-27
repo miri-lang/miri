@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod args;
 pub mod check;
+pub mod determinism;
 pub mod dev;
 pub mod explain;
 pub mod fix;
@@ -21,5 +22,5 @@ pub fn serialize_envelope(envelope: &DiagnosticsEnvelope) -> String {
         .unwrap_or_else(|error| format!("{{\"error\":\"could not serialize: {}\"}}", error))
 }
 
-pub use args::{BuildTarget, Cli, ColorMode, Commands, CpuBackend, Format};
+pub use args::{BuildTarget, Cli, ColorMode, Commands, CpuBackend, DeterminismCommand, Format};
 pub use version::{version_ref, version_string};

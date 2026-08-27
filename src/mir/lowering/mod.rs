@@ -11,6 +11,7 @@
 //! - `variable`: Variable declaration lowering
 //! - `helpers`: Utility functions (resolve_type, bind_pattern, etc.)
 
+pub mod compilation_ids;
 pub mod constructors;
 pub mod context;
 pub mod control_flow;
@@ -21,7 +22,6 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod kernel_launch;
-pub mod kernel_namer;
 pub mod loops;
 pub mod method_dispatch;
 pub mod reduce_gpu;
@@ -43,10 +43,10 @@ use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
 // Re-export commonly used items from submodules
+pub use compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 pub use context::LoweringContext;
 pub use expression::lower_expression;
 pub use helpers::{bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type};
-pub use kernel_namer::{new_shared_kernel_namer, SharedKernelNamer};
 pub use statement::lower_statement;
 
 /// Lower an AST function declaration to a MIR Body.
@@ -91,25 +91,25 @@ pub fn lower_function(
     is_release: bool,
     inject_allocator: bool,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    lower_function_with_kernel_namer(
+    lower_function_with_compilation_ids(
         ast_func,
         tc,
         is_release,
         inject_allocator,
-        new_shared_kernel_namer(),
+        new_shared_compilation_ids(),
     )
 }
 
-/// Lower a function while allocating any GPU kernel names from `kernel_namer`,
+/// Lower a function while allocating any GPU kernel names from `compilation_ids`,
 /// the compilation-wide sequence. The compilation driver passes one shared
 /// namer for every body so kernel names are unique within the build and stable
 /// across builds; [`lower_function`] wraps this with a private per-call namer.
-pub fn lower_function_with_kernel_namer(
+pub fn lower_function_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
@@ -138,7 +138,7 @@ pub fn lower_function_with_kernel_namer(
     // Initialize lowering context
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
-    ctx.use_kernel_namer(kernel_namer);
+    ctx.use_compilation_ids(compilation_ids);
 
     // Populate generic type parameter names so that `is_managed_type` can
     // distinguish unresolved generic placeholders from concrete user types.
@@ -632,25 +632,25 @@ pub fn lower_generic_instantiation(
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    lower_generic_instantiation_with_kernel_namer(
+    lower_generic_instantiation_with_compilation_ids(
         ast_func,
         tc,
         is_release,
         inject_allocator,
         subs,
-        new_shared_kernel_namer(),
+        new_shared_compilation_ids(),
     )
 }
 
 /// [`lower_generic_instantiation`] that allocates GPU kernel names from the
-/// compilation-wide `kernel_namer` instead of a private per-call one.
-pub fn lower_generic_instantiation_with_kernel_namer(
+/// compilation-wide `compilation_ids` instead of a private per-call one.
+pub fn lower_generic_instantiation_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     lower_instantiation_core(
         ast_func,
@@ -659,7 +659,7 @@ pub fn lower_generic_instantiation_with_kernel_namer(
         inject_allocator,
         subs,
         &[],
-        kernel_namer,
+        compilation_ids,
     )
 }
 
@@ -671,13 +671,13 @@ pub fn lower_generic_instantiation_with_kernel_namer(
 /// lowered means the body's `forall` capture resolves to that same device
 /// buffer — the whole GPU launch path is reused unchanged. No generic
 /// substitution applies (`subs` is empty); the specialization axis is residency.
-pub fn lower_residency_instantiation_with_kernel_namer(
+pub fn lower_residency_instantiation_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     lower_instantiation_core(
         ast_func,
@@ -686,7 +686,7 @@ pub fn lower_residency_instantiation_with_kernel_namer(
         inject_allocator,
         &HashMap::new(),
         param_handles,
-        kernel_namer,
+        compilation_ids,
     )
 }
 
@@ -700,7 +700,7 @@ fn lower_instantiation_core(
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
@@ -721,7 +721,7 @@ fn lower_instantiation_core(
 
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
-    ctx.use_kernel_namer(kernel_namer);
+    ctx.use_compilation_ids(compilation_ids);
 
     // For an instantiated generic, `subs` maps each generic name to its concrete
     // type — those names no longer remain as unresolved placeholders after
@@ -831,18 +831,18 @@ pub fn lower_class_method(
         tc,
         is_release,
         &HashMap::new(),
-        new_shared_kernel_namer(),
+        new_shared_compilation_ids(),
     )
 }
 
 /// [`lower_class_method`] that allocates GPU kernel names from the
-/// compilation-wide `kernel_namer` instead of a private per-call one.
-pub fn lower_class_method_with_kernel_namer(
+/// compilation-wide `compilation_ids` instead of a private per-call one.
+pub fn lower_class_method_with_compilation_ids(
     ast_method: &Statement,
     self_type: Type,
     tc: &TypeChecker,
     is_release: bool,
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     lower_class_method_impl(
         ast_method,
@@ -850,7 +850,7 @@ pub fn lower_class_method_with_kernel_namer(
         tc,
         is_release,
         &HashMap::new(),
-        kernel_namer,
+        compilation_ids,
     )
 }
 
@@ -871,28 +871,28 @@ pub fn lower_class_method_instantiation(
     is_release: bool,
     subs: &HashMap<String, Type>,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    lower_class_method_instantiation_with_kernel_namer(
+    lower_class_method_instantiation_with_compilation_ids(
         ast_method,
         class_name,
         tc,
         is_release,
         subs,
-        new_shared_kernel_namer(),
+        new_shared_compilation_ids(),
     )
 }
 
 /// [`lower_class_method_instantiation`] that allocates GPU kernel names from the
-/// compilation-wide `kernel_namer` instead of a private per-call one.
-pub fn lower_class_method_instantiation_with_kernel_namer(
+/// compilation-wide `compilation_ids` instead of a private per-call one.
+pub fn lower_class_method_instantiation_with_compilation_ids(
     ast_method: &Statement,
     class_name: &str,
     tc: &TypeChecker,
     is_release: bool,
     subs: &HashMap<String, Type>,
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let self_type = monomorphized_self_type(class_name, tc, subs, ast_method.span);
-    lower_class_method_impl(ast_method, self_type, tc, is_release, subs, kernel_namer)
+    lower_class_method_impl(ast_method, self_type, tc, is_release, subs, compilation_ids)
 }
 
 /// Build the `self` type for a monomorphized method: `Custom(class, Some(args))`
@@ -939,7 +939,7 @@ fn lower_class_method_impl(
     tc: &TypeChecker,
     is_release: bool,
     subs: &HashMap<String, Type>,
-    kernel_namer: SharedKernelNamer,
+    compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
@@ -969,7 +969,7 @@ fn lower_class_method_impl(
         execution_model,
     );
     let mut ctx = LoweringContext::new(body, tc, is_release);
-    ctx.use_kernel_namer(kernel_namer);
+    ctx.use_compilation_ids(compilation_ids);
     // `Self` inside this body names the class being lowered. Recorded so that a
     // declared type spelling `Self` resolves to the class's real layout instead
     // of falling through codegen's unknown-type path.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::kernel_namer::{new_shared_kernel_namer, SharedKernelNamer};
+use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
@@ -97,11 +97,19 @@ pub struct LoweringContext<'a> {
     /// across every body lowered in one compilation (and inherited by nested
     /// lambda/block contexts) so kernel names are unique within the build and
     /// stable across builds. Defaults to a private allocator; the compilation
-    /// driver injects the shared one via [`LoweringContext::use_kernel_namer`].
-    pub kernel_namer: SharedKernelNamer,
+    /// driver injects the shared one via [`LoweringContext::use_compilation_ids`].
+    pub compilation_ids: SharedCompilationIds,
 }
 
 impl<'a> LoweringContext<'a> {
+    /// Allocates the next device handle of this compilation.
+    ///
+    /// Drawn from the shared per-compilation allocator so that repeated
+    /// compilations of the same source in one process assign the same handles.
+    pub fn fresh_device_handle(&mut self) -> crate::mir::body::DeviceHandleId {
+        crate::mir::body::DeviceHandleId(self.compilation_ids.borrow_mut().fresh_device_handle())
+    }
+
     pub fn new(
         mut body: Body,
         type_checker: &'a crate::type_checker::TypeChecker,
@@ -136,7 +144,7 @@ impl<'a> LoweringContext<'a> {
             source_path,
             generic_subs: HashMap::new(),
             self_type: None,
-            kernel_namer: new_shared_kernel_namer(),
+            compilation_ids: new_shared_compilation_ids(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
@@ -186,14 +194,14 @@ impl<'a> LoweringContext<'a> {
     /// compilation-wide sequence. Called by the compilation driver for each
     /// top-level body, and by nested lambda/block lowering to inherit the
     /// parent's allocator.
-    pub fn use_kernel_namer(&mut self, namer: SharedKernelNamer) {
-        self.kernel_namer = namer;
+    pub fn use_compilation_ids(&mut self, namer: SharedCompilationIds) {
+        self.compilation_ids = namer;
     }
 
     /// Allocate (or reuse) the deterministic, compilation-local kernel-name
     /// index for the kernel-bearing AST node `ast_id`.
     pub fn kernel_index(&self, ast_id: usize) -> usize {
-        self.kernel_namer.borrow_mut().index_for(ast_id)
+        self.compilation_ids.borrow_mut().index_for(ast_id)
     }
 
     /// Compute a 1-based line number for the given byte offset within

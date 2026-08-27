@@ -297,20 +297,12 @@ pub enum BindingResidency {
 /// Assigned at lowering to every local whose residency is
 /// [`BindingResidency::Gpu`]. The runtime keys a persistent device buffer on
 /// this id so kernel launches that capture the same binding share one buffer
-/// across dispatches. Ids are unique across the whole
-/// compilation; `0` is reserved by the runtime as the host-resident
-/// sentinel, so allocation starts at `1`.
+/// across dispatches. Ids are allocated per compilation, so they are unique
+/// within one build and identical across builds of the same source; `0` is
+/// reserved by the runtime as the host-resident sentinel, so allocation starts
+/// at `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceHandleId(pub u64);
-
-impl DeviceHandleId {
-    /// Allocates a fresh, compilation-unique handle id.
-    pub fn fresh() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::SeqCst))
-    }
-}
 
 impl fmt::Display for DeviceHandleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

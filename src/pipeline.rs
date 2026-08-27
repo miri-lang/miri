@@ -16,7 +16,7 @@ use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
 use crate::parser::Parser;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,7 +109,7 @@ struct RuntimeInfo {
     #[cfg(feature = "cranelift")]
     imports: Vec<crate::codegen::cranelift::RuntimeImport>,
     /// Set of distinct runtimes that need to be linked.
-    required_runtimes: HashSet<RuntimeKind>,
+    required_runtimes: BTreeSet<RuntimeKind>,
 }
 
 /// Walk the AST and collect all runtime function declarations.
@@ -124,7 +124,7 @@ fn collect_runtime_info(
 ) -> RuntimeInfo {
     #[cfg(feature = "cranelift")]
     let mut imports = Vec::new();
-    let mut required_runtimes = HashSet::new();
+    let mut required_runtimes = BTreeSet::new();
 
     // Always link the "core" runtime — the codegen emits calls to
     // miri_rt_array_new / miri_rt_list_new for collection literals,
@@ -773,7 +773,7 @@ impl Pipeline {
         pipeline_result: &PipelineResult,
         mir_bodies: &[(String, mir::Body)],
         cpu_backend: CpuBackend,
-    ) -> Result<(Vec<u8>, HashSet<RuntimeKind>), CompilerError> {
+    ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
         let (object_bytes, required_runtimes) = match cpu_backend {
             CpuBackend::Cranelift => {
                 #[cfg(feature = "cranelift")]
@@ -885,7 +885,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // A builtin collection's methods are emitted on demand after the main
         // lowering: most call sites lower to a direct runtime call instead of the
@@ -904,7 +904,7 @@ impl Pipeline {
                 &mangle_args,
                 bodies,
                 lowered_names,
-                kernel_namer,
+                compilation_ids,
             )?;
         }
         Ok(())
@@ -988,7 +988,7 @@ impl Pipeline {
         mangle_args: &[(String, Type)],
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         for method_stmt in &class_data.body {
             let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node else {
@@ -1007,7 +1007,7 @@ impl Pipeline {
                 mangle_args,
                 bodies,
                 lowered_names,
-                kernel_namer,
+                compilation_ids,
             )?;
         }
         Ok(())
@@ -1030,7 +1030,7 @@ impl Pipeline {
         mangle_args: &[(String, Type)],
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let base = Self::mangle_method_name(class_name, method_name);
         let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
@@ -1038,13 +1038,13 @@ impl Pipeline {
             return Ok(());
         }
         let (mir_body, lambdas) =
-            mir::lowering::lower_class_method_instantiation_with_kernel_namer(
+            mir::lowering::lower_class_method_instantiation_with_compilation_ids(
                 method_stmt,
                 class_name,
                 &result.type_checker,
                 is_release,
                 subs,
-                kernel_namer.clone(),
+                compilation_ids.clone(),
             )
             .map_err(|e| {
                 CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
@@ -1077,7 +1077,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // A builtin collection's methods are emitted on demand after the main
         // lowering: most call sites lower to a direct runtime call instead of the
@@ -1108,7 +1108,7 @@ impl Pipeline {
                 &mangle_args,
                 bodies,
                 lowered_names,
-                kernel_namer,
+                compilation_ids,
             )?;
         }
         Ok(())
@@ -1132,7 +1132,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         loop {
             let called = called_function_names(bodies);
@@ -1184,7 +1184,7 @@ impl Pipeline {
                             &mangle_args,
                             bodies,
                             lowered_names,
-                            kernel_namer,
+                            compilation_ids,
                         )?;
                         emitted = true;
                     }
@@ -1262,35 +1262,35 @@ impl Pipeline {
         // GPU kernel names are unique within this build and reproduced identically
         // on any later build of the same source (a long-lived host would otherwise
         // drift because the raw AST-id counter never resets).
-        let kernel_namer = mir::lowering::new_shared_kernel_namer();
+        let compilation_ids = mir::lowering::new_shared_compilation_ids();
 
         self.lower_program_bodies(
             result,
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
         self.lower_imported_bodies(
             result,
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
         self.lower_inherited_methods(
             result,
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
         self.lower_trait_default_methods(
             result,
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
 
         if bodies.is_empty() {
@@ -1304,7 +1304,7 @@ impl Pipeline {
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
 
         self.lower_called_generic_class_methods(
@@ -1312,7 +1312,7 @@ impl Pipeline {
             is_release,
             &mut bodies,
             &mut lowered_names,
-            &kernel_namer,
+            &compilation_ids,
         )?;
 
         // Clone user functions that are transitively called from GPU kernels into
@@ -1383,18 +1383,18 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
-                    let (body, lambdas) = mir::lowering::lower_function_with_kernel_namer(
+                    let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
                         stmt,
                         &result.type_checker,
                         is_release,
                         true,
-                        kernel_namer.clone(),
+                        compilation_ids.clone(),
                     )
                     .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
                     lowered_names.insert(decl.name.clone());
@@ -1446,12 +1446,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1476,7 +1476,7 @@ impl Pipeline {
                         is_release,
                         bodies,
                         lowered_names,
-                        kernel_namer,
+                        compilation_ids,
                     )?;
                 }
                 StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
@@ -1501,12 +1501,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1598,12 +1598,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1635,18 +1635,18 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) if !lowered_names.contains(&decl.name) => {
-                    let (body, lambdas) = mir::lowering::lower_function_with_kernel_namer(
+                    let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
                         stmt,
                         &result.type_checker,
                         is_release,
                         true,
-                        kernel_namer.clone(),
+                        compilation_ids.clone(),
                     )
                     .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
                     lowered_names.insert(decl.name.clone());
@@ -1701,12 +1701,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1731,7 +1731,7 @@ impl Pipeline {
                         is_release,
                         bodies,
                         lowered_names,
-                        kernel_namer,
+                        compilation_ids,
                     )?;
                 }
                 StatementKind::Enum(
@@ -1761,12 +1761,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1806,12 +1806,12 @@ impl Pipeline {
                             }
 
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -1849,7 +1849,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
@@ -1952,12 +1952,12 @@ impl Pipeline {
                                         continue;
                                     }
                                     let (mir_body, lambdas) =
-                                        mir::lowering::lower_class_method_with_kernel_namer(
+                                        mir::lowering::lower_class_method_with_compilation_ids(
                                             method_stmt,
                                             self_type.clone(),
                                             &result.type_checker,
                                             is_release,
-                                            kernel_namer.clone(),
+                                            compilation_ids.clone(),
                                         )
                                         .map_err(|e| {
                                             CompilerError::Codegen(format!(
@@ -1999,7 +1999,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
@@ -2140,12 +2140,12 @@ impl Pipeline {
                                 continue;
                             }
                             let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_kernel_namer(
+                                mir::lowering::lower_class_method_with_compilation_ids(
                                     method_stmt,
                                     self_type.clone(),
                                     &result.type_checker,
                                     is_release,
-                                    kernel_namer.clone(),
+                                    compilation_ids.clone(),
                                 )
                                 .map_err(|e| {
                                     CompilerError::Codegen(format!(
@@ -2172,7 +2172,7 @@ impl Pipeline {
                                 is_release,
                                 bodies,
                                 lowered_names,
-                                kernel_namer,
+                                compilation_ids,
                             )?;
                         }
                     }
@@ -2191,7 +2191,7 @@ impl Pipeline {
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
-        kernel_namer: &mir::lowering::SharedKernelNamer,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         {
             // Build a map from original function name → AST statement for quick lookup.
@@ -2314,13 +2314,13 @@ impl Pipeline {
                 }
                 if let Some(&ast_stmt) = ast_func_map.get(original_name.as_str()) {
                     let (body, lambdas) =
-                        mir::lowering::lower_generic_instantiation_with_kernel_namer(
+                        mir::lowering::lower_generic_instantiation_with_compilation_ids(
                             ast_stmt,
                             &result.type_checker,
                             is_release,
                             true,
                             &subs,
-                            kernel_namer.clone(),
+                            compilation_ids.clone(),
                         )
                         .map_err(|e| {
                             CompilerError::Codegen(format!(
@@ -2346,13 +2346,13 @@ impl Pipeline {
                 }
                 if let Some(&ast_stmt) = residency_func_map.get(original_name.as_str()) {
                     let (body, lambdas) =
-                        mir::lowering::lower_residency_instantiation_with_kernel_namer(
+                        mir::lowering::lower_residency_instantiation_with_compilation_ids(
                             ast_stmt,
                             &result.type_checker,
                             is_release,
                             true,
                             &param_handles,
-                            kernel_namer.clone(),
+                            compilation_ids.clone(),
                         )
                         .map_err(|e| {
                             CompilerError::Codegen(format!(
@@ -2425,7 +2425,7 @@ impl Pipeline {
         &self,
         object_path: &PathBuf,
         output_path: &PathBuf,
-        required_runtimes: &HashSet<RuntimeKind>,
+        required_runtimes: &BTreeSet<RuntimeKind>,
     ) -> Result<(), CompilerError> {
         let linker_path = resolve_linker()?;
         let linker_path_display = linker_path.display().to_string();

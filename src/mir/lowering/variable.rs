@@ -398,7 +398,7 @@ fn apply_variable_residency(
             // here would drop the very buffer being transferred.
             ctx.body.local_decls[local.0].device_handle = Some(handle);
         } else {
-            let handle = DeviceHandleId::fresh();
+            let handle = ctx.fresh_device_handle();
             ctx.body.local_decls[local.0].device_handle = Some(handle);
             emit_gpu_buffer_reset(ctx, handle, *span);
         }

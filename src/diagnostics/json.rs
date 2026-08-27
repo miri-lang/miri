@@ -128,6 +128,7 @@ pub enum JsonCommand {
     Test,
     Explain,
     Fix,
+    Determinism,
 }
 
 /// A single diagnostic (error, warning, or note).

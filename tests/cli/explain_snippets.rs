@@ -96,6 +96,7 @@ const VERIFIED: &[&str] = &[
 const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_BLD_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_BLD_002", "emitted by CLI refusal logic, not by compiling a source file"),
+    ("MER_BLD_003", "emitted by comparing two builds' artifacts, not by compiling a source file"),
     ("MER_CG_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_CG_002", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_CG_003", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),

@@ -1006,7 +1006,7 @@ fn setup_reduce_output_buffer(
 
     let output_local = ctx.push_local("_reduce_out".to_string(), output_array_ty, span);
     ctx.body.local_decls[output_local.0].residency = BindingResidency::Gpu;
-    let handle_id = crate::mir::body::DeviceHandleId::fresh();
+    let handle_id = ctx.fresh_device_handle();
     ctx.body.local_decls[output_local.0].device_handle = Some(handle_id);
 
     let zero_elem = identity_for_op(BinOp::Add, elem_ty);

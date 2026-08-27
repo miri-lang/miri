@@ -23,7 +23,7 @@ use manifest::{
     BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest, SourceMapEntry,
 };
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -459,8 +459,8 @@ fn build_manifest(
     _gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
 ) -> Result<Manifest, CompilerError> {
     // Collect all unique buffers with their metadata
-    let all_buffers: HashMap<String, (String, usize, Vec<f64>, bool)> = {
-        let mut buffers = HashMap::new();
+    let all_buffers: BTreeMap<String, (String, usize, Vec<f64>, bool)> = {
+        let mut buffers = BTreeMap::new();
         for artifact in artifacts {
             for binding in &artifact.bindings {
                 buffers.insert(
@@ -477,10 +477,9 @@ fn build_manifest(
         buffers
     };
 
-    // Convert to BufferSpec list. `all_buffers` is a HashMap, so its iteration
-    // order is nondeterministic; sort by the unique buffer name below so the
-    // emitted manifest is reproducible (identical source → identical bundle).
-    let mut buffers: Vec<BufferSpec> = all_buffers
+    // Convert to BufferSpec list. The `BTreeMap` ensures deterministic iteration
+    // order, producing byte-identical bundles from identical source.
+    let buffers: Vec<BufferSpec> = all_buffers
         .iter()
         .map(
             |(name, (elem_type, length, initial_data, is_zero_filled))| {
@@ -513,7 +512,6 @@ fn build_manifest(
             },
         )
         .collect();
-    buffers.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Compute canvas dimensions from paint buffer. The display target is a
     // writable buffer of the last relevant kernel — preferring an `f32` one, so
