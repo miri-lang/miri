@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) Viacheslav Shynkarenko -->
 
+# Miri Example Programs
+
+`hello.mi` is the smallest complete Miri program: a single `println` behind `use system.io`. It is the fixture the reproducible-build check runs against (`miri determinism check examples/hello.mi`).
+
 # Miri GPU Demo Programs
 
 This directory contains production-grade example programs showcasing Miri's GPU residency surface. Each demo is a single `.mi` source file that demonstrates a specific GPU programming pattern within the constraints of the current compiler surface.

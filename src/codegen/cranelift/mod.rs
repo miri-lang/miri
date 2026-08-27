@@ -31,7 +31,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
@@ -249,7 +249,7 @@ impl Backend for CraneliftBackend {
             .collect();
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
-        let mut string_literals = HashMap::new();
+        let mut string_literals = BTreeMap::new();
         for (name, body) in &cpu_bodies {
             self.compile_function(
                 &mut module,
@@ -398,10 +398,14 @@ impl CraneliftBackend {
 
     /// Define collected string literals as immortal static data structures
     /// (`[RC][DataPtr][Len][Cap]`) referencing a sibling `*_bytes` data symbol.
+    ///
+    /// The iteration order of `string_literals` affects the order of static data
+    /// symbols in the emitted object file. Using a `BTreeMap` ensures this order is
+    /// deterministic across builds, producing byte-identical artifacts from identical source.
     fn define_string_literals(
         module: &mut ObjectModule,
         isa: &Arc<dyn TargetIsa>,
-        string_literals: HashMap<String, String>,
+        string_literals: BTreeMap<String, String>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let ptr_size = ptr_type.bytes();
@@ -520,7 +524,7 @@ impl CraneliftBackend {
         name: &str,
         body: &Body,
         isa: &Arc<dyn TargetIsa>,
-        string_literals: &mut HashMap<String, String>,
+        string_literals: &mut BTreeMap<String, String>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         // Create function translator

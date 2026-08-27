@@ -1241,7 +1241,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::TargetChanging,
-    // BLD — Build and command-invocation (2 codes: 001, 002)
+    // BLD — Build and command-invocation (3 codes: 001, 002, 003)
     "BLD",
     "001",
     BldUnknownDiagnosticCode,
@@ -1253,6 +1253,13 @@ diagnostics!(
     "002",
     BldRefusedRepairs,
     "Refused: Repairs Require Human Review",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "003",
+    BldNonDeterministicArtifact,
+    "Non-Deterministic Artifact",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

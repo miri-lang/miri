@@ -22,7 +22,7 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Mangle a generic class name with a concrete instantiation's type arguments,
@@ -1407,7 +1407,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(entry_block);
         let ptr = builder.block_params(entry_block)[0];
 
-        let mut string_literals = HashMap::new();
+        let mut string_literals = BTreeMap::new();
         let empty_kernel_registry = HashMap::new();
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
@@ -1592,7 +1592,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(entry_block);
         let ptr = builder.block_params(entry_block)[0];
 
-        let mut string_literals = HashMap::new();
+        let mut string_literals = BTreeMap::new();
         let empty_kernel_registry = HashMap::new();
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();

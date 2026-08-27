@@ -22,7 +22,7 @@ use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Translates MIR functions to Cranelift IR.
@@ -61,7 +61,7 @@ pub struct FunctionTranslator<'a> {
 /// and returns the cached id on subsequent calls.
 pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
-    pub(crate) string_literals: &'a mut HashMap<String, String>,
+    pub(crate) string_literals: &'a mut BTreeMap<String, String>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
     pub(crate) kernel_registry:
         &'a HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
@@ -99,7 +99,7 @@ pub(crate) struct CallSite<'a> {
 /// Caches populate lazily as code generation needs each runtime symbol.
 pub(crate) fn empty_module_ctx<'a>(
     module: &'a mut ObjectModule,
-    string_literals: &'a mut HashMap<String, String>,
+    string_literals: &'a mut BTreeMap<String, String>,
     kernel_registry: &'a HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
 ) -> ModuleCtx<'a> {
     ModuleCtx {
@@ -194,7 +194,7 @@ impl<'a> FunctionTranslator<'a> {
         &mut self,
         body: &Body,
         module: &mut ObjectModule,
-        string_literals: &mut HashMap<String, String>,
+        string_literals: &mut BTreeMap<String, String>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;

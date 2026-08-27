@@ -38,7 +38,7 @@ pub struct Parameter {
 ///
 /// Each variant maps to a separate runtime library that provides
 /// `#[no_mangle] extern "C"` FFI functions linked into the final binary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RuntimeKind {
     /// The core runtime (`miri-runtime-core`), providing string, allocation,
     /// I/O, and collection primitives.

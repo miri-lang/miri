@@ -6,7 +6,7 @@ use clap::{CommandFactory, Parser};
 use std::fs;
 use std::path::PathBuf;
 
-use miri::cli::{Cli, ColorMode, Commands, Format};
+use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format};
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand};
 use miri::error::diagnostic::to_json;
 use miri::pipeline::{BuildOptions, Pipeline};
@@ -89,6 +89,29 @@ fn run_command(cli: Cli) -> Result<()> {
                 format,
                 dir,
             } => run_tests(filter, format, dir, cli.verbose, cli.verify_mir, cli.color),
+            Commands::Determinism(cmd) => match cmd {
+                DeterminismCommand::Check {
+                    path,
+                    release,
+                    opt_level,
+                    cpu_backend,
+                    target,
+                    format,
+                } => check_determinism(
+                    path,
+                    BuildOptions {
+                        out_path: None,
+                        release,
+                        opt_level,
+                        cpu_backend,
+                        target,
+                        emit_native_host: true,
+                    },
+                    format,
+                    cli.verify_mir,
+                    cli.color,
+                ),
+            },
         },
         None => {
             Cli::command().print_help()?;
@@ -409,4 +432,19 @@ fn run_tests(
     }
 
     Ok(())
+}
+
+/// Check determinism of a file: build twice and verify artifacts are identical.
+fn check_determinism(
+    path: PathBuf,
+    build_options: BuildOptions,
+    format: Format,
+    verify_mir: bool,
+    color_mode: ColorMode,
+) -> Result<()> {
+    match miri::cli::determinism::run(&path, format, verify_mir, color_mode, &build_options) {
+        miri::cli::determinism::Outcome::DeterministicArtifacts => Ok(()),
+        miri::cli::determinism::Outcome::NonDeterministicArtifacts => std::process::exit(1),
+        miri::cli::determinism::Outcome::BuildFailed => std::process::exit(1),
+    }
 }

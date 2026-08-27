@@ -200,4 +200,40 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
         format: Format,
     },
+
+    /// Verify that build artifacts are byte-reproducible
+    #[command(subcommand)]
+    Determinism(DeterminismCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DeterminismCommand {
+    /// Check if an input builds deterministically
+    Check {
+        /// Path to the Miri source file to check
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Build in release mode
+        #[arg(long)]
+        release: bool,
+
+        /// Optimization level (0-3)
+        #[arg(long, value_name = "LEVEL", default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: u8,
+
+        /// CPU backend to use for code generation
+        #[arg(long, value_enum, default_value_t = CpuBackend::Cranelift)]
+        cpu_backend: CpuBackend,
+
+        /// Build target. `native` (default) emits an executable for the host
+        /// platform. `web-gpu` emits a browser-runnable HTML bundle that
+        /// dispatches `gpu fn` kernels through WebGPU/WGSL.
+        #[arg(long, value_enum, default_value_t = BuildTarget::Native)]
+        target: BuildTarget,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
 }

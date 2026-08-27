@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// A minimal hello-world program.
+
+use system.io
+
+fn main()
+    println("Hello, World!")

@@ -5,7 +5,7 @@ use crate::mir::utils::mir_lower_code;
 use miri::ast::statement::StatementKind;
 use miri::mir::lowering::forall_gpu::{literal_grid_dim, literal_grid_x};
 use miri::mir::lowering::{
-    lower_function, lower_function_with_kernel_namer, new_shared_kernel_namer,
+    lower_function, lower_function_with_compilation_ids, new_shared_compilation_ids,
 };
 use miri::mir::{ExecutionModel, StorageClass, TerminatorKind};
 use miri::pipeline::Pipeline;
@@ -309,7 +309,7 @@ fn b()
         b[i] = i
 ";
     let result = pipeline.frontend(source).expect("frontend");
-    let kernel_namer = new_shared_kernel_namer();
+    let compilation_ids = new_shared_compilation_ids();
     let mut names = Vec::new();
     for func_stmt in result
         .ast
@@ -317,12 +317,12 @@ fn b()
         .iter()
         .filter(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
     {
-        let (_body, lambdas) = lower_function_with_kernel_namer(
+        let (_body, lambdas) = lower_function_with_compilation_ids(
             func_stmt,
             &result.type_checker,
             false,
             false,
-            kernel_namer.clone(),
+            compilation_ids.clone(),
         )
         .expect("lowering");
         names.extend(
