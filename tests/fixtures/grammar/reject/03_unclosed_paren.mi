@@ -1,0 +1,4 @@
+// Unclosed parenthesis — unbalanced delimiters
+
+fn main()
+    let x = (1 + 2

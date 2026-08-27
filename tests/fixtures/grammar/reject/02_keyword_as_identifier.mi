@@ -1,0 +1,4 @@
+// 'fn' keyword used where identifier is required
+
+fn main()
+    let fn = 5

@@ -1,0 +1,4 @@
+// Literal used as assignment target — invalid syntax
+
+fn main()
+    42 = 10

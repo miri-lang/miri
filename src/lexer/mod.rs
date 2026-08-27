@@ -7,6 +7,7 @@ use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 
 pub mod formatted_string;
 pub mod regex;
+pub mod terminal;
 pub mod token;
 pub mod utils;
 
