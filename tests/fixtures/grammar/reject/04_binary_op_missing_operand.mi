@@ -1,0 +1,4 @@
+// Binary operator with missing operand
+
+fn main()
+    let x = 5 +

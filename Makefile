@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent
+.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -149,3 +149,9 @@ audit:
 # the named entry point for CI and for downstream consumers pinning a toolchain.
 conformance-agent:
 	cargo test --test mod conformance
+
+# Validate the published PEG grammar (docs/grammar.peg) against the token-level
+# corpus. This is the gate for grammar changes: the PEG must accept every file
+# the real parser accepts and reject every file the real parser rejects.
+grammar-check:
+	cargo test --test mod grammar

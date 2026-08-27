@@ -1,0 +1,236 @@
+# version: 1
+
+# The Miri language grammar, over the token stream the lexer produces.
+#
+# Terminals are token names; the lexical appendix at the end of this file gives
+# each one's pattern and the indentation algorithm that synthesises INDENT,
+# DEDENT and STMT_END. A consumer implements that lexer, then these rules.
+#
+# This grammar is an OVER-APPROXIMATION. It accepts token sequences the
+# compiler rejects, so it is suitable for validation and for constrained
+# decoding, but it is not a substitute for the compiler. It does not express:
+#   - the parser's recursion depth limit (MAX_PARSE_DEPTH = 256)
+#   - contextual keywords, whose meaning depends on surrounding tokens
+#   - lookahead-driven disambiguation, such as telling a generic argument list
+#     from a chain of comparisons: `List<int` is accepted here as the comparison
+#     `List < int`, while the compiler reads the same tokens as an unterminated
+#     generic argument list and rejects them
+#   - rejection of duplicate match branches
+#   - name resolution, type checking, and every other semantic rule
+#
+# Precedence is expressed by the layering of the expression rules. Associativity
+# is NOT expressible in PEG structure: a rule of the form `a <- b (op b)*`
+# yields a flat sequence, and a consumer building a tree must apply the
+# associativity table in the appendix.
+
+program <- statement*
+
+statement <- declaration / compound_statement / simple_statement
+
+block <- STMT_END INDENT statement+ DEDENT
+body <- COLON statement / block
+
+declaration <- attribute* modifier* declaration_kind
+attribute <- AT attribute_name (L_PAREN argument_list? R_PAREN)? STMT_END?
+attribute_name <- IDENT / MUST_USE / DEFAULT / OUT / SHARED / LOCAL
+modifier <- PUBLIC / PRIVATE / PROTECTED / SHARED / ABSTRACT / ASYNC / MUST_USE / INTRINSIC / RUNTIME STRING? / contextual_static
+contextual_static <- &(IDENT FN) IDENT
+declaration_kind <- use_declaration / function_declaration / class_declaration / struct_declaration / enum_declaration / trait_declaration / type_declaration
+
+use_declaration <- USE use_path (AS IDENT)? STMT_END
+use_path <- use_segment (DOT use_segment)* (DOT use_group)?
+use_group <- L_BRACE use_segment (COMMA use_segment)* R_BRACE
+use_segment <- IDENT / SYSTEM / GPU / LOCAL / TYPE / DEFAULT
+
+function_declaration <- FN function_name generic_parameters? L_PAREN parameter_list? R_PAREN type_expression? function_tail
+function_name <- IDENT / DEFAULT
+function_tail <- body / STMT_END
+parameter_list <- parameter (COMMA parameter)* COMMA?
+parameter <- OUT? IDENT OUT? type_expression? (ASSIGN expression)?
+
+class_declaration <- CLASS IDENT generic_parameters? extends_clause? implements_clause? member_block
+struct_declaration <- STRUCT IDENT generic_parameters? extends_clause? implements_clause? member_block
+trait_declaration <- TRAIT IDENT generic_parameters? extends_clause? member_block
+enum_declaration <- ENUM IDENT generic_parameters? implements_clause? enum_block
+extends_clause <- EXTENDS type_expression (COMMA type_expression)*
+implements_clause <- IMPLEMENTS type_expression (COMMA type_expression)*
+member_block <- STMT_END INDENT member+ DEDENT
+member <- declaration / field_declaration
+field_declaration <- attribute* modifier* (LET / VAR / CONST) IDENT type_expression? (ASSIGN expression)? STMT_END / attribute* modifier* IDENT type_expression (ASSIGN expression)? STMT_END
+shared_declaration <- SHARED IDENT type_expression? (ASSIGN expression)? STMT_END
+enum_block <- STMT_END INDENT enum_member+ DEDENT
+enum_member <- declaration / enum_variant
+enum_variant <- IDENT (L_PAREN type_expression (COMMA type_expression)* R_PAREN)? STMT_END
+
+type_declaration <- TYPE IDENT generic_parameters? ASSIGN type_expression STMT_END
+
+compound_statement <- if_statement / unless_statement / while_statement / until_statement / do_statement / for_statement / forall_statement / match_statement / gpu_statement / forever_statement
+
+if_statement <- IF expression body else_clause?
+unless_statement <- UNLESS expression body else_clause?
+else_clause <- ELSE (if_statement / body)
+while_statement <- WHILE expression body
+until_statement <- UNTIL expression body
+forever_statement <- FOREVER body
+do_statement <- DO body (WHILE / UNTIL) expression STMT_END
+for_statement <- FOR iteration_clause body
+forall_statement <- FORALL iteration_clause body
+iteration_clause <- loop_variables IN expression (COMMA expression)*
+loop_variables <- loop_variable (COMMA loop_variable)*
+loop_variable <- IDENT / L_PAREN loop_variables R_PAREN
+match_statement <- MATCH expression STMT_END INDENT match_branch+ DEDENT
+match_branch <- pattern (COMMA pattern)* body
+pattern <- ELSE / DEFAULT / expression
+
+gpu_statement <- GPU gpu_tail
+gpu_tail <- function_declaration / forall_statement / for_statement / frame_block / binding_statement
+frame_block <- FRAME body
+
+simple_statement <- shared_declaration / binding_statement / return_statement / break_statement / continue_statement / expression_statement
+binding_statement <- binding_head ASSIGN block_valued_expression / binding_head (ASSIGN expression)? guard? STMT_END
+binding_head <- attribute* modifier* (LET / VAR / CONST) binding_targets type_expression?
+block_valued_expression <- match_statement / if_statement
+binding_targets <- binding_target (COMMA binding_target)*
+binding_target <- IDENT / OUT / L_PAREN binding_targets R_PAREN
+return_statement <- RETURN expression? guard? STMT_END
+break_statement <- BREAK expression? guard? STMT_END
+continue_statement <- CONTINUE guard? STMT_END
+expression_statement <- expression guard? STMT_END
+guard <- (IF / UNLESS) expression (ELSE expression)?
+
+expression <- assignment_expression
+assignment_expression <- assignment_target assign_operator assignment_expression / conditional_expression
+assignment_target <- name_atom generic_arguments? postfix_operator*
+assign_operator <- ASSIGN / ASSIGN_ADD / ASSIGN_SUB / ASSIGN_MUL / ASSIGN_DIV / ASSIGN_MOD
+conditional_expression <- null_coalescing_expression (QUESTION_MARK expression COLON expression)?
+null_coalescing_expression <- logical_or_expression (QUESTION_QUESTION logical_or_expression)*
+logical_or_expression <- logical_and_expression ((OR / PIPE) logical_and_expression)*
+logical_and_expression <- equality_expression ((AND / AMPERSAND) equality_expression)*
+equality_expression <- relational_expression ((EQUAL / NOT_EQUAL) relational_expression)*
+relational_expression <- range_expression (relational_operator range_expression)*
+relational_operator <- LESS_THAN_EQUAL / GREATER_THAN_EQUAL / LESS_THAN / GREATER_THAN / IS / INCLUDES / IN
+range_expression <- additive_expression ((RANGE_INCLUSIVE / RANGE) additive_expression)?
+additive_expression <- multiplicative_expression ((PLUS / MINUS / CARET) multiplicative_expression)*
+multiplicative_expression <- unary_expression ((STAR / SLASH / PERCENT) unary_expression)*
+unary_expression <- unary_operator* postfix_expression
+unary_operator <- NOT / MINUS / PLUS / TILDE / INCREMENT / DECREMENT / AWAIT / SPAWN
+postfix_expression <- primary_expression postfix_operator*
+postfix_operator <- DOT member_name / tuple_field / L_PAREN argument_list? R_PAREN / L_BRACKET expression R_BRACKET / AS type_expression / INCREMENT / DECREMENT / QUESTION_MARK
+tuple_field <- FLOAT
+member_name <- IDENT / INT / DEFAULT / TYPE / MATCH
+
+primary_expression <- anonymous_function / inline_if_expression / lambda_expression / literal_expression / collection_expression / grouped_expression / identifier_expression / match_statement / if_statement
+grouped_expression <- L_PAREN expression (COMMA expression)* R_PAREN
+identifier_expression <- qualified_name generic_arguments?
+qualified_name <- name_atom
+name_atom <- IDENT / OUT / contextual_name
+contextual_name <- SUPER / SYSTEM / GPU / FRAME / LOCAL / DEFAULT
+collection_expression <- L_BRACKET (expression (COMMA expression)* COMMA?)? R_BRACKET / L_BRACE (map_entry (COMMA map_entry)* COMMA?)? R_BRACE
+map_entry <- expression (COLON expression)?
+argument_list <- argument (COMMA argument)* COMMA?
+argument <- OUT expression / (IDENT COLON)? expression
+lambda_expression <- L_PAREN parameter_list? R_PAREN ARROW expression / IDENT ARROW expression
+anonymous_function <- FN L_PAREN parameter_list? R_PAREN type_expression? (COLON expression / block)
+inline_if_expression <- IF expression COLON expression (ELSE COLON expression)?
+
+literal_expression <- INT / FLOAT / BINARY / HEX / OCTAL / STRING / REGEX / TRUE / FALSE / NONE / formatted_string
+formatted_string <- FSTRING_START expression? (FSTRING_MID expression?)* FSTRING_END
+
+type_expression <- type_union
+type_union <- type_postfix ((PIPE / AMPERSAND) type_postfix)*
+type_postfix <- type_atom type_suffix*
+type_suffix <- QUESTION_MARK / L_BRACKET expression? R_BRACKET
+type_atom <- type_name generic_arguments? / L_PAREN type_expression (COMMA type_expression)* R_PAREN / L_BRACKET type_expression (SEMICOLON expression)? R_BRACKET / L_BRACE type_expression (COLON type_expression)? R_BRACE / FN L_PAREN (fn_type_parameter (COMMA fn_type_parameter)*)? R_PAREN type_expression?
+type_name <- IDENT / SYSTEM / GPU / FRAME / LOCAL / DEFAULT
+generic_arguments <- LESS_THAN generic_argument (COMMA generic_argument)* COMMA? GREATER_THAN
+generic_argument <- expression / type_expression
+generic_parameters <- LESS_THAN generic_parameter (COMMA generic_parameter)* COMMA? GREATER_THAN
+generic_parameter <- IDENT (COLON type_expression)? (EXTENDS type_expression)?
+fn_type_parameter <- IDENT type_expression / type_expression
+
+# ---------------------------------------------------------------------------
+# Lexical appendix
+# ---------------------------------------------------------------------------
+#
+# The rules above are written over tokens. This appendix defines those tokens,
+# so a consumer can build the token stream the rules consume.
+#
+# Keywords are matched before identifiers. Each is its own terminal, spelled in
+# upper case after the keyword itself: `use` is USE, `fn` is FN, and so on for
+# async, await, spawn, parallel, gpu, frame, if, unless, else, match, default,
+# return, while, until, do, for, forall, forever, in, let, var, const, or, and,
+# not, true, false, None, from, as, break, continue, extends, is, includes,
+# implements, type, enum, struct, class, trait, super, public, protected,
+# shared, private, system, local, abstract, must_use, out, runtime, intrinsic.
+#
+# Note that `system`, `gpu`, `frame`, `local`, `default` and `out` are keywords
+# that also appear where a name is expected, which is why several rules above
+# accept them in name position.
+#
+# Punctuation terminals, longest match first within each group:
+#   AT @              SEMICOLON ;        COLON :          DOUBLE_COLON ::
+#   FAT_ARROW =>      ARROW ->           LEFT_ARROW <-
+#   EQUAL ==          NOT_EQUAL !=       LESS_THAN_EQUAL <=
+#   GREATER_THAN_EQUAL >=                LESS_THAN <       GREATER_THAN >
+#   ASSIGN =          ASSIGN_ADD +=      ASSIGN_SUB -=     ASSIGN_MUL *=
+#   ASSIGN_DIV /=     ASSIGN_MOD %=
+#   PLUS +            INCREMENT ++       MINUS -           DECREMENT --
+#   STAR *            SLASH /            PERCENT %         COMMA ,
+#   RANGE ..          RANGE_INCLUSIVE ..=                  DOT .
+#   L_PAREN (         R_PAREN )          L_BRACKET [       R_BRACKET ]
+#   L_BRACE {         R_BRACE }          PIPE |            AMPERSAND &
+#   CARET ^           QUESTION_MARK ?    QUESTION_QUESTION ??           TILDE ~
+#
+# Literal terminals:
+#   IDENT    [a-zA-Z_][a-zA-Z0-9_]*
+#   INT      [0-9]+(_[0-9]+)*
+#   FLOAT    [0-9]+(_[0-9]+)*\.[0-9]+(_[0-9]+)*([eE][+-]?[0-9]+)?
+#            or  \.[0-9]+(_[0-9]+)*([eE][+-]?[0-9]+)?
+#   BINARY   0[bB][01_]+
+#   HEX      0[xX][0-9a-fA-F_]+
+#   OCTAL    0[oO][0-7_]+
+#   STRING   '...' or "..." with backslash escapes
+#   REGEX    re'...' or re"..." followed by any of the flags [igmsu]
+#   FSTRING_START / FSTRING_MID / FSTRING_END
+#            an f-string is split around its interpolations: f"a{x}b{y}c"
+#            lexes as FSTRING_START, the tokens of x, FSTRING_MID, the tokens of
+#            y, then FSTRING_END.
+#
+# Because FLOAT admits a leading dot, a tuple field access lexes as an identifier
+# followed by a FLOAT: `t.0` is IDENT FLOAT, not IDENT DOT INT. The rules above
+# model that directly, in `tuple_field`.
+#
+# Discarded by the lexer, never present in the stream: horizontal whitespace,
+# `//` line comments, `/* */` block comments (which nest), a leading `#!` line,
+# and a byte-order mark.
+#
+# Indentation. The lexer converts line structure into three synthetic terminals,
+# maintaining a stack of indentation columns that starts holding only column 0:
+#
+#   1. At each newline outside any bracket, measure the next non-blank,
+#      non-comment line's indentation.
+#   2. Greater than the top of the stack: push it and emit INDENT.
+#   3. Less than the top: pop and emit DEDENT until the top matches. If no entry
+#      matches, the indentation is inconsistent and the input is rejected.
+#   4. Equal to the top: emit STMT_END, ending the logical line.
+#   5. At end of input, emit a DEDENT for every column left above 0.
+#
+# A newline inside (), [] or {} continues the logical line and produces nothing.
+# STMT_END is emitted before INDENT, so a block header reads as
+# `header STMT_END INDENT ... DEDENT`, and no STMT_END follows a DEDENT.
+#
+# Longest match resolves every overlapping operator before the grammar sees the
+# stream, so `..=` never lexes as `..` then `=`, and the same holds for `..`/`.`,
+# `::`/`:`, `??`/`?`, `++`/`+` and `--`/`-`. None of these is an ordered-choice
+# hazard in the rules above.
+#
+# Associativity. Precedence is expressed by the layering of the expression rules,
+# but a rule of the form `a <- b (op b)*` yields a flat sequence and records no
+# associativity at all. A consumer folding that sequence into a tree must apply:
+#
+#   left       * / %  + - ^  << >>  &  |  == !=  < > <= >=  and  or
+#   right      = += -= *= /= %=   and the ?: conditional
+#   non        .. ..=      (a range does not chain)
+#
+# Unary operators bind tighter than any binary operator, and postfix operators —
+# call, index, member access, `as`, `?` — bind tighter still.
