@@ -1,4 +1,8 @@
 // summary: Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire.
+// command: build
+// The reduce over a device-resident buffer dispatches to the GPU, so running
+// this would need a device the machine may not have. Building carries the
+// program past the check that raises the diagnostic and stops before dispatch.
 use system.gpu
 
 fn main()

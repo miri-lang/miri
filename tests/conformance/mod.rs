@@ -13,12 +13,31 @@ use tempfile::NamedTempFile;
 #[derive(Debug, Clone)]
 struct FixtureDirectives {
     expect_code: Option<String>,
-    /// Subcommand used to exercise the fixture. Defaults to `check`; a fixture
-    /// whose diagnostic is only raised while the program executes (a runtime
-    /// trap) declares `// command: run`.
-    command: String,
+    /// Subcommand used to exercise the fixture, when the fixture names one.
+    ///
+    /// Left `None` the fixture takes the default for the directory it sits in,
+    /// which differs because the directories ask different questions: `fail/`
+    /// and `warn/` ask what the frontend reports and default to `check`, while
+    /// `pass/` asks whether the program compiles and runs clean and defaults to
+    /// `run`. A fixture overrides that default when its own question is
+    /// narrower: `// command: run` for a diagnostic raised only while the
+    /// program executes, `// command: build` for one raised after the frontend
+    /// but before execution, so the fixture stops short of needing whatever
+    /// hardware the program would run on.
+    command: Option<String>,
     expect_stdout_lines: Vec<String>,
     summary: String,
+}
+
+/// Subcommands a fixture may name, ordered by how far each carries the program.
+const SUPPORTED_COMMANDS: &[&str] = &["check", "build", "run"];
+
+impl FixtureDirectives {
+    /// The subcommand to exercise this fixture with, falling back to the
+    /// default for the directory the fixture came from.
+    fn command_or<'a>(&'a self, default: &'a str) -> &'a str {
+        self.command.as_deref().unwrap_or(default)
+    }
 }
 
 fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
@@ -26,7 +45,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
         .map_err(|e| format!("Failed to read fixture {}: {}", path.display(), e))?;
 
     let mut expect_code = None;
-    let mut command = String::from("check");
+    let mut command = None;
     let mut expect_stdout_lines = Vec::new();
     let mut summary = None;
 
@@ -45,7 +64,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
         } else if let Some(stdout) = comment.strip_prefix("expect-stdout: ") {
             expect_stdout_lines.push(stdout.to_string());
         } else if let Some(c) = comment.strip_prefix("command: ") {
-            command = c.trim().to_string();
+            command = Some(c.trim().to_string());
         } else if let Some(s) = comment.strip_prefix("summary: ") {
             summary = Some(s.to_string());
         }
@@ -58,12 +77,27 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
         )
     })?;
 
-    if command != "check" && command != "run" {
-        return Err(format!(
-            "Fixture {} declares unsupported '// command: {}'; expected 'check' or 'run'",
-            path.display(),
-            command
-        ));
+    if let Some(named) = &command {
+        if !SUPPORTED_COMMANDS.contains(&named.as_str()) {
+            return Err(format!(
+                "Fixture {} declares unsupported '// command: {}'; expected one of {:?}",
+                path.display(),
+                named,
+                SUPPORTED_COMMANDS
+            ));
+        }
+
+        // Only `run` produces a stdout stream, so pairing the directive with any
+        // other command asks for output the envelope never carries. Rejecting it
+        // here turns a silently unsatisfiable expectation into a fixture error.
+        if named != "run" && !expect_stdout_lines.is_empty() {
+            return Err(format!(
+                "Fixture {} declares '// expect-stdout' with '// command: {}'; \
+                 stdout is only captured by 'run'",
+                path.display(),
+                named
+            ));
+        }
     }
 
     Ok(FixtureDirectives {
@@ -78,7 +112,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
 fn test_fail_fixture(path: &Path) -> Result<(), String> {
     let directives = parse_fixture(path)?;
 
-    let expect_code = directives.expect_code.ok_or_else(|| {
+    let expect_code = directives.expect_code.clone().ok_or_else(|| {
         format!(
             "Fixture {} in fail/ must have '// expect: <CODE>'",
             path.display()
@@ -100,7 +134,7 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
-        .arg(&directives.command)
+        .arg(directives.command_or("check"))
         .arg(&test_path)
         .arg("--format")
         .arg("json");
@@ -146,7 +180,7 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
 fn test_warn_fixture(path: &Path) -> Result<(), String> {
     let directives = parse_fixture(path)?;
 
-    let expect_code = directives.expect_code.ok_or_else(|| {
+    let expect_code = directives.expect_code.clone().ok_or_else(|| {
         format!(
             "Fixture {} in warn/ must have '// expect: <CODE>'",
             path.display()
@@ -168,7 +202,7 @@ fn test_warn_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
-        .arg("check")
+        .arg(directives.command_or("check"))
         .arg(&test_path)
         .arg("--format")
         .arg("json");
@@ -233,7 +267,7 @@ fn test_pass_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
-        .arg("run")
+        .arg(directives.command_or("run"))
         .arg(&test_path)
         .arg("--format")
         .arg("json");
