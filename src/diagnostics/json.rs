@@ -53,6 +53,9 @@ pub struct DiagnosticsEnvelope {
     /// Canonical source read back by the view command (view command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<JsonView>,
+    /// Patch results: applied edits and revalidation count (patch command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<JsonPatch>,
 }
 
 impl DiagnosticsEnvelope {
@@ -74,6 +77,7 @@ impl DiagnosticsEnvelope {
             tests: None,
             explanation: None,
             view: None,
+            patch: None,
         }
     }
 
@@ -126,6 +130,12 @@ impl DiagnosticsEnvelope {
         self.view = Some(view);
         self
     }
+
+    /// Set the patch results.
+    pub fn with_patch(mut self, patch: JsonPatch) -> Self {
+        self.patch = Some(patch);
+        self
+    }
 }
 
 /// What a `miri view` call read back.
@@ -156,6 +166,31 @@ pub struct JsonViewSpan {
     pub name: Option<String>,
 }
 
+/// Results of a patch command: applied edits and metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonPatch {
+    /// Individual edits applied in the patch (each with raw byte range and replacement).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<JsonPatchEdit>,
+    /// Number of revalidations performed.
+    pub revalidations: u32,
+    /// Whether the file was written to disk.
+    pub file_written: bool,
+}
+
+/// A single edit applied by the patch command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonPatchEdit {
+    /// Byte offset where the replacement starts in the raw source.
+    pub start: usize,
+    /// Byte offset one past the last replaced byte.
+    pub end: usize,
+    /// The replacement text.
+    pub replacement: String,
+}
+
 /// Command type for the JSON envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -167,6 +202,7 @@ pub enum JsonCommand {
     Explain,
     Fix,
     View,
+    Patch,
     Determinism,
 }
 

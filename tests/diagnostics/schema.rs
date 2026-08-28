@@ -212,6 +212,15 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 name: Some("main".to_string()),
             }],
         }),
+        patch: Some(miri::diagnostics::json::JsonPatch {
+            edits: vec![miri::diagnostics::json::JsonPatchEdit {
+                start: 10,
+                end: 15,
+                replacement: "new_text".to_string(),
+            }],
+            revalidations: 1,
+            file_written: true,
+        }),
     }
 }
 

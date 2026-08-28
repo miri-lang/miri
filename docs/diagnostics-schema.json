@@ -106,6 +106,14 @@
       ],
       "description": "The canonical source a scoped read returned (view command only). Absent or null for other commands.",
       "$ref": "#/$defs/JsonView"
+    },
+    "patch": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Patch results: applied edits and revalidation count (patch command only). Absent or null for other commands.",
+      "$ref": "#/$defs/JsonPatch"
     }
   },
   "required": [
@@ -548,6 +556,54 @@
         "start",
         "end",
         "kind"
+      ]
+    },
+    "JsonPatch": {
+      "type": "object",
+      "description": "Results of a patch command: applied edits and metadata.",
+      "properties": {
+        "edits": {
+          "type": "array",
+          "description": "Individual edits applied in the patch (each with raw byte range and replacement).",
+          "items": {
+            "$ref": "#/$defs/JsonPatchEdit"
+          }
+        },
+        "revalidations": {
+          "type": "integer",
+          "description": "Number of revalidations performed."
+        },
+        "fileWritten": {
+          "type": "boolean",
+          "description": "Whether the file was written to disk."
+        }
+      },
+      "required": [
+        "revalidations",
+        "fileWritten"
+      ]
+    },
+    "JsonPatchEdit": {
+      "type": "object",
+      "description": "A single edit applied by the patch command.",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "description": "Byte offset where the replacement starts in the raw source."
+        },
+        "end": {
+          "type": "integer",
+          "description": "Byte offset one past the last replaced byte."
+        },
+        "replacement": {
+          "type": "string",
+          "description": "The replacement text."
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "replacement"
       ]
     }
   }

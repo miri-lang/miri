@@ -8,6 +8,9 @@ pub mod determinism;
 pub mod dev;
 pub mod explain;
 pub mod fix;
+pub mod patch;
+pub mod resolve;
+pub mod token_align;
 pub mod version;
 pub mod view;
 

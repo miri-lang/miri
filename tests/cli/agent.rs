@@ -174,7 +174,7 @@ fn test_the_handshake_names_served_and_reserved_methods_apart() {
     assert!(served.contains(&json!("check")));
     assert!(served.contains(&json!("fixApply")));
     assert!(served.contains(&json!("view")));
-    assert!(reserved.contains(&json!("patch")));
+    assert!(served.contains(&json!("patch")));
     assert!(reserved.contains(&json!("tokens")));
     for method in served {
         assert!(
@@ -331,12 +331,12 @@ fn test_a_reserved_method_is_distinguishable_from_a_misspelled_one() {
     let directory = project("reserved", &[]);
     let mut session = Session::start(directory.path());
 
-    let reserved = session.call(1, "patch", json!({}));
+    let reserved = session.call(1, "tokens", json!({}));
     let unknown = session.call(2, "chekc", json!({}));
 
     assert_eq!(reserved["error"]["code"], json!(-32601));
     assert_eq!(reserved["error"]["data"]["reserved"], json!(true));
-    assert_eq!(reserved["error"]["data"]["method"], json!("patch"));
+    assert_eq!(reserved["error"]["data"]["method"], json!("tokens"));
 
     assert_eq!(unknown["error"]["code"], json!(-32601));
     assert_eq!(unknown["error"]["data"]["reserved"], json!(false));
@@ -788,5 +788,83 @@ fn test_explain_refuses_a_request_naming_no_code() {
     let refused = session.call(1, "explain", json!({}));
 
     assert_eq!(refused["error"]["code"], json!(-32602), "{}", refused);
+    session.finish();
+}
+
+/// A program with one function whose body can be anchored on.
+const PATCHABLE: &str = "fn total(a int, b int) int
+    return a + b
+";
+
+#[test]
+fn test_a_session_reads_a_function_then_edits_it() {
+    // The two surfaces are meant to compose: what `view` renders is the text
+    // `patch` anchors against, and the edit answers with the diagnostics of the
+    // program it produced rather than with a bare acknowledgement.
+    let directory = project("patch-loop", &[("main.mi", PATCHABLE)]);
+    let path = directory.path().join("main.mi");
+    let path = path.to_str().expect("the path is text");
+    let mut session = Session::start(directory.path());
+
+    let read = session.call(1, "view", json!({ "path": path, "fn": "total" }));
+    let rendered = read["result"]["view"]["text"]
+        .as_str()
+        .expect("the view carries its text");
+    assert!(
+        rendered.contains("return a + b"),
+        "the rendering holds the line to anchor on: {rendered}"
+    );
+
+    let edited = session.call(
+        2,
+        "patch",
+        json!({
+            "path": path,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+        }),
+    );
+    assert!(
+        edited["error"].is_null(),
+        "an edit is an answer, not a protocol failure: {edited}"
+    );
+    let envelope = &edited["result"];
+    assert_eq!(envelope["ok"], json!(true), "the edit checks: {edited}");
+    assert_eq!(envelope["command"], json!("patch"));
+    assert_eq!(envelope["patch"]["revalidations"], json!(1));
+    assert_eq!(envelope["patch"]["fileWritten"], json!(true));
+
+    let written = std::fs::read_to_string(path).expect("the edited file can be read");
+    assert!(written.contains("return a * b"), "got: {written}");
+
+    session.finish();
+}
+
+#[test]
+fn test_a_session_reports_an_edit_that_does_not_check() {
+    let directory = project("patch-rejected", &[("main.mi", PATCHABLE)]);
+    let path = directory.path().join("main.mi");
+    let path = path.to_str().expect("the path is text");
+    let mut session = Session::start(directory.path());
+
+    let edited = session.call(
+        2,
+        "patch",
+        json!({
+            "path": path,
+            "operations": [{ "function": "total", "old": "a + b", "new": "\"text\"" }],
+        }),
+    );
+    let envelope = &edited["result"];
+    assert_eq!(
+        envelope["ok"],
+        json!(false),
+        "an edit producing a type error does not succeed: {edited}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).expect("the file can be read"),
+        PATCHABLE,
+        "a rejected edit leaves the file as it was"
+    );
+
     session.finish();
 }

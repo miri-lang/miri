@@ -233,6 +233,57 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
         format: Format,
     },
+
+    /// Apply source edits with re-validation
+    Patch {
+        /// Path to the Miri source file
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Function to patch: its name, or `Class.method` for a method (repeatable)
+        #[arg(long = "replace-in-fn", value_name = "NAME")]
+        fn_name: Vec<String>,
+
+        /// Text to find in the function (canonical form); pairs positionally with --new
+        #[arg(long, value_name = "TEXT")]
+        old: Vec<String>,
+
+        /// Text to replace it with; pairs positionally with --old
+        #[arg(long, value_name = "TEXT")]
+        new: Vec<String>,
+
+        /// Read multi-line --old text from a file or stdin (-); pairs positionally with --new-file
+        #[arg(long, value_name = "PATH|")]
+        old_file: Vec<String>,
+
+        /// Read multi-line --new text from a file or stdin (-); pairs positionally with --old-file
+        #[arg(long, value_name = "PATH|")]
+        new_file: Vec<String>,
+
+        /// Function to replace wholly: its name, or `Class.method`; pairs with --body-file
+        #[arg(long, value_name = "NAME")]
+        replace_fn: Vec<String>,
+
+        /// Read function body from a file or stdin (-); pairs positionally with --replace-fn
+        #[arg(long, value_name = "PATH|")]
+        body_file: Vec<String>,
+
+        /// Guard against stale state: require this SHA-256 hash
+        #[arg(long, value_name = "HEX")]
+        expect_sha: Option<String>,
+
+        /// Validate without writing
+        #[arg(long, action = ArgAction::SetTrue)]
+        check_only: bool,
+
+        /// Print the diff without writing
+        #[arg(long, action = ArgAction::SetTrue)]
+        dry_run: bool,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
 }
 
 #[derive(Subcommand, Debug)]
