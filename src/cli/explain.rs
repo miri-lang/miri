@@ -10,7 +10,7 @@
 
 use std::str::FromStr;
 
-use crate::cli::{serialize_envelope, ColorMode, Format};
+use crate::cli::{sanitize_for_terminal, serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
 use crate::diagnostics::{DiagnosticCode, Explanation, Severity};
 use crate::error::format::ColorScheme;
@@ -138,27 +138,6 @@ pub fn run(code: &str, format: Format, color_mode: ColorMode) -> Outcome {
             Outcome::UnknownCode
         }
     }
-}
-
-/// Make an arbitrary argument safe to echo to a terminal.
-///
-/// The rejected argument is quoted back to the user, and it is entirely under
-/// their control. Escape sequences passed straight through would let a crafted
-/// argument repaint or rewrite the surrounding terminal output, so control
-/// characters are shown as escapes rather than executed. Printable text of any
-/// script is left alone. JSON needs no such treatment: the serializer already
-/// escapes control characters.
-fn sanitize_for_terminal(argument: &str) -> String {
-    argument
-        .chars()
-        .flat_map(|c| {
-            if c.is_control() {
-                c.escape_default().collect::<Vec<_>>()
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
 }
 
 /// The help text offered alongside an unrecognised code.

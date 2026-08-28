@@ -50,6 +50,9 @@ pub struct DiagnosticsEnvelope {
     /// Explanation of a diagnostic code (explain command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<JsonExplanation>,
+    /// Canonical source read back by the view command (view command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<JsonView>,
 }
 
 impl DiagnosticsEnvelope {
@@ -70,6 +73,7 @@ impl DiagnosticsEnvelope {
             duration_ms: None,
             tests: None,
             explanation: None,
+            view: None,
         }
     }
 
@@ -116,6 +120,40 @@ impl DiagnosticsEnvelope {
         self.explanation = Some(explanation);
         self
     }
+
+    /// Set the canonical source a view read back.
+    pub fn with_view(mut self, view: JsonView) -> Self {
+        self.view = Some(view);
+        self
+    }
+}
+
+/// What a `miri view` call read back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonView {
+    /// Which shape was asked for: `fn`, `outline`, or `around`.
+    pub shape: String,
+    /// The canonical source. Every span below indexes these bytes.
+    pub text: String,
+    /// Where each declaration sits within `text`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<JsonViewSpan>,
+}
+
+/// One declaration's position within a view's text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonViewSpan {
+    /// Byte offset where the declaration starts.
+    pub start: usize,
+    /// Byte offset one past the declaration's last byte.
+    pub end: usize,
+    /// What kind of declaration this is, such as `function` or `class`.
+    pub kind: String,
+    /// The declared name, when the declaration has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Command type for the JSON envelope.
@@ -128,6 +166,7 @@ pub enum JsonCommand {
     Test,
     Explain,
     Fix,
+    View,
     Determinism,
 }
 

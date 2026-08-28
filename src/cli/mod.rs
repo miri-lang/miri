@@ -9,6 +9,7 @@ pub mod dev;
 pub mod explain;
 pub mod fix;
 pub mod version;
+pub mod view;
 
 use crate::diagnostics::json::DiagnosticsEnvelope;
 
@@ -20,6 +21,27 @@ use crate::diagnostics::json::DiagnosticsEnvelope;
 pub fn serialize_envelope(envelope: &DiagnosticsEnvelope) -> String {
     serde_json::to_string_pretty(envelope)
         .unwrap_or_else(|error| format!("{{\"error\":\"could not serialize: {}\"}}", error))
+}
+
+/// Make an arbitrary argument safe to echo to a terminal.
+///
+/// The rejected argument is quoted back to the user, and it is entirely under
+/// their control. Escape sequences passed straight through would let a crafted
+/// argument repaint or rewrite the surrounding terminal output, so control
+/// characters are shown as escapes rather than executed. Printable text of any
+/// script is left alone. JSON needs no such treatment: the serializer already
+/// escapes control characters.
+pub fn sanitize_for_terminal(argument: &str) -> String {
+    argument
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 pub use args::{BuildTarget, Cli, ColorMode, Commands, CpuBackend, DeterminismCommand, Format};

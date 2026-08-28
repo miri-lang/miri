@@ -76,6 +76,13 @@ fn run_command(cli: Cli) -> Result<()> {
             Commands::Dev { path, format } => dev_watch(path, format, cli.verify_mir, cli.color),
             Commands::Agent {} => serve_agent(),
             Commands::Explain { code, format } => explain_code(&code, format, cli.color),
+            Commands::View {
+                path,
+                fn_name,
+                outline,
+                around,
+                format,
+            } => view_file(path, fn_name, outline, around, format, cli.color),
             Commands::Fix {
                 path,
                 plan: _plan,
@@ -383,6 +390,30 @@ fn fix_file(
     match miri::cli::fix::run(&path, apply, yes, allow_risky, format) {
         miri::cli::fix::Outcome::Succeeded => Ok(()),
         miri::cli::fix::Outcome::Refused | miri::cli::fix::Outcome::Failed => std::process::exit(1),
+    }
+}
+
+/// View a scoped section of source code.
+fn view_file(
+    path: PathBuf,
+    fn_name: Option<String>,
+    outline: bool,
+    around: Option<String>,
+    format: Format,
+    color_mode: ColorMode,
+) -> Result<()> {
+    // Clap guarantees exactly one of `--fn` and `--outline` is present, so a
+    // missing name here can only mean the outline was asked for.
+    let shape = match fn_name {
+        Some(name) => miri::cli::view::Shape::Function { name, around },
+        None => {
+            let _ = outline;
+            miri::cli::view::Shape::Outline
+        }
+    };
+    match miri::cli::view::run(&path, &shape, format, color_mode) {
+        miri::cli::view::Outcome::Read => Ok(()),
+        miri::cli::view::Outcome::Failed => std::process::exit(1),
     }
 }
 

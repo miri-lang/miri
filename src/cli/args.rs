@@ -204,6 +204,35 @@ pub enum Commands {
     /// Verify that build artifacts are byte-reproducible
     #[command(subcommand)]
     Determinism(DeterminismCommand),
+
+    /// View scoped portions of source code
+    /// Read part of a Miri source file: one function, or an outline of it
+    View {
+        /// Path to the Miri source file
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Show one function: its name, or `Class.method` for a method
+        #[arg(
+            long = "fn",
+            value_name = "NAME",
+            conflicts_with = "outline",
+            required_unless_present = "outline"
+        )]
+        fn_name: Option<String>,
+
+        /// List every declaration's signature, with no bodies
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "fn_name")]
+        outline: bool,
+
+        /// Narrow `--fn` to the innermost block containing this text
+        #[arg(long, value_name = "TEXT", requires = "fn_name")]
+        around: Option<String>,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
 }
 
 #[derive(Subcommand, Debug)]

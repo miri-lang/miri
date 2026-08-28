@@ -56,7 +56,7 @@ pub enum AttributeSpelling {
 
 /// An attribute on a declaration. Attributes are compiler-known markers,
 /// not macros. Each attribute has a name and optionally one string-literal argument.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct Attribute {
     pub name: String,
     pub argument: Option<String>,
@@ -80,8 +80,22 @@ impl Attribute {
     }
 }
 
-// Hashed by name, argument, and spelling only: `Span` carries no `Hash` impl.
-// Equality still compares the span, so equal attributes always hash equally.
+/// Equality ignores `span`, matching [`crate::ast::node::IdNode`] and
+/// `FunctionDeclarationData`: a node's source location is metadata rather than
+/// part of its identity. Without this, the same attribute written at two
+/// offsets compares unequal, which would make an attributed declaration
+/// unrecognisable across a re-render. Nothing in the compiler compares whole
+/// attributes — validation matches on `name` — so this only narrows identity to
+/// what actually identifies an attribute.
+impl PartialEq for Attribute {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.argument == other.argument
+            && self.spelling == other.spelling
+    }
+}
+
+// Hashed by name, argument, and spelling — the same fields equality compares.
 impl std::hash::Hash for Attribute {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);

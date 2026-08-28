@@ -173,8 +173,9 @@ fn test_the_handshake_names_served_and_reserved_methods_apart() {
 
     assert!(served.contains(&json!("check")));
     assert!(served.contains(&json!("fixApply")));
-    assert!(reserved.contains(&json!("view")));
+    assert!(served.contains(&json!("view")));
     assert!(reserved.contains(&json!("patch")));
+    assert!(reserved.contains(&json!("tokens")));
     for method in served {
         assert!(
             !reserved.contains(method),
@@ -330,12 +331,12 @@ fn test_a_reserved_method_is_distinguishable_from_a_misspelled_one() {
     let directory = project("reserved", &[]);
     let mut session = Session::start(directory.path());
 
-    let reserved = session.call(1, "view", json!({}));
+    let reserved = session.call(1, "patch", json!({}));
     let unknown = session.call(2, "chekc", json!({}));
 
     assert_eq!(reserved["error"]["code"], json!(-32601));
     assert_eq!(reserved["error"]["data"]["reserved"], json!(true));
-    assert_eq!(reserved["error"]["data"]["method"], json!("view"));
+    assert_eq!(reserved["error"]["data"]["method"], json!("patch"));
 
     assert_eq!(unknown["error"]["code"], json!(-32601));
     assert_eq!(unknown["error"]["data"]["reserved"], json!(false));

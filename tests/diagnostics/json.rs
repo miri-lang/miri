@@ -74,6 +74,7 @@ mod tests {
             duration_ms: None,
             tests: None,
             explanation: None,
+            view: None,
         };
 
         let json_str = serde_json::to_string(&envelope).expect("serialize");

@@ -15,7 +15,7 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', or 'fix'.",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', or 'view'.",
       "enum": [
         "check",
         "build",
@@ -23,7 +23,8 @@
         "test",
         "explain",
         "fix",
-        "determinism"
+        "determinism",
+        "view"
       ]
     },
     "diagnostics": {
@@ -97,6 +98,14 @@
       ],
       "description": "Documentation for one diagnostic code (for explain command only). Absent or null for other commands.",
       "$ref": "#/$defs/JsonExplanation"
+    },
+    "view": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The canonical source a scoped read returned (view command only). Absent or null for other commands.",
+      "$ref": "#/$defs/JsonView"
     }
   },
   "required": [
@@ -479,6 +488,66 @@
         "severity",
         "reserved",
         "rule"
+      ]
+    },
+    "JsonView": {
+      "type": "object",
+      "description": "Canonical source read back by the view command, with the position of each declaration inside it.",
+      "properties": {
+        "shape": {
+          "type": "string",
+          "description": "Which shape was asked for: 'fn', 'outline', or 'around'.",
+          "enum": [
+            "fn",
+            "outline",
+            "around"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "The canonical source. Every span below indexes these bytes, not the bytes of the file on disk."
+        },
+        "spans": {
+          "type": "array",
+          "description": "Where each declaration sits within `text`.",
+          "items": {
+            "$ref": "#/$defs/JsonViewSpan"
+          }
+        }
+      },
+      "required": [
+        "shape",
+        "text"
+      ]
+    },
+    "JsonViewSpan": {
+      "type": "object",
+      "description": "One declaration's byte range within a view's text.",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "description": "Byte offset where the declaration starts."
+        },
+        "end": {
+          "type": "integer",
+          "description": "Byte offset one past the declaration's last byte."
+        },
+        "kind": {
+          "type": "string",
+          "description": "What kind of declaration this is, such as 'function' or 'class'."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The declared name, when the declaration has one."
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "kind"
       ]
     }
   }
