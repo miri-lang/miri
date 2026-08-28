@@ -1,4 +1,8 @@
 // summary: Accepted counterpart of MER_TYP_019: GPU Launch Block Dimensions Invalid does not fire.
+// command: build
+// The program launches a GPU kernel, so running it would need a device the
+// machine may not have. Building carries it through kernel lowering, which
+// is the stage that raises the diagnostic this fixture asserts stays quiet.
 use system.gpu
 
 gpu fn my_kernel()
