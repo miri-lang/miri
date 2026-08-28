@@ -1,0 +1,20 @@
+# Starting from an empty directory, author a program and prove it runs.
+# There is no seed/ directory: an empty one cannot be committed, and its
+# absence is what makes "from an empty directory" true rather than claimed.
+
+[[step]]
+type = "WriteFile"
+path = "program.mi"
+content = "fn main()\n    println(\"Hello, world!\")\n"
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["Hello, world!"]

@@ -1,0 +1,34 @@
+# Make a failing test pass.
+#
+# The test is correct and the implementation is wrong, so the fix belongs in
+# the function under test. The agent locates it with a scoped read rather than
+# by pulling the whole file, then edits through the anchored-edit surface.
+
+[[step]]
+type = "TestDir"
+dir = "."
+must_succeed = false
+assert_output_contains = ["test_triple"]
+
+[[step]]
+type = "ViewFn"
+file = "program.mi"
+name = "triple"
+format_json = false
+must_succeed = true
+assert_output_contains = ["x + x"]
+
+[[step]]
+type = "Patch"
+file = "program.mi"
+fn_name = "triple"
+old_text = "x + x"
+new_text = "x * 3"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "TestDir"
+dir = "."
+must_succeed = true
+assert_output_contains = ["test result: ok"]

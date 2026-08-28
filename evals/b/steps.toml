@@ -1,0 +1,41 @@
+# Repair a broken program using only the diagnostic surface: check names the
+# fault, explain describes the rule, fix proposes and then applies the edit.
+# The agent never reads or writes the source itself.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_042"
+
+[[step]]
+type = "Explain"
+code = "MER_TYP_042"
+format_json = false
+must_succeed = true
+assert_output_contains = ["Immutability Violation"]
+
+[[step]]
+type = "FixPlan"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["let-to-var"]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+# The repaired program increments once and prints the result. Asserting the
+# bare digit would match almost any output, including an error mentioning a 1.
+assert_output_contains = ["1\n"]

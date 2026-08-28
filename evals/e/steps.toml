@@ -1,0 +1,40 @@
+# Recover from a target-capability rejection.
+#
+# The kernel carries a loop-carried accumulator, which makes its iterations
+# order-dependent and is rejected at type-check time -- no GPU adapter is
+# involved, so this task runs anywhere. The recovery is the shape documented
+# in docs/diagnostics/MER_TAR_005.md, applied through the edit surface.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TAR_005"
+
+[[step]]
+type = "Explain"
+code = "MER_TAR_005"
+format_json = false
+must_succeed = true
+assert_output_contains = ["Invalid GPU Parallel Construct"]
+
+[[step]]
+type = "ViewFn"
+file = "program.mi"
+name = "main"
+format_json = false
+must_succeed = true
+assert_output_contains = ["gpu forall"]
+
+[[step]]
+type = "ReplaceFn"
+file = "program.mi"
+fn_name = "main"
+body = "gpu let arr = [0, 1, 2, 3]\nlet sum = arr.reduce(0, fn(acc i32, x i32) i32: acc + x)\n"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true

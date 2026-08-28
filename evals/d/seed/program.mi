@@ -1,0 +1,3 @@
+fn main()
+    let result = sqrt(4.0)
+    println(f"{result}")
