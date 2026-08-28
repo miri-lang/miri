@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check
+.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -155,3 +155,19 @@ conformance-agent:
 # the real parser accepts and reject every file the real parser rejects.
 grammar-check:
 	cargo test --test mod grammar
+
+# Replay the recorded agent transcripts under evals/ against the real compiler
+# and compare what the loop cost — invocations, bytes read, bytes written —
+# against evals/results/baseline.json. The same harness runs as part of
+# `make test`; this target is the named entry point for working on it directly.
+# It builds the runtimes first because the transcripts run and test programs,
+# which link the runtime staticlib.
+evals-replay: runtimes
+	cargo test --test mod evals
+
+# Re-record the baseline. Run this when a change deliberately moves what the
+# loop costs, and commit the updated table alongside the change that earned it.
+# A run that gets cheaper fails the gate until it is re-recorded, so the table
+# stays a record of the current cost rather than a high-water mark.
+evals-bless: runtimes
+	MIRI_EVALS_BLESS=1 cargo test --test mod evals

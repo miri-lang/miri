@@ -1,0 +1,44 @@
+[
+  {
+    "task": "a",
+    "success": true,
+    "invocations": 2,
+    "bytes_read": 131,
+    "bytes_written": 39
+  },
+  {
+    "task": "b",
+    "success": true,
+    "invocations": 6,
+    "bytes_read": 1934,
+    "bytes_written": 74
+  },
+  {
+    "task": "c",
+    "success": true,
+    "invocations": 4,
+    "bytes_read": 316,
+    "bytes_written": 199
+  },
+  {
+    "task": "d",
+    "success": true,
+    "invocations": 4,
+    "bytes_read": 1402,
+    "bytes_written": 85
+  },
+  {
+    "task": "e",
+    "success": true,
+    "invocations": 5,
+    "bytes_read": 1697,
+    "bytes_written": 118
+  },
+  {
+    "task": "f",
+    "success": true,
+    "invocations": 4,
+    "bytes_read": 629,
+    "bytes_written": 128
+  }
+]

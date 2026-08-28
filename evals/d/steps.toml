@@ -1,0 +1,29 @@
+# Extend a program with a standard-library module it does not yet import.
+# The name resolves to exactly one module, so the repair is exact and the
+# agent never has to guess which import to add.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_034"
+
+[[step]]
+type = "FixPlan"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["add-import", "system.math"]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+# sqrt(4.0) is 2.0. Asserting "2" alone would pass on any output containing
+# that digit, including a diagnostic about the missing import.
+assert_output_contains = ["2.0"]

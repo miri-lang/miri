@@ -1,0 +1,9 @@
+use system.testing
+
+fn triple(x i32) i32
+    x + x
+
+@test
+fn test_triple()
+    let result = triple(5)
+    assert_eq(result, 15)

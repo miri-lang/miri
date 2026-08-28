@@ -65,6 +65,11 @@ jobs:
       # marked `ignore` without it). They run on the macos-14 hardware job
       # (.github/workflows/gpu-hardware.yml). Everything else — including WGSL
       # validity (naga, no device needed) — runs here on every PR.
+      # This also runs the agent-loop replay gate (tests/evals), which measures
+      # what a tool-driven job costs against the current compiler and fails when
+      # that cost stops matching evals/results/baseline.json. It needs no step of
+      # its own — `make evals-replay` is the named entry point for running it
+      # alone, the same way conformance-agent and grammar-check are.
       - name: Run tests
         run: make test
 

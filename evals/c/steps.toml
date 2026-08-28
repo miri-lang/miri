@@ -1,0 +1,39 @@
+# Add a function and its test to an existing module.
+#
+# `miri patch` cannot insert a sibling declaration -- it refuses with
+# MER_BLD_010, "the edit would have changed a declaration it did not name" --
+# so authoring the new function is a direct write. That write is the honest
+# current cost of this loop, and the metric records it rather than hiding it.
+# Everything after the write goes back through the read/edit surface.
+
+[[step]]
+type = "ViewOutline"
+file = "program.mi"
+format_json = false
+must_succeed = true
+assert_output_contains = ["double"]
+
+[[step]]
+type = "WriteFile"
+path = "program.mi"
+content = "use system.testing\n\nfn double(x i32) i32\n    return x * 2\n\nfn quadruple(x i32) i32\n    return double(x) + double(x)\n\n@test\nfn test_quadruple()\n    let result = quadruple(3)\n    assert_eq(result, 12)\n"
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "ViewFn"
+file = "program.mi"
+name = "quadruple"
+format_json = false
+must_succeed = true
+assert_output_contains = ["double(x) + double(x)"]
+
+[[step]]
+type = "TestDir"
+dir = "."
+must_succeed = true
+assert_output_contains = ["test_quadruple"]

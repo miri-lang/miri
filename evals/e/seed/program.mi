@@ -1,0 +1,6 @@
+use system.gpu
+
+fn main()
+    var sum = 0
+    gpu forall i in 0..4
+        sum = sum + i
