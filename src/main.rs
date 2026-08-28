@@ -83,6 +83,23 @@ fn run_command(cli: Cli) -> Result<()> {
                 around,
                 format,
             } => view_file(path, fn_name, outline, around, format, cli.color),
+            Commands::Patch {
+                path,
+                fn_name,
+                old,
+                new,
+                old_file,
+                new_file,
+                replace_fn,
+                body_file,
+                expect_sha,
+                check_only,
+                dry_run,
+                format,
+            } => patch_file(
+                path, fn_name, old, new, old_file, new_file, replace_fn, body_file, expect_sha,
+                check_only, dry_run, format, cli.color,
+            ),
             Commands::Fix {
                 path,
                 plan: _plan,
@@ -414,6 +431,62 @@ fn view_file(
     match miri::cli::view::run(&path, &shape, format, color_mode) {
         miri::cli::view::Outcome::Read => Ok(()),
         miri::cli::view::Outcome::Failed => std::process::exit(1),
+    }
+}
+
+/// Apply source edits with re-validation.
+#[allow(clippy::too_many_arguments)]
+fn patch_file(
+    path: PathBuf,
+    fn_name: Vec<String>,
+    old: Vec<String>,
+    new: Vec<String>,
+    old_file: Vec<String>,
+    new_file: Vec<String>,
+    replace_fn: Vec<String>,
+    body_file: Vec<String>,
+    expect_sha: Option<String>,
+    check_only: bool,
+    dry_run: bool,
+    format: Format,
+    color_mode: ColorMode,
+) -> Result<()> {
+    let request = miri::cli::patch::Request {
+        functions: fn_name,
+        old,
+        new,
+        old_file,
+        new_file,
+        replace_functions: replace_fn,
+        body_file,
+    };
+    // A run that names no writable mode writes; --check-only and --dry-run each
+    // hold the result back, and asking for both is asking for the stricter one.
+    let mode = if check_only {
+        miri::cli::patch::Mode::CheckOnly
+    } else if dry_run {
+        miri::cli::patch::Mode::DryRun
+    } else {
+        miri::cli::patch::Mode::Apply
+    };
+
+    let outcome = match miri::cli::patch::operations(&request) {
+        Ok(operations) => miri::cli::patch::run(
+            &path,
+            &operations,
+            expect_sha.as_deref(),
+            mode,
+            format,
+            color_mode,
+        ),
+        Err(diagnostic) => {
+            miri::cli::patch::report_malformed(&path, *diagnostic, format, color_mode)
+        }
+    };
+
+    match outcome {
+        miri::cli::patch::Outcome::Succeeded => Ok(()),
+        miri::cli::patch::Outcome::Failed => std::process::exit(1),
     }
 }
 

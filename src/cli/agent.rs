@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::cli::{check, explain, fix, version_string, view};
+use crate::cli::{check, explain, fix, patch, version_string, view};
 use crate::diagnostics::rpc::{
     InitializeResult, RpcId, RpcRequest, RpcResponse, ServerCapabilities, ServerInfo,
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, REQUEST_CANCELLED,
@@ -46,6 +46,7 @@ const SERVED_METHODS: &[&str] = &[
     "fixPlan",
     "fixApply",
     "view",
+    "patch",
 ];
 
 /// The methods this build knows by name but does not yet answer.
@@ -53,15 +54,7 @@ const SERVED_METHODS: &[&str] = &[
 /// Naming them is what lets a client tell a method that is coming from one it
 /// misspelled. Each is the surface of a task that has not landed; a method
 /// moves from here to [`SERVED_METHODS`] when its command exists.
-const RESERVED_METHODS: &[&str] = &[
-    "patch",
-    "tokens",
-    "parse",
-    "graph",
-    "skillsGet",
-    "targets",
-    "doctor",
-];
+const RESERVED_METHODS: &[&str] = &["tokens", "parse", "graph", "skillsGet", "targets", "doctor"];
 
 /// The largest message body this session will accept.
 ///
@@ -372,6 +365,7 @@ fn dispatch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         "fixPlan" => run_fix(request, id, false),
         "fixApply" => run_fix(request, id, true),
         "view" => run_view(request, id),
+        "patch" => run_patch(request, id),
         method if RESERVED_METHODS.contains(&method) => RpcResponse::failure(
             id,
             METHOD_NOT_FOUND,
@@ -463,6 +457,83 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     };
 
     serialize(id, &view::view(&path, &source, &shape).envelope)
+}
+
+/// Apply edits to the file the request names and re-check what they produced.
+///
+/// The edits arrive as a list so that a batch costs one round trip and one
+/// check, which is the whole reason this method exists rather than a caller
+/// writing the file itself and asking for a check afterwards.
+fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
+    let Some(path) = required_path(request) else {
+        return missing_path(id);
+    };
+
+    let operations = match patch_operations(request) {
+        Ok(operations) => operations,
+        Err(reason) => return RpcResponse::failure(id, INVALID_PARAMS, reason),
+    };
+
+    let mode = match string_param(request, "mode").as_deref() {
+        None | Some("apply") => patch::Mode::Apply,
+        Some("checkOnly") => patch::Mode::CheckOnly,
+        Some("dryRun") => patch::Mode::DryRun,
+        Some(other) => {
+            return RpcResponse::failure(
+                id,
+                INVALID_PARAMS,
+                format!(
+                    "unknown mode '{}'; expected apply, checkOnly or dryRun",
+                    other
+                ),
+            )
+        }
+    };
+
+    let expect_sha = string_param(request, "expectSha");
+    serialize(
+        id,
+        &patch::patch(&path, &operations, expect_sha.as_deref(), mode).envelope,
+    )
+}
+
+/// Read the `operations` list every patch request carries.
+fn patch_operations(request: &RpcRequest) -> Result<Vec<patch::Operation>, String> {
+    let entries = request
+        .params
+        .as_ref()
+        .and_then(|params| params.get("operations"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "patch needs an `operations` array".to_string())?;
+
+    entries.iter().map(patch_operation).collect()
+}
+
+/// Read one entry of a patch request's `operations` list.
+fn patch_operation(entry: &serde_json::Value) -> Result<patch::Operation, String> {
+    let text = |name: &str| entry.get(name).and_then(serde_json::Value::as_str);
+    let function = text("function")
+        .ok_or_else(|| "each operation needs a `function`".to_string())?
+        .to_string();
+
+    match (text("old"), text("new"), text("body")) {
+        (Some(old), Some(new), None) => Ok(patch::Operation {
+            function,
+            edit: patch::Edit::Anchored {
+                old: old.to_string(),
+                new: new.to_string(),
+            },
+        }),
+        (None, None, Some(body)) => Ok(patch::Operation {
+            function,
+            edit: patch::Edit::Body {
+                text: body.to_string(),
+            },
+        }),
+        _ => {
+            Err("each operation carries either `old` with `new`, or `body` on its own".to_string())
+        }
+    }
 }
 
 /// Report the repairs for the file the request names, and optionally write them.
