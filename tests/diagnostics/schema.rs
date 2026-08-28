@@ -3,7 +3,7 @@
 
 use miri::diagnostics::json::{
     DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonEdit, JsonExplanation, JsonRejectedFile,
-    JsonRelated, JsonRepair, JsonTestResult, JsonTestSummary,
+    JsonRelated, JsonRepair, JsonTestResult, JsonTestSummary, JsonView, JsonViewSpan,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -201,6 +201,16 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             example_before: Some("let x = 1\nx = \"two\"\n".to_string()),
             example_after: Some("let x = 1\nx = 2\n".to_string()),
             reference: Some("../reference/types.md".to_string()),
+        }),
+        view: Some(JsonView {
+            shape: "fn".to_string(),
+            text: "fn main()\n    println(\"hi\")\n".to_string(),
+            spans: vec![JsonViewSpan {
+                start: 0,
+                end: 27,
+                kind: "function".to_string(),
+                name: Some("main".to_string()),
+            }],
         }),
     }
 }

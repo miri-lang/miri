@@ -16,3 +16,4 @@ pub mod json_envelope;
 pub mod run;
 pub mod test_cmd;
 pub mod version;
+pub mod view;

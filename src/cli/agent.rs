@@ -32,14 +32,21 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::cli::{check, explain, fix, version_string};
+use crate::cli::{check, explain, fix, version_string, view};
 use crate::diagnostics::rpc::{
     InitializeResult, RpcId, RpcRequest, RpcResponse, ServerCapabilities, ServerInfo,
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, REQUEST_CANCELLED,
 };
 
 /// The methods this build answers.
-const SERVED_METHODS: &[&str] = &["initialize", "check", "explain", "fixPlan", "fixApply"];
+const SERVED_METHODS: &[&str] = &[
+    "initialize",
+    "check",
+    "explain",
+    "fixPlan",
+    "fixApply",
+    "view",
+];
 
 /// The methods this build knows by name but does not yet answer.
 ///
@@ -47,7 +54,6 @@ const SERVED_METHODS: &[&str] = &["initialize", "check", "explain", "fixPlan", "
 /// misspelled. Each is the surface of a task that has not landed; a method
 /// moves from here to [`SERVED_METHODS`] when its command exists.
 const RESERVED_METHODS: &[&str] = &[
-    "view",
     "patch",
     "tokens",
     "parse",
@@ -365,6 +371,7 @@ fn dispatch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         "explain" => run_explain(request, id),
         "fixPlan" => run_fix(request, id, false),
         "fixApply" => run_fix(request, id, true),
+        "view" => run_view(request, id),
         method if RESERVED_METHODS.contains(&method) => RpcResponse::failure(
             id,
             METHOD_NOT_FOUND,
@@ -426,6 +433,36 @@ fn run_explain(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         );
     };
     serialize(id, &explain::envelope(&code))
+}
+
+/// Read part of the file the request names.
+///
+/// The shape follows the command line: a `fn` parameter reads one function,
+/// optionally narrowed by `around`, and its absence reads the file's outline.
+fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
+    let Some(path) = required_path(request) else {
+        return missing_path(id);
+    };
+
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) => return unreadable(id, &path, &error),
+    };
+
+    let around = string_param(request, "around");
+    let shape = match string_param(request, "fn") {
+        Some(name) => view::Shape::Function { name, around },
+        None if around.is_some() => {
+            return RpcResponse::failure(
+                id,
+                INVALID_PARAMS,
+                "view needs a `fn` parameter for `around` to narrow",
+            )
+        }
+        None => view::Shape::Outline,
+    };
+
+    serialize(id, &view::view(&path, &source, &shape).envelope)
 }
 
 /// Report the repairs for the file the request names, and optionally write them.

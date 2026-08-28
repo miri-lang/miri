@@ -13,6 +13,7 @@ The CLI provides the interface for evaluating, compiling, and testing Miri progr
 -   **`miri check <file.mi>`**: Runs the frontend (Lexer, Parser, Type Checker) to validate code correctness without generating an executable.
 -   **`miri explain <CODE>`**: Renders the registry entry for a diagnostic code — the rule it enforces, a before/after pair, and a reference link.
 -   **`miri fix <file.mi>`**: Reports the repairs the compiler recorded for a file (`--plan`, the default) or writes them (`--apply`). A repair classified as risky is refused unless `--allow-risky` is given.
+-   **`miri view <file.mi>`**: Reads part of a program instead of all of it — `--fn <name>` for one function (`Class.method` for a method), `--outline` for every declaration's signature with no bodies, and `--fn <name> --around <text>` for the innermost block holding some text. Output is rendered from the parsed AST rather than sliced out of the file, so what a tool reads is canonical and repeatable.
 -   **`miri agent`**: Serves JSON-RPC 2.0 over stdin and stdout so one process answers many requests. See [`docs/agent-protocol.md`](../../docs/agent-protocol.md).
 -   **`miri test`**: Discovers `@test` functions in `.mi` files under a directory and runs each one in an isolated subprocess, with optional filtering by `<path>::<test_name>` and a selectable output format (pretty/json). Discovery, execution and reporting live in `src/test_runner/`; see its README.
 
