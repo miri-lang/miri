@@ -281,6 +281,38 @@ fn main():
     increment(a)
 ```
 
+## Module Resolution
+
+Modules are located by dot-notation paths (e.g., `system.io` or `utils.math`). The search order determines where the compiler looks for each import:
+
+### Bare Imports (`use util`, `use system.io`)
+
+Searched in order:
+1. **Standard library** (if available): `MIRI_STDLIB_PATH` env var, exe directory, or manifest directory (`src/stdlib` at build time)
+2. **Project root**: The directory containing the entry file (the `.mi` file you pass to `miri run` or `miri check`)
+3. **Current working directory**: Where the compiler was invoked from
+
+Example: if you run `miri run src/main.mi` from the repo root, the project root is `src/`. A bare `use util` will first search the stdlib, then look for `src/util.mi`, then `./util.mi`.
+
+**Standard library cannot be shadowed**: if both `src/system/io.mi` (a user file) and the real `system/io.mi` stdlib exist, the stdlib wins. Since `system` is a reserved keyword, local modules cannot use names from the `system` namespace.
+
+### Local Imports (`use local.utils`, `use local.models.user`)
+
+Resolved **only** against the project root (the entry file's directory). The working directory has no effect, so:
+- `use local.utils` always resolves to the same file, no matter where the compiler is invoked from.
+- Deeply nested imports like `use local.utils.math.calculations` work the same way: `calculations.mi` at `utils/math/calculations.mi` relative to the project root.
+
+### Finding the Stdlib When CWD Matters
+
+If you invoke `miri run /tmp/myproject/main.mi` from the `/` directory (not the repo root), the compiler must find the stdlib. It looks in this order:
+
+1. `MIRI_STDLIB_PATH` environment variable (if you set it to the repo's `src/stdlib`)
+2. A `stdlib/` directory next to the `miri` binary
+3. Install prefix paths (`<prefix>/lib/miri/stdlib`)
+4. **Manifest directory**: `src/stdlib` relative to the repo at build time (automatic fallback)
+
+The fourth rule makes `miri run` work from any directory without `MIRI_STDLIB_PATH`, as long as the `miri` binary was built from the repo. If the stdlib is not found, the error will list all the roots that were searched and mention `MIRI_STDLIB_PATH` as an override.
+
 ## Verification Loop
 
 After writing or editing any `.mi` file, always run:
