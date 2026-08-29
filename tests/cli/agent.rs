@@ -175,6 +175,7 @@ fn test_the_handshake_names_served_and_reserved_methods_apart() {
     assert!(served.contains(&json!("fixApply")));
     assert!(served.contains(&json!("view")));
     assert!(served.contains(&json!("patch")));
+    assert!(served.contains(&json!("skillsGet")));
     assert!(reserved.contains(&json!("tokens")));
     for method in served {
         assert!(
@@ -320,6 +321,78 @@ fn test_an_unknown_code_is_answered_as_a_diagnostic() {
     assert_eq!(
         response["result"]["diagnostics"][0]["code"],
         json!("MER_BLD_001")
+    );
+    session.finish();
+}
+
+#[test]
+fn test_skills_get_answers_with_the_same_text_the_command_line_writes() {
+    let directory = project("skills", &[]);
+    let mut session = Session::start(directory.path());
+
+    let one = session.call(1, "skillsGet", json!({ "name": "miri-lang" }));
+    let skills = one["result"]["skills"]
+        .as_array()
+        .expect("the answer carries the skill");
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0]["name"], json!("miri-lang"));
+
+    // A tool driving the compiler must read the same skill a person does.
+    let printed = crate::utils::miri_cmd()
+        .args(["skill", "show", "miri-lang"])
+        .output()
+        .expect("the skill command runs");
+    let shown = String::from_utf8_lossy(&printed.stdout).into_owned();
+    assert_eq!(skills[0]["body"], json!(crate::cli::skill::body_of(&shown)));
+
+    let all = session.call(2, "skillsGet", json!({}));
+    assert_eq!(
+        all["result"]["skills"]
+            .as_array()
+            .expect("the whole catalogue comes back")
+            .len(),
+        skills.len() + 2
+    );
+    session.finish();
+}
+
+#[test]
+fn test_skills_get_refuses_a_name_that_is_not_a_string() {
+    let directory = project("skills-typed", &[]);
+    let mut session = Session::start(directory.path());
+
+    // Reading a wrong-typed name as an absent one would hand back the whole
+    // catalogue to a caller that asked for one skill, and call it success.
+    for wrong in [
+        json!(123),
+        json!(["miri-lang"]),
+        json!({ "name": "miri-lang" }),
+    ] {
+        let answer = session.call(1, "skillsGet", json!({ "name": wrong }));
+        assert_eq!(answer["error"]["code"], json!(-32602));
+    }
+
+    let null_name = session.call(2, "skillsGet", json!({ "name": null }));
+    assert_eq!(
+        null_name["result"]["skills"]
+            .as_array()
+            .expect("a null name reads as no name")
+            .len(),
+        3
+    );
+    session.finish();
+}
+
+#[test]
+fn test_skills_get_refuses_a_name_it_does_not_carry() {
+    let directory = project("skills-unknown", &[]);
+    let mut session = Session::start(directory.path());
+
+    let answer = session.call(1, "skillsGet", json!({ "name": "not-a-skill" }));
+    assert_eq!(answer["result"]["ok"], json!(false));
+    assert_eq!(
+        answer["result"]["diagnostics"][0]["code"],
+        json!("MER_BLD_013")
     );
     session.finish();
 }

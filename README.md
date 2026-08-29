@@ -144,11 +144,16 @@ Miri ships with a skill pack for code-generation agents — Claude Code, Cursor,
 
 ### Install for Your Agent
 
-```bash
-# Claude Code
-npx skills add <path-to-miri> --skill miri-lang
+The compiler bundles skills that match its version, so you never use outdated documentation:
 
-# Or copy directly to your `.claude/skills/` directory
+```bash
+# From the installed compiler (recommended)
+miri skill install --agent claude
+
+# Via the skills package manager
+npx skills add <github-org>/miri
+
+# Manual copy from the repository
 cp skills/miri-{lang,gpu,testing}/SKILL.md ~/.claude/skills/
 ```
 

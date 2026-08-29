@@ -15,6 +15,7 @@ pub mod help;
 pub mod json_envelope;
 pub mod patch;
 pub mod run;
+pub mod skill;
 pub mod test_cmd;
 pub mod version;
 pub mod view;

@@ -10,6 +10,7 @@ pub mod explain;
 pub mod fix;
 pub mod patch;
 pub mod resolve;
+pub mod skill;
 pub mod token_align;
 pub mod version;
 pub mod view;
@@ -47,5 +48,27 @@ pub fn sanitize_for_terminal(argument: &str) -> String {
         .collect()
 }
 
-pub use args::{BuildTarget, Cli, ColorMode, Commands, CpuBackend, DeterminismCommand, Format};
-pub use version::{version_ref, version_string};
+/// Build a diagnostic that carries a registry code but no source position.
+///
+/// A command-invocation failure has no span to point at: the fault is in what
+/// was asked for, not in a place in a file. The code and the help line are what
+/// make it actionable instead.
+pub fn coded(
+    code: crate::diagnostics::DiagnosticCode,
+    message: String,
+    help: &str,
+) -> Box<crate::error::diagnostic::Diagnostic> {
+    Box::new(
+        crate::error::diagnostic::DiagnosticBuilder::error(code.title().to_string())
+            .code(code.as_str())
+            .message(message)
+            .help(help.to_string())
+            .build(),
+    )
+}
+
+pub use args::{
+    AgentFlavor, BuildTarget, Cli, ColorMode, Commands, CpuBackend, DeterminismCommand, Format,
+    SkillCommand,
+};
+pub use version::{crate_version, version_ref, version_string};

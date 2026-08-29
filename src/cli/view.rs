@@ -20,12 +20,12 @@ use crate::ast::doc_comments::DocComments;
 use crate::ast::formatter::{self, Rendered};
 use crate::ast::statement::StatementKind;
 use crate::ast::{Program, Statement};
-use crate::cli::{resolve, sanitize_for_terminal, serialize_envelope, ColorMode, Format};
+use crate::cli::{coded, resolve, sanitize_for_terminal, serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{
     DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonView, JsonViewSpan,
 };
 use crate::diagnostics::DiagnosticCode;
-use crate::error::diagnostic::{to_json, Diagnostic, DiagnosticBuilder, Reportable};
+use crate::error::diagnostic::{to_json, Diagnostic, Reportable};
 use crate::error::format::format_diagnostic_with_color;
 use crate::error::type_error::TypeError;
 use crate::lexer::Lexer;
@@ -375,16 +375,6 @@ fn anchor_not_unique(anchor: &str, count: usize) -> Box<Diagnostic> {
 }
 
 /// Build a diagnostic carrying a registry code.
-fn coded(code: DiagnosticCode, message: String, help: &str) -> Box<Diagnostic> {
-    Box::new(
-        DiagnosticBuilder::error(code.title().to_string())
-            .code(code.as_str())
-            .message(message)
-            .help(help.to_string())
-            .build(),
-    )
-}
-
 /// Report a file that could not be opened.
 ///
 /// A caller that asked for JSON gets an envelope: answering a machine with a
