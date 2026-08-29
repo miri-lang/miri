@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless
+.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -171,3 +171,10 @@ evals-replay: runtimes
 # stays a record of the current cost rather than a high-water mark.
 evals-bless: runtimes
 	MIRI_EVALS_BLESS=1 cargo test --test mod evals
+
+# Validate agent skills: every code block in `skills/**/SKILL.md` compiles or
+# fails with the expected diagnostic code. This gate prevents skills from teaching
+# syntax the compiler rejects. The same harness runs as part of `make test`;
+# this target is the named entry point for running it directly.
+skills-check:
+	cargo test --test mod skills
