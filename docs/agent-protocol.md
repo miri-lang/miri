@@ -64,8 +64,8 @@ Opens a session and describes the build serving it. Takes no parameters.
 {
   "serverInfo": { "name": "miri", "version": "0.6.0-beta.4", "schemaVersion": 1 },
   "capabilities": {
-    "methods": ["initialize", "check", "explain", "fixPlan", "fixApply"],
-    "reservedMethods": ["view", "patch", "tokens", "parse", "graph", "skillsGet", "targets", "doctor"],
+    "methods": ["initialize", "check", "explain", "fixPlan", "fixApply", "view", "patch", "skillsGet"],
+    "reservedMethods": ["tokens", "parse", "graph", "targets", "doctor"],
     "cancellation": true
   }
 }
@@ -74,6 +74,11 @@ Opens a session and describes the build serving it. Takes no parameters.
 `serverInfo.schemaVersion` is the version of the envelope every result on this
 session carries — the same number `miri check --format json` emits. A client
 compares it against the schema it was written for.
+
+A version gains optional fields and new `command` values as commands land, so a
+client must ignore members it does not recognise. The number changes only when
+a field it already reads changes shape or meaning, which is what makes it worth
+comparing at all.
 
 Calling `initialize` is not required before other methods.
 
@@ -124,9 +129,27 @@ Only the file named in `path` is written. A repair for a diagnostic raised
 inside an imported file is reported and skipped, because the caller never named
 that file.
 
+### `skillsGet`
+
+`{ "name": "miri-lang" }` → a `skill` envelope carrying `skills`. Without a
+`name`, every skill this build carries comes back.
+
+Each entry is `{ "name", "description", "compilerVersion", "body" }`. The body
+is the skill's markdown with its header removed, and it is the same text
+`miri skill show` writes, so a tool reading skills over a session and a person
+reading them at a terminal cannot be taught different things.
+
+The skills are compiled into the binary, which is the point of serving them
+here: `compilerVersion` is the version of the compiler answering, so an agent's
+model of the language cannot drift from what this build accepts.
+
+A name the build does not carry is answered as a diagnostic carrying
+`MER_BLD_013` with `ok: false`, not as a protocol error — the same shape the
+command line reports it in.
+
 ### Reserved methods
 
-`view`, `patch`, `tokens`, `parse`, `graph`, `skillsGet`, `targets`, and
+`tokens`, `parse`, `graph`, `targets`, and
 `doctor` are known by name and not yet served. They answer `-32601` with
 `data.reserved: true`, so a client can tell a method that is coming from one it
 misspelled and say so to its user. An unknown method answers `-32601` with

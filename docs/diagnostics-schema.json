@@ -6,7 +6,7 @@
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "description": "Version of this schema. Currently 1.",
+      "description": "Version of this schema. Currently 1. A version gains optional fields and new `command` values as commands land, so a consumer must ignore members it does not recognise; the number changes only when an existing field changes shape or meaning.",
       "minimum": 1
     },
     "ok": {
@@ -15,7 +15,7 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', or 'view'.",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', 'view', 'patch', or 'skill'.",
       "enum": [
         "check",
         "build",
@@ -24,7 +24,9 @@
         "explain",
         "fix",
         "determinism",
-        "view"
+        "view",
+        "patch",
+        "skill"
       ]
     },
     "diagnostics": {
@@ -114,6 +116,16 @@
       ],
       "description": "Patch results: applied edits and revalidation count (patch command only). Absent or null for other commands.",
       "$ref": "#/$defs/JsonPatch"
+    },
+    "skills": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Skills from the embedded catalogue (skill command only). Absent or null for other commands.",
+      "items": {
+        "$ref": "#/$defs/JsonSkill"
+      }
     }
   },
   "required": [
@@ -604,6 +616,50 @@
         "start",
         "end",
         "replacement"
+      ]
+    },
+    "JsonSkill": {
+      "type": "object",
+      "description": "A skill from the embedded catalogue.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Skill name."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line description of the skill."
+        },
+        "compilerVersion": {
+          "type": "string",
+          "description": "Compiler version stamped into the skill."
+        },
+        "installedPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Path where the skill was installed (install command only). Absent or null for list command."
+        },
+        "unchanged": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the target file already held exactly this text and was not rewritten (install command only). Absent or null for the list command."
+        },
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The skill's markdown body, without its header (the skillsGet agent method only). Absent or null for the list and install commands."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "compilerVersion"
       ]
     }
   }

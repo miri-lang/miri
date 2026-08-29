@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::cli::{check, explain, fix, patch, version_string, view};
+use crate::cli::{check, explain, fix, patch, skill, version_string, view};
 use crate::diagnostics::rpc::{
     InitializeResult, RpcId, RpcRequest, RpcResponse, ServerCapabilities, ServerInfo,
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, REQUEST_CANCELLED,
@@ -47,6 +47,7 @@ const SERVED_METHODS: &[&str] = &[
     "fixApply",
     "view",
     "patch",
+    "skillsGet",
 ];
 
 /// The methods this build knows by name but does not yet answer.
@@ -54,7 +55,7 @@ const SERVED_METHODS: &[&str] = &[
 /// Naming them is what lets a client tell a method that is coming from one it
 /// misspelled. Each is the surface of a task that has not landed; a method
 /// moves from here to [`SERVED_METHODS`] when its command exists.
-const RESERVED_METHODS: &[&str] = &["tokens", "parse", "graph", "skillsGet", "targets", "doctor"];
+const RESERVED_METHODS: &[&str] = &["tokens", "parse", "graph", "targets", "doctor"];
 
 /// The largest message body this session will accept.
 ///
@@ -366,6 +367,7 @@ fn dispatch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         "fixApply" => run_fix(request, id, true),
         "view" => run_view(request, id),
         "patch" => run_patch(request, id),
+        "skillsGet" => run_skills_get(request, id),
         method if RESERVED_METHODS.contains(&method) => RpcResponse::failure(
             id,
             METHOD_NOT_FOUND,
@@ -427,6 +429,32 @@ fn run_explain(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         );
     };
     serialize(id, &explain::envelope(&code))
+}
+
+/// Answer with the skills this build carries.
+///
+/// A `name` parameter picks one; without it the whole catalogue comes back.
+/// Each entry carries its body, because the caller cannot read the files this
+/// binary was built from.
+fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
+    // A `name` that is present but not a string is a request this method
+    // cannot answer. Reading it as an absent name would hand back the whole
+    // catalogue to a caller that asked for one skill, and say it succeeded.
+    let named = request
+        .params
+        .as_ref()
+        .and_then(|params| params.get("name"))
+        .filter(|value| !value.is_null());
+    if named.is_some_and(|value| !value.is_string()) {
+        return RpcResponse::failure(
+            id,
+            INVALID_PARAMS,
+            "skillsGet takes a `name` parameter that is a string",
+        );
+    }
+
+    let name = string_param(request, "name");
+    serialize(id, &skill::agent_envelope(name.as_deref()))
 }
 
 /// Read part of the file the request names.

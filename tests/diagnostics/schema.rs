@@ -221,6 +221,14 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             revalidations: 1,
             file_written: true,
         }),
+        skills: Some(vec![miri::diagnostics::json::JsonSkill {
+            name: "miri-lang".to_string(),
+            description: "Writing Miri source files".to_string(),
+            compiler_version: "0.6.0-beta.4".to_string(),
+            installed_path: Some(".claude/skills/miri-lang/SKILL.md".to_string()),
+            unchanged: Some(false),
+            body: Some("# Miri Language Essentials\n".to_string()),
+        }]),
     }
 }
 

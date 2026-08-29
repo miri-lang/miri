@@ -39,6 +39,27 @@ impl From<ColorMode> for crate::error::format::ColorChoice {
     }
 }
 
+/// Agent configuration flavor for skill installation.
+///
+/// Specifies where skills are installed based on which agent tool uses them:
+/// - `claude` → `.claude/skills/<name>/SKILL.md` (Claude Code reads this path)
+/// - `agents`, `cursor`, `codex` → `.agents/skills/<name>/SKILL.md` (vendor-neutral path used by Cursor, Codex, OpenCode, Windsurf, Gemini CLI)
+/// - `generic` → `skills/<name>/SKILL.md` (generic project-local path)
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentFlavor {
+    /// Claude Code (`claude` tool)
+    #[default]
+    Claude,
+    /// Vendor-neutral agents path (used by Cursor, Codex, OpenCode, Windsurf, Gemini CLI)
+    Agents,
+    /// Cursor (alias for `agents` path)
+    Cursor,
+    /// Codex (alias for `agents` path)
+    Codex,
+    /// Generic project-local path
+    Generic,
+}
+
 /// Top-level CLI argument definition parsed by clap.
 #[derive(Parser, Debug)]
 #[command(name = "miri", version = version_ref(), about = "Miri Compiler", author = "Slavik Shynkarenko <slavik@slavikdev.com>")]
@@ -201,6 +222,10 @@ pub enum Commands {
         format: Format,
     },
 
+    /// Manage embedded skills for AI agents
+    #[command(subcommand)]
+    Skill(SkillCommand),
+
     /// Verify that build artifacts are byte-reproducible
     #[command(subcommand)]
     Determinism(DeterminismCommand),
@@ -279,6 +304,52 @@ pub enum Commands {
         /// Print the diff without writing
         #[arg(long, action = ArgAction::SetTrue)]
         dry_run: bool,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillCommand {
+    /// List all available skills
+    List {
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
+
+    /// Show a skill's content
+    Show {
+        /// Name of the skill to display
+        #[arg(required = true)]
+        name: String,
+
+        /// Format for a failure. The skill itself is always written as the
+        /// markdown it is, so the output can be redirected into place; this
+        /// chooses how a name that is not in the catalogue is reported.
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
+
+    /// Install one or more skills to an agent's configuration directory
+    Install {
+        /// Names of skills to install (all skills if empty)
+        #[arg()]
+        names: Vec<String>,
+
+        /// Agent configuration flavor
+        #[arg(long, value_enum, default_value_t = AgentFlavor::Claude)]
+        agent: AgentFlavor,
+
+        /// Target root directory for installation
+        #[arg(long, default_value = ".")]
+        target: PathBuf,
+
+        /// Overwrite locally-modified files without prompting
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        force: bool,
 
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]

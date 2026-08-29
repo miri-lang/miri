@@ -6,7 +6,8 @@ use clap::{CommandFactory, Parser};
 use std::fs;
 use std::path::PathBuf;
 
-use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format};
+use miri::cli::skill;
+use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillCommand};
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
 use miri::error::diagnostic::to_json;
 use miri::pipeline::{BuildOptions, Pipeline};
@@ -136,6 +137,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     cli.color,
                 ),
             },
+            Commands::Skill(cmd) => skill_command(cmd, cli.color),
         },
         None => {
             Cli::command().print_help()?;
@@ -586,4 +588,23 @@ fn check_determinism(
         miri::cli::determinism::Outcome::NonDeterministicArtifacts => std::process::exit(1),
         miri::cli::determinism::Outcome::BuildFailed => std::process::exit(1),
     }
+}
+
+fn skill_command(cmd: SkillCommand, color_mode: ColorMode) -> Result<()> {
+    let outcome = match cmd {
+        SkillCommand::List { format } => skill::run_list(format, color_mode),
+        SkillCommand::Show { name, format } => skill::run_show(&name, format, color_mode),
+        SkillCommand::Install {
+            names,
+            agent,
+            target,
+            force,
+            format,
+        } => skill::run_install(&names, agent, &target, force, format, color_mode),
+    };
+
+    if outcome == skill::Outcome::Failed {
+        std::process::exit(outcome.exit_code());
+    }
+    Ok(())
 }

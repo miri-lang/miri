@@ -56,6 +56,9 @@ pub struct DiagnosticsEnvelope {
     /// Patch results: applied edits and revalidation count (patch command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch: Option<JsonPatch>,
+    /// Skills from the embedded catalogue (skill command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<JsonSkill>>,
 }
 
 impl DiagnosticsEnvelope {
@@ -78,6 +81,7 @@ impl DiagnosticsEnvelope {
             explanation: None,
             view: None,
             patch: None,
+            skills: None,
         }
     }
 
@@ -134,6 +138,12 @@ impl DiagnosticsEnvelope {
     /// Set the patch results.
     pub fn with_patch(mut self, patch: JsonPatch) -> Self {
         self.patch = Some(patch);
+        self
+    }
+
+    /// Set the skills list.
+    pub fn with_skills(mut self, skills: Vec<JsonSkill>) -> Self {
+        self.skills = Some(skills);
         self
     }
 }
@@ -204,6 +214,7 @@ pub enum JsonCommand {
     View,
     Patch,
     Determinism,
+    Skill,
 }
 
 /// A single diagnostic (error, warning, or note).
@@ -376,4 +387,29 @@ pub struct JsonRejectedFile {
     /// Rejection reason: unparseable, declares_main, or top_level_statements.
     /// These values come from the RejectionReason enum's snake_case serialization.
     pub reason: String,
+}
+
+/// A skill from the embedded catalogue.
+///
+/// Which members are present says which caller asked: `installedPath` and
+/// `unchanged` come from writing a skill out, `body` from a request that
+/// carries the text itself, and the rest are always there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonSkill {
+    /// Skill name
+    pub name: String,
+    /// One-line description
+    pub description: String,
+    /// Compiler version
+    pub compiler_version: String,
+    /// Path where the skill was installed (install command only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_path: Option<String>,
+    /// True if the file was identical and not rewritten (install command only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchanged: Option<bool>,
+    /// The skill's markdown body, without its header (`skillsGet` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }

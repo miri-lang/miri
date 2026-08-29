@@ -31,8 +31,8 @@ This writes skills to `.claude/skills/<name>/SKILL.md` so they're immediately av
 
 ### For Other Agents
 
-- **Cursor:** `miri skill install --agent cursor`
-- **Codex/Generic:** `miri skill install --agent generic` (writes to plain `skills/<name>/SKILL.md`)
+- **Cursor/Codex/OpenCode/Windsurf/Gemini CLI:** `miri skill install --agent agents` (writes to `.agents/skills/<name>/SKILL.md`, the vendor-neutral path)
+- **Generic/Project-Local:** `miri skill install --agent generic` (writes to `skills/<name>/SKILL.md`)
 
 ### Manual Install via `npx skills add`
 

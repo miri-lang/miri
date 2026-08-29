@@ -3,6 +3,14 @@
 
 use std::sync::OnceLock;
 
+/// The compiler's crate version on its own.
+///
+/// [`version_string`] adds the platform it was built for, which belongs in a
+/// bug report rather than in a file that reads the same everywhere.
+pub fn crate_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Get version string for display.
 pub fn version_string() -> String {
     let version = env!("CARGO_PKG_VERSION");
