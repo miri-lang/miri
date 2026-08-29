@@ -196,7 +196,7 @@ pub fn patch(
             Ok(written) => written,
             Err(diagnostic) => return refusal(vec![*diagnostic], validated.source, source_path, 1),
         };
-        return applied_report(
+        return accepted_report(
             Applied {
                 edits: validated.applied,
                 warnings: validated.checked_edited.warnings,
@@ -208,13 +208,14 @@ pub fn patch(
                 path: source_path,
             },
             matches!(mode, Mode::DryRun).then_some(path),
+            PreexistingErrors::none(),
         );
     }
 
     let checked_baseline = check_source(path, &validated.source);
     let partitioned = partition_errors_against_baseline(
-        &checked_baseline.diagnostics,
-        &validated.checked_edited.diagnostics,
+        &checked_baseline.errors,
+        &validated.checked_edited.errors,
         &validated.source,
         &validated.edited,
         source_path.as_deref(),
@@ -224,9 +225,8 @@ pub fn patch(
         return reject_with_errors(
             validated.edited,
             source_path,
-            partitioned.new_errors,
-            partitioned.preexisting_json,
-            &validated.checked_edited.diagnostics,
+            partitioned,
+            &validated.checked_edited,
         );
     }
 
@@ -247,8 +247,7 @@ pub fn patch(
             path: source_path,
         },
         matches!(mode, Mode::DryRun).then_some(path),
-        partitioned.preexisting_json,
-        partitioned.preexisting_diagnostics,
+        partitioned.preexisting,
     )
 }
 
@@ -297,84 +296,113 @@ struct Texts {
     path: Option<String>,
 }
 
+/// The errors an edit left in place, in both renderings.
+struct PreexistingErrors {
+    /// The errors as a machine consumer receives them.
+    json: Vec<JsonDiagnostic>,
+    /// The same errors as the compiler reported them, for rendering.
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl PreexistingErrors {
+    /// The empty set, for an edit over a file that already checked.
+    fn none() -> Self {
+        PreexistingErrors {
+            json: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+}
+
 /// Errors partitioned against a baseline.
 struct PartitionedErrors {
     /// Errors that did not exist before the edit.
     new_errors: Vec<JsonDiagnostic>,
-    /// Errors that existed before, as JSON.
-    preexisting_json: Vec<JsonDiagnostic>,
-    /// Errors that existed before, as Diagnostic objects for pretty printing.
-    preexisting_diagnostics: Vec<Diagnostic>,
+    /// Errors that existed before the edit.
+    preexisting: PreexistingErrors,
 }
 
-/// Build the report for a batch that applied and checked.
-fn applied_report(applied: Applied, texts: Texts, diff_for: Option<&Path>) -> PatchReport {
-    let warnings = applied
-        .warnings
-        .iter()
-        .map(|diagnostic| to_json(diagnostic, &texts.after, texts.path.as_deref()))
-        .collect::<Vec<JsonDiagnostic>>();
-    let envelope = DiagnosticsEnvelope::new(JsonCommand::Patch, true, warnings)
-        .with_exit_code(0)
-        .with_patch(JsonPatch {
-            edits: applied.edits,
-            revalidations: 1,
-            file_written: applied.file_was_written,
-        });
-    let diff = diff_for.map(|path| unified_diff(path, &texts.before, &texts.after));
+/// The parts every report is assembled from.
+struct ReportParts {
+    /// Whether the request was answered.
+    ok: bool,
+    /// The diagnostics as a machine consumer receives them.
+    json_diagnostics: Vec<JsonDiagnostic>,
+    /// The edits that were applied, empty when nothing was.
+    edits: Vec<JsonPatchEdit>,
+    /// How many times the edited program was checked.
+    revalidations: u32,
+    /// Whether the file on disk was replaced.
+    file_written: bool,
+    /// The difference the edits make, present only for a dry run.
+    diff: Option<String>,
+    /// The diagnostics as the compiler reported them.
+    diagnostics: Vec<Diagnostic>,
+    /// The text the diagnostics are rendered against.
+    source: String,
+    /// The path the diagnostics were reported against.
+    source_path: Option<String>,
+}
 
+/// Assemble a report from its parts.
+///
+/// Every exit from the command comes through here, so the exit code and the
+/// `ok` flag cannot disagree and `fileWritten` cannot drift from what the
+/// report says about the file.
+fn report(parts: ReportParts) -> PatchReport {
+    let exit_code = if parts.ok { 0 } else { 1 };
     PatchReport {
-        envelope,
-        file_was_written: applied.file_was_written,
-        diff,
-        diagnostics: Vec::new(),
-        source: texts.before,
-        source_path: texts.path,
+        envelope: DiagnosticsEnvelope::new(JsonCommand::Patch, parts.ok, parts.json_diagnostics)
+            .with_exit_code(exit_code)
+            .with_patch(JsonPatch {
+                edits: parts.edits,
+                revalidations: parts.revalidations,
+                file_written: parts.file_written,
+            }),
+        file_was_written: parts.file_written,
+        diff: parts.diff,
+        diagnostics: parts.diagnostics,
+        source: parts.source,
+        source_path: parts.source_path,
     }
 }
 
-/// Build the report for an accepted batch with pre-existing errors.
+/// Build the report for a batch that applied, together with any pre-existing
+/// errors the edit left in place.
+///
+/// An edit over a clean file is the same report with nothing pre-existing, so
+/// both outcomes share one builder.
 fn accepted_report(
     applied: Applied,
     texts: Texts,
     diff_for: Option<&Path>,
-    preexisting_json: Vec<JsonDiagnostic>,
-    preexisting_diags: Vec<Diagnostic>,
+    preexisting: PreexistingErrors,
 ) -> PatchReport {
-    let mut diagnostics_json = preexisting_json;
-    for diag in diagnostics_json.iter_mut() {
-        diag.preexisting = Some(true);
+    let mut json_diagnostics = preexisting.json;
+    for diagnostic in json_diagnostics.iter_mut() {
+        diagnostic.preexisting = Some(true);
     }
+    json_diagnostics.extend(
+        applied
+            .warnings
+            .iter()
+            .map(|diagnostic| to_json(diagnostic, &texts.after, texts.path.as_deref())),
+    );
 
-    let warnings = applied
-        .warnings
-        .iter()
-        .map(|diagnostic| to_json(diagnostic, &texts.after, texts.path.as_deref()))
-        .collect::<Vec<JsonDiagnostic>>();
-    // Warnings accompany a successful check only, and check_source yields none
-    // when the check fails. So whenever pre-existing errors remain after an
-    // edit, this list is necessarily empty.
+    let mut diagnostics = preexisting.diagnostics;
+    diagnostics.extend(applied.warnings);
 
-    let mut all_diags = diagnostics_json;
-    all_diags.extend(warnings);
-
-    let envelope = DiagnosticsEnvelope::new(JsonCommand::Patch, true, all_diags)
-        .with_exit_code(0)
-        .with_patch(JsonPatch {
-            edits: applied.edits,
-            revalidations: 1,
-            file_written: applied.file_was_written,
-        });
-    let diff = diff_for.map(|path| unified_diff(path, &texts.before, &texts.after));
-
-    PatchReport {
-        envelope,
-        file_was_written: applied.file_was_written,
-        diff,
-        diagnostics: preexisting_diags,
+    report(ReportParts {
+        ok: true,
+        json_diagnostics,
+        edits: applied.edits,
+        revalidations: 1,
+        file_written: applied.file_was_written,
+        diff: diff_for.map(|path| unified_diff(path, &texts.before, &texts.after)),
+        diagnostics,
         source: texts.after,
         source_path: texts.path,
-    }
+    })
 }
 
 /// Refuse a request that names nothing to do, or that was prepared against a
@@ -417,103 +445,88 @@ fn fold_operations(
     Ok((edited, applied))
 }
 
-/// Reject an edit that introduced new errors, with all diagnostics.
+/// Reject an edit that introduced new errors, reporting every diagnostic of the
+/// edited program.
+///
+/// Positions are the edited program's, and so is the text they are rendered
+/// against, even though that text never reached disk.
 fn reject_with_errors(
     source_for_rendering: String,
     source_path: Option<String>,
-    new_errors: Vec<JsonDiagnostic>,
-    preexisting_json: Vec<JsonDiagnostic>,
-    edited_diagnostics: &[Diagnostic],
+    partitioned: PartitionedErrors,
+    checked_edited: &Checked,
 ) -> PatchReport {
-    let mut all_json_diags = vec![to_json(
-        &rejected_edit(),
-        &source_for_rendering,
-        source_path.as_deref(),
-    )];
+    let notice = rejected_edit();
+    let as_json = |diagnostic: &Diagnostic| {
+        to_json(diagnostic, &source_for_rendering, source_path.as_deref())
+    };
 
-    for mut new_err in new_errors {
-        new_err.preexisting = Some(false);
-        all_json_diags.push(new_err);
+    let mut json_diagnostics = vec![as_json(&notice)];
+    for mut new_error in partitioned.new_errors {
+        new_error.preexisting = Some(false);
+        json_diagnostics.push(new_error);
     }
-
-    for mut pre_err in preexisting_json {
-        pre_err.preexisting = Some(true);
-        all_json_diags.push(pre_err);
+    for mut old_error in partitioned.preexisting.json {
+        old_error.preexisting = Some(true);
+        json_diagnostics.push(old_error);
     }
+    json_diagnostics.extend(checked_edited.warnings.iter().map(as_json));
 
-    let mut diagnostics = vec![rejected_edit()];
-    for diag in edited_diagnostics {
-        diagnostics.push(diag.clone());
-    }
+    let mut diagnostics = vec![notice];
+    diagnostics.extend(checked_edited.warnings.iter().cloned());
+    diagnostics.extend(checked_edited.errors.iter().cloned());
 
-    PatchReport {
-        envelope: DiagnosticsEnvelope::new(JsonCommand::Patch, false, all_json_diags)
-            .with_exit_code(1)
-            .with_patch(JsonPatch {
-                edits: Vec::new(),
-                revalidations: 1,
-                file_written: false,
-            }),
-        file_was_written: false,
+    report(ReportParts {
+        ok: false,
+        json_diagnostics,
+        edits: Vec::new(),
+        revalidations: 1,
+        file_written: false,
         diff: None,
         diagnostics,
         source: source_for_rendering,
         source_path,
-    }
+    })
 }
 
 /// Partition edited errors into new vs. pre-existing, comparing against baseline.
 fn partition_errors_against_baseline(
-    baseline_diagnostics: &[Diagnostic],
-    edited_diagnostics: &[Diagnostic],
+    baseline_errors: &[Diagnostic],
+    edited_errors: &[Diagnostic],
     source_before: &str,
     source_after: &str,
     source_path: Option<&str>,
 ) -> PartitionedErrors {
-    let baseline_errors: HashSet<_> = baseline_diagnostics
+    let baseline: HashSet<_> = baseline_errors
         .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .map(|d| to_json(d, source_before, source_path))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .map(|j| diagnostic_fingerprint(&j, false))
-        .collect();
-
-    let edited_errors: Vec<_> = edited_diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .map(|d| to_json(d, source_after, source_path))
+        .map(|diagnostic| to_json(diagnostic, source_before, source_path))
+        .map(|json| diagnostic_fingerprint(&json, false))
         .collect();
 
     let line_map = build_line_map(source_before, source_after);
 
     let mut new_errors = Vec::new();
-    let mut preexisting_json = Vec::new();
-    let mut preexisting_diagnostics = Vec::new();
+    let mut preexisting = PreexistingErrors::none();
 
-    for (diag, json_diag) in edited_diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .zip(&edited_errors)
-    {
+    for diagnostic in edited_errors {
+        let json_diagnostic = to_json(diagnostic, source_after, source_path);
         let (is_in_changed_run, mapped) =
-            map_diagnostic_line_with_status(json_diag, &line_map, source_path);
+            map_diagnostic_line_with_status(&json_diagnostic, &line_map, source_path);
         let fingerprint = diagnostic_fingerprint(&mapped, is_in_changed_run);
 
-        if baseline_errors.contains(&fingerprint) {
-            // Report the unmapped diagnostic (with edited file's line numbers),
-            // but use the mapped one only for fingerprinting comparison.
-            preexisting_json.push(json_diag.clone());
-            preexisting_diagnostics.push(diag.clone());
+        if baseline.contains(&fingerprint) {
+            // The mapped copy serves the comparison only. What is reported is
+            // the unmapped one, whose line is the edited file's.
+            preexisting.json.push(json_diagnostic);
+            preexisting.diagnostics.push(diagnostic.clone());
         } else {
-            new_errors.push(json_diag.clone());
+            new_errors.push(json_diagnostic);
         }
     }
 
     PartitionedErrors {
         new_errors,
-        preexisting_json,
-        preexisting_diagnostics,
+        preexisting,
     }
 }
 
@@ -774,8 +787,8 @@ struct Checked {
     /// Whether the frontend succeeded. Warnings do not make this false.
     ok: bool,
     /// The errors the frontend reported.
-    diagnostics: Vec<Diagnostic>,
-    /// The warnings a successful check reported.
+    errors: Vec<Diagnostic>,
+    /// The warnings the frontend reported, whether or not it succeeded.
     warnings: Vec<Diagnostic>,
 }
 
@@ -794,14 +807,22 @@ fn check_source(path: &Path, source: &str) -> Checked {
     match outcome {
         Ok(result) => Checked {
             ok: true,
-            diagnostics: Vec::new(),
+            errors: Vec::new(),
             warnings: result.type_checker.warnings().to_vec(),
         },
-        Err(error) => Checked {
-            ok: false,
-            diagnostics: error.to_diagnostics(),
-            warnings: Vec::new(),
-        },
+        Err(error) => {
+            // A failed check reports its warnings alongside its errors, so the
+            // two are told apart here rather than lost.
+            let (warnings, errors) = error
+                .to_diagnostics()
+                .into_iter()
+                .partition(|diagnostic| diagnostic.severity == Severity::Warning);
+            Checked {
+                ok: false,
+                errors,
+                warnings,
+            }
+        }
     }
 }
 
@@ -925,25 +946,22 @@ fn refusal(
     source_path: Option<String>,
     revalidations: u32,
 ) -> PatchReport {
-    let json = diagnostics
+    let json_diagnostics = diagnostics
         .iter()
         .map(|diagnostic| to_json(diagnostic, &source, source_path.as_deref()))
         .collect::<Vec<JsonDiagnostic>>();
 
-    PatchReport {
-        envelope: DiagnosticsEnvelope::new(JsonCommand::Patch, false, json)
-            .with_exit_code(1)
-            .with_patch(JsonPatch {
-                edits: Vec::new(),
-                revalidations,
-                file_written: false,
-            }),
-        file_was_written: false,
+    report(ReportParts {
+        ok: false,
+        json_diagnostics,
+        edits: Vec::new(),
+        revalidations,
+        file_written: false,
         diff: None,
         diagnostics,
         source,
         source_path,
-    }
+    })
 }
 
 /// Line status in a diagnostic fingerprint.

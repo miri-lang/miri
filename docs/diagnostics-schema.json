@@ -243,7 +243,7 @@
             "boolean",
             "null"
           ],
-          "description": "True if this diagnostic existed in the pre-edited version (patch command only). False if the edit introduced it. Absent or null for commands other than patch, or for a patch command's own refusal notice (e.g., MER_BLD_011)."
+          "description": "True if this diagnostic existed in the pre-edited version (patch command only). False if the edit introduced it. Absent or null for commands other than patch, for a patch command's own refusal notice (e.g., MER_BLD_011), or for a warning, which is never partitioned against the pre-edited version."
         }
       },
       "required": [
