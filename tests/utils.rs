@@ -256,6 +256,133 @@ pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum WorkingDirMode {
+    ProjectRoot,
+    ProjectParent,
+    FilesystemRoot,
+}
+
+/// Run a multi-file Miri project with any command from a specified working directory.
+///
+/// `files` is a slice of `(relative_path, content)` pairs. The first file is
+/// used as the entry point for "run" and "check" commands. All files are written
+/// into a temporary directory. `command` is the Miri subcommand to run
+/// (e.g., "run", "check", "build", or "test"). `working_dir_mode` determines
+/// where to run from (project root, parent, or root filesystem).
+/// `stdlib_path_override` controls which stdlib is used:
+/// - `None`: don't set `MIRI_STDLIB_PATH` (use manifest dir fallback)
+/// - `Some(path)`: set `MIRI_STDLIB_PATH` to the given path
+fn miri_project_with_command_and_cwd(
+    files: &[(&str, &str)],
+    command: &str,
+    working_dir_mode: WorkingDirMode,
+    stdlib_path_override: Option<&std::path::Path>,
+) -> CompilerResult {
+    use std::fs;
+    use tempfile::tempdir;
+
+    assert!(
+        !files.is_empty(),
+        "miri_project_with_command_and_cwd: files list must not be empty"
+    );
+
+    let temp_dir = tempdir().unwrap();
+
+    for (rel_path, content) in files {
+        let file_path = temp_dir.path().join(rel_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, content).unwrap();
+    }
+
+    let entry_file_rel = files[0].0;
+    let entry_file_abs = temp_dir.path().join(entry_file_rel);
+
+    let mut cmd = miri_cmd();
+    cmd.env("RUST_BACKTRACE", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_VERIFY_MIR", "1")
+        .env_remove("MIRI_CC")
+        .env_remove("CC");
+
+    // Conditionally set MIRI_STDLIB_PATH
+    if let Some(stdlib_path) = stdlib_path_override {
+        cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap());
+    } else {
+        cmd.env_remove("MIRI_STDLIB_PATH");
+    }
+
+    // Determine working directory and pass arguments based on command
+    let (working_dir, additional_args) = match working_dir_mode {
+        WorkingDirMode::ProjectRoot => (temp_dir.path().to_path_buf(), Vec::new()),
+        WorkingDirMode::ProjectParent => (
+            temp_dir.path().parent().unwrap().to_path_buf(),
+            vec![entry_file_abs.to_string_lossy().to_string()],
+        ),
+        WorkingDirMode::FilesystemRoot => (
+            PathBuf::from("/"),
+            vec![entry_file_abs.to_string_lossy().to_string()],
+        ),
+    };
+
+    cmd.current_dir(&working_dir).arg(command);
+
+    // Handle command-specific arguments
+    match command {
+        "test" => {
+            // For test command, use --dir to specify the directory
+            let dir_path = if matches!(working_dir_mode, WorkingDirMode::ProjectRoot) {
+                ".".to_string()
+            } else {
+                temp_dir.path().to_string_lossy().to_string()
+            };
+            cmd.arg("--dir").arg(&dir_path);
+        }
+        _ => {
+            // For run and check, pass the file path
+            if !additional_args.is_empty() {
+                cmd.args(&additional_args);
+            } else {
+                cmd.arg(entry_file_rel);
+            }
+        }
+    }
+
+    let output = cmd.output().unwrap();
+
+    CompilerResult {
+        success: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
+pub fn miri_run_project_with_cwd(
+    files: &[(&str, &str)],
+    working_dir_mode: WorkingDirMode,
+    stdlib_path_override: Option<&std::path::Path>,
+) -> CompilerResult {
+    miri_project_with_command_and_cwd(files, "run", working_dir_mode, stdlib_path_override)
+}
+
+pub fn miri_check_project_with_cwd(
+    files: &[(&str, &str)],
+    working_dir_mode: WorkingDirMode,
+    stdlib_path_override: Option<&std::path::Path>,
+) -> CompilerResult {
+    miri_project_with_command_and_cwd(files, "check", working_dir_mode, stdlib_path_override)
+}
+
+pub fn miri_test_project_with_cwd(
+    files: &[(&str, &str)],
+    working_dir_mode: WorkingDirMode,
+    stdlib_path_override: Option<&std::path::Path>,
+) -> CompilerResult {
+    miri_project_with_command_and_cwd(files, "test", working_dir_mode, stdlib_path_override)
+}
+
 /// Strip ANSI escape codes from a string
 pub fn strip_ansi(s: &str) -> String {
     static ANSI_RE: OnceLock<regex::Regex> = OnceLock::new();

@@ -6,6 +6,7 @@ pub use crate::integration::utils;
 pub mod aliases;
 pub mod basic;
 pub mod collisions;
+pub mod cwd_independent;
 pub mod errors;
 pub mod import_validation;
 pub mod project_root;

@@ -382,36 +382,36 @@ impl TypeChecker {
                 vec![(project_root.clone(), project_root.join(&relative_path))]
             } else {
                 let relative_path = path_str.replace('.', "/") + ".mi";
-                let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
-                let exe_dir = std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| exe.parent().map(Path::to_path_buf));
-                let mut locations: Vec<(PathBuf, PathBuf)> =
-                    stdlib_search_roots(env_override, exe_dir.as_deref())
-                        .into_iter()
-                        .map(|base| {
-                            let loc = base.join(&relative_path);
-                            (base, loc)
-                        })
-                        .collect();
+                let mut locations: Vec<(PathBuf, PathBuf)> = get_stdlib_search_roots()
+                    .into_iter()
+                    .map(|base| {
+                        let loc = base.join(&relative_path);
+                        (base, loc)
+                    })
+                    .collect();
+                // Add source_dir (the entry file's directory) as a candidate
+                locations.push((project_root.clone(), project_root.join(&relative_path)));
                 locations.push((current_dir.clone(), current_dir.join(&relative_path)));
                 locations
             };
 
-        for (base, loc) in possible_locations {
+        for (base, loc) in &possible_locations {
             if loc.exists() {
                 if let (Ok(canon_loc), Ok(canon_base)) = (loc.canonicalize(), base.canonicalize()) {
                     if canon_loc.starts_with(&canon_base) {
-                        return Some(loc);
+                        return Some(loc.clone());
                     }
                 }
             }
         }
 
-        self.report_error(
+        // Generate help text listing all searched roots
+        let help = generate_module_search_help(&possible_locations);
+        self.report_error_with_help(
             DiagnosticCode::NamModuleNotFound,
             format!("Module '{}' not found", path_str),
             span,
+            help,
         );
         None
     }
@@ -965,28 +965,30 @@ impl TypeChecker {
     fn prelude_file_imports(
         file_name: &str,
     ) -> Option<Vec<(Box<Expression>, Option<Box<Expression>>)>> {
-        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
+        let stdlib_roots = get_stdlib_search_roots();
 
-        let file_path = stdlib_base.join("system").join(file_name);
-        let source = fs::read_to_string(file_path).ok()?;
-
-        let mut lexer = Lexer::new(&source);
-        let mut parser = Parser::new(&mut lexer, &source);
-        let ast = parser.parse().ok()?;
-
-        Some(
-            ast.body
-                .iter()
-                .filter_map(|stmt| match &stmt.node {
-                    StatementKind::Use(path_expr, alias_expr) => {
-                        Some((path_expr.clone(), alias_expr.clone()))
-                    }
-                    _ => None,
-                })
-                .collect(),
-        )
+        // Try each stdlib root until we find the prelude file
+        for stdlib_base in stdlib_roots {
+            let file_path = stdlib_base.join("system").join(file_name);
+            if let Ok(source) = fs::read_to_string(file_path) {
+                let mut lexer = Lexer::new(&source);
+                let mut parser = Parser::new(&mut lexer, &source);
+                if let Ok(ast) = parser.parse() {
+                    return Some(
+                        ast.body
+                            .iter()
+                            .filter_map(|stmt| match &stmt.node {
+                                StatementKind::Use(path_expr, alias_expr) => {
+                                    Some((path_expr.clone(), alias_expr.clone()))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                    );
+                }
+            }
+        }
+        None
     }
 
     /// Returns the stdlib module path that defines `type_name`, or `None` if
@@ -998,11 +1000,17 @@ impl TypeChecker {
     /// lazy — it runs only on error paths — so its cost is not felt in the
     /// normal (success) compilation path.
     pub(crate) fn suggest_module_for_type(&self, type_name: &str) -> Option<String> {
-        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
+        let stdlib_roots = get_stdlib_search_roots();
 
-        Self::scan_dir_for_class_definition(&stdlib_base, type_name, &stdlib_base)
+        // Try each stdlib root until we find the type
+        for stdlib_base in stdlib_roots {
+            if let Some(module) =
+                Self::scan_dir_for_class_definition(&stdlib_base, type_name, &stdlib_base)
+            {
+                return Some(module);
+            }
+        }
+        None
     }
 
     /// Emits a unified "unknown type, consider importing" diagnostic when
@@ -1035,13 +1043,8 @@ impl TypeChecker {
     /// No module or symbol name is written here: the search reads whatever the
     /// stdlib tree actually declares.
     pub(crate) fn modules_declaring_function(name: &str) -> Vec<String> {
-        let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf));
-
         let mut found = Vec::new();
-        for root in stdlib_search_roots(env_override, exe_dir.as_deref()) {
+        for root in get_stdlib_search_roots() {
             if root.is_dir() {
                 Self::collect_modules_declaring_function(&root, name, &root, &mut found);
             }
@@ -1142,19 +1145,36 @@ impl TypeChecker {
 ///
 /// The first existing root that contains the requested module wins:
 /// 1. `MIRI_STDLIB_PATH` override, when set.
-/// 2. `src/stdlib` relative to the current directory (in-repo development).
-/// 3. Roots derived from the compiler binary's own location, covering both a
+/// 2. Roots derived from the compiler binary's own location, covering both a
 ///    binary shipped with a sibling `stdlib/` directory and the common
 ///    `<prefix>/bin/miri` + `<prefix>/{lib,share}/miri/stdlib` install layouts.
+/// 3. `src/stdlib` relative to `CARGO_MANIFEST_DIR` (the repo root at build time),
+///    as a compile-time fallback for development and agent-in-the-loop workflows.
 ///
 /// Deriving from the binary location (rather than the current directory) is
 /// what lets an installed `miri` resolve the stdlib from any working directory.
+/// The manifest-dir fallback ensures the stdlib is found even in long-lived
+/// processes like `miri agent` that may run from arbitrary working directories.
+///
+/// **Why this order**: an installed binary's shipped stdlib must win over a
+/// build-machine path that may not exist on this machine or may be stale. The
+/// cost is that a dev build stats ~3 missing paths (exe dir, lib/miri, share/miri)
+/// before reaching the manifest root, which is a few `stat` calls per compilation.
+///
+/// The consequence to know about: because the exe directory is searched first, a
+/// `stdlib/` directory sitting next to the binary — say a stray `target/debug/stdlib/`
+/// — outranks the repo's own `src/stdlib`. That is correct for an installed layout
+/// and a hazard only for a build tree that grows one by accident.
+///
+/// The current directory is deliberately not a stdlib root at all. It was one once,
+/// and it made resolution depend on where the user happened to be standing: the same
+/// program compiled from two directories found two different standard libraries.
+/// Reordering these roots, or reintroducing a CWD-relative one, reopens that.
 fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(base) = env_override {
         roots.push(base);
     }
-    roots.push(PathBuf::from("src/stdlib"));
     if let Some(dir) = exe_dir {
         roots.push(dir.join("stdlib"));
         if let Some(prefix) = dir.parent() {
@@ -1162,7 +1182,53 @@ fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) ->
             roots.push(prefix.join("share").join("miri").join("stdlib"));
         }
     }
+    // Compile-time fallback: src/stdlib relative to the repo root (CARGO_MANIFEST_DIR)
+    roots.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib"),
+    );
     roots
+}
+
+/// Computes the stdlib search roots by reading environment variables and binary metadata.
+///
+/// This helper encapsulates the pattern used throughout the type checker: reading
+/// `MIRI_STDLIB_PATH` and the executable's directory, then computing the search
+/// roots from those. Used by multiple modules to keep the lookup logic consistent.
+fn get_stdlib_search_roots() -> Vec<PathBuf> {
+    let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    stdlib_search_roots(env_override, exe_dir.as_deref())
+}
+
+/// Generates help text listing the module search roots.
+///
+/// Takes a slice of `(base, location)` pairs (as returned by `resolve_module_path`)
+/// and extracts the unique bases, formatting them as a user-friendly list suitable
+/// for inclusion in an error message.
+fn generate_module_search_help(locations: &[(PathBuf, PathBuf)]) -> String {
+    let mut seen = HashSet::new();
+    let roots: Vec<_> = locations
+        .iter()
+        .filter_map(|(base, _)| {
+            let base_str = base.to_string_lossy().into_owned();
+            seen.insert(base_str.clone()).then_some(base_str)
+        })
+        .collect();
+
+    let roots_list = roots
+        .into_iter()
+        .map(|r| format!("  - {}", r))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "Module was not found in any of these search roots:\n{}\n\nYou can override the stdlib search path by setting the MIRI_STDLIB_PATH environment variable.",
+        roots_list
+    )
 }
 
 #[cfg(test)]
@@ -1171,17 +1237,23 @@ mod stdlib_search_root_tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn repo_relative_root_present_without_env_or_exe() {
+    fn manifest_dir_fallback_present_without_env_or_exe() {
         let roots = stdlib_search_roots(None, None);
-        assert_eq!(roots, vec![PathBuf::from("src/stdlib")]);
+        let manifest_stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib");
+        assert_eq!(roots, vec![manifest_stdlib]);
     }
 
     #[test]
     fn env_override_takes_priority() {
         let roots = stdlib_search_roots(Some(PathBuf::from("/custom/stdlib")), None);
         assert_eq!(roots.first(), Some(&PathBuf::from("/custom/stdlib")));
-        // The repo-relative fallback is still appended after the override.
-        assert!(roots.contains(&PathBuf::from("src/stdlib")));
+        // The manifest-dir fallback is still appended after the override.
+        let manifest_stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib");
+        assert!(roots.contains(&manifest_stdlib));
     }
 
     #[test]
@@ -1190,10 +1262,18 @@ mod stdlib_search_root_tests {
         assert!(roots.contains(&PathBuf::from("/opt/miri/bin/stdlib")));
         assert!(roots.contains(&PathBuf::from("/opt/miri/lib/miri/stdlib")));
         assert!(roots.contains(&PathBuf::from("/opt/miri/share/miri/stdlib")));
+        // Manifest-dir fallback is always present
+        let manifest_stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib");
+        assert!(roots.contains(&manifest_stdlib));
     }
 
     #[test]
-    fn priority_order_env_then_repo_then_install() {
+    fn priority_order_env_then_exe_then_manifest() {
+        let manifest_stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib");
         let roots = stdlib_search_roots(
             Some(PathBuf::from("/env/stdlib")),
             Some(Path::new("/opt/miri/bin")),
@@ -1202,10 +1282,10 @@ mod stdlib_search_root_tests {
             roots,
             vec![
                 PathBuf::from("/env/stdlib"),
-                PathBuf::from("src/stdlib"),
                 PathBuf::from("/opt/miri/bin/stdlib"),
                 PathBuf::from("/opt/miri/lib/miri/stdlib"),
                 PathBuf::from("/opt/miri/share/miri/stdlib"),
+                manifest_stdlib,
             ]
         );
     }
