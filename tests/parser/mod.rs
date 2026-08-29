@@ -17,6 +17,7 @@ pub mod do_while_loop;
 pub mod edge_cases;
 pub mod enum_statement;
 pub mod equality_expression;
+pub mod error_spans;
 pub mod float;
 pub mod for_loop;
 pub mod forall;

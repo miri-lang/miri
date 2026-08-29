@@ -21,7 +21,9 @@ impl<'source> Parser<'source> {
         let (fields, methods) = self.struct_body()?;
 
         if fields.is_empty() && methods.is_empty() {
-            return Err(self.error_missing_members(SyntaxErrorKind::MissingStructMembers));
+            return Err(
+                self.error_missing_members(SyntaxErrorKind::MissingStructMembers, name.span)
+            );
         }
 
         Ok(ast::struct_statement(
@@ -88,7 +90,7 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         let typ = self
             .type_expression()?
-            .ok_or_else(|| self.error_missing_struct_member_type())?;
+            .ok_or_else(|| self.error_missing_struct_member_type(name.span))?;
         Ok(ast::struct_member_expression(name, typ))
     }
 }
