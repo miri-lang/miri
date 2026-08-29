@@ -132,6 +132,28 @@ make lint         # Check formatting + clippy
 make format       # Auto-format all code
 ```
 
+## Writing Miri with an AI Agent
+
+Miri ships with a skill pack for code-generation agents — Claude Code, Cursor, and other integrations. Each skill is a compile-checked teaching guide that prevents hallucination through anti-hallucination blocks:
+
+### Three Skills at Launch
+
+- **miri-lang** — Core language syntax: variables, functions, structs, enums, classes, generics, pattern matching, and the two-tier prelude. Covers syntax that *does not* exist to prevent generating invalid code.
+- **miri-gpu** — GPU programming: `forall` loops, `gpu fn` kernels, device memory residency, kernel context fields, and `gpu frame` rendering blocks.
+- **miri-testing** — Testing workflow: the `miri test` runner, `@test` attributes, assertion functions, and test discovery.
+
+### Install for Your Agent
+
+```bash
+# Claude Code
+npx skills add <path-to-miri> --skill miri-lang
+
+# Or copy directly to your `.claude/skills/` directory
+cp skills/miri-{lang,gpu,testing}/SKILL.md ~/.claude/skills/
+```
+
+Every code block in each skill is compiled and verified by the `make skills-check` gate in CI. Agents following the taught patterns are guaranteed to generate syntax the compiler accepts.
+
 ## Contributing
 
 We welcome contributions! Please read our [Contributing Guide](CONTRIBUTING.md) for details on code style, testing requirements, and the submission process.

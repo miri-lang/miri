@@ -16,6 +16,7 @@ pub mod mir;
 pub mod parser;
 pub mod pipeline;
 pub mod runtime_fns;
+pub mod skills;
 pub mod stdlib;
 pub mod type_checker;
 pub mod utils;
