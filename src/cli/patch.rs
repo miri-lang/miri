@@ -11,15 +11,17 @@
 //! program — so a caller learns whether its change holds up, not merely whether
 //! the substitution happened.
 //!
-//! Nothing reaches disk unless the edited program checks. Every operation is
-//! applied to a copy held in memory, the copy is checked once, and only then is
-//! the file replaced. An edit that would not compile leaves the file exactly as
-//! it was, which is what lets a caller retry without first repairing the damage
-//! of the attempt before.
+//! Nothing reaches disk that the edit made worse. Every operation is applied to
+//! a copy held in memory, the copy is checked once, and only then is the file
+//! replaced — but only if the edit introduced no new diagnostics. An edit that
+//! introduces new errors is refused and the file is left unchanged. An edit that
+//! leaves only pre-existing errors untouched is accepted and written, with those
+//! pre-existing errors reported and marked as such.
 //!
 //! What is re-checked is the target file and the modules it imports. A file
 //! that imports the patched one is not re-checked here.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -35,7 +37,7 @@ use crate::cli::{
 use crate::diagnostics::json::{
     DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonPatch, JsonPatchEdit,
 };
-use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::{DiagnosticCode, Severity};
 use crate::error::diagnostic::{to_json, Diagnostic, DiagnosticBuilder, Reportable};
 use crate::error::format::format_diagnostic_with_color;
 use crate::error::type_error::TypeError;
@@ -122,6 +124,57 @@ impl PatchReport {
     }
 }
 
+/// Result of validating the source and applying operations.
+struct ValidatedEdit {
+    /// Original source file content.
+    source: String,
+    /// Edited source file content.
+    edited: String,
+    /// The edits that were applied.
+    applied: Vec<JsonPatchEdit>,
+    /// Check result of the edited source.
+    checked_edited: Checked,
+}
+
+/// Validate source file and apply operations; return early if any step fails.
+fn validate_and_apply(
+    path: &Path,
+    operations: &[Operation],
+    expect_sha: Option<&str>,
+) -> Result<ValidatedEdit, Box<PatchReport>> {
+    let source_path = Some(path.display().to_string());
+    let source = fs::read_to_string(path).map_err(|error| {
+        Box::new(refusal(
+            vec![unreadable(path, &error)],
+            String::new(),
+            source_path.clone(),
+            0,
+        ))
+    })?;
+
+    if let Some(diagnostic) = request_refused(&source, operations, expect_sha) {
+        return Err(Box::new(refusal(vec![diagnostic], source, source_path, 0)));
+    }
+
+    let (edited, applied) = fold_operations(&source, operations).map_err(|diagnostic| {
+        Box::new(refusal(
+            vec![*diagnostic],
+            source.clone(),
+            source_path.clone(),
+            0,
+        ))
+    })?;
+
+    let checked_edited = check_source(path, &edited);
+
+    Ok(ValidatedEdit {
+        source,
+        edited,
+        applied,
+        checked_edited,
+    })
+}
+
 /// Apply `operations` to `path` and report what happened.
 ///
 /// Nothing here writes to a stream or ends the process, so the same call serves
@@ -133,47 +186,69 @@ pub fn patch(
     mode: Mode,
 ) -> PatchReport {
     let source_path = Some(path.display().to_string());
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => return refusal(vec![unreadable(path, &error)], String::new(), source_path),
+    let validated = match validate_and_apply(path, operations, expect_sha) {
+        Ok(v) => v,
+        Err(report) => return *report,
     };
 
-    if let Some(diagnostic) = request_refused(&source, operations, expect_sha) {
-        return refusal(vec![diagnostic], source, source_path);
+    if validated.checked_edited.ok {
+        let file_was_written = match store(path, &validated.edited, mode) {
+            Ok(written) => written,
+            Err(diagnostic) => return refusal(vec![*diagnostic], validated.source, source_path, 1),
+        };
+        return applied_report(
+            Applied {
+                edits: validated.applied,
+                warnings: validated.checked_edited.warnings,
+                file_was_written,
+            },
+            Texts {
+                before: validated.source.clone(),
+                after: validated.edited,
+                path: source_path,
+            },
+            matches!(mode, Mode::DryRun).then_some(path),
+        );
     }
 
-    let (edited, applied) = match fold_operations(&source, operations) {
-        Ok(folded) => folded,
-        Err(diagnostic) => return refusal(vec![*diagnostic], source, source_path),
-    };
+    let checked_baseline = check_source(path, &validated.source);
+    let partitioned = partition_errors_against_baseline(
+        &checked_baseline.diagnostics,
+        &validated.checked_edited.diagnostics,
+        &validated.source,
+        &validated.edited,
+        source_path.as_deref(),
+    );
 
-    // One check answers the whole batch: the operations have already been
-    // folded into a single text, and it is that text the caller is asking
-    // about, not the intermediate states it passed through.
-    let checked = check_source(path, &edited);
-    if !checked.ok {
-        let mut diagnostics = vec![rejected_edit()];
-        diagnostics.extend(checked.diagnostics);
-        return refusal(diagnostics, source, source_path);
+    if !partitioned.new_errors.is_empty() {
+        return reject_with_errors(
+            validated.edited,
+            source_path,
+            partitioned.new_errors,
+            partitioned.preexisting_json,
+            &validated.checked_edited.diagnostics,
+        );
     }
 
-    let file_was_written = match store(path, &edited, mode) {
+    let file_was_written = match store(path, &validated.edited, mode) {
         Ok(written) => written,
-        Err(diagnostic) => return refusal(vec![*diagnostic], source, source_path),
+        Err(diagnostic) => return refusal(vec![*diagnostic], validated.source, source_path, 1),
     };
 
-    applied_report(
+    accepted_report(
         Applied {
-            edits: applied,
-            warnings: checked.warnings,
+            edits: validated.applied,
+            warnings: validated.checked_edited.warnings,
             file_was_written,
         },
         Texts {
-            before: source,
-            after: edited,
+            before: validated.source,
+            after: validated.edited,
             path: source_path,
         },
         matches!(mode, Mode::DryRun).then_some(path),
+        partitioned.preexisting_json,
+        partitioned.preexisting_diagnostics,
     )
 }
 
@@ -222,6 +297,16 @@ struct Texts {
     path: Option<String>,
 }
 
+/// Errors partitioned against a baseline.
+struct PartitionedErrors {
+    /// Errors that did not exist before the edit.
+    new_errors: Vec<JsonDiagnostic>,
+    /// Errors that existed before, as JSON.
+    preexisting_json: Vec<JsonDiagnostic>,
+    /// Errors that existed before, as Diagnostic objects for pretty printing.
+    preexisting_diagnostics: Vec<Diagnostic>,
+}
+
 /// Build the report for a batch that applied and checked.
 fn applied_report(applied: Applied, texts: Texts, diff_for: Option<&Path>) -> PatchReport {
     let warnings = applied
@@ -244,6 +329,50 @@ fn applied_report(applied: Applied, texts: Texts, diff_for: Option<&Path>) -> Pa
         diff,
         diagnostics: Vec::new(),
         source: texts.before,
+        source_path: texts.path,
+    }
+}
+
+/// Build the report for an accepted batch with pre-existing errors.
+fn accepted_report(
+    applied: Applied,
+    texts: Texts,
+    diff_for: Option<&Path>,
+    preexisting_json: Vec<JsonDiagnostic>,
+    preexisting_diags: Vec<Diagnostic>,
+) -> PatchReport {
+    let mut diagnostics_json = preexisting_json;
+    for diag in diagnostics_json.iter_mut() {
+        diag.preexisting = Some(true);
+    }
+
+    let warnings = applied
+        .warnings
+        .iter()
+        .map(|diagnostic| to_json(diagnostic, &texts.after, texts.path.as_deref()))
+        .collect::<Vec<JsonDiagnostic>>();
+    // Warnings accompany a successful check only, and check_source yields none
+    // when the check fails. So whenever pre-existing errors remain after an
+    // edit, this list is necessarily empty.
+
+    let mut all_diags = diagnostics_json;
+    all_diags.extend(warnings);
+
+    let envelope = DiagnosticsEnvelope::new(JsonCommand::Patch, true, all_diags)
+        .with_exit_code(0)
+        .with_patch(JsonPatch {
+            edits: applied.edits,
+            revalidations: 1,
+            file_written: applied.file_was_written,
+        });
+    let diff = diff_for.map(|path| unified_diff(path, &texts.before, &texts.after));
+
+    PatchReport {
+        envelope,
+        file_was_written: applied.file_was_written,
+        diff,
+        diagnostics: preexisting_diags,
+        source: texts.after,
         source_path: texts.path,
     }
 }
@@ -286,6 +415,106 @@ fn fold_operations(
         applied.push(edit);
     }
     Ok((edited, applied))
+}
+
+/// Reject an edit that introduced new errors, with all diagnostics.
+fn reject_with_errors(
+    source_for_rendering: String,
+    source_path: Option<String>,
+    new_errors: Vec<JsonDiagnostic>,
+    preexisting_json: Vec<JsonDiagnostic>,
+    edited_diagnostics: &[Diagnostic],
+) -> PatchReport {
+    let mut all_json_diags = vec![to_json(
+        &rejected_edit(),
+        &source_for_rendering,
+        source_path.as_deref(),
+    )];
+
+    for mut new_err in new_errors {
+        new_err.preexisting = Some(false);
+        all_json_diags.push(new_err);
+    }
+
+    for mut pre_err in preexisting_json {
+        pre_err.preexisting = Some(true);
+        all_json_diags.push(pre_err);
+    }
+
+    let mut diagnostics = vec![rejected_edit()];
+    for diag in edited_diagnostics {
+        diagnostics.push(diag.clone());
+    }
+
+    PatchReport {
+        envelope: DiagnosticsEnvelope::new(JsonCommand::Patch, false, all_json_diags)
+            .with_exit_code(1)
+            .with_patch(JsonPatch {
+                edits: Vec::new(),
+                revalidations: 1,
+                file_written: false,
+            }),
+        file_was_written: false,
+        diff: None,
+        diagnostics,
+        source: source_for_rendering,
+        source_path,
+    }
+}
+
+/// Partition edited errors into new vs. pre-existing, comparing against baseline.
+fn partition_errors_against_baseline(
+    baseline_diagnostics: &[Diagnostic],
+    edited_diagnostics: &[Diagnostic],
+    source_before: &str,
+    source_after: &str,
+    source_path: Option<&str>,
+) -> PartitionedErrors {
+    let baseline_errors: HashSet<_> = baseline_diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| to_json(d, source_before, source_path))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|j| diagnostic_fingerprint(&j, false))
+        .collect();
+
+    let edited_errors: Vec<_> = edited_diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| to_json(d, source_after, source_path))
+        .collect();
+
+    let line_map = build_line_map(source_before, source_after);
+
+    let mut new_errors = Vec::new();
+    let mut preexisting_json = Vec::new();
+    let mut preexisting_diagnostics = Vec::new();
+
+    for (diag, json_diag) in edited_diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .zip(&edited_errors)
+    {
+        let (is_in_changed_run, mapped) =
+            map_diagnostic_line_with_status(json_diag, &line_map, source_path);
+        let fingerprint = diagnostic_fingerprint(&mapped, is_in_changed_run);
+
+        if baseline_errors.contains(&fingerprint) {
+            // Report the unmapped diagnostic (with edited file's line numbers),
+            // but use the mapped one only for fingerprinting comparison.
+            preexisting_json.push(json_diag.clone());
+            preexisting_diagnostics.push(diag.clone());
+        } else {
+            new_errors.push(json_diag.clone());
+        }
+    }
+
+    PartitionedErrors {
+        new_errors,
+        preexisting_json,
+        preexisting_diagnostics,
+    }
 }
 
 /// Apply one operation to `source`, returning the edited text and what it did.
@@ -449,13 +678,10 @@ fn reindented(source: &str, body_start: usize, body: &str) -> String {
         .join("\n")
 }
 
-/// Render the change as one unified-diff hunk.
+/// Find the common prefix and suffix line counts between two texts.
 ///
-/// The hunk spans from the first differing line to the last, so a batch that
-/// touches several places is reported as one stretch rather than as separate
-/// hunks. That is more context than the smallest possible diff, and it is
-/// always a truthful account of what the file becomes.
-fn unified_diff(path: &Path, before: &str, after: &str) -> String {
+/// Returns (prefix_count, suffix_count).
+fn common_prefix_suffix(before: &str, after: &str) -> (usize, usize) {
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
 
@@ -468,6 +694,20 @@ fn unified_diff(path: &Path, before: &str, after: &str) -> String {
         .count()
         .min(old.len() - prefix)
         .min(new.len() - prefix);
+
+    (prefix, suffix)
+}
+
+/// Render the change as one unified-diff hunk.
+///
+/// The hunk spans from the first differing line to the last, so a batch that
+/// touches several places is reported as one stretch rather than as separate
+/// hunks. That is more context than the smallest possible diff, and it is
+/// always a truthful account of what the file becomes.
+fn unified_diff(path: &Path, before: &str, after: &str) -> String {
+    let old: Vec<&str> = before.lines().collect();
+    let new: Vec<&str> = after.lines().collect();
+    let (prefix, suffix) = common_prefix_suffix(before, after);
 
     let old_changed = &old[prefix..old.len() - suffix];
     let new_changed = &new[prefix..new.len() - suffix];
@@ -683,6 +923,7 @@ fn refusal(
     diagnostics: Vec<Diagnostic>,
     source: String,
     source_path: Option<String>,
+    revalidations: u32,
 ) -> PatchReport {
     let json = diagnostics
         .iter()
@@ -694,7 +935,7 @@ fn refusal(
             .with_exit_code(1)
             .with_patch(JsonPatch {
                 edits: Vec::new(),
-                revalidations: 0,
+                revalidations,
                 file_written: false,
             }),
         file_was_written: false,
@@ -703,6 +944,102 @@ fn refusal(
         source,
         source_path,
     }
+}
+
+/// Line status in a diagnostic fingerprint.
+/// Distinguishes between diagnostics that genuinely have no line (absent),
+/// and diagnostics whose line cannot be mapped to a pre-existing line (unmappable).
+/// These must not compare equal, or a NEW error inside the changed run can
+/// fingerprint-match a spanless baseline diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DiagnosticLineStatus {
+    /// The diagnostic carries an actual line number.
+    Present(usize),
+    /// The diagnostic has no span (e.g., a synthetic error).
+    Absent,
+    /// The diagnostic sits inside the changed run and cannot be mapped.
+    Unmappable,
+}
+
+/// Create a fingerprint for a diagnostic to identify whether it existed before the edit.
+/// Fingerprint = (path, code, message, mapped_line).
+///
+/// We use a set rather than a multiset because if a pre-existing error appears in the
+/// edited program's error list, it matches whether or not the edit introduced duplicates.
+/// A line that maps to a changed run never has a corresponding pre-existing line.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DiagnosticFingerprint {
+    path: Option<String>,
+    code: Option<String>,
+    message: String,
+    line: DiagnosticLineStatus,
+}
+
+fn diagnostic_fingerprint(diag: &JsonDiagnostic, is_in_changed_run: bool) -> DiagnosticFingerprint {
+    let line = match diag.line {
+        Some(n) => DiagnosticLineStatus::Present(n),
+        None => {
+            if is_in_changed_run {
+                DiagnosticLineStatus::Unmappable
+            } else {
+                DiagnosticLineStatus::Absent
+            }
+        }
+    };
+    DiagnosticFingerprint {
+        path: diag.path.clone(),
+        code: diag.code.clone(),
+        message: diag.message.clone(),
+        line,
+    }
+}
+
+/// Build a line mapping from edited line numbers to original line numbers.
+/// The mapping is based on common prefix and suffix lines between before and after.
+/// Returns (prefix, suffix, before_total, after_total).
+fn build_line_map(before: &str, after: &str) -> (usize, usize, usize, usize) {
+    let (prefix, suffix) = common_prefix_suffix(before, after);
+    let before_lines = before.lines().count();
+    let after_lines = after.lines().count();
+    (prefix, suffix, before_lines, after_lines)
+}
+
+/// Map a diagnostic's line number from edited to original, and report if it's in the changed run.
+/// Returns (is_in_changed_run, mapped_diagnostic).
+fn map_diagnostic_line_with_status(
+    diag: &JsonDiagnostic,
+    line_map: &(usize, usize, usize, usize),
+    patched_path: Option<&str>,
+) -> (bool, JsonDiagnostic) {
+    let mut mapped = diag.clone();
+    let mut is_in_changed_run = false;
+
+    if diag.path.as_deref() == patched_path {
+        if let Some(line) = diag.line {
+            let (prefix, suffix, before_total, after_total) = line_map;
+            let prefix_1indexed = prefix + 1;
+
+            if line < prefix_1indexed {
+                // Line is before the edit, maps 1:1 (already correct in mapped.line).
+            } else if line > after_total - suffix {
+                // Line is after the edit. Calculate the shift: before_total - after_total.
+                let shift = (*before_total as isize) - (*after_total as isize);
+                let adjusted_isize = (line as isize) + shift;
+                if adjusted_isize > 0 {
+                    mapped.line = Some(adjusted_isize as usize);
+                } else {
+                    // Mapped line would be invalid; mark as unmappable.
+                    mapped.line = None;
+                }
+            } else {
+                // Line is inside the changed run; it cannot map to a pre-existing line.
+                mapped.line = None;
+                is_in_changed_run = true;
+            }
+        }
+    }
+
+    (is_in_changed_run, mapped)
 }
 
 /// Apply the edits to `path` and write the result.
@@ -722,6 +1059,9 @@ pub fn run(
             if report.envelope.ok {
                 if let Some(diff) = &report.diff {
                     print!("{}", diff);
+                }
+                if !report.diagnostics.is_empty() {
+                    eprintln!("{}", report.to_pretty(color_mode));
                 }
                 println!("{}", summary(&report, mode));
             } else {
@@ -744,16 +1084,49 @@ fn summary(report: &PatchReport, mode: Mode) -> String {
         .patch
         .as_ref()
         .map_or(0, |patch| patch.edits.len());
+
+    let has_preexisting = report
+        .envelope
+        .diagnostics
+        .iter()
+        .any(|d| d.preexisting == Some(true));
+
     match mode {
-        Mode::Apply => format!("Applied {} edit(s). The edited program checks.", edits),
-        Mode::CheckOnly => format!(
-            "{} edit(s) would apply and the edited program checks. Nothing was written.",
-            edits
-        ),
-        Mode::DryRun => format!(
-            "{} edit(s) would apply and the edited program checks. Nothing was written.",
-            edits
-        ),
+        Mode::Apply => {
+            if has_preexisting {
+                format!(
+                    "Applied {} edit(s). The file was written; {} pre-existing error(s) remain.",
+                    edits,
+                    report
+                        .envelope
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.preexisting == Some(true))
+                        .count()
+                )
+            } else {
+                format!("Applied {} edit(s). The edited program checks.", edits)
+            }
+        }
+        Mode::CheckOnly | Mode::DryRun => {
+            if has_preexisting {
+                format!(
+                    "{} edit(s) would apply. The file would have {} pre-existing error(s). Nothing was written.",
+                    edits,
+                    report
+                        .envelope
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.preexisting == Some(true))
+                        .count()
+                )
+            } else {
+                format!(
+                    "{} edit(s) would apply and the edited program checks. Nothing was written.",
+                    edits
+                )
+            }
+        }
     }
 }
 
@@ -878,10 +1251,46 @@ pub fn report_malformed(
     color_mode: ColorMode,
 ) -> Outcome {
     let source = fs::read_to_string(path).unwrap_or_default();
-    let report = refusal(vec![diagnostic], source, Some(path.display().to_string()));
+    let report = refusal(
+        vec![diagnostic],
+        source,
+        Some(path.display().to_string()),
+        0,
+    );
     match format {
         Format::Json => println!("{}", serialize_envelope(&report.envelope)),
         Format::Pretty => eprint!("{}", report.to_pretty(color_mode)),
     }
     Outcome::Failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_diagnostic_fingerprint_unmappable_not_equal_to_absent() {
+        // An unmappable line and an absent one must never compare equal.
+        // A diagnostic with no line (absent) must not match a diagnostic whose line
+        // is in the changed run (unmappable), even if path, code, and message are identical.
+
+        let unmappable_fp = DiagnosticFingerprint {
+            path: Some("test.mi".to_string()),
+            code: Some("MER_TYP_001".to_string()),
+            message: "type mismatch".to_string(),
+            line: DiagnosticLineStatus::Unmappable,
+        };
+
+        let absent_fp = DiagnosticFingerprint {
+            path: Some("test.mi".to_string()),
+            code: Some("MER_TYP_001".to_string()),
+            message: "type mismatch".to_string(),
+            line: DiagnosticLineStatus::Absent,
+        };
+
+        assert_ne!(
+            unmappable_fp, absent_fp,
+            "unmappable and absent line statuses must not be equal"
+        );
+    }
 }

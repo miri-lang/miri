@@ -50,6 +50,38 @@ fn envelope(stdout: &str) -> DiagnosticsEnvelope {
     serde_json::from_str(stdout).expect("patch emits a parseable envelope")
 }
 
+/// Extract line:column from a pretty diagnostic output.
+/// Looks for patterns like "--> path:LINE:COL" and returns (line, column).
+fn extract_diagnostic_location(output: &str) -> Option<(usize, usize)> {
+    for line in output.lines() {
+        if line.contains("-->") {
+            // Format: "--> path:LINE:COL" or just "LINE:COL" after a colon
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 3 {
+                // Get the last two parts (line and column)
+                if let (Ok(line_num), Ok(col_num)) = (
+                    parts[parts.len() - 2].parse::<usize>(),
+                    parts[parts.len() - 1].parse::<usize>(),
+                ) {
+                    return Some((line_num, col_num));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find the line and column of a text pattern in the source.
+/// Returns (line_number, column_number) where line_number is 1-indexed.
+fn find_location_in_source(source: &str, pattern: &str) -> Option<(usize, usize)> {
+    for (line_idx, line) in source.lines().enumerate() {
+        if let Some(col_idx) = line.find(pattern) {
+            return Some((line_idx + 1, col_idx + 1));
+        }
+    }
+    None
+}
+
 /// Read the contents of a file.
 fn read_file(path: &Path) -> String {
     fs::read_to_string(path).expect("can read file")
@@ -1080,5 +1112,928 @@ fn test_an_anchor_found_only_in_a_comment_is_refused() {
             "got: {stdout}"
         );
         assert_eq!(read_file(path), before, "nothing is written");
+    });
+}
+
+// An edit that leaves a pre-existing error untouched is written.
+// is written, and the envelope carries that error marked preexisting: true
+#[test]
+fn test_patch_accepts_edit_leaving_preexisting_error_untouched() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let original_content = read_file(path);
+
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "patch should succeed despite pre-existing error: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+
+        let final_content = read_file(path);
+        assert_ne!(final_content, original_content, "file should be modified");
+        assert!(
+            final_content.contains("return a - b"),
+            "edit should be applied: {final_content}"
+        );
+
+        // Should report pre-existing error as such
+        let error_diag = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("pre-existing type error should be reported");
+        assert_eq!(
+            error_diag.preexisting,
+            Some(true),
+            "pre-existing error should be marked: {stdout}"
+        );
+    });
+}
+
+// An edit that adds a new diagnostic is refused.
+// with MER_BLD_011 and writes nothing
+#[test]
+fn test_patch_rejects_edit_that_introduces_new_error() {
+    let source_with_existing_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_existing_error, |path| {
+        let original_content = read_file(path);
+
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return \"text\"",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            !ok,
+            "patch should fail when introducing new error: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(!env.ok, "should report ok=false: {stdout}");
+
+        let final_content = read_file(path);
+        assert_eq!(
+            final_content, original_content,
+            "file should not be modified when edit introduces new error"
+        );
+
+        // Should have MER_BLD_011 refusal
+        let refusal = env
+            .diagnostics
+            .iter()
+            .find(|d| d.code.as_deref() == Some("MER_BLD_011"))
+            .expect("MER_BLD_011 should be reported: {stdout}");
+        assert_eq!(
+            refusal.preexisting, None,
+            "refusal itself should not be marked"
+        );
+    });
+}
+
+// An edit that removes one of two errors is written and the other reported.
+// is written and the remaining one is reported
+#[test]
+fn test_patch_accepts_edit_that_removes_one_error() {
+    let source_with_two_errors = "fn bad1() int
+    return \"wrong\"
+
+fn bad2() int
+    return \"also wrong\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_two_errors, |path| {
+        let original_content = read_file(path);
+
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "bad1",
+            "--old",
+            "return \"wrong\"",
+            "--new",
+            "return 42",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "patch should succeed when removing one error: {stdout}");
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+
+        let final_content = read_file(path);
+        assert_ne!(final_content, original_content, "file should be modified");
+        assert!(
+            final_content.contains("return 42"),
+            "edit should be applied: {final_content}"
+        );
+
+        // Should report the remaining error as pre-existing
+        let remaining_error = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("remaining error should be reported: {stdout}");
+        assert_eq!(
+            remaining_error.preexisting,
+            Some(true),
+            "remaining error should be marked as pre-existing: {stdout}"
+        );
+    });
+}
+
+// A check that ran and refused reports one revalidation, not zero.
+// when a check actually ran and refused
+#[test]
+fn test_patch_revalidations_counts_actual_checks() {
+    let source_with_existing_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_existing_error, |path| {
+        let (stdout, _stderr, _ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return \"also wrong\"",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        let env = envelope(&stdout);
+        assert!(!env.ok, "patch should fail: {stdout}");
+
+        let patch_payload = env
+            .patch
+            .as_ref()
+            .expect("patch should be present in refusal");
+        assert_eq!(
+            patch_payload.revalidations, 1,
+            "revalidations should be 1 when check actually ran and refused: {stdout}"
+        );
+    });
+}
+
+// A parse failure precedes any check, so it reports no revalidation.
+#[test]
+fn test_patch_parse_error_reports_zero_revalidations() {
+    let source_with_parse_error = "fn broken() int
+    return \"text\"
+
+// Intentionally unclosed block
+fn main()
+    println(\"ok\"
+";
+    with_source(source_with_parse_error, |path| {
+        let (stdout, _stderr, _ok) = patch(&[
+            "--replace-in-fn",
+            "main",
+            "--old",
+            "println",
+            "--new",
+            "println",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        let env = envelope(&stdout);
+        assert!(!env.ok, "patch should fail on parse error: {stdout}");
+
+        let patch_payload = env.patch.as_ref().expect("patch should be present");
+        assert_eq!(
+            patch_payload.revalidations, 0,
+            "revalidations should be 0 for parse errors (out of scope): {stdout}"
+        );
+    });
+}
+
+// Test gap fix: pretty mode output shows pre-existing errors correctly.
+// Acceptance criterion: accepted-and-clean still prints "The edited program checks"
+#[test]
+fn test_patch_pretty_output_clean_edit() {
+    with_source(PROBE, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "patch should succeed");
+        assert!(
+            stdout.contains("The edited program checks."),
+            "clean edit should say program checks: {stdout}{stderr}"
+        );
+        assert!(
+            !stdout.contains("pre-existing"),
+            "clean edit should not mention pre-existing: {stdout}{stderr}"
+        );
+    });
+}
+
+// Test gap fix: pretty mode output with pre-existing errors.
+// Acceptance criterion: accepted-with-pre-existing prints the remaining error
+// and a summary that does NOT claim the program checks
+#[test]
+fn test_patch_pretty_output_with_preexisting_error() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "patch should succeed despite pre-existing error: {stdout}{stderr}"
+        );
+
+        let output = format!("{}{}", stdout, stderr);
+        assert!(
+            output.contains("MER_TYP"),
+            "output should contain type error code: {output}"
+        );
+        assert!(
+            output.contains("String") || output.contains("return \"text\""),
+            "output should show the type mismatch: {output}"
+        );
+        assert!(
+            !output.contains("The edited program checks."),
+            "output should NOT claim program checks when errors remain: {output}"
+        );
+        assert!(
+            output.contains("pre-existing error"),
+            "output should mention pre-existing errors: {output}"
+        );
+
+        // The rendered line must be where the offending text actually sits.
+        let (reported_line, _) = extract_diagnostic_location(&output)
+            .expect("pretty output should include error location");
+        let (expected_line, _) = find_location_in_source(source_with_error, "return \"text\"")
+            .expect("pattern should exist in source");
+        assert_eq!(
+            reported_line, expected_line,
+            "error should be reported at the correct line"
+        );
+    });
+}
+
+// Test gap fix: refusal path prints underlying type errors in pretty mode.
+// Acceptance criterion: the refusal path prints the underlying type error,
+// not just the MER_BLD_011 notice
+#[test]
+fn test_patch_pretty_refusal_shows_errors() {
+    let source_with_existing_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_existing_error, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return \"text\"",
+            &path.display().to_string(),
+        ]);
+
+        assert!(!ok, "patch should fail when introducing new error");
+
+        let output = format!("{}{}", stdout, stderr);
+        assert!(
+            output.contains("MER_BLD_011"),
+            "output should contain edit refusal code: {output}"
+        );
+        assert!(
+            output.contains("MER_TYP"),
+            "output should contain the underlying type error code: {output}"
+        );
+        assert!(
+            output.contains("return \"text\"") || output.contains("type error"),
+            "output should describe the error, not just name the code: {output}"
+        );
+
+        // The rendered line must be the one the edited code put the error on.
+        let (reported_line, _) = extract_diagnostic_location(&output)
+            .expect("pretty output should include error location");
+        // The new error is from the edited code "return \"text\"" in the add function
+        // which is at line 2 (inside add function).
+        // We're looking for where this appears in the EDITED version (as reported).
+        // Since we replaced "return a + b" with "return \"text\"", the error should be
+        // reported at line 2 where the replacement was made
+        assert_eq!(
+            reported_line, 2,
+            "new error in add function should be reported at line 2"
+        );
+    });
+}
+
+// The accepted path reports the edited file's line numbers, not the original's.
+// Edit that adds lines before a pre-existing error should report the error's line number
+// in the edited file.
+#[test]
+fn test_patch_d1_accepted_with_added_lines_reports_correct_line_number() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let output = miri_cmd()
+            .arg("patch")
+            .args([
+                "--replace-fn",
+                "add",
+                "--body-file",
+                "-",
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ])
+            .write_stdin("var t = a\nvar u = b\nreturn t + u\n")
+            .output()
+            .expect("the patch command runs");
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "patch should succeed with pre-existing error"
+        );
+
+        let env = envelope(&stdout);
+        assert!(env.ok, "patch should report ok=true: {stdout}");
+
+        // Read the edited file to find where broken() now is
+        let edited = read_file(path);
+        let broken_line = edited
+            .lines()
+            .position(|line| line.contains("fn broken()"))
+            .map(|i| i + 1)
+            .expect("broken() should exist in edited file");
+
+        // Find the type error in the JSON
+        let type_error = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("type error should be reported");
+
+        // The error's reported line should match where it is in the edited file
+        assert_eq!(
+            type_error.line,
+            Some(broken_line + 1),
+            "reported line should match error's position in edited file. Edited file:\n{edited}"
+        );
+    });
+}
+
+// The accepted path maps line numbers correctly when the edit removes lines.
+#[test]
+fn test_patch_d1_accepted_with_removed_lines_reports_correct_line_number() {
+    let source_with_error = "fn add(a int, b int) int
+    var t = a
+    var u = b
+    return t + u
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let output = miri_cmd()
+            .arg("patch")
+            .args([
+                "--replace-fn",
+                "add",
+                "--body-file",
+                "-",
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ])
+            .write_stdin("return a + b\n")
+            .output()
+            .expect("the patch command runs");
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "patch should succeed with pre-existing error"
+        );
+
+        let env = envelope(&stdout);
+        assert!(env.ok, "patch should report ok=true: {stdout}");
+
+        // Read the edited file to find where broken() now is
+        let edited = read_file(path);
+        let broken_line = edited
+            .lines()
+            .position(|line| line.contains("fn broken()"))
+            .map(|i| i + 1)
+            .expect("broken() should exist in edited file");
+
+        // Find the type error
+        let type_error = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("type error should be reported");
+
+        // The error's reported line should match where it is in the edited file
+        assert_eq!(
+            type_error.line,
+            Some(broken_line + 1),
+            "reported line should match error's position in edited file. Edited file:\n{edited}"
+        );
+    });
+}
+
+// The JSON envelope and the rendered output agree on a diagnostic's position.
+#[test]
+fn test_patch_d1_accepted_json_and_pretty_agree_on_line_numbers() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        // Parse JSON to get reported line
+        let json_output = miri_cmd()
+            .arg("patch")
+            .args([
+                "--replace-in-fn",
+                "add",
+                "--old",
+                "return a + b",
+                "--new",
+                "return a - b",
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ])
+            .output()
+            .expect("patch runs");
+        let json_stdout = String::from_utf8_lossy(&json_output.stdout);
+        let env = envelope(&json_stdout.as_ref());
+
+        let json_error = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("type error should be in JSON");
+
+        let json_line = json_error.line.expect("JSON error should have line number");
+        let json_column = json_error
+            .column
+            .expect("JSON error should have column number");
+
+        // Parse pretty output to get reported line and column (run on fresh file)
+        with_source(source_with_error, |path2| {
+            let pretty_output = miri_cmd()
+                .arg("patch")
+                .args([
+                    "--replace-in-fn",
+                    "add",
+                    "--old",
+                    "return a + b",
+                    "--new",
+                    "return a - b",
+                    &path2.display().to_string(),
+                ])
+                .output()
+                .expect("patch runs");
+            let pretty_combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&pretty_output.stdout),
+                String::from_utf8_lossy(&pretty_output.stderr)
+            );
+
+            // Read the position back out of the rendering rather than matching a substring.
+            let (pretty_line, pretty_col) = extract_diagnostic_location(&pretty_combined)
+                .expect("pretty output should include error location");
+            assert_eq!(
+                pretty_line, json_line,
+                "pretty and JSON should report same line number. Pretty:\n{}",
+                pretty_combined
+            );
+            assert_eq!(
+                pretty_col, json_column,
+                "pretty and JSON should report same column number. Pretty:\n{}",
+                pretty_combined
+            );
+        });
+    });
+}
+
+// The refusal renders the edited program's diagnostics against the edited text.
+// When edit introduces a new error by changing existing code, the pretty output
+// must show the edited text, not the original.
+#[test]
+fn test_patch_d2_refusal_renders_against_edited_text() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return \"wrong\"",
+            &path.display().to_string(),
+        ]);
+
+        assert!(!ok, "patch should fail when introducing new error");
+
+        let output = format!("{}{}", stdout, stderr);
+
+        // The pretty output should show the edited text "return \"wrong\"",
+        // not the original "return a + b"
+        assert!(
+            output.contains("return \"wrong\""),
+            "pretty output should show the edited text, got:\n{output}"
+        );
+
+        // Verify it doesn't show the original code that was replaced
+        assert!(
+            !output.contains("return a + b"),
+            "pretty output should not show original unmodified code"
+        );
+
+        // The reported location must point into the edited text.
+        let (reported_line, _) = extract_diagnostic_location(&output)
+            .expect("pretty output should include error location");
+        // The edited "return \"wrong\"" is at line 2 of the edited file
+        assert_eq!(
+            reported_line, 2,
+            "error in edited add function should be reported at line 2"
+        );
+    });
+}
+
+// Two errors sharing a code and a message, one pre-existing and one introduced,
+// must be marked correctly.
+#[test]
+fn test_patch_f9_identical_code_and_message_split() {
+    // A source with two functions, each with the same type error (string where int is expected)
+    let source_with_two_identical_errors = "fn bad1() int
+    return \"text\"
+
+fn bad2() int
+    return \"also string\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_two_identical_errors, |path| {
+        // This edit will fix bad1 but keep bad2's error
+        // The baseline has a MER_TYP error from bad1 ("text" at line 2)
+        // The edited program will have the same MER_TYP error from bad2 (now at a different line)
+        // These have the same code and message but different locations
+        // The one from bad2 should be marked preexisting, not treated as a new error
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "bad1",
+            "--old",
+            "return \"text\"",
+            "--new",
+            "return 1",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "patch should succeed when remaining error is pre-existing: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "patch should report ok=true: {stdout}");
+
+        // Check that the remaining error is marked as preexisting
+        let remaining_error = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("remaining error should be reported: {stdout}");
+        assert_eq!(
+            remaining_error.preexisting,
+            Some(true),
+            "remaining error with same code/message should be marked preexisting: {stdout}"
+        );
+    });
+}
+
+// `--check-only` beside a pre-existing error writes nothing.
+#[test]
+fn test_patch_f10_check_only_with_preexisting_error() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let original_content = read_file(path);
+
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            "--check-only",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "check-only should succeed with pre-existing error: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+        assert!(
+            env.patch.as_ref().map_or(false, |p| !p.file_written),
+            "file_written should be false: {stdout}"
+        );
+
+        // File should be unchanged
+        let final_content = read_file(path);
+        assert_eq!(
+            original_content, final_content,
+            "check-only must not write the file"
+        );
+
+        // Should report the pre-existing error
+        let error_diag = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("pre-existing error should be reported");
+        assert_eq!(
+            error_diag.preexisting,
+            Some(true),
+            "error should be marked preexisting: {stdout}"
+        );
+    });
+}
+
+// `--dry-run` beside a pre-existing error writes nothing.
+#[test]
+fn test_patch_f10_dry_run_with_preexisting_error() {
+    let source_with_error = "fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    println(\"ok\")
+";
+    with_source(source_with_error, |path| {
+        let original_content = read_file(path);
+
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            "--dry-run",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "dry-run should succeed with pre-existing error: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+        assert!(
+            env.patch.as_ref().map_or(false, |p| !p.file_written),
+            "file_written should be false: {stdout}"
+        );
+
+        // File should be unchanged
+        let final_content = read_file(path);
+        assert_eq!(
+            original_content, final_content,
+            "dry-run must not write the file"
+        );
+
+        // Should report the pre-existing error
+        let error_diag = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("pre-existing error should be reported");
+        assert_eq!(
+            error_diag.preexisting,
+            Some(true),
+            "error should be marked preexisting: {stdout}"
+        );
+    });
+}
+
+// A file with no trailing newline still maps positions correctly.
+#[test]
+fn test_patch_f10_no_trailing_newline() {
+    let source_with_error_no_newline = "fn add(a int, b int) int\n    return a + b\n\nfn broken() int\n    return \"text\"\n\nfn main()\n    println(\"ok\")";
+    with_source(source_with_error_no_newline, |path| {
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "patch should succeed with file lacking trailing newline: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+
+        // Should report the pre-existing error
+        let error_diag = env
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.code
+                    .as_deref()
+                    .map(|c| c.starts_with("MER_TYP"))
+                    .unwrap_or(false)
+            })
+            .expect("pre-existing error should be reported");
+        assert_eq!(
+            error_diag.preexisting,
+            Some(true),
+            "error should be marked preexisting: {stdout}"
+        );
+    });
+}
+
+// An empty file is refused by anchoring rather than crashing.
+#[test]
+fn test_patch_f10_empty_source_file() {
+    with_source("", |path| {
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "any",
+            "--old",
+            "x",
+            "--new",
+            "y",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(!ok, "patch should fail on empty file: {stdout}");
+        let env = envelope(&stdout);
+        assert!(!env.ok, "should report ok=false: {stdout}");
+        // Should have a parse or anchor error, not a panic
+        assert!(
+            !env.diagnostics.is_empty(),
+            "should report diagnostic(s), not panic: {stdout}"
+        );
     });
 }

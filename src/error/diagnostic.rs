@@ -365,5 +365,6 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
             .as_ref()
             .and_then(|request| request.project(file_label.unwrap_or_default(), effective_source)),
         related,
+        preexisting: None,
     }
 }

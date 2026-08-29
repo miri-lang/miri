@@ -27,6 +27,7 @@ fn diagnostic(message: &str) -> JsonDiagnostic {
         fix_safety: None,
         repair: None,
         related: vec![],
+        preexisting: None,
     }
 }
 
