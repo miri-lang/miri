@@ -38,7 +38,7 @@ impl<'source> Parser<'source> {
         let (variants, methods) = self.enum_body()?;
 
         if variants.is_empty() {
-            return Err(self.error_missing_members(SyntaxErrorKind::MissingEnumMembers));
+            return Err(self.error_missing_members(SyntaxErrorKind::MissingEnumMembers, name.span));
         }
 
         Ok(ast::enum_statement(

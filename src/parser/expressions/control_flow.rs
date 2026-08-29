@@ -176,20 +176,20 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn match_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.eat_token(&Token::Match)?;
+        let match_span = self.eat_token(&Token::Match)?.1;
         let value = self.expression()?;
-        let mut branches = Vec::new();
+        let mut branches_with_spans: Vec<(MatchBranch, Vec<_>)> = Vec::new();
 
         if self.lookahead_is_colon() {
             self.eat_token(&Token::Colon)?;
             if self.lookahead.is_some() {
-                branches.extend(self.inline_match_branches()?);
+                branches_with_spans.extend(self.inline_match_branches()?);
             }
         } else if self.lookahead_is_expression_end() {
             self.eat_expression_end()?;
             if self.lookahead_is_indent() {
                 self.eat_token(&Token::Indent)?;
-                branches.extend(self.block_match_branches()?);
+                branches_with_spans.extend(self.block_match_branches()?);
                 self.eat_token(&Token::Dedent)?;
             }
         } else {
@@ -198,28 +198,35 @@ impl<'source> Parser<'source> {
             ));
         }
 
-        if branches.is_empty() {
-            return Err(self.error_missing_match_branches());
+        if branches_with_spans.is_empty() {
+            return Err(self.error_missing_match_branches(match_span));
         }
 
-        self.reject_duplicate_branches(&branches)?;
+        self.reject_duplicate_branches(&branches_with_spans)?;
 
+        let branches = branches_with_spans
+            .into_iter()
+            .map(|(branch, _)| branch)
+            .collect();
         Ok(ast::match_expression(value, branches))
     }
 
-    fn reject_duplicate_branches(&self, branches: &[MatchBranch]) -> Result<(), SyntaxError> {
+    fn reject_duplicate_branches(
+        &self,
+        branches: &[(MatchBranch, Vec<Span>)],
+    ) -> Result<(), SyntaxError> {
         let mut seen = std::collections::HashSet::new();
-        for branch in branches {
-            for pattern in &branch.patterns {
+        for (branch, spans) in branches {
+            for (pattern, span) in branch.patterns.iter().zip(spans.iter()) {
                 if !seen.insert((pattern, &branch.guard)) {
-                    return Err(self.error_duplicate_match_pattern());
+                    return Err(self.error_duplicate_match_pattern(*span));
                 }
             }
         }
         Ok(())
     }
 
-    fn inline_match_branches(&mut self) -> Result<Vec<MatchBranch>, SyntaxError> {
+    fn inline_match_branches(&mut self) -> Result<Vec<(MatchBranch, Vec<Span>)>, SyntaxError> {
         let mut branches = vec![self.match_branch()?];
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
@@ -228,7 +235,7 @@ impl<'source> Parser<'source> {
         Ok(branches)
     }
 
-    fn block_match_branches(&mut self) -> Result<Vec<MatchBranch>, SyntaxError> {
+    fn block_match_branches(&mut self) -> Result<Vec<(MatchBranch, Vec<Span>)>, SyntaxError> {
         let mut branches = vec![self.match_branch()?];
 
         while self.lookahead.is_some() && !self.lookahead_is_dedent() {
@@ -249,46 +256,66 @@ impl<'source> Parser<'source> {
         Ok(branches)
     }
 
-    pub(crate) fn match_branch(&mut self) -> Result<MatchBranch, SyntaxError> {
+    pub(crate) fn match_branch(&mut self) -> Result<(MatchBranch, Vec<Span>), SyntaxError> {
+        let (patterns, pattern_spans) = self.match_branch_patterns()?;
+        let guard = self.match_branch_guard()?;
+        let body = self.match_branch_body()?;
+        self.try_eat_expression_end()?;
+
+        Ok((
+            MatchBranch {
+                patterns,
+                guard,
+                body: Box::new(body),
+                is_mutable: false,
+            },
+            pattern_spans,
+        ))
+    }
+
+    fn match_branch_patterns(&mut self) -> Result<(Vec<Pattern>, Vec<Span>), SyntaxError> {
+        let pattern_span = self.current_token_span();
         let mut patterns = vec![self.pattern()?];
+        let mut pattern_spans = vec![pattern_span];
+
         while self.match_lookahead_type(|t| t == &Token::Pipe) {
             self.eat_token(&Token::Pipe)?;
+            let next_span = self.current_token_span();
             patterns.push(self.pattern()?);
+            pattern_spans.push(next_span);
         }
 
-        let guard = if self.match_lookahead_type(|t| t == &Token::If) {
-            self.eat_token(&Token::If)?;
-            Some(Box::new(self.expression()?))
-        } else {
-            None
-        };
+        Ok((patterns, pattern_spans))
+    }
 
-        let body_parsing_error = self.error_unexpected_lookahead_token(
+    fn match_branch_guard(&mut self) -> Result<Option<Box<Expression>>, SyntaxError> {
+        if self.match_lookahead_type(|t| t == &Token::If) {
+            self.eat_token(&Token::If)?;
+            Ok(Some(Box::new(self.expression()?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn match_branch_body(&mut self) -> Result<Statement, SyntaxError> {
+        let body_error = self.error_unexpected_lookahead_token(
             "a colon for an inline body or an indented block for a block body",
         );
-        let body = match &self.lookahead {
+        match &self.lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
-                ast::expression_statement(expr)
+                Ok(ast::expression_statement(expr))
             }
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
-                    self.block_statement()?
+                    self.block_statement()
                 } else {
-                    return Err(body_parsing_error);
+                    Err(body_error)
                 }
             }
-            _ => return Err(body_parsing_error),
-        };
-        self.try_eat_expression_end()?;
-
-        Ok(MatchBranch {
-            patterns,
-            guard,
-            body: Box::new(body),
-            is_mutable: false,
-        })
+            _ => Err(body_error),
+        }
     }
 }
