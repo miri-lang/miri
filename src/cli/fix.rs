@@ -267,6 +267,7 @@ fn refusal_diagnostic() -> JsonDiagnostic {
         fix_safety: Some(refusal.fix_safety().as_str().to_string()),
         repair: None,
         related: vec![],
+        preexisting: None,
     }
 }
 
@@ -296,6 +297,7 @@ fn failure_diagnostic(failure: &ApplyFailure) -> JsonDiagnostic {
         fix_safety: Some(code.fix_safety().as_str().to_string()),
         repair: None,
         related: vec![],
+        preexisting: None,
     }
 }
 
@@ -726,6 +728,7 @@ mod tests {
                 }],
             }),
             related: vec![],
+            preexisting: None,
         }
     }
 

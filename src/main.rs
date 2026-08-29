@@ -203,6 +203,7 @@ fn run_file(
                         fix_safety: None,
                         repair: None,
                         related: vec![],
+                        preexisting: None,
                     }]
                 } else {
                     vec![]

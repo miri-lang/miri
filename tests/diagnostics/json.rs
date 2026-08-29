@@ -108,6 +108,7 @@ mod tests {
             fix_safety: None,
             repair: None,
             related: vec![],
+            preexisting: None,
         };
 
         let json_str = serde_json::to_string(&diag).expect("serialize");

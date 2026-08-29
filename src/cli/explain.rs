@@ -164,6 +164,7 @@ fn unknown_code(code: &str) -> JsonDiagnostic {
         fix_safety: None,
         repair: None,
         related: vec![],
+        preexisting: None,
     }
 }
 

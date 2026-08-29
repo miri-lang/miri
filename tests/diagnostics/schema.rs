@@ -168,6 +168,7 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 line: Some(5),
                 column: Some(1),
             }],
+            preexisting: Some(true),
         }],
         artifact: Some("output.bin".to_string()),
         exit_code: Some(1),

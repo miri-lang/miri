@@ -234,6 +234,7 @@ pub fn drift_diagnostic(drift: &Drift) -> JsonDiagnostic {
         fix_safety: None,
         repair: None,
         related: vec![],
+        preexisting: None,
     }
 }
 
@@ -343,6 +344,7 @@ fn command_failure_envelope(message: &str, elapsed_ms: u64) -> DiagnosticsEnvelo
         fix_safety: None,
         repair: None,
         related: vec![],
+        preexisting: None,
     };
     DiagnosticsEnvelope::new(JsonCommand::Determinism, false, vec![diagnostic])
         .with_exit_code(1)

@@ -269,6 +269,11 @@ pub struct JsonDiagnostic {
     /// Related diagnostics (notes from the original).
     #[serde(default)]
     pub related: Vec<JsonRelated>,
+    /// True if this diagnostic existed in the pre-edited version (patch command only).
+    /// Absent when the diagnostic is a command's own refusal notice (e.g., MER_BLD_011),
+    /// or for commands other than patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preexisting: Option<bool>,
 }
 
 /// A repair suggestion (reserved for Task 4).

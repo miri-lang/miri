@@ -179,6 +179,7 @@ mod tests {
                 edits: vec![],
             }),
             related: vec![],
+            preexisting: None,
         };
         let refused = compute_refused_repairs(&[diag], false);
         assert_eq!(
@@ -209,6 +210,7 @@ mod tests {
                 edits: vec![],
             }),
             related: vec![],
+            preexisting: None,
         };
         let refused = compute_refused_repairs(&[diag], false);
         assert_eq!(
@@ -239,6 +241,7 @@ mod tests {
                 edits: vec![],
             }),
             related: vec![],
+            preexisting: None,
         };
         let refused = compute_refused_repairs(&[diag], false);
         assert_eq!(
@@ -269,6 +272,7 @@ mod tests {
                 edits: vec![],
             }),
             related: vec![],
+            preexisting: None,
         };
         let refused = compute_refused_repairs(&[diag], false);
         assert_eq!(
@@ -299,6 +303,7 @@ mod tests {
                 edits: vec![],
             }),
             related: vec![],
+            preexisting: None,
         };
         let refused = compute_refused_repairs(&[diag], true);
         assert_eq!(
