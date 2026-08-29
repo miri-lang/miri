@@ -138,9 +138,10 @@ now compiles. Those are different questions: the patch succeeds if it introduces
 no new diagnostics, even if pre-existing diagnostics remain. A patch that
 introduces new errors is refused and nothing is written; `ok` is false and
 `fileWritten` is false. A patch that leaves only pre-existing errors untouched
-is written; `ok` is true and `fileWritten` is true. All reported diagnostics
-carry a `preexisting` marker to distinguish which errors existed before the edit
-and which the edit caused.
+is written; `ok` is true and `fileWritten` is true. Every reported error carries
+a `preexisting` marker distinguishing the ones that existed before the edit from
+the ones the edit caused. Warnings are reported without the marker — they are
+never partitioned — and the command's own refusal notice carries none either.
 
 `fileWritten` is true only when the edit was accepted and written. In
 `checkOnly` or `dryRun` mode, `fileWritten` is always false (the check still

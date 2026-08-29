@@ -1509,7 +1509,7 @@ fn main()
 // Edit that adds lines before a pre-existing error should report the error's line number
 // in the edited file.
 #[test]
-fn test_patch_d1_accepted_with_added_lines_reports_correct_line_number() {
+fn test_patch_accepted_with_added_lines_reports_correct_line_number() {
     let source_with_error = "fn add(a int, b int) int
     return a + b
 
@@ -1575,7 +1575,7 @@ fn main()
 
 // The accepted path maps line numbers correctly when the edit removes lines.
 #[test]
-fn test_patch_d1_accepted_with_removed_lines_reports_correct_line_number() {
+fn test_patch_accepted_with_removed_lines_reports_correct_line_number() {
     let source_with_error = "fn add(a int, b int) int
     var t = a
     var u = b
@@ -1643,7 +1643,7 @@ fn main()
 
 // The JSON envelope and the rendered output agree on a diagnostic's position.
 #[test]
-fn test_patch_d1_accepted_json_and_pretty_agree_on_line_numbers() {
+fn test_patch_accepted_json_and_pretty_agree_on_line_numbers() {
     let source_with_error = "fn add(a int, b int) int
     return a + b
 
@@ -1731,7 +1731,7 @@ fn main()
 // When edit introduces a new error by changing existing code, the pretty output
 // must show the edited text, not the original.
 #[test]
-fn test_patch_d2_refusal_renders_against_edited_text() {
+fn test_patch_refusal_renders_against_edited_text() {
     let source_with_error = "fn add(a int, b int) int
     return a + b
 
@@ -1783,7 +1783,7 @@ fn main()
 // Two errors sharing a code and a message, one pre-existing and one introduced,
 // must be marked correctly.
 #[test]
-fn test_patch_f9_identical_code_and_message_split() {
+fn test_patch_identical_code_and_message_split() {
     // A source with two functions, each with the same type error (string where int is expected)
     let source_with_two_identical_errors = "fn bad1() int
     return \"text\"
@@ -1840,7 +1840,7 @@ fn main()
 
 // `--check-only` beside a pre-existing error writes nothing.
 #[test]
-fn test_patch_f10_check_only_with_preexisting_error() {
+fn test_patch_check_only_with_preexisting_error() {
     let source_with_error = "fn add(a int, b int) int
     return a + b
 
@@ -1905,7 +1905,7 @@ fn main()
 
 // `--dry-run` beside a pre-existing error writes nothing.
 #[test]
-fn test_patch_f10_dry_run_with_preexisting_error() {
+fn test_patch_dry_run_with_preexisting_error() {
     let source_with_error = "fn add(a int, b int) int
     return a + b
 
@@ -1970,7 +1970,7 @@ fn main()
 
 // A file with no trailing newline still maps positions correctly.
 #[test]
-fn test_patch_f10_no_trailing_newline() {
+fn test_patch_no_trailing_newline() {
     let source_with_error_no_newline = "fn add(a int, b int) int\n    return a + b\n\nfn broken() int\n    return \"text\"\n\nfn main()\n    println(\"ok\")";
     with_source(source_with_error_no_newline, |path| {
         let (stdout, _stderr, ok) = patch(&[
@@ -2013,7 +2013,7 @@ fn test_patch_f10_no_trailing_newline() {
 
 // An empty file is refused by anchoring rather than crashing.
 #[test]
-fn test_patch_f10_empty_source_file() {
+fn test_patch_empty_source_file() {
     with_source("", |path| {
         let (stdout, _stderr, ok) = patch(&[
             "--replace-in-fn",
@@ -2034,6 +2034,147 @@ fn test_patch_f10_empty_source_file() {
         assert!(
             !env.diagnostics.is_empty(),
             "should report diagnostic(s), not panic: {stdout}"
+        );
+    });
+}
+
+/// A program whose check reports a deprecation warning as well as a type error.
+const WARNING_AND_ERROR: &str = "@deprecated(\"use current\")
+fn old() int
+    return 1
+
+fn add(a int, b int) int
+    return a + b
+
+fn broken() int
+    return \"text\"
+
+fn main()
+    let value = old()
+    println(\"ok\")
+";
+
+// A warning survives a failed check: an edit accepted over a pre-existing error
+// still reports the warnings the same check found.
+#[test]
+fn test_patch_reports_warning_beside_preexisting_error() {
+    with_source(WARNING_AND_ERROR, |path| {
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(
+            ok,
+            "patch should succeed over a pre-existing error: {stdout}"
+        );
+        let env = envelope(&stdout);
+        assert!(env.ok, "should report ok=true: {stdout}");
+
+        let warning = env
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == "warning")
+            .expect("the deprecation warning should be reported");
+        assert_eq!(
+            warning.code.as_deref(),
+            Some("MER_TYP_027"),
+            "the warning should be the deprecation one: {stdout}"
+        );
+        assert_eq!(
+            warning.preexisting, None,
+            "a warning is not partitioned against the baseline: {stdout}"
+        );
+        assert!(
+            env.diagnostics
+                .iter()
+                .any(|d| d.severity == "error" && d.preexisting == Some(true)),
+            "the pre-existing error should still be reported: {stdout}"
+        );
+    });
+}
+
+// A refusal reports the warnings of the edited program too, so the JSON payload
+// says what the rendering says.
+#[test]
+fn test_patch_refusal_reports_warnings() {
+    with_source(WARNING_AND_ERROR, |path| {
+        let (stdout, _stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return nope",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(!ok, "an edit introducing an error is refused: {stdout}");
+        let env = envelope(&stdout);
+        assert!(!env.ok, "should report ok=false: {stdout}");
+
+        let warning = env
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == "warning")
+            .expect("the deprecation warning should be reported");
+        assert_eq!(
+            warning.code.as_deref(),
+            Some("MER_TYP_027"),
+            "the warning should be the deprecation one: {stdout}"
+        );
+    });
+}
+
+// Warnings reach the human rendering on every path, including the one where the
+// edited program checks cleanly.
+#[test]
+fn test_patch_pretty_output_reports_warning_on_clean_apply() {
+    let source = "@deprecated(\"use current\")
+fn old() int
+    return 1
+
+fn add(a int, b int) int
+    return a + b
+
+fn main()
+    let value = old()
+    println(\"ok\")
+";
+    with_source(source, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "return a + b",
+            "--new",
+            "return a - b",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "the edit checks cleanly: {stdout}");
+        assert!(
+            stderr.contains("MER_TYP_027"),
+            "the deprecation warning should be rendered: {stderr}"
+        );
+
+        let written = read_file(path);
+        let (expected_line, _) = find_location_in_source(&written, "= old()")
+            .expect("the deprecated call is in the written file");
+        let (reported_line, _) =
+            extract_diagnostic_location(&stderr).expect("the warning carries a position");
+        assert_eq!(
+            reported_line, expected_line,
+            "the warning is rendered against the edited text: {stderr}"
         );
     });
 }

@@ -271,7 +271,8 @@ pub struct JsonDiagnostic {
     pub related: Vec<JsonRelated>,
     /// True if this diagnostic existed in the pre-edited version (patch command only).
     /// Absent when the diagnostic is a command's own refusal notice (e.g., MER_BLD_011),
-    /// or for commands other than patch.
+    /// when it is a warning, which is never partitioned against the pre-edited
+    /// version, or for commands other than patch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preexisting: Option<bool>,
 }
