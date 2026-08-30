@@ -293,6 +293,14 @@ pub enum Commands {
         #[arg(long, value_name = "PATH|")]
         body_file: Vec<String>,
 
+        /// Function to insert: its name, or `Class.method`; pairs with --body-file
+        #[arg(long, value_name = "NAME")]
+        insert_fn: Vec<String>,
+
+        /// Declaration the new one follows; optional, pairs positionally with --insert-fn
+        #[arg(long, value_name = "DECL")]
+        after: Vec<String>,
+
         /// Guard against stale state: require this SHA-256 hash
         #[arg(long, value_name = "HEX")]
         expect_sha: Option<String>,

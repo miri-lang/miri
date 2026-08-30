@@ -110,6 +110,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_BLD_014", "reports an installed skill file that has been edited since it was written, not a property of any source file"),
     ("MER_BLD_015", "reports a directory the skill command cannot write to, not a property of any source file"),
     ("MER_BLD_016", "reports a skill embedded in this build whose header cannot be read, not a property of any source file"),
+    ("MER_BLD_017", "emitted by the patch command's insert operation when a declaration already exists, not by compiling a source file"),
     ("MER_CG_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_CG_002", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_CG_003", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),

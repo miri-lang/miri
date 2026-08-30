@@ -18,7 +18,6 @@
 //! literal written `1.50`, cannot be anchored, and guessing at it would edit
 //! the wrong bytes.
 
-use crate::ast::statement::FunctionDeclarationData;
 use crate::error::diagnostic::{Diagnostic, DiagnosticBuilder};
 use crate::error::syntax::Span;
 use crate::lexer::token::Token;
@@ -164,6 +163,11 @@ impl Alignment {
         }
         self.raw_span_of_tokens(first, last)
     }
+
+    /// The raw bytes this whole declaration occupies.
+    pub fn raw_extent(&self) -> Option<(usize, usize)> {
+        self.raw_span_of_tokens(0, self.canonical.len().checked_sub(1)?)
+    }
 }
 
 /// Report a text that would not lex.
@@ -176,11 +180,14 @@ fn unlexable(what: &str) -> AlignmentDiverged {
     }
 }
 
-/// Anchor a function's canonical rendering to the source it was parsed from.
+/// Anchor a declaration's canonical rendering to the source it was parsed from.
+///
+/// The name and name_span are extracted from the declaration being anchored.
 pub fn build_alignment(
     raw_source: &str,
     canonical_rendering: &str,
-    declaration: &FunctionDeclarationData,
+    name: &str,
+    name_span: Span,
 ) -> Result<Alignment, AlignmentDiverged> {
     let canonical =
         significant_tokens(canonical_rendering).ok_or_else(|| unlexable("rendering"))?;
@@ -191,24 +198,21 @@ pub fn build_alignment(
     // after the modifiers and `fn`.
     let raw_name = raw
         .iter()
-        .position(|token| {
-            token.span.start == declaration.name_span.start
-                && token.span.end == declaration.name_span.end
-        })
+        .position(|token| token.span.start == name_span.start && token.span.end == name_span.end)
         .ok_or_else(|| AlignmentDiverged {
             token_index: 0,
-            expected: format!("the declared name `{}`", declaration.name),
+            expected: format!("the declared name `{}`", name),
             actual: "no token at the recorded name position".to_string(),
-            raw_byte_offset: declaration.name_span.start,
+            raw_byte_offset: name_span.start,
         })?;
     let canonical_name = canonical
         .iter()
-        .position(|token| token.kind == Token::Identifier && token.text == declaration.name)
+        .position(|token| token.kind == Token::Identifier && token.text == name)
         .ok_or_else(|| AlignmentDiverged {
             token_index: 0,
-            expected: format!("the declared name `{}`", declaration.name),
+            expected: format!("the declared name `{}`", name),
             actual: "a rendering that does not name it".to_string(),
-            raw_byte_offset: declaration.name_span.start,
+            raw_byte_offset: name_span.start,
         })?;
 
     // A canonical token can only sit at or after its raw counterpart's index
@@ -219,7 +223,7 @@ pub fn build_alignment(
             token_index: 0,
             expected: "a source holding this whole declaration".to_string(),
             actual: "a source that starts inside it".to_string(),
-            raw_byte_offset: declaration.name_span.start,
+            raw_byte_offset: name_span.start,
         })?;
 
     for (index, expected) in canonical.iter().enumerate() {

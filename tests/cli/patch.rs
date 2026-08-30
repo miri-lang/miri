@@ -2178,3 +2178,694 @@ fn main()
         );
     });
 }
+
+/// Write `text` to a temporary file and hand its path to `body`.
+///
+/// A declaration travels by file rather than on the command line so that a
+/// multi-line body needs no shell quoting.
+fn with_body<T>(text: &str, body: impl FnOnce(&str) -> T) -> T {
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile()
+        .expect("a temporary body file can be created");
+    file.write_all(text.as_bytes())
+        .expect("the body can be written");
+    file.flush().expect("the body reaches disk");
+    body(&file.path().display().to_string())
+}
+
+/// The code every diagnostic in an envelope carries, for assertions.
+fn codes(env: &DiagnosticsEnvelope) -> Vec<String> {
+    env.diagnostics
+        .iter()
+        .filter_map(|d| d.code.clone())
+        .collect()
+}
+
+// A file with no `--after` gets the new declaration at its end, separated by a
+// blank line and leaving the trailing newline as the author left it.
+#[test]
+fn test_insert_appends_a_top_level_function() {
+    with_source(PROBE, |path| {
+        with_body("fn answer() int\n    return 42", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(ok, "an insert of a new name applies: {stdout}{stderr}");
+            assert_eq!(
+                read_file(path),
+                "fn add(a int, b int) int\n    return a + b\n\nfn main()\n    println(\"ok\")\n\nfn answer() int\n    return 42\n",
+                "the declaration is appended below the last one, one blank line down"
+            );
+        });
+    });
+}
+
+// `--after` puts the declaration between the one it names and the next.
+#[test]
+fn test_insert_after_places_the_declaration_between_two_others() {
+    let source = "fn first() int\n    return 1\n\nfn third() int\n    return 3\n\nfn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body("fn second() int\n    return 2", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "second",
+                "--after",
+                "first",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "an insert after a named function applies: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn first() int\n    return 1\n\nfn second() int\n    return 2\n\nfn third() int\n    return 3\n\nfn main()\n    println(\"ok\")\n",
+                "the new declaration sits between the one it followed and the next"
+            );
+        });
+    });
+}
+
+// A method goes inside its container, at the depth that container's own
+// members are written at — not at the end of the file.
+//
+// The container is one with a plain field, which is the case that cannot be
+// anchored through the canonical rendering: the parser records a field as
+// mutable, so the renderer writes the `var` the file does not have.
+#[test]
+fn test_insert_places_a_method_inside_its_container() {
+    let source = "class Order\n    total int\n    quantity int\n\nfn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body(
+            "fn subtotal() int\n    return self.total * self.quantity",
+            |body| {
+                let (stdout, stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "Order.subtotal",
+                    "--body-file",
+                    body,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(ok, "a method insert applies: {stdout}{stderr}");
+                assert_eq!(
+                    read_file(path),
+                    "class Order\n    total int\n    quantity int\n\n    fn subtotal() int\n        return self.total * self.quantity\n\nfn main()\n    println(\"ok\")\n",
+                    "the method is written inside the class, at its members' depth"
+                );
+            },
+        );
+    });
+}
+
+// A method inserted after a named sibling sits at that sibling's depth.
+#[test]
+fn test_insert_after_a_method_stays_inside_the_container() {
+    let source = "class Order\n    total int\n\n    fn first() int\n        return 1\n\n    fn last() int\n        return 9\n";
+    with_source(source, |path| {
+        with_body("fn middle() int\n    return 5", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "Order.middle",
+                "--after",
+                "Order.first",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(ok, "an insert after a method applies: {stdout}{stderr}");
+            assert_eq!(
+                read_file(path),
+                "class Order\n    total int\n\n    fn first() int\n        return 1\n\n    fn middle() int\n        return 5\n\n    fn last() int\n        return 9\n",
+                "the method lands between its two siblings, at their depth"
+            );
+        });
+    });
+}
+
+// A name the file already declares is refused, and nothing is written.
+#[test]
+fn test_insert_refuses_a_name_the_file_already_declares() {
+    let source = "fn helper() int\n    return 42\n\nfn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body("fn helper() int\n    return 43", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "helper",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "a duplicate name is refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_017".to_string()),
+                "the refusal carries MER_BLD_017: {stdout}"
+            );
+            assert_eq!(read_file(path), source, "the file is left as it was");
+        });
+    });
+}
+
+// A top-level name and a method of that name are different declarations, and a
+// file may hold both.
+#[test]
+fn test_insert_allows_a_top_level_name_beside_a_method_of_that_name() {
+    let source = "class Box\n    size int\n\n    fn total() int\n        return self.size\n";
+    with_source(source, |path| {
+        with_body("fn total() int\n    return 7", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "total",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "a top-level name does not collide with a method of that name: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "class Box\n    size int\n\n    fn total() int\n        return self.size\n\nfn total() int\n    return 7\n",
+                "the top-level function is written at the top level, not into the class"
+            );
+        });
+    });
+}
+
+// A method addressed to a container the file does not declare is refused with
+// the code the agent contract names for it.
+#[test]
+fn test_insert_refuses_a_method_into_a_container_the_file_lacks() {
+    let source = "fn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body("fn method() int\n    return 42", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "Missing.method",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                !ok,
+                "a method into an undeclared container is refused: {stdout}"
+            );
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_004".to_string()),
+                "the refusal carries MER_BLD_004: {stdout}"
+            );
+            assert_eq!(read_file(path), source, "the file is left as it was");
+        });
+    });
+}
+
+// `--after` naming nothing is refused the same way any unresolved name is.
+#[test]
+fn test_insert_refuses_an_after_that_names_nothing() {
+    with_source(PROBE, |path| {
+        with_body("fn answer() int\n    return 42", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "answer",
+                "--after",
+                "nowhere",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "an anchor that names nothing is refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_004".to_string()),
+                "the refusal carries MER_BLD_004: {stdout}"
+            );
+            assert_eq!(read_file(path), PROBE, "the file is left as it was");
+        });
+    });
+}
+
+// Text declaring a name other than the one asked for is refused, because the
+// caller would otherwise be told it inserted something it did not.
+#[test]
+fn test_insert_refuses_text_declaring_another_name() {
+    with_source(PROBE, |path| {
+        with_body("fn something_else() int\n    return 42", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "a body declaring another name is refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_012".to_string()),
+                "the refusal carries MER_BLD_012: {stdout}"
+            );
+            assert_eq!(read_file(path), PROBE, "the file is left as it was");
+        });
+    });
+}
+
+// An insert that does not check is refused, and the file keeps its own text.
+#[test]
+fn test_insert_that_does_not_check_leaves_the_file_alone() {
+    with_source(PROBE, |path| {
+        with_body("fn answer() int\n    return missing_name()", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "an insert that does not check is refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_011".to_string()),
+                "the refusal reports the edited program was rejected: {stdout}"
+            );
+            assert_eq!(read_file(path), PROBE, "the file is left as it was");
+        });
+    });
+}
+
+// The separators an insert introduces follow the endings the file already uses.
+#[test]
+fn test_insert_follows_the_files_line_endings() {
+    with_source("fn r() int\r\n    return 1\r\n", |path| {
+        with_body("fn s() int\n    return 2", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "s",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "a file with carriage returns is inserted into: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn r() int\r\n    return 1\r\n\r\nfn s() int\r\n    return 2\r\n",
+                "the line endings the author used are the ones the insert writes"
+            );
+        });
+    });
+}
+
+// A file with no trailing newline keeps having none.
+#[test]
+fn test_insert_into_a_file_without_a_trailing_newline() {
+    with_source("fn a() int\n    return 1", |path| {
+        with_body("fn b() int\n    return 2", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "b",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "a file with no trailing newline is inserted into: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn a() int\n    return 1\n\nfn b() int\n    return 2",
+                "no trailing newline is invented"
+            );
+        });
+    });
+}
+
+// An empty file takes the declaration with no blank line above it.
+#[test]
+fn test_insert_into_an_empty_file() {
+    with_source("", |path| {
+        with_body("fn main()\n    println(\"ok\")", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "main",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(ok, "an empty file takes an insert: {stdout}{stderr}");
+            assert_eq!(
+                read_file(path),
+                "fn main()\n    println(\"ok\")",
+                "the file opens with the declaration, not with whitespace"
+            );
+        });
+    });
+}
+
+// A batch applies in order, so a later insert may call an earlier one.
+#[test]
+fn test_a_batch_of_inserts_applies_in_order() {
+    with_source("fn base() int\n    return 1\n", |path| {
+        with_body("fn one() int\n    return base() + 1", |first| {
+            with_body("fn two() int\n    return one() + 1", |second| {
+                let (stdout, stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "one",
+                    "--body-file",
+                    first,
+                    "--insert-fn",
+                    "two",
+                    "--body-file",
+                    second,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(ok, "a batch of inserts applies: {stdout}{stderr}");
+                assert_eq!(
+                    read_file(path),
+                    "fn base() int\n    return 1\n\nfn one() int\n    return base() + 1\n\nfn two() int\n    return one() + 1\n",
+                    "both declarations are written, and the second one sees the first"
+                );
+            })
+        });
+    });
+}
+
+// A declaration carrying a doc comment and an attribute keeps both when the
+// insert lands after it.
+#[test]
+fn test_insert_after_a_decorated_declaration_leaves_its_decoration_attached() {
+    let source = "// What this one does.\n@deprecated(\"use later instead\")\nfn earlier() int\n    return 1\n\nfn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body("fn later() int\n    return 2", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "later",
+                "--after",
+                "earlier",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "an insert after a decorated declaration applies: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "// What this one does.\n@deprecated(\"use later instead\")\nfn earlier() int\n    return 1\n\nfn later() int\n    return 2\n\nfn main()\n    println(\"ok\")\n",
+                "the comment and the attribute stay above the declaration they described"
+            );
+        });
+    });
+}
+
+// Neither mode that holds a result back writes the file.
+#[test]
+fn test_insert_writes_nothing_in_check_only_or_dry_run() {
+    for mode in ["--check-only", "--dry-run"] {
+        with_source(PROBE, |path| {
+            with_body("fn answer() int\n    return 42", |body| {
+                let (stdout, stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "answer",
+                    "--body-file",
+                    body,
+                    mode,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(
+                    ok,
+                    "{mode} reports the insert would apply: {stdout}{stderr}"
+                );
+                assert_eq!(read_file(path), PROBE, "{mode} writes nothing");
+            });
+        });
+    }
+}
+
+// One call takes either a replacement or an insert, because both would pair
+// against `--body-file` and the pairing would say nothing about which is which.
+#[test]
+fn test_a_replacement_and_an_insert_cannot_share_one_call() {
+    with_source(PROBE, |path| {
+        with_body("return 0", |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--replace-fn",
+                "add",
+                "--body-file",
+                body,
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "the two flags together are refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_012".to_string()),
+                "the refusal carries MER_BLD_012: {stdout}"
+            );
+        });
+    });
+}
+
+// An `--after` for some inserts but not others names no order, so it is refused.
+#[test]
+fn test_insert_refuses_a_partial_after_list() {
+    with_source(PROBE, |path| {
+        with_body("fn one() int\n    return 1", |first| {
+            with_body("fn two() int\n    return 2", |second| {
+                let (stdout, _stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "one",
+                    "--body-file",
+                    first,
+                    "--insert-fn",
+                    "two",
+                    "--body-file",
+                    second,
+                    "--after",
+                    "add",
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(!ok, "a partial --after is refused: {stdout}");
+                assert!(
+                    codes(&envelope(&stdout)).contains(&"MER_BLD_012".to_string()),
+                    "the refusal carries MER_BLD_012: {stdout}"
+                );
+            })
+        });
+    });
+}
+
+// Text declaring more than the one declaration asked for is refused, on both
+// the top-level path and the method path.
+//
+// The method path is the one that needs saying: a container grows without the
+// file's top-level count changing, so nothing downstream would notice the
+// extra declaration and the caller would be told it inserted one thing.
+#[test]
+fn test_insert_refuses_text_declaring_more_than_one_declaration() {
+    let two = "fn helper() int\n    return 1\n\nfn actual() int\n    return 2";
+
+    let class_source = "class Order\n    total int\n\nfn main()\n    println(\"ok\")\n";
+    with_source(class_source, |path| {
+        with_body(two, |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "Order.actual",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "a body declaring two methods is refused: {stdout}");
+            assert!(
+                codes(&envelope(&stdout)).contains(&"MER_BLD_012".to_string()),
+                "the refusal carries MER_BLD_012: {stdout}"
+            );
+            assert_eq!(read_file(path), class_source, "the file is left as it was");
+        });
+    });
+
+    with_source(PROBE, |path| {
+        with_body(two, |body| {
+            let (stdout, _stderr, ok) = patch(&[
+                "--insert-fn",
+                "actual",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "a body declaring two functions is refused: {stdout}");
+            assert_eq!(read_file(path), PROBE, "the file is left as it was");
+        });
+    });
+}
+
+// A declaration reaches the command through standard input, which is what an
+// agent holding text in memory rather than on disk uses.
+#[test]
+fn test_insert_reads_a_declaration_from_standard_input() {
+    with_source(PROBE, |path| {
+        let output = miri_cmd()
+            .arg("patch")
+            .args([
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                "-",
+                "--format",
+                "json",
+            ])
+            .arg(path.display().to_string())
+            .write_stdin("fn answer() int\n    return 42")
+            .output()
+            .expect("the patch command runs");
+
+        assert!(
+            output.status.success(),
+            "a declaration read from standard input applies: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            read_file(path),
+            "fn add(a int, b int) int\n    return a + b\n\nfn main()\n    println(\"ok\")\n\nfn answer() int\n    return 42\n",
+            "the declaration read from standard input is the one written"
+        );
+    });
+}
+
+// A batch is refused whole. The first operation failing means the later ones
+// never run and the file keeps every byte it had.
+#[test]
+fn test_a_batch_is_refused_whole_when_its_first_insert_is() {
+    let source = "fn taken() int\n    return 1\n";
+    with_source(source, |path| {
+        with_body("fn taken() int\n    return 2", |first| {
+            with_body("fn fresh() int\n    return 3", |second| {
+                let (stdout, _stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "taken",
+                    "--body-file",
+                    first,
+                    "--insert-fn",
+                    "fresh",
+                    "--body-file",
+                    second,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(!ok, "the batch is refused: {stdout}");
+                assert!(
+                    codes(&envelope(&stdout)).contains(&"MER_BLD_017".to_string()),
+                    "the refusal names the duplicate: {stdout}"
+                );
+                assert_eq!(
+                    read_file(path),
+                    source,
+                    "neither operation reached the file"
+                );
+            })
+        });
+    });
+}
+
+// A container's members set the depth, whatever width the file indents with.
+#[test]
+fn test_insert_adopts_the_containers_own_indent_width() {
+    for (width, indent) in [(2, "  "), (8, "        ")] {
+        let source = format!(
+            "class Tiny\n{indent}size int\n\nfn main()\n{indent}println(\"ok\")\n",
+            indent = indent
+        );
+        with_source(&source, |path| {
+            with_body("fn grow() int\n    return self.size + 1", |body| {
+                let (stdout, stderr, ok) = patch(&[
+                    "--insert-fn",
+                    "Tiny.grow",
+                    "--body-file",
+                    body,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+                assert!(ok, "a {width}-space file takes a method: {stdout}{stderr}");
+                assert!(
+                    read_file(path).contains(&format!("\n\n{indent}fn grow() int\n")),
+                    "the method header sits at the container's own member depth, not at four spaces: {}",
+                    read_file(path)
+                );
+            });
+        });
+    }
+}
+
+// A dry run reports the difference it would make and writes nothing.
+#[test]
+fn test_insert_dry_run_reports_the_difference_without_writing() {
+    with_source(PROBE, |path| {
+        with_body("fn answer() int\n    return 42", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "answer",
+                "--body-file",
+                body,
+                "--dry-run",
+                &path.display().to_string(),
+            ]);
+            assert!(ok, "a dry run of an insert succeeds: {stdout}{stderr}");
+            assert!(
+                stdout.contains("+fn answer() int"),
+                "the diff shows the declaration being added: {stdout}"
+            );
+            assert_eq!(read_file(path), PROBE, "a dry run writes nothing");
+        });
+    });
+}
