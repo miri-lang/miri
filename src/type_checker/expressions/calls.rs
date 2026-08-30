@@ -85,7 +85,18 @@ impl TypeChecker {
             return result;
         }
 
+        // Set call_site_arity when func is a member access (diagnostic-only, for better suggestions)
+        let prev_arity = if matches!(func.node, ExpressionKind::Member(..)) {
+            self.call_site_arity.replace(args.len())
+        } else {
+            None
+        };
+
         let func_type = self.infer_expression(func, context);
+
+        // Restore call_site_arity after member-access inference completes.
+        // Use prev_arity to handle nested cases correctly.
+        self.call_site_arity = prev_arity;
 
         // Compile-time bounds checking for methods marked with @index_bounds_check.
         // Must run AFTER infer_expression to avoid re-inferring module alias receivers.

@@ -66,6 +66,43 @@ let x = \"hello\" + 1
 }
 
 #[test]
+fn test_string_int_mismatch_with_help() {
+    type_checker_error_with_help_test(
+        "
+let x = \"hello\" + 1
+",
+        "Type mismatch: cannot add String and int",
+        "build the text with an f-string",
+    );
+}
+
+/// The text may be either operand.
+#[test]
+fn test_int_string_mismatch_with_help() {
+    type_checker_error_with_help_test(
+        "
+let x = 1 + \"hello\"
+",
+        "Invalid types for arithmetic operation: int and String",
+        "build the text with an f-string",
+    );
+}
+
+/// The hint reads the operand's type, not the shape of the expression, so a
+/// bound variable is served the same as a literal.
+#[test]
+fn test_string_variable_int_mismatch_with_help() {
+    type_checker_error_with_help_test(
+        "
+let s = \"hello\"
+let x = s + 1
+",
+        "Type mismatch: cannot add String and int",
+        "build the text with an f-string",
+    );
+}
+
+#[test]
 fn test_string_bool_mismatch() {
     // String + bool is invalid — both sides must be String for Addable (concat).
     type_checker_error_test(

@@ -43,6 +43,7 @@ pub(crate) mod float_literals;
 mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;
+pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
 pub mod statements;
@@ -162,6 +163,14 @@ pub struct TypeChecker {
     /// sites — a call, an instantiation, an enum-variant reference — can emit
     /// warnings.
     pub(crate) deprecated_declarations: HashMap<String, Deprecation>,
+    /// The argument count at a method call site, used only for arity-aware
+    /// member suggestions. Set temporarily in `infer_call` when the function
+    /// being called is a member access (`Member(..)` expression), then consumed
+    /// (via `take()`) at the start of member-access inference. This ensures
+    /// arity information is only visible when inferring the receiver's members,
+    /// not during sub-expression inference (preventing leakage from nested calls).
+    /// Diagnostic-only: does not affect what resolves or compiles.
+    pub(crate) call_site_arity: Option<usize>,
 }
 
 impl Default for TypeChecker {
@@ -195,6 +204,7 @@ impl TypeChecker {
             suppress_diagnostics: false,
             resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
+            call_site_arity: None,
         }
     }
 
