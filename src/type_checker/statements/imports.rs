@@ -40,7 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::*;
-use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -568,7 +568,7 @@ impl TypeChecker {
         };
 
         self.filter_scope_symbols(pre_import_globals, &should_be_visible, context);
-        self.filter_type_definitions(pre_import_global_types, module_name, &should_be_visible);
+        self.filter_type_definitions(pre_import_global_types, &should_be_visible);
         self.register_item_aliases(import_kind);
         self.validate_selected_exports(&selected_names, module_name, span);
     }
@@ -649,34 +649,30 @@ impl TypeChecker {
         }
     }
 
+    /// Drops the names an import did not select from user-facing visibility,
+    /// while keeping every definition the load produced.
+    ///
+    /// The definition has to survive: a selectively imported symbol's own
+    /// signature may name a sibling type the caller did not select, and reading
+    /// that signature resolves the name from the definitions rather than from
+    /// what this scope may write. Hiding the name is what keeps the selection
+    /// meaningful — the caller still cannot name the type itself.
     fn filter_type_definitions(
         &mut self,
         pre_import_global_types: &HashSet<String>,
-        module_name: &str,
         should_be_visible: &dyn Fn(&str, Option<&str>) -> bool,
     ) {
-        self.type_table.global_type_definitions.retain(|name, def| {
-            if !pre_import_global_types.contains(name) {
-                let def_module = match def {
-                    TypeDefinition::Class(cd) => Some(cd.module.as_str()),
-                    TypeDefinition::Trait(td) => Some(td.module.as_str()),
-                    TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
-                    TypeDefinition::Enum(ed) => Some(ed.module.as_str()),
-                    _ => None,
-                };
-                if should_be_visible(name, def_module) {
-                    return true;
-                }
-                let is_transitive = def_module.is_some_and(|m| m != module_name);
-                if is_transitive {
-                    self.type_table.visible_type_names.remove(name);
-                    return true;
-                }
-                self.type_table.visible_type_names.remove(name);
-                return false;
-            }
-            true
-        });
+        let hidden: Vec<String> = self
+            .type_table
+            .global_type_definitions
+            .iter()
+            .filter(|(name, _)| !pre_import_global_types.contains(*name))
+            .filter(|(name, def)| !should_be_visible(name, module_of(def)))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in hidden {
+            self.type_table.visible_type_names.remove(&name);
+        }
     }
 
     fn register_item_aliases(&mut self, import_kind: &ImportPathKind) {
@@ -999,144 +995,128 @@ impl TypeChecker {
     /// stdlib module paths in the compiler source.  The scan is intentionally
     /// lazy — it runs only on error paths — so its cost is not felt in the
     /// normal (success) compilation path.
-    pub(crate) fn suggest_module_for_type(&self, type_name: &str) -> Option<String> {
-        let stdlib_roots = get_stdlib_search_roots();
-
-        // Try each stdlib root until we find the type
-        for stdlib_base in stdlib_roots {
-            if let Some(module) =
-                Self::scan_dir_for_class_definition(&stdlib_base, type_name, &stdlib_base)
-            {
-                return Some(module);
-            }
-        }
-        None
-    }
-
     /// Emits a unified "unknown type, consider importing" diagnostic when
     /// `type_name` names a stdlib type that exists but is not imported into the
-    /// current scope. Returns `true` if the hint was emitted, signalling the
+    /// current scope. If the type is declared by exactly one module, emits a
+    /// repair with help text; otherwise emits help only (since the choice is the
+    /// author's). Returns `true` if any diagnostic was emitted, signalling the
     /// caller to suppress its own fallback error so the two "named hidden type"
     /// paths (the bare collection identifier and the sized-array constructor)
     /// surface the same actionable message.
     pub(crate) fn report_hidden_type_import_hint(&mut self, type_name: &str, span: Span) -> bool {
-        match self.suggest_module_for_type(type_name) {
-            Some(module) => {
-                self.report_error_with_help(
-                    DiagnosticCode::TypTypeNotFound,
-                    format!("Unknown type: {}", type_name),
-                    span,
-                    format!("Consider importing '{}'", module),
-                );
-                true
-            }
-            None => false,
+        let modules = Self::modules_declaring_type(type_name);
+        if modules.is_empty() {
+            return false;
         }
+        let message = format!("Unknown type: {}", type_name);
+        if let [single_module] = modules.as_slice() {
+            self.report_error_with_help_and_repair(
+                DiagnosticCode::TypTypeNotFound,
+                message,
+                span,
+                format!("Consider importing '{}'", single_module),
+                RepairRequest::AddImport {
+                    module: single_module.clone(),
+                    name: type_name.to_string(),
+                },
+            );
+        } else {
+            self.report_error_with_help(
+                DiagnosticCode::TypTypeNotFound,
+                message,
+                span,
+                format!("Consider importing '{}'", modules[0]),
+            );
+        }
+        true
     }
 
     /// Every stdlib module declaring `name` as a top-level function, sorted.
-    ///
-    /// The result is sorted so it does not depend on directory iteration order,
-    /// which no filesystem guarantees. A caller that acts on the answer needs
-    /// the same answer every run.
-    ///
-    /// No module or symbol name is written here: the search reads whatever the
-    /// stdlib tree actually declares.
     pub(crate) fn modules_declaring_function(name: &str) -> Vec<String> {
-        let mut found = Vec::new();
-        for root in get_stdlib_search_roots() {
-            if root.is_dir() {
-                Self::collect_modules_declaring_function(&root, name, &root, &mut found);
-            }
-            // The first existing root wins, matching how a module path resolves.
-            if !found.is_empty() {
-                break;
-            }
-        }
-        found.sort();
-        found.dedup();
-        found
+        modules_declaring(name, declares_function)
     }
 
-    /// Recursively collects module paths under `dir` declaring `fn <name>`.
-    fn collect_modules_declaring_function(
-        dir: &Path,
-        name: &str,
-        base: &Path,
-        found: &mut Vec<String>,
-    ) {
-        let Ok(read_dir) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                Self::collect_modules_declaring_function(&path, name, base, found);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("mi") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if declares_function(&content, name) {
-                        if let Some(module) = module_path_of(&path, base) {
-                            found.push(module);
-                        }
+    /// Every stdlib module declaring `name` as a top-level type, sorted.
+    pub(crate) fn modules_declaring_type(name: &str) -> Vec<String> {
+        modules_declaring(name, declares_type)
+    }
+}
+
+/// Every stdlib module whose source satisfies `declares`, sorted.
+///
+/// The result is sorted so it does not depend on directory iteration order,
+/// which no filesystem guarantees. A caller that acts on the answer needs the
+/// same answer every run.
+///
+/// No module or symbol name is written here: the search reads whatever the
+/// stdlib tree actually declares.
+fn modules_declaring(name: &str, declares: fn(&str, &str) -> bool) -> Vec<String> {
+    let mut found = Vec::new();
+    for root in get_stdlib_search_roots() {
+        if root.is_dir() {
+            collect_modules_declaring(&root, name, &root, declares, &mut found);
+        }
+        // The first existing root wins, matching how a module path resolves.
+        if !found.is_empty() {
+            break;
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Recursively collects module paths under `dir` whose source satisfies
+/// `declares` for `name`.
+fn collect_modules_declaring(
+    dir: &Path,
+    name: &str,
+    base: &Path,
+    declares: fn(&str, &str) -> bool,
+    found: &mut Vec<String>,
+) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_modules_declaring(&path, name, base, declares, found);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("mi") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if declares(&content, name) {
+                    if let Some(module) = module_path_of(&path, base) {
+                        found.push(module);
                     }
                 }
             }
         }
     }
+}
 
-    /// Recursively scans `dir` for a `.mi` file whose top-level declarations
-    /// include `class <type_name>`.  Returns the dot-separated module path
-    /// (e.g. `"system.collections.array"`) derived from the file's position
-    /// relative to `base`, or `None` if no such file is found.
-    fn scan_dir_for_class_definition(dir: &Path, type_name: &str, base: &Path) -> Option<String> {
-        let read_dir = fs::read_dir(dir).ok()?;
-
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(result) = Self::scan_dir_for_class_definition(&path, type_name, base) {
-                    return Some(result);
-                }
-            } else if path.extension().and_then(|e| e.to_str()) == Some("mi") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let defines_type = content.lines().any(|line| {
-                        let trimmed = line.trim();
-                        // Skip comment lines.
-                        if trimmed.starts_with("//") {
-                            return false;
-                        }
-                        // Look for `class <type_name>` as adjacent whitespace-separated tokens,
-                        // handling optional modifiers like `public` or `abstract`, and
-                        // stripping any generic parameters (e.g. `Array<T, Size>` → `Array`).
-                        trimmed
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .windows(2)
-                            .any(|w| {
-                                w[0] == "class"
-                                    && w[1].split('<').next().unwrap_or(w[1]) == type_name
-                            })
-                    });
-
-                    if defines_type {
-                        if let Ok(relative) = path.strip_prefix(base) {
-                            let parts: Vec<String> = relative
-                                .components()
-                                .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
-                                .collect();
-                            if let Some(last_part) = parts.last() {
-                                let last = last_part.trim_end_matches(".mi").to_string();
-                                let mut module_parts = parts[..parts.len() - 1].to_vec();
-                                module_parts.push(last);
-                                return Some(module_parts.join("."));
-                            }
-                        }
-                    }
-                }
+/// Whether `source` declares `name` as a top-level type.
+///
+/// Recognises every form the language uses to introduce a type name, with
+/// generic parameters stripped, so a type is found however it is declared.
+fn declares_type(source: &str, name: &str) -> bool {
+    const TYPE_KEYWORDS: [&str; 5] = ["class", "enum", "struct", "trait", "type"];
+    source.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || is_indented_line(line) {
+            return false;
+        }
+        let mut words = trimmed.split_whitespace();
+        while let Some(word) = words.next() {
+            if !TYPE_KEYWORDS.contains(&word) {
+                continue;
+            }
+            let declared = words.next().and_then(|next| next.split('<').next());
+            if declared == Some(name) {
+                return true;
             }
         }
-        None
-    }
+        false
+    })
 }
 
 /// Ordered stdlib search roots, highest priority first, so the compiler
@@ -1300,6 +1280,26 @@ mod stdlib_search_root_tests {
     }
 }
 
+/// The module a type definition came from, where it records one.
+///
+/// A generic parameter and an alias are scoped rather than owned by a module,
+/// so neither carries one.
+fn module_of(definition: &TypeDefinition) -> Option<&str> {
+    match definition {
+        TypeDefinition::Class(def) => Some(def.module.as_str()),
+        TypeDefinition::Trait(def) => Some(def.module.as_str()),
+        TypeDefinition::Struct(def) => Some(def.module.as_str()),
+        TypeDefinition::Enum(def) => Some(def.module.as_str()),
+        TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => None,
+    }
+}
+
+/// Whether a line is indented, which makes it a method or a nested item rather
+/// than a top-level importable declaration.
+fn is_indented_line(line: &str) -> bool {
+    line.starts_with(char::is_whitespace)
+}
+
 /// Whether `source` declares `name` as a top-level function.
 ///
 /// Reads the declaration form the language actually uses rather than any
@@ -1311,9 +1311,7 @@ fn declares_function(source: &str, name: &str) -> bool {
         if trimmed.starts_with("//") {
             return false;
         }
-        // A top-level declaration sits at column zero; an indented `fn` is a
-        // method on a type and is not importable on its own.
-        if line.starts_with(char::is_whitespace) {
+        if is_indented_line(line) {
             return false;
         }
         let mut words = trimmed.split_whitespace();

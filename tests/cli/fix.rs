@@ -537,3 +537,164 @@ fn test_a_repair_belonging_to_an_imported_file_is_not_applied() {
     );
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn test_unimported_list_collection_is_repaired_with_import_and_checks_clean() {
+    let fixture = Fixture::new("unimported-list", "fn main()\n    let l = List([1, 2])\n");
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["add-import"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture
+            .contents()
+            .starts_with("use system.collections.list"),
+        "the import should lead the file, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_unimported_map_collection_is_repaired_with_import_and_checks_clean() {
+    let fixture = Fixture::new(
+        "unimported-map",
+        "fn main()\n    let m = Map<String, int>()\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["add-import"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture.contents().starts_with("use system.collections.map"),
+        "the import should lead the file, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_unimported_set_collection_is_repaired_with_import_and_checks_clean() {
+    let fixture = Fixture::new("unimported-set", "fn main()\n    let s = Set({1})\n");
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["add-import"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture.contents().starts_with("use system.collections.set"),
+        "the import should lead the file, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_unimported_json_is_repaired_with_import_and_checks_clean() {
+    let fixture = Fixture::new(
+        "unimported-json",
+        "fn main()\n    let j = Json.parse(\"{}\")\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["add-import"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture.contents().starts_with("use system.json"),
+        "the import should lead the file, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_ambiguous_unimported_type_gets_no_repair() {
+    let stdlib = TemporaryStdlib::new(
+        "ambiguous-widget",
+        &[("alpha", "class Widget\n"), ("beta", "class Widget\n")],
+    );
+    let fixture = Fixture::new("ambiguous-widget", "fn main()\n    let w = Widget()\n");
+
+    let repair = stdlib.plan_repair_for(fixture.path(), "Widget");
+    assert!(
+        repair.is_none(),
+        "type declared in two modules should not get a repair, got {:?}",
+        repair
+    );
+    assert!(
+        !checks_clean(fixture.path()),
+        "an unimported ambiguous type should still be an error, repair or not"
+    );
+}
+
+/// A type is found however it is declared, not only when it is a `class`.
+///
+/// The stdlib happens to declare its types as classes and enums, so a scan that
+/// silently missed the other forms would still pass every test written against
+/// it. These modules name one type per declaration form instead.
+#[test]
+fn test_a_type_is_repaired_whichever_form_declares_it() {
+    let forms = [
+        ("astruct", "struct Marker\n    x int\n", "Marker"),
+        ("atrait", "trait Marker\n    fn ping()\n", "Marker"),
+        ("analias", "type Marker is String\n", "Marker"),
+    ];
+
+    for (module, source, name) in forms {
+        let stdlib = TemporaryStdlib::new(module, &[(module, source)]);
+        let fixture = Fixture::new(
+            &format!("declared-as-{}", module),
+            "fn main()\n    let v = Marker()\n",
+        );
+
+        assert_eq!(
+            stdlib.plan_repair_for(fixture.path(), name).as_deref(),
+            Some(format!("Import `Marker` from `system.{}`.", module).as_str()),
+            "a type declared in {} should be importable",
+            source.trim()
+        );
+    }
+}
+
+#[test]
+fn test_selective_import_hides_sibling_types() {
+    let fixture = Fixture::new(
+        "selective-import-hides-sibling",
+        "use system.json.{Json}\n\nfn main()\n    let e = JsonError.TrailingData(1, 1)\n",
+    );
+    assert!(
+        !checks_clean(fixture.path()),
+        "JsonError should not be directly accessible with selective import"
+    );
+}
+
+#[test]
+fn test_selective_import_of_json_checks_clean() {
+    let fixture = Fixture::new(
+        "selective-import-json",
+        "use system.json.{Json}\n\nfn main()\n    let j = Json.parse(\"{}\")\n",
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "Json imported selectively should be usable and check clean"
+    );
+}
