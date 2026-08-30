@@ -1,0 +1,5 @@
+// expect: MER_PAR_001
+// summary: Arrow-style return type (Rust-like syntax, not Miri).
+// expect-help: Miri writes the return type directly after the parameter list: `fn main() int`.
+fn main() -> int
+    println("hello")

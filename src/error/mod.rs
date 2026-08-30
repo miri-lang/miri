@@ -9,6 +9,7 @@
 pub mod codegen;
 pub mod compiler;
 pub mod diagnostic;
+pub mod foreign_syntax;
 pub mod format;
 pub mod lowering;
 pub mod runtime;

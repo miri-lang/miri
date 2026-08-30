@@ -49,6 +49,7 @@ use crate::ast::types::{
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
+use crate::error::foreign_syntax::ForeignForm;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -294,6 +295,22 @@ impl TypeChecker {
     }
 
     fn report_undefined_identifier_error(&mut self, name: &str, span: Span, context: &Context) {
+        // A name another language spells the absent value with resolves nowhere,
+        // so it arrives here as an ordinary unknown name. Naming the construct
+        // is more use than guessing at the nearest binding in scope.
+        if let Some(form) = foreign_absent_value(name, span) {
+            if let Some(repair) = form.repair() {
+                self.report_error_with_help_and_repair(
+                    DiagnosticCode::TypUndefinedName,
+                    format!("Undefined variable: {}", name),
+                    span,
+                    form.help().to_string(),
+                    repair,
+                );
+                return;
+            }
+        }
+
         let entity_kind = if self.type_table.global_type_definitions.contains_key(name)
             || name.starts_with(|c: char| c.is_uppercase())
         {
@@ -432,3 +449,20 @@ impl TypeChecker {
         }
     }
 }
+
+/// The absent-value spelling `name` comes from, when it is not Miri's.
+///
+/// Miri writes the absent value as a literal, so these names never resolve to
+/// anything and would otherwise be measured against the bindings in scope for a
+/// nearest match that cannot exist.
+fn foreign_absent_value(name: &str, span: Span) -> Option<ForeignForm> {
+    FOREIGN_ABSENT_VALUES
+        .contains(&name)
+        .then_some(ForeignForm::NullLiteral {
+            spelling_start: span.start,
+            spelling_end: span.end,
+        })
+}
+
+/// The names other languages give the absent value.
+const FOREIGN_ABSENT_VALUES: &[&str] = &["null", "nil", "nullptr"];

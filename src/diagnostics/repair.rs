@@ -30,6 +30,16 @@ pub enum RepairId {
     AddImport,
     /// Drop positional arguments a call does not declare.
     DropExtraArguments,
+    /// Remove a colon and surrounding whitespace in type annotation.
+    ColonAnnotation,
+    /// Remove an arrow and surrounding whitespace in return type.
+    ArrowReturnType,
+    /// Replace `let mut` with `var`.
+    LetMutToVar,
+    /// Replace a null-like literal with `None`.
+    NullToNone,
+    /// Remove the `!` from a macro call.
+    PrintlnBang,
 }
 
 impl RepairId {
@@ -39,12 +49,26 @@ impl RepairId {
             Self::LetToVar => "let-to-var",
             Self::AddImport => "add-import",
             Self::DropExtraArguments => "drop-extra-arguments",
+            Self::ColonAnnotation => "colon-annotation",
+            Self::ArrowReturnType => "arrow-return-type",
+            Self::LetMutToVar => "let-mut-to-var",
+            Self::NullToNone => "null-to-none",
+            Self::PrintlnBang => "println-bang",
         }
     }
 
     /// Every repair identifier, in declaration order.
     pub fn all() -> &'static [RepairId] {
-        &[Self::LetToVar, Self::AddImport, Self::DropExtraArguments]
+        &[
+            Self::LetToVar,
+            Self::AddImport,
+            Self::DropExtraArguments,
+            Self::ColonAnnotation,
+            Self::ArrowReturnType,
+            Self::LetMutToVar,
+            Self::NullToNone,
+            Self::PrintlnBang,
+        ]
     }
 }
 
@@ -85,11 +109,37 @@ pub enum RepairRequest {
     /// The range starts after the last argument the callee declares, so the
     /// deletion covers the separating comma and never touches the parentheses.
     DropExtraArguments { start: usize, end: usize },
+    /// Remove a colon and surrounding whitespace in a type annotation.
+    ColonAnnotation {
+        colon_start: usize,
+        colon_end: usize,
+    },
+    /// Remove an arrow and surrounding whitespace in a return type.
+    ArrowReturnType {
+        arrow_start: usize,
+        arrow_end: usize,
+    },
+    /// Replace `let mut` with `var`.
+    LetMutToVar {
+        keyword_start: usize,
+        mut_end: usize,
+    },
+    /// Replace a null-like literal with `None`.
+    NullToNone {
+        spelling_start: usize,
+        spelling_end: usize,
+    },
+    /// Remove the `!` from a macro call.
+    PrintlnBang { bang_start: usize },
 }
 
 /// The `let` keyword, and the `var` that replaces it. Equal length is a
 /// coincidence of the language, not something the edit relies on.
 const LET_KEYWORD: &str = "let";
+
+/// The mutability marker other languages spell a mutable binding with. Miri has
+/// no such keyword: `var` carries the meaning on its own.
+const MUT_KEYWORD: &str = "mut";
 
 impl RepairRequest {
     /// The stable identifier for this request's shape.
@@ -98,6 +148,11 @@ impl RepairRequest {
             Self::LetToVar { .. } => RepairId::LetToVar,
             Self::AddImport { .. } => RepairId::AddImport,
             Self::DropExtraArguments { .. } => RepairId::DropExtraArguments,
+            Self::ColonAnnotation { .. } => RepairId::ColonAnnotation,
+            Self::ArrowReturnType { .. } => RepairId::ArrowReturnType,
+            Self::LetMutToVar { .. } => RepairId::LetMutToVar,
+            Self::NullToNone { .. } => RepairId::NullToNone,
+            Self::PrintlnBang { .. } => RepairId::PrintlnBang,
         }
     }
 
@@ -119,6 +174,25 @@ impl RepairRequest {
             }
             Self::DropExtraArguments { start, end } => {
                 Self::project_drop_extra_arguments(path, source, *start, *end)
+            }
+            Self::ColonAnnotation {
+                colon_start,
+                colon_end,
+            } => Self::project_colon_annotation(path, source, *colon_start, *colon_end),
+            Self::ArrowReturnType {
+                arrow_start,
+                arrow_end,
+            } => Self::project_arrow_return_type(path, source, *arrow_start, *arrow_end),
+            Self::LetMutToVar {
+                keyword_start,
+                mut_end,
+            } => Self::project_let_mut_to_var(path, source, *keyword_start, *mut_end),
+            Self::NullToNone {
+                spelling_start,
+                spelling_end,
+            } => Self::project_null_to_none(path, source, *spelling_start, *spelling_end),
+            Self::PrintlnBang { bang_start } => {
+                Self::project_println_bang(path, source, *bang_start)
             }
         }
     }
@@ -184,6 +258,152 @@ impl RepairRequest {
             }],
         })
     }
+
+    fn project_colon_annotation(
+        path: &str,
+        source: &str,
+        colon_start: usize,
+        colon_end: usize,
+    ) -> Option<JsonRepair> {
+        let separator = replace_with_separator(source, colon_start, colon_end, ":")?;
+        Some(JsonRepair {
+            id: RepairId::ColonAnnotation.as_str().to_string(),
+            summary: "Write the type after the name, without a colon.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: separator.start,
+                end: separator.end,
+                replacement: " ".to_string(),
+            }],
+        })
+    }
+
+    fn project_arrow_return_type(
+        path: &str,
+        source: &str,
+        arrow_start: usize,
+        arrow_end: usize,
+    ) -> Option<JsonRepair> {
+        let separator = replace_with_separator(source, arrow_start, arrow_end, "->")?;
+        Some(JsonRepair {
+            id: RepairId::ArrowReturnType.as_str().to_string(),
+            summary: "Write the return type after the parameter list, without an arrow."
+                .to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: separator.start,
+                end: separator.end,
+                replacement: " ".to_string(),
+            }],
+        })
+    }
+
+    fn project_let_mut_to_var(
+        path: &str,
+        source: &str,
+        keyword_start: usize,
+        mut_end: usize,
+    ) -> Option<JsonRepair> {
+        // This edit replaces a whole span rather than one token, so confirming
+        // its two ends is not enough: whatever sits between them is deleted as
+        // well. Requiring the gap to be blank is what keeps the edit from
+        // swallowing a comment written between the two words.
+        let keyword_end = keyword_start.checked_add(LET_KEYWORD.len())?;
+        if source.get(keyword_start..keyword_end)? != LET_KEYWORD {
+            return None;
+        }
+        let mut_start = mut_end.checked_sub(MUT_KEYWORD.len())?;
+        if source.get(mut_start..mut_end)? != MUT_KEYWORD {
+            return None;
+        }
+        if !source.get(keyword_end..mut_start)?.trim().is_empty() {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::LetMutToVar.as_str().to_string(),
+            summary: "Replace `let mut` with `var`.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: keyword_start,
+                end: mut_end,
+                replacement: "var".to_string(),
+            }],
+        })
+    }
+
+    fn project_null_to_none(
+        path: &str,
+        source: &str,
+        spelling_start: usize,
+        spelling_end: usize,
+    ) -> Option<JsonRepair> {
+        let spelling = source.get(spelling_start..spelling_end)?;
+        if !matches!(spelling, "null" | "nil" | "nullptr") {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::NullToNone.as_str().to_string(),
+            summary: "Replace the null literal with `None`.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: spelling_start,
+                end: spelling_end,
+                replacement: "None".to_string(),
+            }],
+        })
+    }
+
+    fn project_println_bang(path: &str, source: &str, bang_start: usize) -> Option<JsonRepair> {
+        if source.get(bang_start..bang_start + 1)? != "!" {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::PrintlnBang.as_str().to_string(),
+            summary: "Remove the macro invocation operator.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: bang_start,
+                end: bang_start + 1,
+                replacement: String::new(),
+            }],
+        })
+    }
+}
+
+/// A byte range to be replaced, and what surrounds it.
+struct SeparatorRange {
+    start: usize,
+    end: usize,
+}
+
+/// The range a punctuation token occupies together with the whitespace hugging it.
+///
+/// Miri separates the two sides of these constructs with a space where the
+/// foreign spelling puts a token. Deleting only the token would run the sides
+/// together when nothing spaced them (`let x:int`), and leave a double space
+/// when something did (`let x: int`). Absorbing the surrounding whitespace and
+/// writing back exactly one space is correct in both, and the verification that
+/// `token` really sits at the recorded offsets is what makes it safe to do.
+fn replace_with_separator(
+    source: &str,
+    start: usize,
+    end: usize,
+    token: &str,
+) -> Option<SeparatorRange> {
+    if source.get(start..end)? != token {
+        return None;
+    }
+
+    let leading = source.get(..start)?;
+    let absorbed_start = leading.trim_end_matches([' ', '\t']).len();
+
+    let trailing = source.get(end..)?;
+    let absorbed_end = end + (trailing.len() - trailing.trim_start_matches([' ', '\t']).len());
+
+    Some(SeparatorRange {
+        start: absorbed_start,
+        end: absorbed_end,
+    })
 }
 
 /// The byte offset at which a new `use` line belongs.

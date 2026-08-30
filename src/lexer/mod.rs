@@ -3,6 +3,7 @@
 
 use logos::Logos;
 
+use crate::error::foreign_syntax::ForeignForm;
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 
 pub mod formatted_string;
@@ -130,7 +131,13 @@ impl<'source> Lexer<'source> {
 
             let token = match self.inner.next() {
                 Some(Ok(t)) => t,
-                Some(Err(_)) => return Some(Err(self.span_error(SyntaxErrorKind::InvalidToken))),
+                Some(Err(_)) => {
+                    let mut error = self.span_error(SyntaxErrorKind::InvalidToken);
+                    if let Some(form) = self.macro_bang_at(self.inner.span().start) {
+                        error = error.with_foreign_form(form);
+                    }
+                    return Some(Err(error));
+                }
                 None => return self.finalize_eof(),
             };
             let span = self.inner.span();
@@ -196,6 +203,37 @@ impl<'source> Lexer<'source> {
             Ok(()) => Step::Continue,
             Err(e) => Step::Fail(e),
         }
+    }
+
+    /// Recognises a macro invocation at `position`, which Miri has no syntax for.
+    ///
+    /// `!` is not a Miri token at all, so it reaches here as an invalid one. It
+    /// is a macro call rather than a stray character when a name runs up to it
+    /// and a call follows, as in `println!("hi")`. The name is read from the
+    /// source rather than from the emitted-token history, so the recognition
+    /// does not depend on how far that history happens to reach.
+    fn macro_bang_at(&self, position: usize) -> Option<ForeignForm> {
+        if self.source.as_bytes().get(position) != Some(&b'!') {
+            return None;
+        }
+
+        let name = self.source.get(..position)?;
+        let ends_a_name = name
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if !ends_a_name {
+            return None;
+        }
+
+        let after = self.source.get(position + 1..)?;
+        if !after.trim_start().starts_with('(') {
+            return None;
+        }
+
+        Some(ForeignForm::MacroBang {
+            bang_start: position,
+        })
     }
 
     fn span_error(&self, kind: SyntaxErrorKind) -> SyntaxError {

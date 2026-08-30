@@ -1,0 +1,5 @@
+// expect: MER_TYP_034
+// summary: null literal (JavaScript/C-like, not Miri).
+// expect-help: Miri writes the absent value as `None`.
+fn main()
+    let x = null

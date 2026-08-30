@@ -1,0 +1,6 @@
+// expect: MER_PAR_001
+// summary: Tuple destructuring in let binding (Python-like, not Miri).
+// expect-help: Miri has no destructuring binding: bind one name, then read its parts.
+fn main()
+    let (a, b) = (1, 2)
+    println(a)
