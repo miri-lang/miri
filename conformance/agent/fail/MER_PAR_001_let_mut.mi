@@ -1,0 +1,6 @@
+// expect: MER_PAR_001
+// summary: let mut binding (Rust-like, not Miri).
+// expect-help: Miri declares a mutable binding with `var`: `var x = 5`.
+fn main()
+    let mut x = 5
+    println(x)

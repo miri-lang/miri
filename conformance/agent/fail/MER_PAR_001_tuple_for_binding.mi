@@ -1,0 +1,7 @@
+// expect: MER_PAR_001
+// summary: Tuple destructuring in for loop (Python-like, not Miri).
+// expect-help: Miri's `for` binds a single name: iterate a map with `for k in m` and read each value with `m.get(k)`.
+fn main()
+    let m = Map<int, int>({})
+    for (k, v) in m
+        println(k)

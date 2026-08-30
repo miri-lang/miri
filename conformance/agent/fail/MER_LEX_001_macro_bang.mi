@@ -1,0 +1,5 @@
+// expect: MER_LEX_001
+// summary: Macro invocation with bang operator (Rust-like, not Miri).
+// expect-help: Miri has no macros: call `println(...)` without the `!`.
+fn main()
+    println!("hello")

@@ -1,0 +1,6 @@
+// expect: MER_PAR_001
+// summary: C-style brace block instead of indentation-based.
+// expect-help: Miri blocks are indentation-based: end the header with `:` for a single-line body, or indent the body on the lines below.
+if true {
+    println("hello")
+}

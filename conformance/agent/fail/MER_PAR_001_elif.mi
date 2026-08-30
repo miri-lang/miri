@@ -1,0 +1,7 @@
+// expect: MER_PAR_001
+// summary: elif keyword (Python-like, not Miri).
+// expect-help: Miri spells the chained branch `else if`.
+fn main()
+    println("before")
+elif true
+    println("after")

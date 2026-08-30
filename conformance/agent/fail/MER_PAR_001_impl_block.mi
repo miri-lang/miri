@@ -1,0 +1,9 @@
+// expect: MER_PAR_001
+// summary: impl block (Rust-like, not Miri).
+// expect-help: Miri declares methods inside the class body; there is no `impl` block.
+class Foo
+    fn bar()
+        println("baz")
+impl Foo
+    fn qux()
+        println("quux")

@@ -1,0 +1,4 @@
+// expect: MER_PAR_001
+// summary: Colon-style type annotation (Rust-like syntax, not Miri).
+// expect-help: Miri writes a type annotation without a colon: `let x int = 5`.
+let x: int = 5

@@ -3,6 +3,7 @@
 
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
+use crate::error::foreign_syntax::ForeignForm;
 
 /// Byte offset range in source code, used for error reporting and AST spans.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
@@ -22,6 +23,9 @@ impl Span {
 pub struct SyntaxError {
     pub kind: SyntaxErrorKind,
     pub span: Span,
+    /// The construct from another language this error recognised, when the
+    /// failing token names one.
+    pub foreign_form: Option<ForeignForm>,
 }
 
 /// All possible syntax error variants produced by the lexer and parser.
@@ -196,7 +200,20 @@ impl SyntaxErrorKind {
 impl SyntaxError {
     /// Creates a new syntax error of the given kind at the given span.
     pub fn new(kind: SyntaxErrorKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            foreign_form: None,
+        }
+    }
+
+    /// Records the construct from another language this error recognised.
+    ///
+    /// The form supplies the help text and, where the rewrite is textual, the
+    /// repair. Both are read when the error becomes a diagnostic.
+    pub fn with_foreign_form(mut self, form: ForeignForm) -> Self {
+        self.foreign_form = Some(form);
+        self
     }
 
     /// Formats this error for terminal display using the given source code.
@@ -214,7 +231,15 @@ impl std::fmt::Display for SyntaxError {
 
 impl Reportable for SyntaxError {
     fn to_diagnostic(&self) -> Diagnostic {
-        Diagnostic::from_props(self.kind.properties(), Some(self.span), None)
+        let mut diag = Diagnostic::from_props(self.kind.properties(), Some(self.span), None);
+        // A recognised foreign construct names the Miri form that replaces it,
+        // which is more use than the token the parser expected. Its help
+        // supersedes whatever the error kind carries.
+        if let Some(foreign_form) = &self.foreign_form {
+            diag.help = Some(foreign_form.help().to_string());
+            diag.repair = foreign_form.repair();
+        }
+        diag
     }
 }
 

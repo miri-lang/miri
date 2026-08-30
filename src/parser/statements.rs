@@ -3,11 +3,17 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::foreign_syntax::ForeignForm;
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::literals::unescape_string;
 use super::Parser;
+
+/// The mutability marker other languages place after `let`. Miri has no such
+/// keyword — `var` carries the meaning — so a binding named `mut` and followed
+/// by another identifier is that spelling rather than a name and its type.
+const MUT_BINDING: &str = "mut";
 
 impl<'source> Parser<'source> {
     /// Parses a sequence of attributes at the start of a statement.
@@ -240,7 +246,7 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations = self.variable_declaration_list(&declaration_type)?;
+        let declarations = self.variable_declaration_list(&declaration_type, keyword_span)?;
         Ok(ast::variable_statement_with_span(
             declarations,
             visibility,
@@ -289,12 +295,13 @@ impl<'source> Parser<'source> {
     pub(crate) fn variable_declaration_list(
         &mut self,
         declaration_type: &VariableDeclarationType,
+        keyword_span: Span,
     ) -> Result<Vec<VariableDeclaration>, SyntaxError> {
-        let mut declarations = vec![self.variable_declaration(declaration_type)?];
+        let mut declarations = vec![self.variable_declaration(declaration_type, keyword_span)?];
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            declarations.push(self.variable_declaration(declaration_type)?);
+            declarations.push(self.variable_declaration(declaration_type, keyword_span)?);
         }
 
         Ok(declarations)
@@ -322,8 +329,20 @@ impl<'source> Parser<'source> {
     pub(crate) fn variable_declaration(
         &mut self,
         declaration_type: &VariableDeclarationType,
+        keyword_span: Span,
     ) -> Result<VariableDeclaration, SyntaxError> {
+        if let Some(error) = self.parenthesised_binding_error(ForeignForm::DestructuringLet) {
+            return Err(error);
+        }
+
         let (name, name_span) = self.declaration_name()?;
+
+        if let Some(error) =
+            self.foreign_annotation_error(&name, name_span, declaration_type, keyword_span)
+        {
+            return Err(error);
+        }
+
         let typ = self.type_expression()?.map(Box::new);
         let initializer = self.optional_initializer()?;
 
@@ -344,7 +363,67 @@ impl<'source> Parser<'source> {
         })
     }
 
+    /// Rejects a binding that opens with a parenthesis, which reads as an
+    /// attempt to bind several names at once.
+    fn parenthesised_binding_error(&self, form: ForeignForm) -> Option<SyntaxError> {
+        if !self.lookahead_is_lparen() {
+            return None;
+        }
+        let span = self.current_token_span();
+        Some(
+            self.error_unexpected_token_with_span("identifier", "(", span)
+                .with_foreign_form(form),
+        )
+    }
+
+    /// Rejects the two ways a binding names its mutability or type that Miri
+    /// does not share: `let mut x`, and a type introduced by a colon.
+    ///
+    /// Both are recognised after the name is read, which is what tells `mut`
+    /// apart from an ordinary binding: Miri would take it as the name itself,
+    /// with the identifier that follows read as its type.
+    fn foreign_annotation_error(
+        &self,
+        name: &str,
+        name_span: Span,
+        declaration_type: &VariableDeclarationType,
+        keyword_span: Span,
+    ) -> Option<SyntaxError> {
+        let binds_after_mut = name == MUT_BINDING
+            && matches!(declaration_type, VariableDeclarationType::Immutable)
+            && matches!(self.lookahead, Some((Token::Identifier, _)));
+        if binds_after_mut {
+            return Some(
+                self.error_unexpected_token_with_span(
+                    "an end of statement",
+                    "identifier",
+                    name_span,
+                )
+                .with_foreign_form(ForeignForm::LetMut {
+                    keyword_start: keyword_span.start,
+                    mut_end: name_span.end,
+                }),
+            );
+        }
+
+        if !self.lookahead_is_colon() {
+            return None;
+        }
+        let colon = self.current_token_span();
+        Some(
+            self.error_unexpected_token_with_span("an expression", ":", colon)
+                .with_foreign_form(ForeignForm::ColonAnnotation {
+                    colon_start: colon.start,
+                    colon_end: colon.end,
+                }),
+        )
+    }
+
     fn for_loop_variable(&mut self) -> Result<VariableDeclaration, SyntaxError> {
+        if let Some(error) = self.parenthesised_binding_error(ForeignForm::TupleForBinding) {
+            return Err(error);
+        }
+
         let (name, _) = self.declaration_name()?;
         let typ = self.type_expression()?.map(Box::new);
         Ok(VariableDeclaration {
@@ -404,6 +483,41 @@ impl<'source> Parser<'source> {
         } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
             // `else if` chains back into a fresh statement.
             return self.statement();
+        } else if self.match_lookahead_type(|t| t == &Token::Arrow) {
+            let arrow_span = self
+                .lookahead
+                .as_ref()
+                .map(|(_, span)| *span)
+                .unwrap_or_default();
+            let err = SyntaxError::new(
+                SyntaxErrorKind::UnexpectedToken {
+                    expected: "a colon or an expression end".to_string(),
+                    found: "->".to_string(),
+                },
+                arrow_span,
+            )
+            .with_foreign_form(
+                crate::error::foreign_syntax::ForeignForm::ArrowReturnType {
+                    arrow_start: arrow_span.start,
+                    arrow_end: arrow_span.end,
+                },
+            );
+            return Err(err);
+        } else if self.match_lookahead_type(|t| t == &Token::LBrace) {
+            let brace_span = self
+                .lookahead
+                .as_ref()
+                .map(|(_, span)| *span)
+                .unwrap_or_default();
+            let err = SyntaxError::new(
+                SyntaxErrorKind::UnexpectedToken {
+                    expected: "a colon or an expression end".to_string(),
+                    found: "{".to_string(),
+                },
+                brace_span,
+            )
+            .with_foreign_form(crate::error::foreign_syntax::ForeignForm::BraceBlock);
+            return Err(err);
         } else {
             return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
         }

@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::*;
+use crate::error::foreign_syntax::ForeignForm;
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::{token_to_string, Token, TokenSpan};
 
@@ -121,6 +122,10 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_rparen)
     }
 
+    pub(crate) fn lookahead_is_lparen(&self) -> bool {
+        self.match_lookahead_type(is_lparen)
+    }
+
     pub(crate) fn lookahead_is_less_than(&self) -> bool {
         self.match_lookahead_type(is_less_than)
     }
@@ -232,9 +237,10 @@ impl<'source> Parser<'source> {
             | Some((Token::Until, _)) => {
                 // Do nothing, the token is a valid boundary.
             }
+            // Check for foreign forms at this point, when lookahead is still unconsumed
             // Anything else is an error.
             _ => {
-                return Err(self.error_unexpected_lookahead_token("an end of statement"));
+                return Err(self.error_statement_end());
             }
         }
         Ok(())
@@ -282,6 +288,46 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn error_unexpected_lookahead_token(&self, expected: &str) -> SyntaxError {
         self.error_unexpected_token(expected, &self.lookahead_as_string())
+    }
+
+    /// Reports a statement that runs on past where it may end.
+    ///
+    /// `elif` and `impl` lex as ordinary identifiers, so a line opening with
+    /// either has already been consumed as an expression by the time the
+    /// statement fails to end. The word the line opens with is what still names
+    /// the construct, and blaming it reads better than blaming the token that
+    /// happened to follow it.
+    fn error_statement_end(&self) -> SyntaxError {
+        let error = self.error_unexpected_lookahead_token("an end of statement");
+        // The span stays on the token that could not follow the statement, which
+        // is the token the caret belongs under. The recognised construct only
+        // adds the help; moving the caret onto the opening word would report a
+        // position the parser did not fail at.
+        match self.line_leading_foreign_form() {
+            Some(form) => error.with_foreign_form(form),
+            None => error,
+        }
+    }
+
+    /// The foreign construct the line under the cursor opens with, if any.
+    ///
+    /// This reads the source rather than a token because the word it looks for
+    /// has already been consumed: both constructs lex as ordinary identifiers
+    /// and parse as an expression before the statement fails to end. Nothing in
+    /// the grammar depends on the answer — it only decides which help is shown.
+    fn line_leading_foreign_form(&self) -> Option<ForeignForm> {
+        let offending = self.current_token_span().start;
+        let text_before = self.source.get(..offending)?;
+        let line_start = text_before.rfind('\n').map_or(0, |newline| newline + 1);
+        let line = text_before.get(line_start..)?;
+
+        let word = line.split_whitespace().next()?;
+
+        match word {
+            "elif" => Some(ForeignForm::Elif),
+            "impl" => Some(ForeignForm::ImplBlock),
+            _ => None,
+        }
     }
 
     pub(crate) fn error_missing_match_branches(&self, span: crate::error::Span) -> SyntaxError {
@@ -440,6 +486,10 @@ pub(crate) fn is_in(token: &Token) -> bool {
 
 pub(crate) fn is_rparen(token: &Token) -> bool {
     matches!(token, Token::RParen)
+}
+
+pub(crate) fn is_lparen(token: &Token) -> bool {
+    matches!(token, Token::LParen)
 }
 
 pub(crate) fn is_less_than(token: &Token) -> bool {

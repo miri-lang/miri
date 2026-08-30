@@ -175,3 +175,39 @@ fn test_section_headings_are_exactly_as_contracted() {
         );
     }
 }
+
+/// The repair identifiers `MER_PAR_001`'s page names must all be real.
+///
+/// That page lists the constructs from other languages the parser recognises,
+/// and names the repair each one offers. The names are the wire strings tooling
+/// matches on, so a page naming a repair the binary does not ship would send a
+/// reader looking for something that cannot arrive.
+#[test]
+fn test_the_repairs_the_unexpected_token_page_names_are_all_shipped() {
+    use miri::diagnostics::repair::RepairId;
+
+    let shipped: Vec<&str> = RepairId::all().iter().map(|id| id.as_str()).collect();
+    let page = DiagnosticCode::ParUnexpectedToken.doc();
+
+    let named: Vec<&str> = page
+        .lines()
+        .filter(|line| line.starts_with('|'))
+        .filter_map(|line| line.split('|').nth(3))
+        .map(str::trim)
+        .filter_map(|cell| cell.strip_prefix('`')?.strip_suffix('`'))
+        .collect();
+
+    assert!(
+        !named.is_empty(),
+        "the page should name the repairs its recognised constructs offer"
+    );
+
+    for repair in named {
+        assert!(
+            shipped.contains(&repair),
+            "the page names `{}`, which is not a repair this binary ships: {:?}",
+            repair,
+            shipped
+        );
+    }
+}

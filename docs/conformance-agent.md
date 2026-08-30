@@ -15,6 +15,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 |---|---|
 | MER_IMP_002 | Triggers MER_IMP_002: Imported Name Conflict. |
 | MER_LEX_001 | Triggers MER_LEX_001: Invalid Token. |
+| MER_LEX_001_macro_bang | Macro invocation with bang operator (Rust-like, not Miri). |
 | MER_LEX_002 | Triggers MER_LEX_002: Unclosed Multiline Comment. |
 | MER_LEX_003 | Triggers MER_LEX_003: Indentation Mismatch. |
 | MER_LEX_005 | Triggers MER_LEX_005: Invalid Binary Literal. |
@@ -27,6 +28,13 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_OWN_003 | Triggers MER_OWN_003: Use of Moved Value. |
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
+| MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
+| MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
+| MER_PAR_001_brace_block | C-style brace block instead of indentation-based. |
+| MER_PAR_001_elif | elif keyword (Python-like, not Miri). |
+| MER_PAR_001_impl_block | impl block (Rust-like, not Miri). |
+| MER_PAR_001_tuple_for_binding | Tuple destructuring in for loop (Python-like, not Miri). |
+| MER_PAR_001_destructuring_let | Tuple destructuring in let binding (Python-like, not Miri). |
 | MER_PAR_002 | Triggers MER_PAR_002: Unexpected End of File. |
 | MER_PAR_003 | Triggers MER_PAR_003: Invalid Type Declaration. |
 | MER_PAR_004 | Triggers MER_PAR_004: Invalid Left-Hand Side Expression. |
@@ -65,11 +73,13 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_032 | Triggers MER_TYP_032: Not Callable. |
 | MER_TYP_033 | Triggers MER_TYP_033: Field Not Found. |
 | MER_TYP_034 | Triggers MER_TYP_034: Undefined Name. |
+| MER_TYP_034_null_literal | null literal (JavaScript/C-like, not Miri). |
 | MER_TYP_039 | Triggers MER_TYP_039: Invalid Collection Element Type. |
 | MER_TYP_040 | Triggers MER_TYP_040: Invalid Index Operation. |
 | MER_TYP_041 | Triggers MER_TYP_041: Invalid Slice Operation. |
 | MER_TYP_042 | Triggers MER_TYP_042: Immutability Violation. |
 | MER_TYP_043 | Triggers MER_TYP_043: Type Not Found. |
+| MER_PAR_001_let_mut | let mut binding (Rust-like, not Miri). |
 | MER_TYP_044 | Triggers MER_TYP_044: Type Already Defined. |
 | MER_TYP_048 | Triggers MER_TYP_048: Type Inference Failure. |
 | MER_TYP_049 | A shared variable is declared outside a GPU function. |

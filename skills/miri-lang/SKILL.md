@@ -242,7 +242,7 @@ fn main()
 
 The keyword `let mut` does not exist:
 
-```miri,fails=MER_TYP_043
+```miri,fails=MER_PAR_001
 let mut x = 5
 ```
 
@@ -336,8 +336,13 @@ miri fix --plan myfile.mi --format json
 
 Running `miri fix --plan` on a file with errors prints structured repair suggestions. The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.
+- `arrow-return-type`: Drop the `->` before a return type.
+- `colon-annotation`: Drop the `:` before a type annotation.
 - `drop-extra-arguments`: Drop positional arguments a call does not declare.
+- `let-mut-to-var`: Rewrite a `let mut` binding as `var`.
 - `let-to-var`: Rebind an immutable declaration as mutable.
+- `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
+- `println-bang`: Drop the `!` from a macro-style call.
 
 Apply them with:
 

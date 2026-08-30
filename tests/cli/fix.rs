@@ -698,3 +698,268 @@ fn test_selective_import_of_json_checks_clean() {
         "Json imported selectively should be usable and check clean"
     );
 }
+
+/// Applies the one repair `source` is expected to offer, and returns the text
+/// it leaves behind.
+///
+/// Every foreign-syntax repair makes the same promise: the file it writes is one
+/// the compiler accepts. Asserting the text alone would let a repair that
+/// produces plausible-looking but unparseable source pass, so the check is part
+/// of the helper rather than left to each caller to remember.
+fn repaired(name: &str, source: &str, expected_id: &str) -> String {
+    let fixture = Fixture::new(name, source);
+
+    let envelope = plan(fixture.path());
+    assert_eq!(
+        repair_ids(&envelope),
+        vec![expected_id.to_string()],
+        "the plan should offer exactly the {} repair",
+        expected_id
+    );
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the {} repair should succeed", expected_id);
+    assert!(
+        checks_clean(fixture.path()),
+        "the source {} left behind should check clean, got: {}",
+        expected_id,
+        fixture.contents()
+    );
+
+    fixture.contents()
+}
+
+#[test]
+fn test_a_colon_type_annotation_loses_its_colon() {
+    assert_eq!(
+        repaired(
+            "colon-annotation",
+            "fn main()\n    let x: int = 5\n    println(\"{x}\")\n",
+            "colon-annotation",
+        ),
+        "fn main()\n    let x int = 5\n    println(\"{x}\")\n"
+    );
+}
+
+#[test]
+fn test_a_colon_annotation_without_a_space_gains_one() {
+    // Deleting the colon alone would run the name into the type, so the repair
+    // writes back the separator Miri needs rather than removing bytes.
+    assert_eq!(
+        repaired(
+            "colon-annotation-tight",
+            "fn main()\n    let x:int = 5\n    println(\"{x}\")\n",
+            "colon-annotation",
+        ),
+        "fn main()\n    let x int = 5\n    println(\"{x}\")\n"
+    );
+}
+
+#[test]
+fn test_an_arrow_return_type_loses_its_arrow() {
+    assert_eq!(
+        repaired(
+            "arrow-return-type",
+            "fn main() -> int\n    return 0\n",
+            "arrow-return-type",
+        ),
+        "fn main() int\n    return 0\n"
+    );
+}
+
+#[test]
+fn test_an_arrow_return_type_without_spaces_gains_one() {
+    assert_eq!(
+        repaired(
+            "arrow-return-type-tight",
+            "fn main()->int\n    return 0\n",
+            "arrow-return-type",
+        ),
+        "fn main() int\n    return 0\n"
+    );
+}
+
+#[test]
+fn test_a_let_mut_binding_becomes_a_var() {
+    assert_eq!(
+        repaired(
+            "let-mut-to-var",
+            "fn main()\n    let mut x = 5\n    x = 6\n    println(\"{x}\")\n",
+            "let-mut-to-var",
+        ),
+        "fn main()\n    var x = 5\n    x = 6\n    println(\"{x}\")\n"
+    );
+}
+
+#[test]
+fn test_a_let_mut_binding_spaced_out_still_becomes_a_var() {
+    // The repair spans from the keyword to the end of `mut`, so it does not
+    // depend on the two words being one space apart.
+    assert_eq!(
+        repaired(
+            "let-mut-to-var-spaced",
+            "fn main()\n    let   mut x = 5\n    x = 6\n",
+            "let-mut-to-var",
+        ),
+        "fn main()\n    var x = 5\n    x = 6\n"
+    );
+}
+
+#[test]
+fn test_a_let_mut_binding_with_a_comment_between_the_words_is_not_repaired() {
+    // The edit replaces the whole `let mut` span, so anything between the two
+    // words would be deleted with them. A repair that cannot be made without
+    // discarding the author's text is not offered at all.
+    let fixture = Fixture::new(
+        "let-mut-to-var-commented",
+        "fn main()\n    let /*keep me*/ mut x = 5\n    x = 6\n",
+    );
+
+    let envelope = plan(fixture.path());
+    // The construct is still recognised — only the edit is withheld. Asserting
+    // the help as well is what keeps this from passing if the diagnostic were to
+    // stop being raised at all.
+    let diagnostic = diagnostic_with_code(&envelope, "MER_PAR_001");
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("Miri declares a mutable binding with `var`: `var x = 5`.")
+    );
+    assert!(
+        repair_ids(&envelope).is_empty(),
+        "a `let mut` split by a comment should offer no repair, got: {:?}",
+        repair_ids(&envelope)
+    );
+}
+
+#[test]
+fn test_a_macro_style_call_loses_its_bang() {
+    assert_eq!(
+        repaired(
+            "println-bang",
+            "fn main()\n    println!(\"hi\")\n",
+            "println-bang",
+        ),
+        "fn main()\n    println(\"hi\")\n"
+    );
+}
+
+#[test]
+fn test_a_null_literal_becomes_none() {
+    assert_eq!(
+        repaired(
+            "null-to-none",
+            "fn f() String?\n    return null\n\nfn main()\n    println(\"x\")\n",
+            "null-to-none",
+        ),
+        "fn f() String?\n    return None\n\nfn main()\n    println(\"x\")\n"
+    );
+}
+
+#[test]
+fn test_a_foreign_form_whose_rewrite_is_structural_offers_no_repair() {
+    // An indented block, a class body and a second binding are shapes rather
+    // than substitutions. Offering a repair for them would mean writing code the
+    // author has not written, so these carry help and nothing else.
+    for (name, source) in [
+        (
+            "brace-block",
+            "fn main()\n    if true {\n        println(\"x\")\n",
+        ),
+        (
+            "elif",
+            "fn main()\n    println(\"a\")\nelif true\n    println(\"b\")\n",
+        ),
+        (
+            "impl-block",
+            "class Foo\n    fn bar()\n        println(\"x\")\nimpl Foo\n    fn qux()\n        println(\"y\")\n",
+        ),
+        (
+            "tuple-for-binding",
+            "use system.collections.map\n\nfn main()\n    let m = Map<int, int>({})\n    for (k, v) in m\n        println(k)\n",
+        ),
+        (
+            "destructuring-let",
+            "fn main()\n    let (a, b) = (1, 2)\n    println(a)\n",
+        ),
+    ] {
+        let fixture = Fixture::new(name, source);
+        let envelope = plan(fixture.path());
+        assert!(
+            repair_ids(&envelope).is_empty(),
+            "{} should carry help but no repair, got: {:?}",
+            name,
+            repair_ids(&envelope)
+        );
+    }
+}
+
+#[test]
+fn test_foreign_forms_are_repaired_one_pass_at_a_time_until_the_file_checks() {
+    // A syntax error stops the parse, so a file holding two foreign constructs
+    // reveals the second only once the first is gone. The loop the skill
+    // documents — check, fix, re-check — is what carries such a file to clean,
+    // and this pins that it terminates rather than stalling on the first edit.
+    let fixture = Fixture::new(
+        "two-foreign-forms",
+        "fn main()\n    let x: int = 5\n    let mut y = 6\n    y = 7\n    println(\"{x}\")\n",
+    );
+
+    let (_, _, first) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(first, "the first repair should apply");
+    assert!(
+        !checks_clean(fixture.path()),
+        "the second construct should still be waiting"
+    );
+
+    let (_, _, second) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(second, "the second repair should apply");
+
+    assert_eq!(
+        fixture.contents(),
+        "fn main()\n    let x int = 5\n    var y = 6\n    y = 7\n    println(\"{x}\")\n"
+    );
+    assert!(checks_clean(fixture.path()));
+}
+
+#[test]
+fn test_the_miri_spellings_of_the_recognised_constructs_are_left_alone() {
+    // Each recognition keys on something that is legal Miri elsewhere: `{` opens
+    // a set or map, `(` groups an expression, `:` heads a single-line block or a
+    // map entry, and `!=` carries a bang. A recognition firing on these would
+    // reject correct programs, so the guard is that they still compile.
+    for (name, source) in [
+        (
+            "set-literal",
+            "use system.collections.set\n\nfn main()\n    let s = Set({1, 2})\n",
+        ),
+        (
+            "map-literal",
+            "use system.collections.map\n\nfn main()\n    let m = Map({\"a\": 1})\n",
+        ),
+        ("grouping", "fn main()\n    let x = (1 + 2)\n    println(\"{x}\")\n"),
+        (
+            "not-equal",
+            "fn main()\n    let a = 1\n    if a != 2: println(\"ok\")\n",
+        ),
+        ("single-line-block", "fn double(x int) int:\n    x * 2\n"),
+        (
+            "match-arms",
+            "fn main()\n    let x int? = 5\n    match x\n        Some(v): println(\"got\")\n        None: println(\"none\")\n",
+        ),
+        (
+            "foreign-text-inside-a-string",
+            "fn main()\n    let s = \"let mut x: int = println!\"\n    println(s)\n",
+        ),
+        (
+            "binding-named-mut",
+            "fn main()\n    let mut = 5\n    println(\"{mut}\")\n",
+        ),
+    ] {
+        let fixture = Fixture::new(name, source);
+        assert!(
+            checks_clean(fixture.path()),
+            "{} is legal Miri and must not be taken for a foreign construct",
+            name
+        );
+    }
+}

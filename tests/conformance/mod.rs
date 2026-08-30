@@ -26,11 +26,33 @@ struct FixtureDirectives {
     /// hardware the program would run on.
     command: Option<String>,
     expect_stdout_lines: Vec<String>,
+    expect_help: Option<String>,
     summary: String,
 }
 
 /// Subcommands a fixture may name, ordered by how far each carries the program.
 const SUPPORTED_COMMANDS: &[&str] = &["check", "build", "run"];
+
+/// Every directive a fixture header may carry.
+const SUPPORTED_DIRECTIVES: &[&str] = &[
+    "expect",
+    "expect-help",
+    "expect-stdout",
+    "command",
+    "summary",
+];
+
+/// The directive a header line declares, if it declares one.
+///
+/// A header also carries prose explaining the fixture, so a line only counts as
+/// a directive when it opens with a lower-case word followed by a colon and a
+/// space — the shape every directive has and no sentence in the corpus does.
+fn directive_name(comment: &str) -> Option<&str> {
+    let (name, _) = comment.split_once(": ")?;
+    let is_directive_shaped = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    is_directive_shaped.then_some(name)
+}
 
 impl FixtureDirectives {
     /// The subcommand to exercise this fixture with, falling back to the
@@ -47,6 +69,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
     let mut expect_code = None;
     let mut command = None;
     let mut expect_stdout_lines = Vec::new();
+    let mut expect_help = None;
     let mut summary = None;
 
     for line in content.lines() {
@@ -63,10 +86,22 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
             expect_code = Some(code.to_string());
         } else if let Some(stdout) = comment.strip_prefix("expect-stdout: ") {
             expect_stdout_lines.push(stdout.to_string());
+        } else if let Some(help) = comment.strip_prefix("expect-help: ") {
+            expect_help = Some(help.to_string());
         } else if let Some(c) = comment.strip_prefix("command: ") {
             command = Some(c.trim().to_string());
         } else if let Some(s) = comment.strip_prefix("summary: ") {
             summary = Some(s.to_string());
+        } else if let Some(name) = directive_name(comment) {
+            // A directive the harness does not know is a typo, and a typo in an
+            // assertion silently removes it. Rejecting the fixture is what keeps
+            // `// expect-hlep:` from reading as a fixture that asserts nothing.
+            return Err(format!(
+                "Fixture {} declares unknown directive '// {}:'; expected one of {:?}",
+                path.display(),
+                name,
+                SUPPORTED_DIRECTIVES
+            ));
         }
     }
 
@@ -104,6 +139,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
         expect_code,
         command,
         expect_stdout_lines,
+        expect_help,
         summary,
     })
 }
@@ -158,19 +194,32 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
         .as_array()
         .ok_or_else(|| "diagnostics is not an array".to_string())?;
 
-    let found = diags.iter().any(|d| {
+    let matching_diag = diags.iter().find(|d| {
         d["code"]
             .as_str()
             .map(|c| c == expect_code)
             .unwrap_or(false)
     });
 
-    if !found {
+    let matching_diag = matching_diag.ok_or_else(|| {
         let codes: Vec<_> = diags.iter().filter_map(|d| d["code"].as_str()).collect();
-        return Err(format!(
-            "Expected error code {} but got: {:?}",
-            expect_code, codes
-        ));
+        format!("Expected error code {} but got: {:?}", expect_code, codes)
+    })?;
+
+    if let Some(expected_help) = &directives.expect_help {
+        let actual_help = matching_diag["help"].as_str().ok_or_else(|| {
+            format!(
+                "Fixture {} expects help, but {} carries none",
+                path.display(),
+                expect_code
+            )
+        })?;
+        if actual_help != expected_help {
+            return Err(format!(
+                "Expected help text:\n  {:?}\nbut got:\n  {:?}",
+                expected_help, actual_help
+            ));
+        }
     }
 
     Ok(())
@@ -731,5 +780,50 @@ fn test_conformance_agent() {
     match run_conformance_tests(&corpus_root) {
         Ok(()) => {}
         Err(err) => panic!("Conformance tests failed: {}", err),
+    }
+}
+
+mod directive_tests {
+    use super::*;
+
+    /// Writes `header` into a fixture file and returns what `parse_fixture` made of it.
+    fn parse_header(header: &str) -> Result<FixtureDirectives, String> {
+        let mut file = NamedTempFile::new().expect("could not create the fixture");
+        write!(file, "{}", header).expect("could not write the fixture");
+        parse_fixture(file.path())
+    }
+
+    #[test]
+    fn test_a_mistyped_directive_is_rejected_rather_than_ignored() {
+        let error = parse_header("// summary: a fixture\n// expect-hlep: some text\nfn main()\n")
+            .expect_err("a misspelled directive must fail the fixture");
+
+        assert!(
+            error.contains("expect-hlep"),
+            "the error should name the directive it did not recognise, got: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_prose_in_a_header_is_not_read_as_a_directive() {
+        let directives = parse_header(
+            "// summary: a fixture\n// The program needs a device this machine may not have.\nfn main()\n",
+        )
+        .expect("prose beside the directives must be allowed");
+
+        assert_eq!(directives.summary, "a fixture");
+    }
+
+    #[test]
+    fn test_the_help_a_fixture_expects_is_read_from_its_header() {
+        let directives =
+            parse_header("// summary: a fixture\n// expect-help: Miri writes it so.\nfn main()\n")
+                .expect("the header is well formed");
+
+        assert_eq!(
+            directives.expect_help.as_deref(),
+            Some("Miri writes it so.")
+        );
     }
 }
