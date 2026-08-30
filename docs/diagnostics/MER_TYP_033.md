@@ -1,31 +1,27 @@
 ## Rule
 
-This code covers a family of member-access failures. When field names do not exist in a class, or when trying to access members on a type that does not support member access, this error is raised.
+This code covers a family of member-access failures. When a field or method name does not exist on a type, this error is raised.
+
+Where the compiler can name a likely intent it does so in the help line. A member name borrowed from another language is matched against the names the receiver actually declares (`len` against `length`, `append` against `push`, `upper` against `to_upper`), and the argument count at the call site breaks ties between members that are otherwise equally close. When the receiver is iterable and the missing member is an accessor such as `keys`, the help points at a `for` loop instead of a member.
 
 ## Before
 
 ```miri
-class Point
-    public var x int
-    public var y int
+use system.collections.list
 
-fn main()
-    let p = Point(1, 2)
-    let v = p.unknown_field
-    println(f"{v}")
+var l = List<int>()
+l.push(1)
+let n = l.len()
 ```
 
 ## After
 
 ```miri
-class Point
-    public var x int
-    public var y int
+use system.collections.list
 
-fn main()
-    let p = Point(1, 2)
-    let v = p.x
-    println(f"{v}")
+var l = List<int>()
+l.push(1)
+let n = l.length()
 ```
 
 ## Reference

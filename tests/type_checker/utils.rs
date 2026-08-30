@@ -68,6 +68,38 @@ pub fn type_checker_error_with_help_test(source: &str, expected_error: &str, exp
     }
 }
 
+/// Asserts the reported error carries no help line at all.
+///
+/// `type_checker_error_test` only looks at the message, so it passes even when
+/// a wrong suggestion is attached. A negative case — a name no rule should
+/// recognise, a hint whose precondition does not hold — needs the absence of
+/// help asserted, or the rule under test can start firing everywhere and every
+/// test still agrees.
+pub fn type_checker_error_without_help_test(source: &str, expected_error: &str) {
+    let pipeline = Pipeline::new();
+    match pipeline.frontend(source) {
+        Ok(_) => panic!("Expected error '{}', but got success", expected_error),
+        Err(CompilerError::TypeErrors { errors, .. }) => {
+            let matching: Vec<_> = errors
+                .iter()
+                .filter(|e| e.to_string().contains(expected_error))
+                .collect();
+            if matching.is_empty() {
+                panic!("Expected error '{}', but got: {:?}", expected_error, errors);
+            }
+            for error in matching {
+                assert!(
+                    !format!("{:?}", error).contains("help: Some"),
+                    "Expected '{}' to carry no help, but got: {:?}",
+                    expected_error,
+                    error
+                );
+            }
+        }
+        Err(e) => panic!("Expected TypeErrors, but got: {:?}", e),
+    }
+}
+
 pub fn type_checker_errors_test(source: &str, expected_errors: Vec<&str>) {
     let pipeline = Pipeline::new();
     match pipeline.frontend(source) {

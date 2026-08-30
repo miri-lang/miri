@@ -117,6 +117,56 @@ var y = x + 1
 }
 
 #[test]
+fn test_arithmetic_on_option_with_help() {
+    type_checker_error_with_help_test(
+        "
+var x int? = 5
+var y = x + 1
+        ",
+        "Invalid types for arithmetic operation: int? and int",
+        "An optional value must be unwrapped before arithmetic",
+    );
+}
+
+/// The hint covers every arithmetic operator, not only the one first reported.
+#[test]
+fn test_arithmetic_on_option_with_help_for_subtraction() {
+    type_checker_error_with_help_test(
+        "
+var x int? = 5
+var y = x - 1
+        ",
+        "Invalid types for arithmetic operation: int? and int",
+        "An optional value must be unwrapped before arithmetic",
+    );
+}
+
+#[test]
+fn test_arithmetic_on_option_with_help_for_multiplication() {
+    type_checker_error_with_help_test(
+        "
+var x int? = 5
+var y = x * 2
+        ",
+        "Invalid types for arithmetic operation: int? and int",
+        "An optional value must be unwrapped before arithmetic",
+    );
+}
+
+/// The optional may be either operand.
+#[test]
+fn test_arithmetic_on_option_with_help_on_right_operand() {
+    type_checker_error_with_help_test(
+        "
+var x int? = 5
+var y = 1 + x
+        ",
+        "Invalid types for arithmetic operation: int and int?",
+        "An optional value must be unwrapped before arithmetic",
+    );
+}
+
+#[test]
 fn test_member_access_on_option_error() {
     type_checker_error_test(
         "

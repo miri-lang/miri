@@ -62,6 +62,16 @@ fn is_arithmetic_op(op: &BinaryOp) -> bool {
     )
 }
 
+/// True for an optional operand, in either of the two forms an optional takes:
+/// the dedicated kind, and the generic instantiation a declaration produces.
+fn is_optional_type(ty: &Type) -> bool {
+    matches!(ty.kind, TypeKind::Option(_))
+        || matches!(
+            &ty.kind,
+            TypeKind::Custom(name, _) if name == crate::ast::types::OPTION_TYPE_NAME
+        )
+}
+
 impl TypeChecker {
     /// Infers the type of a binary operation.
     ///
@@ -120,10 +130,57 @@ impl TypeChecker {
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {
-                self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
+                // Generate context-specific help messages for common errors
+                let help = self.generate_binary_op_help(&left_ty, op, &right_ty);
+                if let Some(help_text) = help {
+                    self.report_error_with_help(
+                        DiagnosticCode::TypTypeMismatch,
+                        msg,
+                        span,
+                        help_text,
+                    );
+                } else {
+                    self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
+                }
                 ast_factory::make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// Names the way out of a rejected binary operation, where the operand
+    /// types identify one.
+    ///
+    /// The operand types alone decide this, not the message the operator check
+    /// produced, so a rewording there cannot silently drop the help.
+    fn generate_binary_op_help(
+        &self,
+        left_ty: &Type,
+        op: &BinaryOp,
+        right_ty: &Type,
+    ) -> Option<String> {
+        if is_arithmetic_op(op) && (is_optional_type(left_ty) || is_optional_type(right_ty)) {
+            return Some(
+                "An optional value must be unwrapped before arithmetic: supply a default with \
+                 '??' (e.g. `v ?? 0`) or match on it first."
+                    .to_string(),
+            );
+        }
+
+        if self.mixes_text_with_another_type(left_ty, op, right_ty) {
+            return Some(
+                "'+' does not convert between types — build the text with an f-string, \
+                 e.g. f\"n={n}\"."
+                    .to_string(),
+            );
+        }
+
+        None
+    }
+
+    /// True when `+` joins a string to a value of some other type — the shape a
+    /// reader reaches for when they want the value rendered into the text.
+    fn mixes_text_with_another_type(&self, left_ty: &Type, op: &BinaryOp, right_ty: &Type) -> bool {
+        matches!(op, BinaryOp::Add) && self.is_string_type(left_ty) != self.is_string_type(right_ty)
     }
 
     /// Narrows a bare float literal operand to `f16` when the other operand is

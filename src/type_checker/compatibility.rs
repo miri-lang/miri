@@ -829,7 +829,7 @@ impl TypeChecker {
 
     /// Returns `true` if the type represents a string, either the built-in
     /// `TypeKind::String` or the class `TypeKind::Custom(STRING_TYPE_NAME, _)`.
-    fn is_string_type(&self, ty: &Type) -> bool {
+    pub(crate) fn is_string_type(&self, ty: &Type) -> bool {
         match &ty.kind {
             TypeKind::String => true,
             TypeKind::Custom(name, _) => name == STRING_TYPE_NAME,

@@ -1680,6 +1680,56 @@ impl TypeChecker {
         }
     }
 
+    /// Determines whether a type is iterable (can be used in a for loop).
+    ///
+    /// A type is iterable if it is one of:
+    /// - String
+    /// - A built-in collection (List, Array, Set, Map)
+    /// - Tuple
+    /// - Range
+    /// - A custom class implementing the Iterable trait
+    ///
+    /// This function and `get_iterable_element_type` (immediately above) encode one
+    /// iterability rule and must be changed together. They are deliberately adjacent:
+    /// a hint that offers a `for` loop where `for` would be rejected, or stays silent
+    /// where it would be accepted, is worse than no hint.
+    pub(crate) fn type_is_iterable(&self, type_name: &str, context: &Context) -> bool {
+        use crate::ast::types::{
+            ITERABLE_TRAIT_NAME, RANGE_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
+        };
+
+        // String is iterable
+        if type_name == STRING_TYPE_NAME {
+            return true;
+        }
+
+        // Built-in collections are iterable
+        if BuiltinCollectionKind::from_name(type_name).is_some() {
+            return true;
+        }
+
+        // Tuple is iterable
+        if type_name == TUPLE_TYPE_NAME {
+            return true;
+        }
+
+        // Range is iterable
+        if type_name == RANGE_TYPE_NAME {
+            return true;
+        }
+
+        // Check if it's a custom class implementing Iterable
+        let def_opt = context
+            .resolve_type_definition(type_name)
+            .or_else(|| self.type_table.global_type_definitions.get(type_name));
+
+        if let Some(TypeDefinition::Class(class_def)) = def_opt {
+            return class_def.trait_args.contains_key(ITERABLE_TRAIT_NAME);
+        }
+
+        false
+    }
+
     // ==================== Name and Type Extraction ====================
 
     /// Extracts a name from an identifier expression.

@@ -53,6 +53,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::member_hints::{self, MemberCandidate};
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -675,6 +676,9 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
+        // Consume call_site_arity at entry (diagnostic-only, prevents leakage to nested calls).
+        let call_arity = self.call_site_arity.take();
+
         if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
             if let Some(module_path) = self
                 .modules
@@ -728,7 +732,7 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         };
 
-        self.infer_member_dispatch(&obj_type, prop_name, span, context)
+        self.infer_member_dispatch(&obj_type, prop_name, span, context, call_arity)
     }
 
     fn infer_member_dispatch(
@@ -737,6 +741,7 @@ impl TypeChecker {
         prop_name: &str,
         span: Span,
         context: &mut Context,
+        call_arity: Option<usize>,
     ) -> Type {
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
 
@@ -754,7 +759,7 @@ impl TypeChecker {
             }
 
             if let Some(result) = self.dispatch_type_definition_member(
-                name, prop_name, obj_type, &type_args, span, context,
+                name, prop_name, obj_type, &type_args, span, context, call_arity,
             ) {
                 return result;
             }
@@ -775,8 +780,9 @@ impl TypeChecker {
         }
     }
 
-    /// Dispatches member access to the appropriate type definition handler.
+    /// Dispatches member access to the appropriate type definition handler with arity awareness.
     /// Returns Some with the result type, or None if no definition was found.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_type_definition_member(
         &mut self,
         type_name: &str,
@@ -785,6 +791,7 @@ impl TypeChecker {
         type_args: &Option<Vec<Expression>>,
         span: Span,
         context: &mut Context,
+        call_arity: Option<usize>,
     ) -> Option<Type> {
         let def_opt = self
             .resolve_visible_type(type_name, context)
@@ -801,9 +808,9 @@ impl TypeChecker {
             Some(TypeDefinition::Struct(def)) => {
                 Some(self.infer_member_struct(&def, type_name, prop_name, type_args, span, context))
             }
-            Some(TypeDefinition::Class(def)) => {
-                Some(self.infer_member_class(&def, type_name, prop_name, type_args, span, context))
-            }
+            Some(TypeDefinition::Class(def)) => Some(self.infer_member_class(
+                &def, type_name, prop_name, type_args, span, context, call_arity,
+            )),
             Some(TypeDefinition::Trait(trait_def)) => {
                 Some(self.infer_member_trait(type_name, &trait_def, prop_name, span, context))
             }
@@ -1111,6 +1118,7 @@ impl TypeChecker {
         make_type(TypeKind::Error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_member_class(
         &mut self,
         def: &crate::type_checker::context::ClassDefinition,
@@ -1119,6 +1127,7 @@ impl TypeChecker {
         type_args: &Option<Vec<Expression>>,
         span: Span,
         context: &mut Context,
+        call_arity: Option<usize>,
     ) -> Type {
         if let Some(ty) =
             self.search_class_hierarchy(def, name, prop_name, type_args, span, context)
@@ -1130,7 +1139,7 @@ impl TypeChecker {
             return ty;
         }
 
-        self.report_class_member_not_found(name, prop_name, context, span)
+        self.report_class_member_not_found(name, prop_name, context, span, call_arity)
     }
 
     fn search_class_hierarchy(
@@ -1336,10 +1345,18 @@ impl TypeChecker {
         prop_name: &str,
         context: &mut Context,
         span: Span,
+        call_arity: Option<usize>,
     ) -> Type {
-        let mut candidates: Vec<&str> = Vec::new();
+        let mut member_candidates: Vec<MemberCandidate> = Vec::new();
         let mut collect_class_name = name;
+        // A circular `extends` chain is reported before this point, but the
+        // report does not stop the walk, so revisiting a class would collect
+        // its members forever.
+        let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
         loop {
+            if !visited.insert(collect_class_name) {
+                break;
+            }
             let collect_def_opt =
                 context
                     .resolve_type_definition(collect_class_name)
@@ -1350,8 +1367,17 @@ impl TypeChecker {
                     });
 
             if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
-                candidates.extend(collect_def.fields.iter().map(|(n, _)| n.as_str()));
-                candidates.extend(collect_def.methods.keys().map(|k| k.as_str()));
+                // Add fields (with None arity)
+                for (field_name, _) in &collect_def.fields {
+                    member_candidates.push(MemberCandidate::field(field_name));
+                }
+                // Add methods (with their param count as arity)
+                for (method_name, method_info) in &collect_def.methods {
+                    member_candidates.push(MemberCandidate::method(
+                        method_name,
+                        method_info.params.len(),
+                    ));
+                }
 
                 if let Some(base_name) = &collect_def.base_class {
                     collect_class_name = base_name.as_str();
@@ -1361,12 +1387,27 @@ impl TypeChecker {
             break;
         }
 
-        if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+        // Try synonym-based suggestions first (with arity preference if available)
+        if let Some(suggestion) =
+            member_hints::suggest_member(prop_name, &member_candidates, call_arity)
+        {
             self.report_error_with_help(
                 DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field or method '{}'", name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+            );
+        } else if let Some(iteration_help) = member_hints::suggest_iteration_help(
+            prop_name,
+            &member_candidates,
+            name,
+            self.type_is_iterable(name, context),
+        ) {
+            self.report_error_with_help(
+                DiagnosticCode::TypFieldNotFound,
+                format!("Type '{}' has no field or method '{}'", name, prop_name),
+                span,
+                iteration_help,
             );
         } else {
             self.report_error(
