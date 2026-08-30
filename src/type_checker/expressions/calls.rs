@@ -1785,7 +1785,14 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if let Some(rt_expr) = &func_data.return_type {
+            // The callee declared this type, not the caller. Resolving it under
+            // the caller's import list would reject a type the caller never
+            // names, so the visibility gate is lifted for the read and restored
+            // immediately after.
+            let previous = self.resolving_declared_signature;
+            self.resolving_declared_signature = true;
             let rt = self.resolve_type_expression(rt_expr, context);
+            self.resolving_declared_signature = previous;
             if func_data.generics.is_some() {
                 self.substitute_type(&rt, generic_map)
             } else {

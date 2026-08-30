@@ -1900,8 +1900,18 @@ impl TypeChecker {
                 .collect()
         });
 
-        // Look up type definition (user-facing: must be visible in scope)
-        if let Some(def) = self.resolve_visible_type(name, context).cloned() {
+        // Look up type definition. User-written type expressions must name a
+        // type visible in scope; a callee's declared signature is read on behalf
+        // of the module that wrote it, so it resolves from the definitions the
+        // import kept rather than from what this scope may name.
+        let definition = match self.resolve_visible_type(name, context).cloned() {
+            Some(def) => Some(def),
+            None if self.resolving_declared_signature => {
+                self.type_table.global_type_definitions.get(name).cloned()
+            }
+            None => None,
+        };
+        if let Some(def) = definition {
             // Types used purely as annotations (e.g. `private trait Foo` in a
             // parameter position) never go through the identifier-lookup path
             // that enforces `check_visibility`.  We close that gap here: if the
@@ -2203,6 +2213,12 @@ impl TypeChecker {
 
     /// Reports an unknown type error with suggestions.
     fn report_unknown_type(&mut self, name: &str, expr: &Expression, context: &Context) {
+        if name.starts_with(|c: char| c.is_uppercase())
+            && self.report_hidden_type_import_hint(name, expr.span)
+        {
+            return;
+        }
+
         let capacity = context
             .type_definitions
             .iter()
@@ -2478,6 +2494,29 @@ impl TypeChecker {
         if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::coded(code, message, span, Some(help));
             err.source_override = self.modules.current_source_override.clone();
+            self.diagnostics.push_error(err);
+        }
+    }
+
+    /// Reports a type error with both help text and a repair suggestion.
+    /// The help text is presented to the user, and the repair is returned as an
+    /// auto-applicable fix. Both are preserved in the diagnostic output.
+    pub(crate) fn report_error_with_help_and_repair(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: String,
+        repair: RepairRequest,
+    ) {
+        if self.suppress_diagnostics {
+            return;
+        }
+        let key = (message.clone(), span);
+        if self.diagnostics.mark_reported(key) {
+            let mut err = TypeError::coded(code, message, span, Some(help));
+            err.source_override = self.modules.current_source_override.clone();
+            err.repair = Some(repair);
             self.diagnostics.push_error(err);
         }
     }

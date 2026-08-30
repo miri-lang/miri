@@ -445,3 +445,50 @@ fn test_an_unknown_name_beside_known_ones_installs_the_rest_and_still_fails() {
     assert!(claude_path(workspace.path(), "miri-lang").exists());
     assert!(claude_path(workspace.path(), "miri-gpu").exists());
 }
+
+#[test]
+fn test_the_listed_repair_ids_are_exactly_the_ones_the_binary_ships() {
+    use miri::diagnostics::repair::RepairId;
+
+    let skill_text = source_of("miri-lang");
+    let listed = repair_ids_listed_in(&skill_text);
+    let mut shipped: Vec<String> = RepairId::all()
+        .iter()
+        .map(|id| id.as_str().to_string())
+        .collect();
+    shipped.sort();
+
+    assert_eq!(
+        listed, shipped,
+        "the repair ids SKILL.md lists must be exactly those RepairId::all() carries"
+    );
+}
+
+/// The repair identifiers SKILL.md lists, sorted.
+///
+/// Read from the bullet list the prose introduces rather than by scanning the
+/// whole document, so an ordinary backticked word elsewhere is never mistaken
+/// for a repair identifier.
+fn repair_ids_listed_in(skill_text: &str) -> Vec<String> {
+    const HEADING: &str = "The auto-applicable repairs are:";
+    let list = skill_text
+        .split_once(HEADING)
+        .unwrap_or_else(|| {
+            panic!(
+                "SKILL.md should introduce the repair list with {:?}",
+                HEADING
+            )
+        })
+        .1;
+    let mut ids: Vec<String> = list
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .take_while(|line| line.trim_start().starts_with("- `"))
+        .filter_map(|line| {
+            let after = line.trim_start().strip_prefix("- `")?;
+            after.split_once('`').map(|(id, _)| id.to_string())
+        })
+        .collect();
+    ids.sort();
+    ids
+}

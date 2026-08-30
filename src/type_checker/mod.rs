@@ -145,6 +145,18 @@ pub struct TypeChecker {
     /// its diagnostics emitted) later in the body pass; suppressing here avoids
     /// duplicate or premature errors from that speculative first inference.
     pub(crate) suppress_diagnostics: bool,
+    /// When true, a `Custom` type name that is not visible in the importing
+    /// scope still resolves from `global_type_definitions`.
+    ///
+    /// Set only while reading a *callee's declared* signature. Such a type was
+    /// written by the module that declares the callee, not by the caller, so
+    /// gating it on what the caller imported is wrong: a selective import like
+    /// `use system.json.{Json}` would otherwise fail to resolve the `JsonError`
+    /// in `Json.parse`'s declared `Result<Json, JsonError>`, even though the
+    /// caller never names that type. User-written type expressions keep the
+    /// visibility gate, so an unimported name is still rejected where the author
+    /// actually wrote it.
+    pub(crate) resolving_declared_signature: bool,
     /// Maps the name of each `@deprecated` declaration to what it is and why it
     /// was deprecated. Populated during declaration collection so that use
     /// sites — a call, an instantiation, an enum-variant reference — can emit
@@ -181,6 +193,7 @@ impl TypeChecker {
             wide_typed_int_literals: HashSet::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
+            resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
         }
     }

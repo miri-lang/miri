@@ -334,7 +334,12 @@ miri explain MER_TYP_044
 miri fix --plan myfile.mi --format json
 ```
 
-Running `miri fix --plan` on a file with errors prints structured repair suggestions. Many are auto-applicable; apply them with:
+Running `miri fix --plan` on a file with errors prints structured repair suggestions. The auto-applicable repairs are:
+- `add-import`: Import a name that resolves in exactly one module.
+- `drop-extra-arguments`: Drop positional arguments a call does not declare.
+- `let-to-var`: Rebind an immutable declaration as mutable.
+
+Apply them with:
 
 ```bash
 miri fix --apply --yes myfile.mi

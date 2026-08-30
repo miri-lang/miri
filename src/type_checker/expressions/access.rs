@@ -812,14 +812,15 @@ impl TypeChecker {
             ),
             Some(TypeDefinition::Generic(_)) | Some(TypeDefinition::Alias(_)) => None,
             None => {
-                if let Some(module) = self.suggest_module_for_type(type_name) {
+                let modules = Self::modules_declaring_type(type_name);
+                if !modules.is_empty() {
                     self.report_error_with_help(
                         DiagnosticCode::TypFieldNotFound,
                         format!("Type '{}' does not have members", obj_type),
                         span,
                         format!(
                             "Consider importing '{}' to use {} methods",
-                            module, type_name
+                            &modules[0], type_name
                         ),
                     );
                 } else {
