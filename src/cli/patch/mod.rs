@@ -45,6 +45,15 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::pipeline::Pipeline;
 
+mod insertion;
+mod request;
+
+pub use request::{operations, Request};
+
+use insertion::{
+    already_declared, confirm_text_declares_only, dominant_line_ending, indented, place,
+};
+
 /// What one operation does to one function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edit {
@@ -60,12 +69,21 @@ pub enum Edit {
         /// The replacement body, as the caller wrote it.
         text: String,
     },
+    /// Add a new declaration the file does not have.
+    Insert {
+        /// The declaration text, as the caller wrote it.
+        text: String,
+        /// The declaration the new one follows; `None` appends.
+        after: Option<String>,
+    },
 }
 
 /// One edit, and the function it applies to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operation {
     /// The function's name, or `Class.method` for a method.
+    /// For Anchored and Body edits: the target to modify.
+    /// For Insert edits: the new declaration to create.
     pub function: String,
     /// What to do to it.
     pub edit: Edit,
@@ -535,6 +553,41 @@ fn apply_one(
     source: &str,
     operation: &Operation,
 ) -> Result<(String, JsonPatchEdit), Box<Diagnostic>> {
+    match &operation.edit {
+        Edit::Anchored { old, new } => {
+            apply_in_place(source, operation, InPlace::Anchored { old, new })
+        }
+        Edit::Body { text } => apply_in_place(source, operation, InPlace::Body { text }),
+        Edit::Insert { text, after } => apply_insert(source, operation, text, after.as_deref()),
+    }
+}
+
+/// An edit that rewrites bytes inside a declaration that already exists.
+///
+/// Insert is absent by construction: it names a declaration the file does not
+/// have yet, so the resolution this path opens with would refuse it, and the
+/// refusal would describe the wrong problem.
+enum InPlace<'edit> {
+    /// Replace one occurrence of some text in the declaration.
+    Anchored {
+        /// The text to find, matched against the canonical rendering.
+        old: &'edit str,
+        /// What to put in its place.
+        new: &'edit str,
+    },
+    /// Replace everything past the declaration's header.
+    Body {
+        /// The replacement body, as the caller wrote it.
+        text: &'edit str,
+    },
+}
+
+/// Rewrite bytes inside a declaration the file already holds.
+fn apply_in_place(
+    source: &str,
+    operation: &Operation,
+    edit: InPlace<'_>,
+) -> Result<(String, JsonPatchEdit), Box<Diagnostic>> {
     let program = parse(source)?;
     let declaration = resolve::resolve(&program, &operation.function)?;
     let StatementKind::FunctionDeclaration(data) = &declaration.node else {
@@ -542,18 +595,19 @@ fn apply_one(
     };
 
     let rendered = formatter::declaration(declaration);
-    let alignment = token_align::build_alignment(source, &rendered.text, data)
-        .map_err(|diverged| Box::new(diverged.to_diagnostic()))?;
+    let alignment =
+        token_align::build_alignment(source, &rendered.text, &data.name, data.name_span)
+            .map_err(|diverged| Box::new(diverged.to_diagnostic()))?;
 
-    let (range, replacement) = match &operation.edit {
-        Edit::Anchored { old, new } => {
+    let (range, replacement) = match edit {
+        InPlace::Anchored { old, new } => {
             let canonical = anchor_range(&rendered.text, old)?;
             let range = alignment
                 .raw_range(canonical.0, canonical.1)
                 .ok_or_else(|| anchor_covers_no_token(old))?;
-            (range, new.clone())
+            (range, new.to_string())
         }
-        Edit::Body { text } => {
+        InPlace::Body { text } => {
             let header = formatter::signature(declaration)
                 .and_then(|signature| token_align::significant_token_count(&signature.text))
                 .ok_or_else(|| not_a_function(&operation.function))?;
@@ -581,6 +635,231 @@ fn apply_one(
     ))
 }
 
+/// Add a declaration the file does not have.
+///
+/// The text is spliced in as the caller wrote it, re-indented to sit where it
+/// lands. Nothing else in the file moves, and the edited program is checked
+/// before any of it reaches disk, so a declaration that does not belong where
+/// it was asked for is refused rather than written.
+fn apply_insert(
+    source: &str,
+    operation: &Operation,
+    text: &str,
+    after: Option<&str>,
+) -> Result<(String, JsonPatchEdit), Box<Diagnostic>> {
+    let program = parse(source)?;
+    let container = operation.function.rsplit_once('.').map(|(name, _)| name);
+
+    if already_declared(&program, &operation.function) {
+        return Err(already_exists(&operation.function));
+    }
+    confirm_text_declares_only(text, &operation.function)?;
+
+    let placement = place(source, &program, container, after)?;
+    let ending = dominant_line_ending(source);
+    let body = indented(text, &placement.indent, ending);
+    let replacement = if placement.separated {
+        format!("{}{}{}", ending, ending, body)
+    } else {
+        body
+    };
+
+    let mut edited = String::with_capacity(source.len() + replacement.len());
+    edited.push_str(source.get(..placement.at).ok_or_else(split_failed)?);
+    edited.push_str(&replacement);
+    edited.push_str(source.get(placement.at..).ok_or_else(split_failed)?);
+
+    confirm_insert(&edited, operation, &program, container)?;
+
+    Ok((
+        edited,
+        JsonPatchEdit {
+            start: placement.at,
+            end: placement.at,
+            replacement,
+        },
+    ))
+}
+
+/// Check that the insert added the one declaration it named and nothing else.
+///
+/// An insert and an in-place edit fail in different shapes, which is why this
+/// does not go through [`confirm_only_target_changed`]: that one holds the
+/// file's declaration count fixed, and an insert is the case that changes it.
+/// The two insert paths differ again from each other. A top-level declaration
+/// makes the file declare one more thing, so setting the new one aside has to
+/// leave exactly the sequence that was there. A method leaves the count alone
+/// and grows its container instead, so what is checked is that the container
+/// is the only declaration whose rendering moved.
+fn confirm_insert(
+    after: &str,
+    operation: &Operation,
+    parsed_before: &Program,
+    container: Option<&str>,
+) -> Result<(), Box<Diagnostic>> {
+    let reparsed = parse(after)?;
+    match container {
+        Some(name) => confirm_method_arrived(&reparsed, parsed_before, &operation.function, name),
+        None => confirm_declaration_arrived(&reparsed, parsed_before, &operation.function),
+    }
+}
+
+/// Check a method joined its container and left every other declaration alone.
+///
+/// A method changes only the container that holds it, so the file declares
+/// exactly what it declared before.
+fn confirm_method_arrived(
+    reparsed: &Program,
+    parsed_before: &Program,
+    name: &str,
+    container: &str,
+) -> Result<(), Box<Diagnostic>> {
+    if reparsed.body.len() != parsed_before.body.len() {
+        return Err(edit_escaped());
+    }
+    confirm_untouched(parsed_before, reparsed, |statement| {
+        resolve::container_name(statement).as_deref() == Some(container)
+    })?;
+
+    let Some((_, method)) = name.rsplit_once('.') else {
+        return Err(declared_something_else(name));
+    };
+    if resolve::methods_of(reparsed, container, method).is_empty() {
+        return Err(declared_something_else(name));
+    }
+    Ok(())
+}
+
+/// Check a top-level declaration arrived and displaced nothing.
+///
+/// The file declares one more thing than it did, and setting the new one aside
+/// leaves the sequence that was there before.
+fn confirm_declaration_arrived(
+    reparsed: &Program,
+    parsed_before: &Program,
+    name: &str,
+) -> Result<(), Box<Diagnostic>> {
+    if reparsed.body.len() != parsed_before.body.len() + 1 {
+        return Err(edit_escaped());
+    }
+    let inserted = reparsed
+        .body
+        .iter()
+        .position(|statement| resolve::declared_function_name(statement) == Some(name))
+        .ok_or_else(|| declared_something_else(name))?;
+
+    let surviving = reparsed
+        .body
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != inserted)
+        .map(|(_, statement)| statement);
+    for (old, new) in parsed_before.body.iter().zip(surviving) {
+        if formatter::declaration(old).text != formatter::declaration(new).text {
+            return Err(edit_escaped());
+        }
+    }
+    Ok(())
+}
+
+/// Check every declaration the edit did not name renders as it did before.
+fn confirm_untouched(
+    before: &Program,
+    after: &Program,
+    is_target: impl Fn(&Statement) -> bool,
+) -> Result<(), Box<Diagnostic>> {
+    for (old, new) in before.body.iter().zip(&after.body) {
+        if is_target(old) {
+            continue;
+        }
+        if formatter::declaration(old).text != formatter::declaration(new).text {
+            return Err(edit_escaped());
+        }
+    }
+    Ok(())
+}
+
+/// Report a name the file already declares where the new one would go.
+fn already_exists(name: &str) -> Box<Diagnostic> {
+    Box::new(coded(
+        DiagnosticCode::BldDeclarationAlreadyExists,
+        format!(
+            "`{}` is already declared in this file",
+            sanitize_for_terminal(name)
+        ),
+        "an insert adds a declaration the file does not have; edit the existing one with --replace-fn, or insert under a name nothing answers to",
+    ))
+}
+
+/// Report a method addressed to a container the file does not declare.
+fn container_missing(name: &str) -> Box<Diagnostic> {
+    Box::new(coded(
+        DiagnosticCode::BldFunctionNotFound,
+        format!(
+            "no class, struct, enum or trait named `{}` in this file",
+            sanitize_for_terminal(name)
+        ),
+        "a method is inserted into a container the file already declares; run `miri view --outline` to list what it declares",
+    ))
+}
+
+/// Report a container with no body a member could join.
+fn bodyless_container(name: &str) -> Box<Diagnostic> {
+    Box::new(coded(
+        DiagnosticCode::BldSourceNotAnchorable,
+        format!(
+            "`{}` has no member to place a new one beside",
+            sanitize_for_terminal(name)
+        ),
+        "a method is inserted beside the members a container already declares; add the first one by hand",
+    ))
+}
+
+/// Report an anchor that does not sit where the new declaration would.
+fn anchor_in_another_scope(
+    anchor: &str,
+    wanted: Option<&str>,
+    found: Option<&str>,
+) -> Box<Diagnostic> {
+    let describe = |container: Option<&str>| match container {
+        Some(name) => format!("inside `{}`", sanitize_for_terminal(name)),
+        None => "at the top level".to_string(),
+    };
+    Box::new(coded(
+        DiagnosticCode::BldMalformedEditRequest,
+        format!(
+            "`{}` sits {}, and the new declaration would go {}",
+            sanitize_for_terminal(anchor),
+            describe(found),
+            describe(wanted)
+        ),
+        "an insert goes beside the declaration --after names, so the two belong to the same container; drop --after to append instead",
+    ))
+}
+
+/// Report a declaration whose extent could not be established.
+fn not_anchorable(name: &str) -> Box<Diagnostic> {
+    Box::new(coded(
+        DiagnosticCode::BldSourceNotAnchorable,
+        format!(
+            "the extent of `{}` could not be established",
+            sanitize_for_terminal(name)
+        ),
+        "this declaration could not be anchored reliably; rewrite it in canonical form and retry",
+    ))
+}
+
+/// Report inserted text that declares something other than what was named.
+fn declared_something_else(name: &str) -> Box<Diagnostic> {
+    Box::new(coded(
+        DiagnosticCode::BldMalformedEditRequest,
+        format!(
+            "the inserted text does not declare `{}`",
+            sanitize_for_terminal(name)
+        ),
+        "the text passed with --body-file must declare the name given to --insert-fn",
+    ))
+}
 /// Where an anchor sits in a canonical rendering.
 ///
 /// The anchor has to name one site. Text that appears nowhere cannot be
@@ -658,10 +937,13 @@ fn enclosing_index(program: &Program, target: &Statement) -> Option<usize> {
 /// indentation of that first line is already in the file and the replacement
 /// must not repeat it. Every line after the first carries it.
 fn reindented(source: &str, body_start: usize, body: &str) -> String {
-    let line_start = source[..body_start]
-        .rfind('\n')
+    let line_start = source
+        .get(..body_start)
+        .and_then(|before| before.rfind('\n'))
         .map_or(0, |index| index + 1);
-    let indent: String = source[line_start..body_start]
+    let indent: String = source
+        .get(line_start..body_start)
+        .unwrap_or_default()
         .chars()
         .take_while(|c| c.is_whitespace())
         .collect();
@@ -1146,119 +1428,6 @@ fn summary(report: &PatchReport, mode: Mode) -> String {
             }
         }
     }
-}
-
-/// The edit flags as they arrived, before they are read as operations.
-#[derive(Debug, Default, Clone)]
-pub struct Request {
-    /// Functions named by `--replace-in-fn`.
-    pub functions: Vec<String>,
-    /// Anchors given inline.
-    pub old: Vec<String>,
-    /// Replacements given inline.
-    pub new: Vec<String>,
-    /// Files, or `-`, carrying the anchors.
-    pub old_file: Vec<String>,
-    /// Files, or `-`, carrying the replacements.
-    pub new_file: Vec<String>,
-    /// Functions named by `--replace-fn`.
-    pub replace_functions: Vec<String>,
-    /// Files, or `-`, carrying the replacement bodies.
-    pub body_file: Vec<String>,
-}
-
-/// Read the edit flags as a sequence of operations.
-///
-/// Anchored edits are applied in the order they were written, and body
-/// replacements after them. A batch is applied to one text and checked once, so
-/// a later edit sees what an earlier one did.
-pub fn operations(request: &Request) -> Result<Vec<Operation>, Box<Diagnostic>> {
-    reject_multiple_standard_inputs(request)?;
-
-    let old = one_source_of(&request.old, &request.old_file, "--old", "--old-file")?;
-    let new = one_source_of(&request.new, &request.new_file, "--new", "--new-file")?;
-
-    if request.functions.len() != old.len() || request.functions.len() != new.len() {
-        return Err(malformed(format!(
-            "{} function(s) named for an anchored edit, with {} anchor(s) and {} replacement(s)",
-            request.functions.len(),
-            old.len(),
-            new.len()
-        )));
-    }
-    if request.replace_functions.len() != request.body_file.len() {
-        return Err(malformed(format!(
-            "{} function(s) named for a body replacement, with {} body file(s)",
-            request.replace_functions.len(),
-            request.body_file.len()
-        )));
-    }
-
-    let mut built = Vec::new();
-    for ((function, old), new) in request.functions.iter().zip(old).zip(new) {
-        built.push(Operation {
-            function: function.clone(),
-            edit: Edit::Anchored { old, new },
-        });
-    }
-    for (function, body) in request.replace_functions.iter().zip(&request.body_file) {
-        built.push(Operation {
-            function: function.clone(),
-            edit: Edit::Body {
-                text: text_from_file(body)?,
-            },
-        });
-    }
-    Ok(built)
-}
-
-/// Take the texts from whichever of the two flags carried them.
-///
-/// One flag or the other answers for a whole call. Accepting both would leave
-/// the order of a batch resting on which flag an edit happened to use.
-fn one_source_of(
-    inline: &[String],
-    files: &[String],
-    inline_flag: &str,
-    file_flag: &str,
-) -> Result<Vec<String>, Box<Diagnostic>> {
-    if !inline.is_empty() && !files.is_empty() {
-        return Err(malformed(format!(
-            "{} and {} were both given; one call takes its text from one of them",
-            inline_flag, file_flag
-        )));
-    }
-    if inline.is_empty() {
-        return files.iter().map(|path| text_from_file(path)).collect();
-    }
-    Ok(inline.to_vec())
-}
-
-/// Refuse a call that would read standard input more than once.
-fn reject_multiple_standard_inputs(request: &Request) -> Result<(), Box<Diagnostic>> {
-    let from_input = request
-        .old_file
-        .iter()
-        .chain(&request.new_file)
-        .chain(&request.body_file)
-        .filter(|source| source.as_str() == "-")
-        .count();
-    if from_input > 1 {
-        return Err(malformed(format!(
-            "{} arguments read standard input, which can be read once",
-            from_input
-        )));
-    }
-    Ok(())
-}
-
-/// Report edit flags that do not describe a coherent edit.
-fn malformed(detail: String) -> Box<Diagnostic> {
-    Box::new(coded(
-        DiagnosticCode::BldMalformedEditRequest,
-        detail,
-        "name one function, one anchor and one replacement per edit; repeat the three together to batch edits",
-    ))
 }
 
 /// Report edit flags that could not be read as operations, and write the result.

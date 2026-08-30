@@ -147,6 +147,28 @@ never partitioned — and the command's own refusal notice carries none either.
 `checkOnly` or `dryRun` mode, `fileWritten` is always false (the check still
 happens and reports normally).
 
+Each entry of `operations` names a `function` and carries one of three shapes,
+told apart by which keys are present:
+
+```json
+{ "function": "total",        "old": "sum + 1", "new": "sum + 2" }
+{ "function": "Cart.total",   "body": "return self.sum" }
+{ "function": "quadruple",    "insert": "fn quadruple(x i32) i32\n    return double(x) * 2", "after": "double" }
+```
+
+`old` with `new` replaces one occurrence inside the named declaration, and
+`body` replaces everything past its header. `insert` adds a declaration the file
+does not have, and there `function` names what is being *created* rather than an
+existing target: a bare name for a free function, or `Class.method` for a
+method, which is placed among that container's own members. `after` is optional
+and names the declaration the new one follows; without it the declaration is
+appended, at the end of the file or at the end of its container's body.
+
+An insert of a name the file already declares at that scope answers
+`MER_BLD_017`, and a method addressed to a container the file does not declare
+answers `MER_BLD_004`. Both are diagnostics with `ok: false`, not protocol
+errors.
+
 ### `skillsGet`
 
 `{ "name": "miri-lang" }` → a `skill` envelope carrying `skills`. Without a

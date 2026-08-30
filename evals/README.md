@@ -110,11 +110,24 @@ through — so the counts should carry across. They are not yet *proven* to. If
 the gate fails on a first CI run with small byte deltas and no other change, the
 fix is to widen the normalizer, never to widen the gate.
 
-## A known gap the numbers record
+## What task `c` shows about the insert operation
 
-`miri patch` cannot insert a sibling declaration — it refuses with
-`MER_BLD_010`. Task `c` therefore authors its new function with a direct write
-rather than through the edit surface. That write is the honest current cost of
-that loop, and `bytes_written` records it rather than hiding it. When a
-declaration-inserting operation lands, task `c` should move onto it and the
-baseline should get cheaper.
+Task `c` adds both of its declarations through `miri patch --insert-fn`, in one
+call. It used to author them with a direct write, because the edit surface could
+only replace text inside a declaration that already existed.
+
+Moving onto the insert did not make the loop cheaper by these numbers, and it is
+worth being precise about why. `invocations` is unchanged at four: the insert
+re-checks what it wrote, so the separate `check` step went away and the patch
+call took its place. `bytes_written` is unchanged at 199, because it counts the
+size of the file that ends up on disk and the same file ends up there either
+way. `bytes_read` rose from 316 to 702, because the patch envelope echoes each
+inserted declaration back in its `edits` array, and the caller is reading text
+it just sent.
+
+What did change is not measured here: the loop no longer has to author the whole
+file to add to it, and the addition is checked before it lands. These columns
+count what a loop reads, writes and invokes — they do not count what the agent
+had to compose to get there. That is a real limitation of the device, recorded
+rather than corrected, because widening the metric to reward this change would
+make it stop measuring the thing it was built for.

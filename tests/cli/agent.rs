@@ -941,3 +941,43 @@ fn test_a_session_reports_an_edit_that_does_not_check() {
 
     session.finish();
 }
+
+#[test]
+fn test_a_session_can_insert_a_declaration() {
+    let source = "fn helper() int
+    return 42
+
+fn main()
+    println(\"ok\")
+";
+    let directory = project("patch-insert", &[("main.mi", source)]);
+    let path = directory.path().join("main.mi");
+    let path = path.to_str().expect("the path is text");
+    let mut session = Session::start(directory.path());
+
+    let edited = session.call(
+        2,
+        "patch",
+        json!({
+            "path": path,
+            "operations": [{ "function": "answer", "insert": "fn answer() int\n    return 43" }],
+        }),
+    );
+    assert!(
+        edited["error"].is_null(),
+        "an insert is an answer, not a protocol failure: {edited}"
+    );
+    let envelope = &edited["result"];
+    assert_eq!(envelope["ok"], json!(true), "the insert checks: {edited}");
+    assert_eq!(envelope["command"], json!("patch"));
+    assert_eq!(envelope["patch"]["revalidations"], json!(1));
+    assert_eq!(envelope["patch"]["fileWritten"], json!(true));
+
+    let written = std::fs::read_to_string(path).expect("the edited file can be read");
+    assert!(
+        written.contains("fn answer()"),
+        "inserted declaration should be in file: {written}"
+    );
+
+    session.finish();
+}

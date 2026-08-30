@@ -1354,6 +1354,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "BLD",
+    "017",
+    BldDeclarationAlreadyExists,
+    "Declaration Already Exists",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
 );
 
 #[cfg(test)]

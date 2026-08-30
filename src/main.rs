@@ -93,13 +93,15 @@ fn run_command(cli: Cli) -> Result<()> {
                 new_file,
                 replace_fn,
                 body_file,
+                insert_fn,
+                after,
                 expect_sha,
                 check_only,
                 dry_run,
                 format,
             } => patch_file(
-                path, fn_name, old, new, old_file, new_file, replace_fn, body_file, expect_sha,
-                check_only, dry_run, format, cli.color,
+                path, fn_name, old, new, old_file, new_file, replace_fn, body_file, insert_fn,
+                after, expect_sha, check_only, dry_run, format, cli.color,
             ),
             Commands::Fix {
                 path,
@@ -448,6 +450,8 @@ fn patch_file(
     new_file: Vec<String>,
     replace_fn: Vec<String>,
     body_file: Vec<String>,
+    insert_fn: Vec<String>,
+    after: Vec<String>,
     expect_sha: Option<String>,
     check_only: bool,
     dry_run: bool,
@@ -462,6 +466,8 @@ fn patch_file(
         new_file,
         replace_functions: replace_fn,
         body_file,
+        insert_functions: insert_fn,
+        after,
     };
     // A run that names no writable mode writes; --check-only and --dry-run each
     // hold the result back, and asking for both is asking for the stricter one.

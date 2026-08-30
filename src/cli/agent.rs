@@ -544,22 +544,32 @@ fn patch_operation(entry: &serde_json::Value) -> Result<patch::Operation, String
         .ok_or_else(|| "each operation needs a `function`".to_string())?
         .to_string();
 
-    match (text("old"), text("new"), text("body")) {
-        (Some(old), Some(new), None) => Ok(patch::Operation {
+    match (text("old"), text("new"), text("body"), text("insert")) {
+        (Some(old), Some(new), None, None) => Ok(patch::Operation {
             function,
             edit: patch::Edit::Anchored {
                 old: old.to_string(),
                 new: new.to_string(),
             },
         }),
-        (None, None, Some(body)) => Ok(patch::Operation {
+        (None, None, Some(body), None) => Ok(patch::Operation {
             function,
             edit: patch::Edit::Body {
                 text: body.to_string(),
             },
         }),
+        (None, None, None, Some(insert)) => {
+            let after = text("after").map(|s| s.to_string());
+            Ok(patch::Operation {
+                function,
+                edit: patch::Edit::Insert {
+                    text: insert.to_string(),
+                    after,
+                },
+            })
+        }
         _ => {
-            Err("each operation carries either `old` with `new`, or `body` on its own".to_string())
+            Err("each operation carries either `old` with `new`, `body` alone, or `insert` with optional `after`".to_string())
         }
     }
 }

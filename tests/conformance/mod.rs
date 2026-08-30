@@ -170,6 +170,12 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
+        // A sibling test sets these process-wide to prove the linker is chosen
+        // from them, and the setting outlives it. A fixture that builds would
+        // inherit that bogus linker and fail for a reason that has nothing to
+        // do with the fixture.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
         .arg(directives.command_or("check"))
         .arg(&test_path)
         .arg("--format")
@@ -251,6 +257,12 @@ fn test_warn_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
+        // A sibling test sets these process-wide to prove the linker is chosen
+        // from them, and the setting outlives it. A fixture that builds would
+        // inherit that bogus linker and fail for a reason that has nothing to
+        // do with the fixture.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
         .arg(directives.command_or("check"))
         .arg(&test_path)
         .arg("--format")
@@ -316,6 +328,12 @@ fn test_pass_fixture(path: &Path) -> Result<(), String> {
 
     cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         .env("RUST_BACKTRACE", "0")
+        // A sibling test sets these process-wide to prove the linker is chosen
+        // from them, and the setting outlives it. A fixture that builds would
+        // inherit that bogus linker and fail for a reason that has nothing to
+        // do with the fixture.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
         .arg(directives.command_or("run"))
         .arg(&test_path)
         .arg("--format")
@@ -402,6 +420,7 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_BLD_014", "Command-invocation diagnostic (miri skill install refuses an edited file); not reachable from .mi source"),
     ("MER_BLD_015", "Command-invocation diagnostic (miri skill install cannot write its target); not reachable from .mi source"),
     ("MER_BLD_016", "Command-invocation diagnostic (a skill embedded in this build has no readable header); not reachable from .mi source"),
+    ("MER_BLD_017", "Command-invocation diagnostic (miri patch --insert-fn was given a name the file already declares); not reachable from .mi source"),
     ("MER_CG_001", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),
     ("MER_CG_002", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),
     ("MER_CG_003", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),

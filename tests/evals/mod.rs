@@ -68,6 +68,9 @@ struct StepSpec {
     old_text: Option<String>,
     new_text: Option<String>,
     body: Option<String>,
+    /// The declarations an `InsertFn` step adds, in the order it names them.
+    #[serde(default)]
+    insert: Vec<InsertSpec>,
     path: Option<String>,
     content: Option<String>,
     dir: Option<String>,
@@ -84,6 +87,22 @@ struct StepSpec {
 
 fn yes() -> bool {
     true
+}
+
+/// One declaration an `InsertFn` step adds.
+///
+/// A step carries a list of these rather than a single declaration because one
+/// `miri patch` call can add several, and a transcript that spent one call per
+/// declaration would report a cost the loop does not actually pay.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InsertSpec {
+    /// The name being created: a bare name, or `Class.method`.
+    name: String,
+    /// The declaration's source text.
+    body: String,
+    /// The declaration this one follows; appended when absent.
+    after: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,6 +337,29 @@ fn run_step(
                 .arg(&body_path)
                 .arg("--format")
                 .arg("json");
+        }
+        "InsertFn" => {
+            if spec.insert.is_empty() {
+                return Err(format!(
+                    "step of type '{}' requires field 'insert'",
+                    spec.kind
+                ));
+            }
+            cmd.arg("patch")
+                .arg(require(&spec.file, "file", &spec.kind)?);
+            // Each declaration travels in its own file, written outside the
+            // working directory: anything left beside the source would be
+            // picked up by a later `miri test --dir .` in the same transcript.
+            for (index, insert) in spec.insert.iter().enumerate() {
+                let body_path = scratch.join(format!("insert-{}.txt", index));
+                fs::write(&body_path, &insert.body).map_err(|e| e.to_string())?;
+                cmd.arg("--insert-fn").arg(&insert.name);
+                cmd.arg("--body-file").arg(&body_path);
+                if let Some(after) = &insert.after {
+                    cmd.arg("--after").arg(after);
+                }
+            }
+            cmd.arg("--format").arg("json");
         }
         "Run" => {
             cmd.arg("run").arg(require(&spec.file, "file", &spec.kind)?);
@@ -799,6 +841,7 @@ mod tests {
             old_text: None,
             new_text: None,
             body: None,
+            insert: Vec::new(),
             path: None,
             content: None,
             dir: None,
