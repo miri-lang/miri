@@ -14,11 +14,10 @@
 
 use std::path::Path;
 
-use crate::cli::{serialize_envelope, ColorMode, Format};
+use crate::cli::{anchor, serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand};
 use crate::error::diagnostic::{to_json, Diagnostic};
 use crate::error::format::format_diagnostic_with_color;
-use crate::pipeline::Pipeline;
 
 /// How the command finished, mapped onto a process exit code by the caller.
 pub enum Outcome {
@@ -45,19 +44,17 @@ pub struct CheckReport {
     source_path: Option<String>,
 }
 
-/// Run the frontend over `source` and report what it found.
+/// Run the frontend over `source` anchored to an optional path and report what it found.
 ///
 /// Nothing here writes to a stream or ends the process, so the same call serves
 /// the command line and a request over a long-lived connection.
-pub fn check(path: &Path, source: &str, verify_mir: bool) -> CheckReport {
-    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
-    // Canonicalize first so that a bare filename like "main.mi" resolves to an
-    // absolute path whose parent is the working directory, not an empty path.
-    let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(directory) = absolute.parent() {
-        pipeline = pipeline.with_source_dir(directory.to_path_buf());
-    }
-    pipeline = pipeline.with_source_path(absolute.display().to_string());
+///
+/// When `path` is `None`, imports resolve from the current working directory and
+/// diagnostics carry no path. When `path` is `Some`, the check anchors to that
+/// logical location even if the file does not yet exist on disk, and diagnostics
+/// echo the path back.
+pub fn check_anchored(path: Option<&Path>, source: &str, verify_mir: bool) -> CheckReport {
+    let pipeline = anchor::pipeline_for(path).with_verify_mir(verify_mir);
 
     let start = std::time::Instant::now();
     let outcome = pipeline.frontend(source);
@@ -84,6 +81,14 @@ pub fn check(path: &Path, source: &str, verify_mir: bool) -> CheckReport {
         diagnostics,
         source_path,
     }
+}
+
+/// Run the frontend over `source` and report what it found.
+///
+/// This is a convenience wrapper that anchors to the provided path.
+/// It is kept for backwards compatibility with existing callers.
+pub fn check(path: &Path, source: &str, verify_mir: bool) -> CheckReport {
+    check_anchored(Some(path), source, verify_mir)
 }
 
 impl CheckReport {

@@ -142,9 +142,16 @@ class AgentSession:
         """Call initialize and return the response."""
         return self.call("initialize", {})
 
-    def check(self, path, verify_mir=False):
-        """Call check and return the response."""
-        params = {"path": path}
+    def check(self, path=None, source=None, verify_mir=False):
+        """Call check and return the response.
+
+        Either path or source (or both) must be provided.
+        """
+        params = {}
+        if path is not None:
+            params["path"] = path
+        if source is not None:
+            params["source"] = source
         if verify_mir:
             params["verifyMir"] = True
         return self.call("check", params)
@@ -158,9 +165,16 @@ class AgentSession:
             params["around"] = around
         return self.call("view", params)
 
-    def patch(self, path, operations, mode=None, expect_sha=None):
-        """Call patch and return the response."""
-        params = {"path": path, "operations": operations}
+    def patch(self, operations, path=None, source=None, mode=None, expect_sha=None):
+        """Call patch and return the response.
+
+        Either path or source (or both) must be provided.
+        """
+        params = {"operations": operations}
+        if path is not None:
+            params["path"] = path
+        if source is not None:
+            params["source"] = source
         if mode is not None:
             params["mode"] = mode
         if expect_sha is not None:
@@ -223,14 +237,20 @@ def main():
 
     elif args.mode == "full":
         with AgentSession(args.miri) as session:
+            # Read the source for in-memory examples
+            source_code = Path(args.file).read_text()
+
             # Exercise all public methods
             init_result = session.initialize()
-            check_result = session.check(args.file)
-            check_verify_result = session.check(args.file, verify_mir=True)
+            check_result = session.check(path=args.file)
+            check_verify_result = session.check(path=args.file, verify_mir=True)
+            check_source_result = session.check(source=source_code)
+            check_source_with_path_result = session.check(path=args.file, source=source_code)
             view_result = session.view(args.file)
             view_fn_result = session.view(args.file, fn="main")
             explain_result = session.explain("MER_TYP_030")
-            patch_result = session.patch(args.file, [])
+            patch_result = session.patch([], path=args.file)
+            patch_source_result = session.patch([], source=source_code, mode="checkOnly")
             skills_result = session.skills_get()
             skills_named_result = session.skills_get(name="miri-lang")
 
@@ -239,10 +259,13 @@ def main():
                 "initialize": init_result.get("result") is not None,
                 "check": check_result.get("result") is not None,
                 "check_with_verify": check_verify_result.get("result") is not None,
+                "check_with_source": check_source_result.get("result") is not None,
+                "check_with_source_and_path": check_source_with_path_result.get("result") is not None,
                 "view": view_result.get("result") is not None,
                 "view_with_fn": view_fn_result.get("result") is not None,
                 "explain": explain_result.get("result") is not None,
                 "patch": patch_result.get("result") is not None,
+                "patch_with_source": patch_source_result.get("result") is not None,
                 "skills_get": skills_result.get("result") is not None,
                 "skills_get_named": skills_named_result.get("result") is not None,
             }
