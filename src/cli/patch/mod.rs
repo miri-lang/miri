@@ -32,7 +32,7 @@ use crate::ast::formatter;
 use crate::ast::statement::StatementKind;
 use crate::ast::{Program, Statement};
 use crate::cli::{
-    resolve, sanitize_for_terminal, serialize_envelope, token_align, ColorMode, Format,
+    anchor, resolve, sanitize_for_terminal, serialize_envelope, token_align, ColorMode, Format,
 };
 use crate::diagnostics::json::{
     DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonPatch, JsonPatchEdit,
@@ -43,7 +43,6 @@ use crate::error::format::format_diagnostic_with_color;
 use crate::error::type_error::TypeError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::pipeline::Pipeline;
 
 mod insertion;
 mod request;
@@ -154,21 +153,43 @@ struct ValidatedEdit {
     checked_edited: Checked,
 }
 
-/// Validate source file and apply operations; return early if any step fails.
-fn validate_and_apply(
-    path: &Path,
+/// Validate source and apply operations; return early if any step fails.
+///
+/// When `source` is provided, that text is used (and `path` anchors imports).
+/// When `source` is None, the file at `path` is read from disk.
+fn validate_and_apply_anchored(
+    path: Option<&Path>,
+    source: Option<&str>,
     operations: &[Operation],
     expect_sha: Option<&str>,
 ) -> Result<ValidatedEdit, Box<PatchReport>> {
-    let source_path = Some(path.display().to_string());
-    let source = fs::read_to_string(path).map_err(|error| {
-        Box::new(refusal(
-            vec![unreadable(path, &error)],
-            String::new(),
-            source_path.clone(),
-            0,
-        ))
-    })?;
+    let source_path = path.map(|p| p.display().to_string());
+
+    let source = match (source, path) {
+        (Some(src), _) => src.to_string(),
+        (None, Some(p)) => fs::read_to_string(p).map_err(|error| {
+            Box::new(refusal(
+                vec![unreadable(p, &error)],
+                String::new(),
+                source_path.clone(),
+                0,
+            ))
+        })?,
+        (None, None) => {
+            // Caller should have validated that at least one is present.
+            // Return an error rather than panicking.
+            return Err(Box::new(refusal(
+                vec![coded(
+                    DiagnosticCode::BldInputNotReadable,
+                    "patch needs either a source or a path to work on".to_string(),
+                    "provide one or both of source and path",
+                )],
+                String::new(),
+                source_path,
+                0,
+            )));
+        }
+    };
 
     if let Some(diagnostic) = request_refused(&source, operations, expect_sha) {
         return Err(Box::new(refusal(vec![diagnostic], source, source_path, 0)));
@@ -183,7 +204,7 @@ fn validate_and_apply(
         ))
     })?;
 
-    let checked_edited = check_source(path, &edited);
+    let checked_edited = check_source_anchored(path, &edited);
 
     Ok(ValidatedEdit {
         source,
@@ -193,44 +214,124 @@ fn validate_and_apply(
     })
 }
 
-/// Apply `operations` to `path` and report what happened.
+/// The label a dry run's diff header carries.
+///
+/// An in-memory source has no file to point at, so it is named instead.
+fn diff_label(path: Option<&Path>, mode: Mode) -> Option<String> {
+    matches!(mode, Mode::DryRun).then(|| match path {
+        Some(path) => path.display().to_string(),
+        None => "<source>".to_string(),
+    })
+}
+
+/// Put the edited text on disk when there is a file to put it in.
+///
+/// An in-memory source has nowhere to be written, so it reports that nothing
+/// was written rather than failing.
+fn try_store_edited(
+    path: Option<&Path>,
+    edited: &str,
+    source: &str,
+    source_path: Option<String>,
+    mode: Mode,
+) -> Result<bool, Box<PatchReport>> {
+    let Some(path) = path else {
+        return Ok(false);
+    };
+    store(path, edited, mode).map_err(|diagnostic| {
+        Box::new(refusal(
+            vec![*diagnostic],
+            source.to_string(),
+            source_path,
+            1,
+        ))
+    })
+}
+
+/// Store the edited text and report the batch that produced it.
+///
+/// An edit over a clean file and one that leaves pre-existing errors in place
+/// end the same way, differing only in the errors they carry, so both come
+/// through here.
+fn accepted_after_store(
+    path: Option<&Path>,
+    validated: ValidatedEdit,
+    source_path: Option<String>,
+    mode: Mode,
+    preexisting: PreexistingErrors,
+) -> PatchReport {
+    let label = diff_label(path, mode);
+    let file_was_written = match try_store_edited(
+        path,
+        &validated.edited,
+        &validated.source,
+        source_path.clone(),
+        mode,
+    ) {
+        Ok(written) => written,
+        Err(report) => return *report,
+    };
+
+    accepted_report(
+        Applied {
+            edits: validated.applied,
+            warnings: validated.checked_edited.warnings,
+            file_was_written,
+        },
+        Texts {
+            before: validated.source,
+            after: validated.edited,
+            path: source_path,
+        },
+        label.as_deref(),
+        preexisting,
+    )
+}
+
+/// Apply `operations` to an in-memory source or to a file, and report what happened.
 ///
 /// Nothing here writes to a stream or ends the process, so the same call serves
 /// the command line and a request over a long-lived connection.
-pub fn patch(
-    path: &Path,
+///
+/// When `source` is supplied, everything is anchored to that text: the edits
+/// apply to it, the baseline for pre-existing-error partitioning is it, the
+/// diagnostics render against it, and the dry-run diff is against it. The file
+/// on disk is never read, compared, or consulted. Applying then has nowhere to
+/// write, so it is refused rather than putting the supplied text over a file
+/// whose contents were never seen.
+pub fn patch_anchored(
+    path: Option<&Path>,
+    source: Option<&str>,
     operations: &[Operation],
     expect_sha: Option<&str>,
     mode: Mode,
 ) -> PatchReport {
-    let source_path = Some(path.display().to_string());
-    let validated = match validate_and_apply(path, operations, expect_sha) {
-        Ok(v) => v,
+    if matches!(mode, Mode::Apply) && path.is_none() {
+        return refusal(
+            vec![coded(
+                DiagnosticCode::BldOutputNotWritable,
+                "apply mode requires a path to write to; in-memory source alone cannot be written"
+                    .to_string(),
+                "use checkOnly or dryRun, or provide a path",
+            )],
+            String::new(),
+            None,
+            0,
+        );
+    }
+
+    let source_path = path.map(|path| path.display().to_string());
+    let validated = match validate_and_apply_anchored(path, source, operations, expect_sha) {
+        Ok(validated) => validated,
         Err(report) => return *report,
     };
 
     if validated.checked_edited.ok {
-        let file_was_written = match store(path, &validated.edited, mode) {
-            Ok(written) => written,
-            Err(diagnostic) => return refusal(vec![*diagnostic], validated.source, source_path, 1),
-        };
-        return accepted_report(
-            Applied {
-                edits: validated.applied,
-                warnings: validated.checked_edited.warnings,
-                file_was_written,
-            },
-            Texts {
-                before: validated.source.clone(),
-                after: validated.edited,
-                path: source_path,
-            },
-            matches!(mode, Mode::DryRun).then_some(path),
-            PreexistingErrors::none(),
-        );
+        let clean = PreexistingErrors::none();
+        return accepted_after_store(path, validated, source_path, mode, clean);
     }
 
-    let checked_baseline = check_source(path, &validated.source);
+    let checked_baseline = check_source_anchored(path, &validated.source);
     let partitioned = partition_errors_against_baseline(
         &checked_baseline.errors,
         &validated.checked_edited.errors,
@@ -248,25 +349,19 @@ pub fn patch(
         );
     }
 
-    let file_was_written = match store(path, &validated.edited, mode) {
-        Ok(written) => written,
-        Err(diagnostic) => return refusal(vec![*diagnostic], validated.source, source_path, 1),
-    };
+    accepted_after_store(path, validated, source_path, mode, partitioned.preexisting)
+}
 
-    accepted_report(
-        Applied {
-            edits: validated.applied,
-            warnings: validated.checked_edited.warnings,
-            file_was_written,
-        },
-        Texts {
-            before: validated.source,
-            after: validated.edited,
-            path: source_path,
-        },
-        matches!(mode, Mode::DryRun).then_some(path),
-        partitioned.preexisting,
-    )
+/// Apply `operations` to `path` and report what happened.
+///
+/// This is a convenience wrapper that reads from disk.
+pub fn patch(
+    path: &Path,
+    operations: &[Operation],
+    expect_sha: Option<&str>,
+    mode: Mode,
+) -> PatchReport {
+    patch_anchored(Some(path), None, operations, expect_sha, mode)
 }
 
 /// Report a file the command was asked to read and could not.
@@ -393,7 +488,7 @@ fn report(parts: ReportParts) -> PatchReport {
 fn accepted_report(
     applied: Applied,
     texts: Texts,
-    diff_for: Option<&Path>,
+    diff_label: Option<&str>,
     preexisting: PreexistingErrors,
 ) -> PatchReport {
     let mut json_diagnostics = preexisting.json;
@@ -416,7 +511,7 @@ fn accepted_report(
         edits: applied.edits,
         revalidations: 1,
         file_written: applied.file_was_written,
-        diff: diff_for.map(|path| unified_diff(path, &texts.before, &texts.after)),
+        diff: diff_label.map(|label| unified_diff(label, &texts.before, &texts.after)),
         diagnostics,
         source: texts.after,
         source_path: texts.path,
@@ -1093,7 +1188,7 @@ fn common_prefix_suffix(before: &str, after: &str) -> (usize, usize) {
 /// touches several places is reported as one stretch rather than as separate
 /// hunks. That is more context than the smallest possible diff, and it is
 /// always a truthful account of what the file becomes.
-fn unified_diff(path: &Path, before: &str, after: &str) -> String {
+fn unified_diff(label: &str, before: &str, after: &str) -> String {
     let old: Vec<&str> = before.lines().collect();
     let new: Vec<&str> = after.lines().collect();
     let (prefix, suffix) = common_prefix_suffix(before, after);
@@ -1103,8 +1198,8 @@ fn unified_diff(path: &Path, before: &str, after: &str) -> String {
 
     let mut diff = format!(
         "--- a/{}\n+++ b/{}\n@@ -{},{} +{},{} @@\n",
-        path.display(),
-        path.display(),
+        label,
+        label,
         prefix + 1,
         old_changed.len(),
         prefix + 1,
@@ -1168,18 +1263,8 @@ struct Checked {
     warnings: Vec<Diagnostic>,
 }
 
-/// Run the frontend over the edited text without putting it on disk.
-fn check_source(path: &Path, source: &str) -> Checked {
-    let mut pipeline = Pipeline::new();
-    // Canonicalize first so that a bare filename resolves to an absolute path
-    // whose parent is the working directory, not an empty path.
-    let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(directory) = absolute.parent() {
-        pipeline = pipeline.with_source_dir(directory.to_path_buf());
-    }
-    pipeline = pipeline.with_source_path(absolute.display().to_string());
-
-    let outcome = pipeline.frontend(source);
+fn check_source_anchored(path: Option<&Path>, source: &str) -> Checked {
+    let outcome = anchor::pipeline_for(path).frontend(source);
     match outcome {
         Ok(result) => Checked {
             ok: true,

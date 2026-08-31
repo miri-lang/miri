@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod agent;
+pub mod anchor;
 pub mod args;
 pub mod check;
 pub mod determinism;

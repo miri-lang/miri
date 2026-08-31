@@ -121,7 +121,15 @@ Calling `initialize` is not required before other methods.
 
 ### `check`
 
-Request: `{ "path": "main.mi", "verifyMir": false }`
+Request:
+```json
+{ "path": "main.mi", "verifyMir": false }
+```
+
+Request (in-memory source):
+```json
+{ "source": "fn main():\n    println(\"hello\")", "path": "candidate.mi", "verifyMir": false }
+```
 
 Response:
 
@@ -138,8 +146,15 @@ Response:
 }
 ```
 
-`verifyMir` is optional and defaults to false. It runs the MIR verification pass
-after reference-counting insertion, the same as the CLI's `--verify-mir`.
+**Parameters:**
+- `path` (string, optional): path to the source file. When provided, it is echoed into the diagnostics for reference. When an in-memory `source` is also provided, the file on disk is never read; instead, `path` anchors `local.*` imports to its parent directory.
+- `source` (string, optional): source code to check. At least one of `path` or `source` is required. When both are present, imports resolve relative to `path`'s directory while the provided `source` text is checked.
+- `verifyMir` (boolean, optional): defaults to false. It runs the MIR verification pass after reference-counting insertion, the same as the CLI's `--verify-mir`.
+
+**Behavior:**
+- When `path` is provided without `source`: the file is read from disk and checked; `path` appears in diagnostics.
+- When `source` is provided without `path`: the source is checked; diagnostics carry no `path` field.
+- When both are provided: the source is checked with imports anchored to `path`'s directory; `path` appears in diagnostics; the file at `path` is never read or compared.
 
 Warnings never make `ok` false. A check that reports only warnings answers
 `ok: true` with the warnings in `diagnostics`.
@@ -290,7 +305,15 @@ the compiler cannot know which declaration to search inside.
 
 ### `patch`
 
-Request: `{ "path": "main.mi", "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }] }`
+Request:
+```json
+{ "path": "main.mi", "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }] }
+```
+
+Request (in-memory source, dry-run):
+```json
+{ "source": "fn total(a int, b int) int\n    return a + b\n", "path": "candidate.mi", "mode": "dryRun", "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }] }
+```
 
 Response:
 
@@ -304,7 +327,7 @@ Response:
     "command": "patch",
     "diagnostics": [],
     "patch": {
-      "fileWritten": true,
+      "fileWritten": false,
       "revalidations": 1
     }
   }
@@ -312,6 +335,22 @@ Response:
 ```
 
 Applies source edits and re-validates the edited program in one step.
+
+**Parameters:**
+- `path` (string, optional): path to the source file. At least one of `path` or `source` is required. When an in-memory `source` is also provided, the file on disk is never read.
+- `source` (string, optional): source code to edit. When provided, edits are applied to this text; the file on disk is never read or written. When both `source` and `path` are present, imports resolve relative to `path`'s directory.
+- `operations` (array, required): edits to apply (see shape details below).
+- `mode` (string, optional): one of `apply`, `checkOnly`, or `dryRun`. Defaults to `apply`. When `source` is provided without `path`, only `checkOnly` and `dryRun` are legal; `apply` mode is refused with `-32602`.
+- `expectSha` (string, optional): expected SHA-256 hash. When `source` is provided, this is hashed against the supplied text. When `source` is absent, it is hashed against the file on disk. A mismatch is reported with `MER_BLD_012`.
+
+**Behavior with `source`:**
+When an in-memory `source` is supplied:
+- The edits are applied to that text, not the file on disk.
+- The file on disk is never read, compared, or consulted.
+- Pre-existing errors are partitioned against the supplied text, not the file.
+- Diagnostics render against the supplied text.
+- In `dryRun` mode, the diff shows changes to the supplied text.
+- `apply` mode is rejected as a `-32602` error (no file to write to).
 
 `ok` says whether the edits succeeded in being written, not whether the file
 now compiles. Those are different questions: the patch succeeds if it introduces
@@ -325,7 +364,8 @@ never partitioned — and the command's own refusal notice carries none either.
 
 `fileWritten` is true only when the edit was accepted and written. In
 `checkOnly` or `dryRun` mode, `fileWritten` is always false (the check still
-happens and reports normally).
+happens and reports normally). When no `path` is given, `fileWritten` is always
+false (there is no file to write).
 
 Each entry of `operations` names a `function` and carries one of three shapes,
 told apart by which keys are present:

@@ -144,6 +144,9 @@ pub struct MethodSchema {
     pub method: &'static str,
     /// Its parameters.
     pub params: &'static [Param],
+    /// Optional cross-parameter constraint, e.g., "at least one of X and Y".
+    /// Rendered as `anyOf: [{ required: ["X"] }, { required: ["Y"] }]`.
+    pub constraint: Option<&'static [&'static str]>,
 }
 
 impl MethodSchema {
@@ -192,6 +195,15 @@ impl MethodSchema {
             schema["dependentRequired"] = json!(dependent_required);
         }
 
+        // Add anyOf constraint for "at least one of X and Y" cases.
+        if let Some(constraint) = self.constraint {
+            let any_of: Vec<Value> = constraint
+                .iter()
+                .map(|param| json!({ "required": [param] }))
+                .collect();
+            schema["anyOf"] = json!(any_of);
+        }
+
         schema
     }
 }
@@ -201,6 +213,7 @@ pub const METHODS: &[MethodSchema] = &[
     MethodSchema {
         method: "initialize",
         params: &[],
+        constraint: None,
     },
     MethodSchema {
         method: "check",
@@ -208,9 +221,16 @@ pub const METHODS: &[MethodSchema] = &[
             Param {
                 name: "path",
                 shape: Shape::Text,
-                required: true,
+                required: false,
                 requires: None,
                 description: "path to the source file to check",
+            },
+            Param {
+                name: "source",
+                shape: Shape::Text,
+                required: false,
+                requires: None,
+                description: "source code to check",
             },
             Param {
                 name: "verifyMir",
@@ -220,6 +240,7 @@ pub const METHODS: &[MethodSchema] = &[
                 description: "whether to verify MIR validity",
             },
         ],
+        constraint: Some(&["path", "source"]),
     },
     MethodSchema {
         method: "explain",
@@ -230,6 +251,7 @@ pub const METHODS: &[MethodSchema] = &[
             requires: None,
             description: "the diagnostic code to explain",
         }],
+        constraint: None,
     },
     MethodSchema {
         method: "fixPlan",
@@ -240,6 +262,7 @@ pub const METHODS: &[MethodSchema] = &[
             requires: None,
             description: "path to the source file",
         }],
+        constraint: None,
     },
     MethodSchema {
         method: "fixApply",
@@ -259,6 +282,7 @@ pub const METHODS: &[MethodSchema] = &[
                 description: "whether to apply repairs classified as risky",
             },
         ],
+        constraint: None,
     },
     MethodSchema {
         method: "view",
@@ -285,6 +309,7 @@ pub const METHODS: &[MethodSchema] = &[
                 description: "text to narrow the function view by",
             },
         ],
+        constraint: None,
     },
     MethodSchema {
         method: "patch",
@@ -292,9 +317,16 @@ pub const METHODS: &[MethodSchema] = &[
             Param {
                 name: "path",
                 shape: Shape::Text,
-                required: true,
+                required: false,
                 requires: None,
                 description: "path to the source file to edit",
+            },
+            Param {
+                name: "source",
+                shape: Shape::Text,
+                required: false,
+                requires: None,
+                description: "source code to edit",
             },
             Param {
                 name: "operations",
@@ -315,9 +347,10 @@ pub const METHODS: &[MethodSchema] = &[
                 shape: Shape::Text,
                 required: false,
                 requires: None,
-                description: "expected SHA-256 hash of the file before edits",
+                description: "expected SHA-256 hash of the source before edits",
             },
         ],
+        constraint: Some(&["path", "source"]),
     },
     MethodSchema {
         method: "skillsGet",
@@ -328,6 +361,7 @@ pub const METHODS: &[MethodSchema] = &[
             requires: None,
             description: "name of a specific skill to retrieve",
         }],
+        constraint: None,
     },
 ];
 

@@ -1142,15 +1142,14 @@ fn extract_parameter_reads(
     fn_to_methods.insert("run_patch", vec!["patch"]);
     fn_to_methods.insert("run_skills_get", vec!["skillsGet"]);
     // run_fix is called for both fixPlan and fixApply, but allowRisky is only read
-    // when apply=true (fixApply). Use required_path to cover fixPlan's path read,
-    // and map run_fix only to fixApply for its allowRisky read.
+    // when apply=true (fixApply). Map run_fix only to fixApply for its allowRisky read.
     fn_to_methods.insert("run_fix", vec!["fixApply"]);
     // patch_operations reads the "operations" request parameter
     fn_to_methods.insert("patch_operations", vec!["patch"]);
-    // required_path is used by multiple file-taking methods
+    // path_param is the single reader used by all file-taking methods
     fn_to_methods.insert(
-        "required_path",
-        vec!["check", "fixPlan", "fixApply", "view", "patch"],
+        "path_param",
+        vec!["check", "patch", "view", "fixPlan", "fixApply"],
     );
 
     // Map of schema methods for initialization
@@ -1318,7 +1317,7 @@ fn test_schema_does_not_over_claim() {
     let path_str = path.to_str().unwrap();
     let mut session = Session::start(directory.path());
 
-    // Test check: path is required, verifyMir is optional
+    // Test check: at least one of path and source is required, verifyMir is optional
     let with_required = session.call(1, "check", json!({ "path": path_str }));
     assert_eq!(
         with_required["error"]["code"],
@@ -1711,6 +1710,523 @@ fn test_every_advertised_method_is_actually_served() {
             response
         );
     }
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_and_path_omitted_mode_does_not_clobber_disk() {
+    // CRITICAL 1: Verify that patch { source, path } with mode omitted (defaults to apply)
+    // is REFUSED, not silently applied. The file on disk must remain unchanged.
+    let code = PATCHABLE;
+    let directory = project("patch-source-path-no-mode", &[("main.mi", code)]);
+    let path_str = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let original_content = std::fs::read_to_string(directory.path().join("main.mi")).unwrap();
+    let mut session = Session::start(directory.path());
+
+    // Attempt patch with source + path but NO mode (should default to apply and be refused)
+    let refused = session.call(
+        1,
+        "patch",
+        json!({
+            "source": code,
+            "path": path_str,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }]
+        }),
+    );
+
+    // This MUST be a protocol error (-32602), not a success
+    assert_eq!(
+        refused["error"]["code"],
+        json!(-32602),
+        "patch with source+path and no mode should be refused: {}",
+        refused
+    );
+
+    // Verify the file on disk is unchanged
+    let disk_content = std::fs::read_to_string(directory.path().join("main.mi")).unwrap();
+    assert_eq!(
+        disk_content, original_content,
+        "file on disk should be unchanged"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_and_explicit_apply_mode_is_refused() {
+    // CRITICAL 1: Verify that patch { source, path, mode: "apply" } is refused
+    let code = PATCHABLE;
+    let directory = project("patch-source-path-apply", &[("main.mi", code)]);
+    let path_str = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let original_content = std::fs::read_to_string(directory.path().join("main.mi")).unwrap();
+    let mut session = Session::start(directory.path());
+
+    let refused = session.call(
+        1,
+        "patch",
+        json!({
+            "source": code,
+            "path": path_str,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+            "mode": "apply"
+        }),
+    );
+
+    // Must be -32602, not success
+    assert_eq!(
+        refused["error"]["code"],
+        json!(-32602),
+        "patch with source+path+apply should be refused: {}",
+        refused
+    );
+
+    // File must be unchanged
+    let disk_content = std::fs::read_to_string(directory.path().join("main.mi")).unwrap();
+    assert_eq!(
+        disk_content, original_content,
+        "file on disk should be unchanged"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_check_with_source_no_path() {
+    // Criterion 1: check { source } returns the same envelope as the on-disk file,
+    // but with NO path in diagnostics.
+    let code = "fn main():\n    let x = 1\n    x = 2\n";
+    let directory = project("check-source-no-path", &[("main.mi", code)]);
+    let path_str = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut session = Session::start(directory.path());
+
+    // Check the file on disk to get the baseline.
+    let disk_check = session.call(1, "check", json!({ "path": path_str }));
+    assert_eq!(disk_check["result"]["ok"], json!(false));
+    let disk_diagnostics = &disk_check["result"]["diagnostics"];
+    assert!(!disk_diagnostics.as_array().unwrap().is_empty());
+    let disk_path = &disk_diagnostics[0]["path"];
+    assert!(!disk_path.is_null(), "on-disk check should carry a path");
+
+    // Check the same source in memory (no path).
+    let mem_check = session.call(2, "check", json!({ "source": code }));
+    assert_eq!(mem_check["result"]["ok"], json!(false));
+    let mem_diagnostics = &mem_check["result"]["diagnostics"];
+    assert!(!mem_diagnostics.as_array().unwrap().is_empty());
+    let mem_path = &mem_diagnostics[0]["path"];
+    assert!(
+        mem_path.is_null(),
+        "in-memory check without path should NOT carry a path, got: {}",
+        mem_check
+    );
+
+    // Compare multiple diagnostic fields for envelope equivalence modulo path.
+    // The diagnostics should match exactly except for the path field.
+    assert_eq!(
+        disk_diagnostics[0]["code"], mem_diagnostics[0]["code"],
+        "error code should match"
+    );
+    assert_eq!(
+        disk_diagnostics[0]["message"], mem_diagnostics[0]["message"],
+        "error message should match"
+    );
+    assert_eq!(
+        disk_diagnostics[0]["line"], mem_diagnostics[0]["line"],
+        "error line should match"
+    );
+    assert_eq!(
+        disk_diagnostics[0]["column"], mem_diagnostics[0]["column"],
+        "error column should match"
+    );
+    assert_eq!(
+        disk_diagnostics[0]["severity"], mem_diagnostics[0]["severity"],
+        "error severity should match"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_check_with_source_and_path() {
+    // Criterion 1 continued: check { source, path } echoes path in diagnostics.
+    let code = "fn main():\n    undefined_name()\n";
+    let directory = project("check-source-with-path", &[("main.mi", code)]);
+    let path_str = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut session = Session::start(directory.path());
+
+    let mem_check = session.call(
+        1,
+        "check",
+        json!({
+            "source": code,
+            "path": path_str
+        }),
+    );
+    assert_eq!(mem_check["result"]["ok"], json!(false));
+    let mem_diagnostics = &mem_check["result"]["diagnostics"];
+    let mem_path = &mem_diagnostics[0]["path"];
+    assert!(
+        !mem_path.is_null(),
+        "check with source + path should echo the path"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_check_with_neither_source_nor_path_fails() {
+    // Criterion 1: check with NEITHER path nor source → -32602 naming both parameters.
+    let directory = project("check-neither", &[]);
+    let mut session = Session::start(directory.path());
+
+    let refused = session.call(1, "check", json!({}));
+    assert_eq!(refused["error"]["code"], json!(-32602));
+    let msg = refused["error"]["message"].as_str().unwrap();
+    // The error must mention both parameters.
+    assert!(
+        msg.contains("path") || msg.contains("source"),
+        "error should name missing parameters: {}",
+        msg
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_dryrun() {
+    // Criterion 2: patch { source, mode: "dryRun" } returns the diff,
+    // fileWritten false, and file on disk UNCHANGED.
+    let code = PATCHABLE;
+    let directory = project("patch-source-dryrun", &[("main.mi", code)]);
+    let mut session = Session::start(directory.path());
+
+    // Perform a dry-run patch on in-memory source.
+    let patch_result = session.call(
+        1,
+        "patch",
+        json!({
+            "source": code,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+            "mode": "dryRun"
+        }),
+    );
+
+    assert!(patch_result["error"].is_null(), "dry-run should succeed");
+    let envelope = &patch_result["result"];
+    assert_eq!(envelope["ok"], json!(true));
+    assert_eq!(
+        envelope["patch"]["fileWritten"],
+        json!(false),
+        "dryRun should not write"
+    );
+    assert!(
+        !envelope["patch"]["edits"].is_null(),
+        "should report the edits"
+    );
+
+    // Verify the file on disk is unchanged.
+    let on_disk = std::fs::read_to_string(directory.path().join("main.mi")).unwrap();
+    assert_eq!(
+        on_disk, code,
+        "file on disk should be unchanged after dryRun"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_apply_fails() {
+    // Criterion 2: patch { source, mode: "apply" } → -32602 (protocol error).
+    let code = PATCHABLE;
+    let directory = project("patch-source-apply", &[("main.mi", code)]);
+    let mut session = Session::start(directory.path());
+
+    let refused = session.call(
+        1,
+        "patch",
+        json!({
+            "source": code,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+            "mode": "apply"
+        }),
+    );
+
+    // Apply mode with source is a protocol error
+    assert_eq!(
+        refused["error"]["code"],
+        json!(-32602),
+        "apply on in-memory source should be a protocol error: {}",
+        refused
+    );
+    let msg = refused["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.to_lowercase().contains("path") || msg.to_lowercase().contains("write"),
+        "error message should explain why: {}",
+        msg
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_and_expectsha() {
+    // Criterion 2 continued: patch { source, expectSha } where the sha is of the supplied text → accepted.
+    let code = PATCHABLE;
+    let directory = project("patch-source-expectsha", &[("main.mi", code)]);
+    let mut session = Session::start(directory.path());
+
+    // Compute the sha of the source.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(code.as_bytes());
+    let correct_sha = format!("{:x}", hasher.finalize());
+
+    let patch_result = session.call(
+        1,
+        "patch",
+        json!({
+            "source": code,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+            "mode": "checkOnly",
+            "expectSha": correct_sha
+        }),
+    );
+
+    assert!(
+        patch_result["error"].is_null(),
+        "patch with correct sha should succeed"
+    );
+    assert_eq!(patch_result["result"]["ok"], json!(true));
+
+    // Now try with a wrong sha.
+    let wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000";
+    let refused = session.call(
+        2,
+        "patch",
+        json!({
+            "source": code,
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }],
+            "mode": "checkOnly",
+            "expectSha": wrong_sha
+        }),
+    );
+
+    assert_eq!(
+        refused["result"]["ok"],
+        json!(false),
+        "patch with wrong sha should be refused: {}",
+        refused
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_local_import_anchoring_with_nonexistent_file() {
+    // Criterion 3: Imports in an in-memory source resolve relative to the given path
+    // when present, even if the file does not yet exist.
+    //
+    // This test creates a local.helper module on disk, then tries to check an
+    // in-memory source that imports it, anchored to a path that does not (yet) exist.
+    // The import should still resolve correctly.
+
+    let helper_code = "fn helper_func() int\n    return 42\n";
+    let main_code = "use local.helper\n\nfn main():\n    println(\"{helper_func()}\")\n";
+
+    let directory = project("local-anchoring", &[("helper.mi", helper_code)]);
+    let mut session = Session::start(directory.path());
+
+    // Use a BARE RELATIVE filename (not an absolute path).
+    // The session's cwd is directory.path(), so "candidate.mi" is relative to that.
+    // This proves the anchor fix: canonicalization fails, so we resolve against CWD.
+    let check_result = session.call(
+        1,
+        "check",
+        json!({
+            "source": main_code,
+            "path": "candidate.mi"
+        }),
+    );
+
+    // The check should succeed because local.helper resolves relative to the directory
+    // of the anchored path. The anchor fix ensures that even though "candidate.mi"
+    // doesn't exist, we resolve it against CWD to find its parent = the project dir.
+    assert_eq!(
+        check_result["result"]["ok"],
+        json!(true),
+        "local import should resolve to helper.mi even with nonexistent bare relative path: {}",
+        check_result
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_check_with_source_ignores_the_file_on_disk() {
+    // A supplied source is the whole program: the file the path names is never
+    // read. Proving it needs the two to disagree, so the file on disk does not
+    // compile and the supplied text does.
+    let broken = "fn main():\n    undefined_name()\n";
+    let directory = project("check-source-shadows-disk", &[("main.mi", broken)]);
+    let path = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .expect("the temporary path is valid UTF-8")
+        .to_string();
+    let mut session = Session::start(directory.path());
+
+    let disk = session.call(1, "check", json!({ "path": path }));
+    assert_eq!(
+        disk["result"]["ok"],
+        json!(false),
+        "the file on disk should not compile: {}",
+        disk
+    );
+
+    let clean = "fn main():\n    println(\"ok\")\n";
+    let in_memory = session.call(2, "check", json!({ "source": clean, "path": path }));
+    assert_eq!(
+        in_memory["result"]["ok"],
+        json!(true),
+        "the supplied source should be checked, not the file at the path: {}",
+        in_memory
+    );
+    assert_eq!(
+        in_memory["result"]["diagnostics"],
+        json!([]),
+        "a clean supplied source carries no diagnostics from the broken file: {}",
+        in_memory
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_ignores_the_file_on_disk() {
+    // The same guarantee for `patch`: the anchor text is the supplied source, so
+    // an operation anchored on text that appears only in it applies, and the
+    // file the path names is neither consulted nor changed.
+    let on_disk = "fn other(x int) int\n    return x\n";
+    let directory = project("patch-source-shadows-disk", &[("main.mi", on_disk)]);
+    let path = directory
+        .path()
+        .join("main.mi")
+        .to_str()
+        .expect("the temporary path is valid UTF-8")
+        .to_string();
+    let mut session = Session::start(directory.path());
+
+    let patched = session.call(
+        1,
+        "patch",
+        json!({
+            "source": PATCHABLE,
+            "path": path,
+            "mode": "dryRun",
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }]
+        }),
+    );
+    assert!(
+        patched["error"].is_null(),
+        "the anchor lives in the supplied source, so the edit should apply: {}",
+        patched
+    );
+    assert_eq!(patched["result"]["ok"], json!(true));
+    assert_eq!(patched["result"]["patch"]["fileWritten"], json!(false));
+
+    let after = std::fs::read_to_string(directory.path().join("main.mi"))
+        .expect("the file the path names still exists");
+    assert_eq!(
+        after, on_disk,
+        "a dry run over a supplied source must leave the file byte-identical"
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_check_with_source_and_verify_mir() {
+    // `verifyMir` runs a pass over lowered MIR, which is the part of the
+    // frontend furthest from the file system. It must work for text that has
+    // no file at all.
+    let directory = project("check-source-verify-mir", &[]);
+    let mut session = Session::start(directory.path());
+
+    let checked = session.call(
+        1,
+        "check",
+        json!({
+            "source": "fn main():\n    println(\"ok\")\n",
+            "verifyMir": true
+        }),
+    );
+    assert!(
+        checked["error"].is_null(),
+        "verifying MIR over an in-memory source is not a protocol error: {}",
+        checked
+    );
+    assert_eq!(
+        checked["result"]["ok"],
+        json!(true),
+        "a clean program passes MIR verification with no file on disk: {}",
+        checked
+    );
+
+    session.finish();
+}
+
+#[test]
+fn test_patch_with_source_check_only_writes_nothing() {
+    // `checkOnly` over a supplied source reports the edited program without a
+    // diff and without touching disk, which is the cheapest way to ask whether
+    // an edit would hold up.
+    let directory = project("patch-source-check-only", &[("main.mi", PATCHABLE)]);
+    let mut session = Session::start(directory.path());
+
+    let checked = session.call(
+        1,
+        "patch",
+        json!({
+            "source": PATCHABLE,
+            "mode": "checkOnly",
+            "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }]
+        }),
+    );
+    assert!(
+        checked["error"].is_null(),
+        "checkOnly over a source needs no path: {}",
+        checked
+    );
+    assert_eq!(checked["result"]["ok"], json!(true));
+    assert_eq!(checked["result"]["patch"]["fileWritten"], json!(false));
+
+    let after = std::fs::read_to_string(directory.path().join("main.mi"))
+        .expect("the untouched file still exists");
+    assert_eq!(
+        after, PATCHABLE,
+        "checkOnly must leave the file byte-identical"
+    );
 
     session.finish();
 }

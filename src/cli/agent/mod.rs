@@ -397,15 +397,42 @@ fn initialize() -> InitializeResult {
     }
 }
 
-/// Type-check the file the request names.
+/// Type-check a source, either from memory or disk.
 fn run_check(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
-    let Some(path) = required_path(request) else {
-        return missing_path(id, "check");
-    };
+    let path = path_param(request);
+    let source = string_param(request, "source");
 
-    let source = match std::fs::read_to_string(&path) {
-        Ok(source) => source,
-        Err(error) => return unreadable(id, &path, &error),
+    // Require at least one of source or path.
+    if source.is_none() && path.is_none() {
+        return RpcResponse::failure(
+            id,
+            INVALID_PARAMS,
+            invalid_params(
+                "check",
+                "check needs either a `source` parameter or a `path` parameter naming a source file",
+            ),
+        );
+    }
+
+    // If source is supplied, use it; otherwise read from disk.
+    let source_text = match (&source, &path) {
+        (Some(src), _) => src.clone(),
+        (None, Some(p)) => match std::fs::read_to_string(p) {
+            Ok(source) => source,
+            Err(error) => return unreadable(id, p, &error),
+        },
+        (None, None) => {
+            // This should not happen due to the check above, but we handle it
+            // gracefully rather than panicking.
+            return RpcResponse::failure(
+                id,
+                INVALID_PARAMS,
+                invalid_params(
+                    "check",
+                    "check needs either a `source` parameter or a `path` parameter naming a source file",
+                ),
+            );
+        }
     };
 
     let verify_mir = request
@@ -415,7 +442,10 @@ fn run_check(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    serialize(id, &check::check(&path, &source, verify_mir).envelope)
+    serialize(
+        id,
+        &check::check_anchored(path.as_deref(), &source_text, verify_mir).envelope,
+    )
 }
 
 /// Explain the diagnostic code the request names.
@@ -467,7 +497,7 @@ fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
 /// The shape follows the command line: a `fn` parameter reads one function,
 /// optionally narrowed by `around`, and its absence reads the file's outline.
 fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
-    let Some(path) = required_path(request) else {
+    let Some(path) = path_param(request) else {
         return missing_path(id, "view");
     };
 
@@ -492,15 +522,26 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     serialize(id, &view::view(&path, &source, &shape).envelope)
 }
 
-/// Apply edits to the file the request names and re-check what they produced.
+/// Apply edits to a source and re-check what they produced.
 ///
 /// The edits arrive as a list so that a batch costs one round trip and one
 /// check, which is the whole reason this method exists rather than a caller
 /// writing the file itself and asking for a check afterwards.
 fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
-    let Some(path) = required_path(request) else {
-        return missing_path(id, "patch");
-    };
+    let path = path_param(request);
+    let source = string_param(request, "source");
+
+    // Require at least one of source or path.
+    if source.is_none() && path.is_none() {
+        return RpcResponse::failure(
+            id,
+            INVALID_PARAMS,
+            invalid_params(
+                "patch",
+                "patch needs either a `source` parameter or a `path` parameter naming a source file",
+            ),
+        );
+    }
 
     let operations = match patch_operations(request) {
         Ok(operations) => operations,
@@ -509,7 +550,22 @@ fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         }
     };
 
-    let mode = match string_param(request, "mode").as_deref() {
+    let mode_param = string_param(request, "mode");
+    let mode_str = mode_param.as_deref();
+
+    // When source is present, apply mode is forbidden (whether explicit or default).
+    if source.is_some() && (mode_str.is_none() || mode_str == Some("apply")) {
+        return RpcResponse::failure(
+            id,
+            INVALID_PARAMS,
+            invalid_params(
+                "patch",
+                "apply mode requires a path to write to; in-memory source alone cannot be written; use checkOnly or dryRun instead",
+            ),
+        );
+    }
+
+    let mode = match mode_str {
         None | Some("apply") => patch::Mode::Apply,
         Some("checkOnly") => patch::Mode::CheckOnly,
         Some("dryRun") => patch::Mode::DryRun,
@@ -531,7 +587,14 @@ fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let expect_sha = string_param(request, "expectSha");
     serialize(
         id,
-        &patch::patch(&path, &operations, expect_sha.as_deref(), mode).envelope,
+        &patch::patch_anchored(
+            path.as_deref(),
+            source.as_deref(),
+            &operations,
+            expect_sha.as_deref(),
+            mode,
+        )
+        .envelope,
     )
 }
 
@@ -590,7 +653,7 @@ fn patch_operation(entry: &serde_json::Value) -> Result<patch::Operation, String
 /// whether a repair the compiler classes as risky may be written. The default
 /// is that it may not.
 fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -> RpcResponse {
-    let Some(path) = required_path(request) else {
+    let Some(path) = path_param(request) else {
         return missing_path(id, method);
     };
 
@@ -615,8 +678,8 @@ fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -
     serialize(id, &fix::apply_envelope(&report, &diagnostics))
 }
 
-/// Read the `path` parameter every file-taking method requires.
-fn required_path(request: &RpcRequest) -> Option<PathBuf> {
+/// Read the `path` parameter (may be required or optional depending on the handler).
+fn path_param(request: &RpcRequest) -> Option<PathBuf> {
     string_param(request, "path").map(PathBuf::from)
 }
 
