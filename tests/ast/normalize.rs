@@ -173,7 +173,12 @@ fn test_normalize_walks_class_fields_and_methods() {
         None,
         vec![],
         vec![
-            Statement::new(0, StatementKind::Expression(field), Span::new(0, 0)),
+            Statement {
+                id: 0,
+                node: StatementKind::Expression(field),
+                span: Span::new(0, 0),
+                trivia: Default::default(),
+            },
             method,
         ],
         MemberVisibility::Public,
@@ -293,11 +298,12 @@ fn test_normalize_walks_trait_member_types() {
         "T",
         None,
         vec![],
-        vec![Statement::new(
-            0,
-            StatementKind::Expression(struct_member("xs", list_int_type_expr())),
-            Span::new(0, 0),
-        )],
+        vec![Statement {
+            id: 0,
+            node: StatementKind::Expression(struct_member("xs", list_int_type_expr())),
+            span: Span::new(0, 0),
+            trivia: Default::default(),
+        }],
         MemberVisibility::Public,
     );
     let mut prog = Program { body: vec![stmt] };

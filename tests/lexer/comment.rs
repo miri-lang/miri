@@ -201,3 +201,103 @@ fn test_malformed_comment_delimiters() {
         ],
     );
 }
+
+#[test]
+fn test_inline_comments_buffered_not_emitted() {
+    use miri::lexer::Lexer;
+
+    let source = r#"var x = 10 // inline comment
+print('hi')"#;
+
+    let mut lexer = Lexer::new(source);
+    let mut tokens = Vec::new();
+    while let Some(result) = lexer.next() {
+        match result {
+            Ok((token, _)) => tokens.push(token),
+            Err(e) => panic!("Lexer error: {:?}", e),
+        }
+    }
+
+    // Verify that no inline comment tokens appear in the stream
+    assert!(
+        !tokens.iter().any(|t| matches!(t, Token::InlineComment)),
+        "InlineComment token should not be emitted"
+    );
+
+    // Verify that comments were buffered
+    let comments = lexer.take_trailing_comments();
+    assert_eq!(comments.len(), 1, "Should have 1 buffered comment");
+    assert_eq!(comments[0].text, "// inline comment");
+    assert!(
+        lexer.take_leading_comments().is_empty(),
+        "a comment after code is not also a leading one"
+    );
+}
+
+#[test]
+fn test_leading_comment_identification() {
+    use miri::lexer::Lexer;
+
+    let source = r#"
+// leading comment
+var x = 10"#;
+
+    let mut lexer = Lexer::new(source);
+    while let Some(result) = lexer.next() {
+        let _ = result;
+    }
+
+    let comments = lexer.take_leading_comments();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].text, "// leading comment");
+    assert!(
+        lexer.take_trailing_comments().is_empty(),
+        "a comment starting its own line is not a trailing one"
+    );
+}
+
+#[test]
+fn test_multiple_inline_comments_buffering() {
+    use miri::lexer::Lexer;
+
+    let source = r#"var x = 10 // first
+var y = 20 // second
+// third (leading)
+z = 30"#;
+
+    let mut lexer = Lexer::new(source);
+    while let Some(result) = lexer.next() {
+        let _ = result;
+    }
+
+    let trailing = lexer.take_trailing_comments();
+    let leading = lexer.take_leading_comments();
+    let trailing_text: Vec<&str> = trailing.iter().map(|c| c.text.as_str()).collect();
+    let leading_text: Vec<&str> = leading.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(trailing_text, vec!["// first", "// second"]);
+    assert_eq!(leading_text, vec!["// third (leading)"]);
+}
+
+#[test]
+fn test_token_stream_unchanged_with_and_without_comments() {
+    use miri::lexer::Lexer;
+
+    let with_comments = r#"var x = 10 // comment
+print('hi')"#;
+
+    let without_comments = r#"var x = 10
+print('hi')"#;
+
+    let lexer1 = Lexer::new(with_comments);
+    let results1: Result<Vec<_>, _> = lexer1.map(|r| r.map(|(t, _)| t)).collect();
+    let tokens1 = results1.expect("Lexing should succeed");
+
+    let lexer2 = Lexer::new(without_comments);
+    let results2: Result<Vec<_>, _> = lexer2.map(|r| r.map(|(t, _)| t)).collect();
+    let tokens2 = results2.expect("Lexing should succeed");
+
+    assert_eq!(
+        tokens1, tokens2,
+        "Token stream should be identical with and without comments"
+    );
+}

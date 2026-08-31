@@ -305,3 +305,139 @@ fn collect(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         }
     }
 }
+
+/// Every comment written in `source`, in the order the lexer meets them.
+fn comments_in(source: &str) -> Vec<String> {
+    let mut lexer = Lexer::new(source);
+    for token in lexer.by_ref() {
+        if token.is_err() {
+            panic!("the fixture lexes: {source}");
+        }
+    }
+    let mut found = lexer.take_leading_comments();
+    found.extend(lexer.take_trailing_comments());
+    // Deliberately unsorted: order is part of what must survive, so that a
+    // render which keeps every comment but moves one is still a failure.
+    found.into_iter().map(|comment| comment.text).collect()
+}
+
+#[test]
+fn test_a_whole_program_renders_with_its_comments() {
+    let source = "// what the helper is for\nfn helper() int\n    // the answer\n    return 1 // beside it\n";
+    let program = parse(source).expect("the fixture parses");
+
+    let rendered = formatter::program(&program).text;
+
+    assert!(
+        rendered.contains("// what the helper is for"),
+        "a comment above a declaration survives: {rendered}"
+    );
+    assert!(
+        rendered.contains("// the answer"),
+        "a comment inside a body survives: {rendered}"
+    );
+    assert!(
+        rendered.contains("// beside it"),
+        "a comment after code survives: {rendered}"
+    );
+}
+
+#[test]
+fn test_a_single_declaration_renders_without_its_comments() {
+    let source = "fn helper() int\n    // the answer\n    return 1\n";
+    let program = parse(source).expect("the fixture parses");
+
+    let rendered = formatter::declaration(&program.body[0]).text;
+
+    assert!(
+        !rendered.contains("// the answer"),
+        "an anchor is matched against this text, so a comment must not appear \
+         in it — otherwise `--old` could match inside a comment and edit it: {rendered}"
+    );
+}
+
+#[test]
+fn test_the_repository_corpus_keeps_every_comment_through_a_render() {
+    let mut checked = 0;
+    let mut failures = Vec::new();
+
+    for path in miri_sources() {
+        let source = std::fs::read_to_string(&path).expect("a listed source file is readable");
+        let Ok(program) = parse(&source) else {
+            continue;
+        };
+        checked += 1;
+
+        let rendered = formatter::program(&program).text;
+        let before = comments_in(&source);
+        let after = comments_in(&rendered);
+        if before != after {
+            failures.push(format!(
+                "{}: {} comments in, {} out",
+                path.display(),
+                before.len(),
+                after.len()
+            ));
+        }
+    }
+
+    assert!(checked > 0, "the corpus scan found no parseable sources");
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} corpus files lost or gained a comment:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn test_a_field_written_without_a_keyword_renders_without_one() {
+    let source = "class Order\n    total int\n    var count int\n";
+    let program = parse(source).expect("the fixture parses");
+
+    let rendered = formatter::program(&program).text;
+
+    assert!(
+        rendered.contains("    total int"),
+        "a field written with no mutability keyword keeps none: {rendered}"
+    );
+    assert!(
+        !rendered.contains("var total"),
+        "rendering must not invent a keyword the author did not write: {rendered}"
+    );
+    assert!(
+        rendered.contains("    var count int"),
+        "a field written `var` keeps it: {rendered}"
+    );
+}
+
+#[test]
+fn test_a_block_comment_survives_a_render() {
+    // `fmt` rewrites a file from its tree. A comment form the tree does not
+    // carry is a comment the rewrite deletes, so both forms are recorded.
+    let source = "fn helper(a int) int\n    /* block note */\n    let t = a + 1\n    return t\n";
+    let program = parse(source).expect("the fixture parses");
+
+    let rendered = formatter::program(&program).text;
+
+    assert!(
+        rendered.contains("/* block note */"),
+        "a block comment survives the render: {rendered}"
+    );
+}
+
+#[test]
+fn test_a_comment_below_the_last_statement_survives_a_render() {
+    // Nothing follows these comments to claim them as leading, so without an
+    // explicit home they would be dropped — and `fmt` rewrites from the tree,
+    // so a dropped comment is a deleted one.
+    let source = "fn add(a int, b int) int\n    return a + b\n    // tail of the body\n";
+    let program = parse(source).expect("the fixture parses");
+
+    let rendered = formatter::program(&program).text;
+
+    assert!(
+        rendered.contains("// tail of the body"),
+        "the comment below the last statement survives: {rendered}"
+    );
+}

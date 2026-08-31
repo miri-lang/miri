@@ -10,6 +10,7 @@ pub mod boolean;
 pub mod break_statement;
 pub mod call_member;
 pub mod class_statement;
+pub mod comment_trivia;
 pub mod conditional_expression;
 pub mod constant_declaration;
 pub mod continue_statement;

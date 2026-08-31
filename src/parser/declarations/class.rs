@@ -45,7 +45,7 @@ impl<'source> Parser<'source> {
             name,
             typ: Some(typ),
             initializer: None,
-            declaration_type: VariableDeclarationType::Mutable,
+            declaration_type: VariableDeclarationType::Unmarked,
             is_shared: false,
             residency: crate::ast::statement::BindingResidency::Host,
         };
@@ -201,8 +201,12 @@ impl<'source> Parser<'source> {
         let mut statements = vec![];
 
         while !self.lookahead_is_dedent() && self.lookahead.is_some() {
-            let stmt = self.class_member(mode)?;
-            statements.push(stmt);
+            // A member is parsed here rather than through `statement`, so the
+            // comments written around it are claimed here too.
+            let leading = self.lexer.take_leading_comments();
+            let mut member = self.class_member(mode)?;
+            self.claim_trivia(&mut member, leading);
+            statements.push(member);
             self.try_eat_expression_end()?;
         }
 

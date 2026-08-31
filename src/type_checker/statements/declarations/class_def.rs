@@ -587,7 +587,7 @@ impl TypeChecker {
             };
 
             let is_mutable = match decl.declaration_type {
-                VariableDeclarationType::Mutable => true,
+                VariableDeclarationType::Mutable | VariableDeclarationType::Unmarked => true,
                 VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
             };
 

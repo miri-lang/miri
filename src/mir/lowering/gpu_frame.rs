@@ -1056,7 +1056,12 @@ mod tests {
     }
 
     fn stmt(kind: StatementKind) -> Statement {
-        IdNode::new(0, kind, Span::default())
+        Statement {
+            id: 0,
+            node: kind,
+            span: Span::default(),
+            trivia: Default::default(),
+        }
     }
 
     #[test]

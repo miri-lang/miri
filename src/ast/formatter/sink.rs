@@ -41,12 +41,43 @@ pub struct Mark(usize);
 pub struct Sink {
     text: String,
     spans: Vec<RecordedSpan>,
+    comments: bool,
 }
 
 impl Sink {
-    /// An empty sink.
+    /// An empty sink that renders code only.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty sink that also renders the comments a statement carries.
+    ///
+    /// Only whole-program rendering asks for these. A single declaration is
+    /// rendered without them because that text is what an edit anchor is
+    /// matched against, and an anchor that could match inside a comment would
+    /// let an edit land there.
+    pub fn with_comments() -> Self {
+        Self {
+            comments: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this sink renders comments.
+    pub fn renders_comments(&self) -> bool {
+        self.comments
+    }
+
+    /// Whether the cursor sits at the start of a line, with only indentation
+    /// written since the last break.
+    ///
+    /// A statement is rendered inline in the single-line `:` form, where a
+    /// comment cannot be written above it without breaking the line in two.
+    pub fn at_line_start(&self) -> bool {
+        match self.text.rfind('\n') {
+            Some(break_at) => self.text[break_at + 1..].chars().all(|c| c == ' '),
+            None => self.text.chars().all(|c| c == ' '),
+        }
     }
 
     /// Append text.

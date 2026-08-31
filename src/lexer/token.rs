@@ -282,7 +282,7 @@ pub enum Token {
     InvalidOctalNumber,
 
     // Comments and Whitespace
-    #[regex("//.*", logos::skip, allow_greedy = true)]
+    #[regex("//.*", allow_greedy = true)]
     InlineComment,
     #[regex(r"/\*")]
     MultilineComment,
@@ -349,7 +349,8 @@ impl Token {
             | Token::String | Token::Regex(_)
             | Token::FormattedStringStart(_) | Token::FormattedStringMiddle(_) | Token::FormattedStringEnd(_)
             | Token::Indent | Token::Dedent | Token::ExpressionStatementEnd
-            | Token::InlineComment | Token::Whitespace | Token::Shebang | Token::ByteOrderMark => LexAction::EmitAsIs,
+            | Token::Whitespace | Token::Shebang | Token::ByteOrderMark => LexAction::EmitAsIs,
+            Token::InlineComment => LexAction::BufferComment,
         }
     }
 }

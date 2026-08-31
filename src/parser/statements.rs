@@ -5,7 +5,7 @@ use crate::ast::factory as ast;
 use crate::ast::*;
 use crate::error::foreign_syntax::ForeignForm;
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
-use crate::lexer::Token;
+use crate::lexer::{BufferedComment, Token};
 
 use super::literals::unescape_string;
 use super::Parser;
@@ -130,6 +130,7 @@ impl<'source> Parser<'source> {
             statements.push(self.statement()?);
             self.try_eat_expression_end()?;
         }
+        self.claim_orphaned_comments(&mut statements);
 
         Ok(statements)
     }
@@ -155,10 +156,43 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn statement(&mut self) -> Result<Statement, SyntaxError> {
+        let leading = self.lexer.take_leading_comments();
         self.enter_recursion()?;
         let res = self.dispatch_statement();
         self.exit_recursion();
-        res
+        let mut statement = res?;
+        self.claim_trivia(&mut statement, leading);
+        Ok(statement)
+    }
+
+    /// Give `statement` the comments written around it.
+    ///
+    /// Both the statement path and the class-member loop claim trivia, and a
+    /// member is not parsed through `statement`, so the two would otherwise
+    /// drift apart.
+    pub(crate) fn claim_trivia(
+        &mut self,
+        statement: &mut Statement,
+        leading: Vec<BufferedComment>,
+    ) {
+        attach_leading(statement, leading);
+        statement.trivia.trailing_comment = self.lexer.take_trailing_comments().pop();
+    }
+
+    /// Give the comments written below the last statement of a block to that
+    /// statement.
+    ///
+    /// Nothing follows them to claim them as leading comments, so without this
+    /// they would stay in the lexer's buffer and be lost — and a command that
+    /// rewrites a file from the tree would delete them.
+    pub(crate) fn claim_orphaned_comments(&mut self, statements: &mut [Statement]) {
+        let orphaned = self.lexer.take_leading_comments();
+        if orphaned.is_empty() {
+            return;
+        }
+        if let Some(last) = statements.last_mut() {
+            last.trivia.trailing_lines.extend(orphaned);
+        }
     }
 
     fn dispatch_statement(&mut self) -> Result<Statement, SyntaxError> {
@@ -1172,4 +1206,25 @@ fn option_pattern_complement(pattern: &Pattern) -> Pattern {
     } else {
         Pattern::Default
     }
+}
+
+/// Give `statement` the comments written above it.
+///
+/// A block is a wrapper the source never names: the comments gathered before
+/// it were written above the first statement it holds, and reading them back
+/// off the block would place them above the line that opens it. They are
+/// forwarded inward so the comment stays with the statement it describes.
+fn attach_leading(statement: &mut Statement, leading: Vec<BufferedComment>) {
+    if leading.is_empty() {
+        return;
+    }
+    if let StatementKind::Block(body) = &mut statement.node {
+        if let Some(first) = body.first_mut() {
+            let mut moved = leading;
+            moved.append(&mut first.trivia.leading_comments);
+            first.trivia.leading_comments = moved;
+            return;
+        }
+    }
+    statement.trivia.leading_comments = leading;
 }

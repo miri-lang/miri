@@ -3,10 +3,16 @@
 
 //! Renders a parsed program back to canonical Miri source.
 //!
-//! The rendering is canonical rather than faithful: it is derived from the AST,
-//! so comments, blank lines, and the author's spacing are normalized away and
-//! one program shape always produces one text. That is what lets a tool read a
-//! declaration here and anchor an edit against the same bytes later.
+//! The rendering is canonical: it is derived from the AST, so blank lines and
+//! the author's spacing are normalized away and one program shape always
+//! produces one text. That is what lets a tool read a declaration here and
+//! anchor an edit against the same bytes later.
+//!
+//! Comments are the one thing rendered two ways. [`program`] keeps them, so
+//! rewriting a file to its canonical text does not cost the author their
+//! notes. [`declaration`] drops them, because that text is what an edit anchor
+//! is matched against: an anchor able to match inside a comment could quietly
+//! edit the comment instead of the code.
 //!
 //! Rendering records spans as it goes, so every declaration in the output comes
 //! with the byte range it occupies in that output. The spans index the rendered
@@ -35,9 +41,9 @@ pub struct Rendered {
     pub spans: Vec<RecordedSpan>,
 }
 
-/// Render a whole program.
+/// Render a whole program, comments included.
 pub fn program(program: &Program) -> Rendered {
-    let mut sink = Sink::new();
+    let mut sink = Sink::with_comments();
     for (index, entry) in program.body.iter().enumerate() {
         if index > 0 {
             sink.emit("\n");
