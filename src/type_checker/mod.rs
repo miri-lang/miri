@@ -629,6 +629,7 @@ impl TypeChecker {
             let is_mutable = matches!(
                 decl.declaration_type,
                 crate::ast::statement::VariableDeclarationType::Mutable
+                    | crate::ast::statement::VariableDeclarationType::Unmarked
             );
             let is_constant = matches!(
                 decl.declaration_type,

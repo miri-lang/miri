@@ -84,6 +84,11 @@ fn run_command(cli: Cli) -> Result<()> {
                 around,
                 format,
             } => view_file(path, fn_name, outline, around, format, cli.color),
+            Commands::Fmt {
+                path,
+                check,
+                format,
+            } => fmt_file(path, check, format, cli.color),
             Commands::Patch {
                 path,
                 fn_name,
@@ -372,6 +377,14 @@ fn check_file(
     match miri::cli::check::run(&path, format, verify_mir, color_mode) {
         miri::cli::check::Outcome::Succeeded => Ok(()),
         miri::cli::check::Outcome::Failed => std::process::exit(1),
+    }
+}
+
+/// Format one file to its canonical form.
+fn fmt_file(path: PathBuf, check: bool, format: Format, color_mode: ColorMode) -> Result<()> {
+    match miri::cli::fmt::run(&path, check, format, color_mode) {
+        miri::cli::fmt::Outcome::Succeeded => Ok(()),
+        miri::cli::fmt::Outcome::Failed => std::process::exit(1),
     }
 }
 

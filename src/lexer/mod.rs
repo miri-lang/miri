@@ -20,6 +20,17 @@ use self::regex::parse_regex_literal;
 
 const TAB_WIDTH: usize = 4;
 
+/// A comment buffered by the lexer, with its span and position relative to code.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BufferedComment {
+    /// The text of the comment (including // or /* */).
+    pub text: String,
+    /// Where the comment appears in the source.
+    pub span: Span,
+    /// True if the comment begins on its own line, false if it follows code.
+    pub is_leading: bool,
+}
+
 /// One step of `generate_token`: emit a token, surface an error, or continue scanning.
 enum Step {
     Emit(TokenSpan),
@@ -45,6 +56,7 @@ pub(crate) enum LexAction {
     PromoteToString,
     FormattedString(char),
     Invalid(SyntaxErrorKind),
+    BufferComment,
     EmitAsIs,
 }
 
@@ -91,6 +103,8 @@ pub struct Lexer<'source> {
     open_brackets: Vec<OpenBracket>,
     previous_tokens: [Option<Token>; 2],
     previous_tokens_count: usize,
+    /// Pending comments not yet claimed by the parser.
+    pending_comments: Vec<BufferedComment>,
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -120,6 +134,7 @@ impl<'source> Lexer<'source> {
             open_brackets: Vec::new(),
             previous_tokens: [None, None],
             previous_tokens_count: 0,
+            pending_comments: Vec::new(),
         }
     }
 
@@ -169,6 +184,7 @@ impl<'source> Lexer<'source> {
             LexAction::PromoteToString => Step::Emit((Token::String, Span::new(start, end))),
             LexAction::FormattedString(quote) => self.dispatch_formatted_string(quote),
             LexAction::Invalid(kind) => Step::Fail(error_at(kind, start, end)),
+            LexAction::BufferComment => self.buffer_comment(start, end),
             LexAction::EmitAsIs => Step::Emit((token, Span::new(start, end))),
         }
     }
@@ -290,8 +306,10 @@ impl<'source> Lexer<'source> {
                     depth -= 1;
                     i += 2;
                     if depth == 0 {
-                        let bump_len = i - self.inner.span().start - 2;
+                        let start = self.inner.span().start;
+                        let bump_len = i - start - 2;
                         self.inner.bump(bump_len);
+                        self.record_comment(start, i);
                         return Ok(());
                     }
                 }
@@ -527,6 +545,91 @@ impl<'source> Lexer<'source> {
     fn is_expression_statement_end(&self) -> bool {
         (self.is_outside_paired_tokens() || self.is_inside_code_block())
             && !self.match_previous_token(Token::ExpressionStatementEnd)
+    }
+
+    /// Buffers a comment without emitting it to the token stream, then continues.
+    fn buffer_comment(&mut self, start: usize, end: usize) -> Step {
+        self.record_comment(start, end);
+        Step::Continue
+    }
+
+    /// Records the comment spanning `start..end` so the parser can claim it.
+    ///
+    /// A comment never reaches the token stream. Both comment forms are kept,
+    /// because a command that rewrites a file from the tree would otherwise
+    /// delete whichever form it did not record.
+    fn record_comment(&mut self, start: usize, end: usize) {
+        let text = self.source.get(start..end).unwrap_or("").to_string();
+        let is_leading = self.comment_is_leading(start);
+        self.pending_comments.push(BufferedComment {
+            text,
+            span: Span::new(start, end),
+            is_leading,
+        });
+    }
+
+    /// Determines whether a comment at the given source position is leading or trailing.
+    ///
+    /// A comment is leading if it is the first non-whitespace on its line.
+    /// It is trailing if it follows other code on the same line.
+    fn comment_is_leading(&self, comment_start: usize) -> bool {
+        // Scan backward from comment start to find the previous newline or start of file.
+        let mut pos = comment_start;
+        while pos > 0 {
+            pos -= 1;
+            match self.source.as_bytes().get(pos) {
+                Some(b'\n') | Some(b'\r') => {
+                    // Found newline; check if anything but whitespace is between it and comment.
+                    let line_start = pos + 1;
+                    let between = self.source.get(line_start..comment_start).unwrap_or("");
+                    return between.trim().is_empty();
+                }
+                Some(c) if !c.is_ascii_whitespace() => {
+                    // Found non-whitespace before comment on same line; it's trailing.
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        // Reached start of file; comment is leading if nothing but whitespace before it.
+        self.source
+            .get(0..comment_start)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    }
+
+    /// Takes the pending comments that begin their own line, leaving any that
+    /// follow code where they are.
+    ///
+    /// The parser is one token ahead of the statement it is building, so both
+    /// kinds can be pending at once: a comment written after the previous
+    /// statement's code belongs to that statement, while a comment on its own
+    /// line belongs to the statement about to be parsed. Taking them
+    /// separately is what keeps the two from being confused.
+    pub fn take_leading_comments(&mut self) -> Vec<BufferedComment> {
+        self.take_comments(true)
+    }
+
+    /// Takes the pending comments that follow code on their own line.
+    pub fn take_trailing_comments(&mut self) -> Vec<BufferedComment> {
+        self.take_comments(false)
+    }
+
+    /// Removes and returns the pending comments whose position matches
+    /// `leading`, preserving the order of both what is taken and what stays.
+    fn take_comments(&mut self, leading: bool) -> Vec<BufferedComment> {
+        let mut taken = Vec::new();
+        let mut kept = Vec::new();
+        for comment in self.pending_comments.drain(..) {
+            if comment.is_leading == leading {
+                taken.push(comment);
+            } else {
+                kept.push(comment);
+            }
+        }
+        self.pending_comments = kept;
+        taken
     }
 }
 

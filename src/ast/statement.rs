@@ -4,8 +4,8 @@
 use crate::ast::attributes::Attribute;
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::Expression;
-use crate::ast::node::IdNode;
 use crate::error::syntax::Span;
+use crate::lexer::BufferedComment;
 use std::hash::{Hash, Hasher};
 
 /// Data for a function declaration, boxed to reduce `StatementKind` enum size.
@@ -90,6 +90,26 @@ pub enum VariableDeclarationType {
     Mutable,
     Immutable,
     Constant,
+    /// A class field declared with no mutability keyword, as in `total int`.
+    ///
+    /// It binds exactly as `Mutable` does — the field is writable — and the
+    /// variant exists only so the canonical rendering can write the field back
+    /// the way it was written instead of inventing a `var` the author never
+    /// typed. Every reader that asks whether a binding is mutable must answer
+    /// the same for this as for [`VariableDeclarationType::Mutable`].
+    Unmarked,
+}
+
+/// Trivia (comments and whitespace metadata) attached to a statement.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct StatementTrivia {
+    /// Comments that precede the statement.
+    pub leading_comments: Vec<BufferedComment>,
+    /// An optional comment on the same line as the statement.
+    pub trailing_comment: Option<BufferedComment>,
+    /// Comments written on their own lines after the statement, which no
+    /// later statement claimed because none follows it in its block.
+    pub trailing_lines: Vec<BufferedComment>,
 }
 
 /// Where a binding's value physically lives. Residency is a binding
@@ -262,5 +282,34 @@ pub enum StatementKind {
     ),
 }
 
-/// Represents a statement
-pub type Statement = IdNode<StatementKind>;
+/// Represents a statement with trivia (leading and trailing comments).
+#[derive(Debug, Clone, Eq)]
+pub struct Statement {
+    pub id: usize,
+    pub node: StatementKind,
+    pub span: Span,
+    pub trivia: StatementTrivia,
+}
+
+impl PartialEq for Statement {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node
+    }
+}
+
+impl Hash for Statement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node.hash(state);
+    }
+}
+
+impl Default for Statement {
+    fn default() -> Self {
+        Statement {
+            id: 0,
+            node: StatementKind::Empty,
+            span: Span::new(0, 0),
+            trivia: Default::default(),
+        }
+    }
+}

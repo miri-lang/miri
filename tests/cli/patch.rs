@@ -2194,6 +2194,16 @@ fn with_body<T>(text: &str, body: impl FnOnce(&str) -> T) -> T {
     body(&file.path().display().to_string())
 }
 
+/// Write multi-line old text for --old-file.
+fn with_old_file<T>(text: &str, body: impl FnOnce(&str) -> T) -> T {
+    with_body(text, body)
+}
+
+/// Write multi-line new text for --new-file.
+fn with_new_file<T>(text: &str, body: impl FnOnce(&str) -> T) -> T {
+    with_body(text, body)
+}
+
 /// The code every diagnostic in an envelope carries, for assertions.
 fn codes(env: &DiagnosticsEnvelope) -> Vec<String> {
     env.diagnostics
@@ -2867,5 +2877,204 @@ fn test_insert_dry_run_reports_the_difference_without_writing() {
             );
             assert_eq!(read_file(path), PROBE, "a dry run writes nothing");
         });
+    });
+}
+
+// A rejected multi-line edit should always carry a BLD code, never a bare lexer error.
+#[test]
+fn test_a_replacement_written_at_the_site_depth_applies() {
+    // The indentation of a replacement must not decide whether it can be
+    // applied. This shape once spliced a file whose indentation no longer
+    // lexed, and the caller was shown a raw `MER_LEX_003` pointing into a
+    // file state it never saw.
+    let source = "fn helper(a int) int\n    let t = a + 1\n    return t\n";
+    with_source(source, |path| {
+        with_old_file("let t = a + 1\n    return t", |old_file| {
+            with_new_file("    let t = a + 9\n    return t", |new_file| {
+                let (stdout, stderr, ok) = patch(&[
+                    "--replace-in-fn",
+                    "helper",
+                    "--old-file",
+                    old_file,
+                    "--new-file",
+                    new_file,
+                    &path.display().to_string(),
+                ]);
+
+                assert!(
+                    ok,
+                    "the replacement lands at the anchor's depth: {stdout}{stderr}"
+                );
+                assert_eq!(
+                    read_file(path),
+                    "fn helper(a int) int\n    let t = a + 9\n    return t\n",
+                    "the file keeps its indentation"
+                );
+            });
+        });
+    });
+}
+
+#[test]
+fn test_a_replacement_that_cannot_be_applied_reports_a_bld_code() {
+    // A replacement the edited program rejects is refused under a `MER_BLD_*`
+    // code describing the refusal, never under a raw lexer or parser error
+    // raised against the spliced text.
+    let source = "fn helper(a int) int\n    let t = a + 1\n    return t\n";
+    with_source(source, |path| {
+        with_old_file("let t = a + 1\n    return t", |old_file| {
+            with_new_file("let t = \"text\"\n    return t", |new_file| {
+                let (stdout, _stderr, ok) = patch(&[
+                    "--replace-in-fn",
+                    "helper",
+                    "--old-file",
+                    old_file,
+                    "--new-file",
+                    new_file,
+                    "--format",
+                    "json",
+                    &path.display().to_string(),
+                ]);
+
+                assert!(!ok, "returning a string where an int is declared fails");
+                let code = envelope(&stdout)
+                    .diagnostics
+                    .first()
+                    .and_then(|d| d.code.as_deref())
+                    .unwrap_or_default()
+                    .to_string();
+                assert!(
+                    code.starts_with("MER_BLD_"),
+                    "the refusal carries a build code, got `{code}`: {stdout}"
+                );
+                assert_eq!(
+                    read_file(path),
+                    source,
+                    "a refused edit leaves the file alone"
+                );
+            });
+        });
+    });
+}
+
+// End-to-end test: fmt resolves MER_BLD_010 so patch succeeds.
+#[test]
+fn test_fmt_then_patch_resolves_bld010() {
+    let source = "fn add(a int, b int) int\n    let t = (a + b)\n    return t\n";
+    with_source(source, |path| {
+        // First, try to patch - it should fail with MER_BLD_010 because (a + b) is non-canonical
+        let (_, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "let t = (a + b)",
+            "--new",
+            "let t = a - b",
+            &path.display().to_string(),
+        ]);
+        assert!(!ok, "patch should fail on non-canonical source: {stderr}");
+        assert!(
+            stderr.contains("MER_BLD_010"),
+            "should report MER_BLD_010: {stderr}"
+        );
+
+        // Now format the file - this will remove the redundant parentheses
+        let fmt_output = miri_cmd()
+            .arg("fmt")
+            .arg(&path.display().to_string())
+            .output()
+            .expect("fmt runs");
+        assert!(fmt_output.status.success(), "fmt should succeed");
+
+        // Now the patch should succeed because the file is canonical
+        let (_, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "let t = a + b",
+            "--new",
+            "let t = a - b",
+            &path.display().to_string(),
+        ]);
+        assert!(ok, "patch should succeed after fmt: {stderr}");
+        let content = read_file(path);
+        assert!(
+            content.contains("let t = a - b"),
+            "patch should have applied: {content}"
+        );
+    });
+}
+
+/// A function whose body an anchor can span more than one line of.
+const TWO_LINE_BODY: &str = "fn helper(a int) int
+    let t = a + 1
+    return t
+
+fn main()
+    println(f\"{helper(1)}\")
+";
+
+/// Write `text` to a file beside the fixture and hand back its path.
+fn anchor_file(directory: &Path, name: &str, text: &str) -> std::path::PathBuf {
+    let path = directory.join(name);
+    fs::write(&path, text).expect("the anchor file can be written");
+    path
+}
+
+#[test]
+fn test_a_multi_line_anchor_applies_with_its_first_line_unindented() {
+    with_source(TWO_LINE_BODY, |path| {
+        let directory = path.parent().expect("the fixture has a parent directory");
+        let old = anchor_file(directory, "old_flat.txt", "let t = a + 1\n    return t");
+        let new = anchor_file(directory, "new_flat.txt", "let t = a + 9\n    return t");
+
+        let (stdout, _, ok) = patch(&[
+            "--replace-in-fn",
+            "helper",
+            "--old-file",
+            &old.display().to_string(),
+            "--new-file",
+            &new.display().to_string(),
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "a multi-line anchor names this body: {stdout}");
+        assert!(
+            read_file(path).contains("let t = a + 9"),
+            "the edit reached the file: {}",
+            read_file(path)
+        );
+    });
+}
+
+#[test]
+fn test_the_same_multi_line_anchor_applies_when_every_line_is_indented() {
+    with_source(TWO_LINE_BODY, |path| {
+        let directory = path.parent().expect("the fixture has a parent directory");
+        // The same anchor as above, copied out of the file with its
+        // indentation intact. Depth must not decide whether it matches.
+        let old = anchor_file(directory, "old_deep.txt", "    let t = a + 1\n    return t");
+        let new = anchor_file(directory, "new_deep.txt", "    let t = a + 9\n    return t");
+
+        let (stdout, _, ok) = patch(&[
+            "--replace-in-fn",
+            "helper",
+            "--old-file",
+            &old.display().to_string(),
+            "--new-file",
+            &new.display().to_string(),
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "an indented anchor names the same body: {stdout}");
+        assert!(
+            read_file(path).contains("let t = a + 9"),
+            "the edit reached the file: {}",
+            read_file(path)
+        );
     });
 }

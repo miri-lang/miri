@@ -173,3 +173,23 @@ fn main()
         "7",
     );
 }
+
+#[test]
+fn test_a_field_declared_without_a_keyword_is_writable() {
+    // A field written `total int` carries no mutability keyword, and the
+    // canonical rendering must write it back that way rather than inventing a
+    // `var`. Recording that distinction may not cost the field its
+    // mutability, which is what this pins.
+    assert_runs_with_output(
+        r#"
+class Order
+    total int
+
+fn main()
+    var order = Order(1)
+    order.total = 7
+    println(f"{order.total}")
+"#,
+        "7",
+    );
+}

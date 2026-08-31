@@ -23,8 +23,50 @@ use super::pattern::pattern as format_pattern;
 use super::sink::{Mark, Sink};
 use super::types::generic_arguments;
 
-/// Render a statement at the caller's cursor.
+/// Render a statement at the caller's cursor, preceded by the comments
+/// written above it and followed by the one written beside it.
 pub fn statement(sink: &mut Sink, node: &Statement, indent: usize) {
+    // A statement rendered mid-line is the single-line `:` form, where a
+    // comment written above it would break the line in two and a comment
+    // written after it would swallow whatever the caller renders next.
+    let carries_comments = sink.renders_comments() && sink.at_line_start();
+    if carries_comments {
+        leading_comments(sink, node, indent);
+    }
+    statement_code(sink, node, indent);
+    if carries_comments {
+        trailing_comment(sink, node);
+        trailing_lines(sink, node, indent);
+    }
+}
+
+/// The comments written below `node` that no later statement claimed.
+fn trailing_lines(sink: &mut Sink, node: &Statement, indent: usize) {
+    for comment in &node.trivia.trailing_lines {
+        sink.emit_line(indent);
+        sink.emit(&comment.text);
+    }
+}
+
+/// The comments written on their own lines above `node`, each on its own line
+/// at the statement's indentation.
+fn leading_comments(sink: &mut Sink, node: &Statement, indent: usize) {
+    for comment in &node.trivia.leading_comments {
+        sink.emit(&comment.text);
+        sink.emit_line(indent);
+    }
+}
+
+/// The comment written after `node`'s code on the same line.
+fn trailing_comment(sink: &mut Sink, node: &Statement) {
+    if let Some(comment) = &node.trivia.trailing_comment {
+        sink.emit(" ");
+        sink.emit(&comment.text);
+    }
+}
+
+/// Render a statement's own code, without the comments around it.
+fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
     match &node.node {
         StatementKind::Empty => {}
         StatementKind::Break => sink.emit("break"),
@@ -261,6 +303,7 @@ fn variable(
             VariableDeclarationType::Mutable => "var ",
             VariableDeclarationType::Immutable => "let ",
             VariableDeclarationType::Constant => "const ",
+            VariableDeclarationType::Unmarked => "",
         });
     }
     for (index, declaration) in declarations.iter().enumerate() {

@@ -49,10 +49,12 @@ pub(super) fn expr(kind: ExpressionKind) -> Expression {
 
 /// Creates a statement with a specific span.
 pub fn stmt_with_span(kind: StatementKind, span: Span) -> Statement {
+    use crate::ast::statement::StatementTrivia;
     Statement {
         id: next_id(),
         node: kind,
         span,
+        trivia: StatementTrivia::default(),
     }
 }
 

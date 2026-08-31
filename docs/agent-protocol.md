@@ -169,6 +169,35 @@ An insert of a name the file already declares at that scope answers
 answers `MER_BLD_004`. Both are diagnostics with `ok: false`, not protocol
 errors.
 
+#### What an anchor is matched against
+
+`old` is not matched against the bytes of the file. It is matched against the
+declaration's **canonical rendering** — the same text `view` returns for that
+declaration — so an anchor describes code rather than layout.
+
+Two consequences are worth stating, because both have surprised callers:
+
+- **Comments are not part of that text.** An anchor that occurs only inside a
+  comment matches nothing and answers `MER_BLD_006`, which is deliberate: an
+  anchor able to match a comment could quietly edit the comment instead of the
+  code it sits beside.
+- **Indentation does not matter.** A multi-line `old` is compared after the
+  depth it was written at is discarded, so the same anchor works whether it was
+  copied out of the file with its indentation intact or typed flat. Relative
+  indentation *inside* the anchor is still significant, so a nested block still
+  only matches a block nested the same way. `new` is re-indented to the depth of
+  the site it replaces, so it may be written at either depth too.
+
+An anchor is refused when it names no site (`MER_BLD_006`) or more than one
+(`MER_BLD_007`); extend it until it names one.
+
+A file whose text cannot be aligned to its canonical form at all answers
+`MER_BLD_010` — redundant parentheses around an expression, or a literal
+written `1.50` where the canonical form is `1.5`. That is what `miri fmt`
+is for: it rewrites the file to its canonical text, comments included, and the
+anchor then holds. `miri fmt --check` reports whether a file is already
+canonical without writing to it.
+
 ### `skillsGet`
 
 `{ "name": "miri-lang" }` → a `skill` envelope carrying `skills`. Without a

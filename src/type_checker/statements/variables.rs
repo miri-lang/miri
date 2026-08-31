@@ -131,7 +131,10 @@ impl TypeChecker {
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
         self.check_gpu_residency_type(decl, &inferred_type, context, span);
         self.check_host_f16(decl, &inferred_type, context, span);
-        let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+        let is_mutable = matches!(
+            decl.declaration_type,
+            VariableDeclarationType::Mutable | VariableDeclarationType::Unmarked
+        );
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
         let const_value = if is_constant {
@@ -484,7 +487,10 @@ impl TypeChecker {
             } else {
                 // Check for warning: assigning non-optional to optional immutable variable
                 if let TypeKind::Option(_) = &declared_type.kind {
-                    if !matches!(decl.declaration_type, VariableDeclarationType::Mutable) {
+                    if !matches!(
+                        decl.declaration_type,
+                        VariableDeclarationType::Mutable | VariableDeclarationType::Unmarked
+                    ) {
                         // If inferred type is NOT optional (and not None), warn
                         if !matches!(inferred_type.kind, TypeKind::Option(_)) {
                             self.report_warning(

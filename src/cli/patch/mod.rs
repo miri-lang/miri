@@ -605,7 +605,7 @@ fn apply_in_place(
             let range = alignment
                 .raw_range(canonical.0, canonical.1)
                 .ok_or_else(|| anchor_covers_no_token(old))?;
-            (range, new.to_string())
+            (range, reindented(source, range.0, new))
         }
         InPlace::Body { text } => {
             let header = formatter::signature(declaration)
@@ -860,35 +860,139 @@ fn declared_something_else(name: &str) -> Box<Diagnostic> {
         "the text passed with --body-file must declare the name given to --insert-fn",
     ))
 }
+/// An anchor or replacement rendered so that the depth it was written at
+/// cannot decide whether it matches.
+///
+/// The first line is taken without its leading whitespace: an anchor may be
+/// copied straight out of the file, where it carries the indentation of the
+/// line it sat on, or typed flat. The lines below it are dedented by the
+/// shallowest indentation among them, which discards the depth the block sits
+/// at while keeping the shape of anything nested inside it.
+fn without_indentation(text: &str) -> String {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let rest: Vec<&str> = lines.collect();
+    let base = rest
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    let mut rendered = String::from(first.trim_start());
+    for line in rest {
+        rendered.push('\n');
+        if !line.trim().is_empty() {
+            rendered.push_str(line.get(base..).unwrap_or(line));
+        }
+    }
+    rendered
+}
+
+/// Each line of `text` with the byte offset it starts at.
+fn line_offsets(text: &str) -> Vec<(usize, &str)> {
+    let mut offsets = Vec::new();
+    let mut at = 0;
+    for line in text.lines() {
+        offsets.push((at, line));
+        at += line.len() + 1;
+    }
+    offsets
+}
+
+/// Every run of lines in `canonical` that holds `anchor`, ignoring how deeply
+/// either was indented.
+///
+/// A site starts at the first non-blank byte of its opening line rather than at
+/// the line break, so the range hands back exactly the bytes the anchor names
+/// and the indentation in front of them is left alone.
+fn anchor_sites(canonical: &str, anchor: &str) -> Vec<(usize, usize)> {
+    let wanted = without_indentation(anchor);
+    let span = anchor.lines().count();
+    let lines = line_offsets(canonical);
+    let mut sites = Vec::new();
+    if span == 0 || span > lines.len() {
+        return sites;
+    }
+
+    for start in 0..=lines.len() - span {
+        let window = &lines[start..start + span];
+        let text = window
+            .iter()
+            .map(|(_, line)| *line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if without_indentation(&text) != wanted {
+            continue;
+        }
+        let (first_offset, first_line) = window[0];
+        let opens_at = first_offset + (first_line.len() - first_line.trim_start().len());
+        let (last_offset, last_line) = window[span - 1];
+        sites.push((opens_at, last_offset + last_line.len()));
+    }
+    sites
+}
+
 /// Where an anchor sits in a canonical rendering.
 ///
 /// The anchor has to name one site. Text that appears nowhere cannot be
 /// anchored, and text that appears repeatedly does not say which occurrence was
 /// meant; both are reported with the count so a caller can extend the anchor.
+/// Multi-line anchors are matched indentation-insensitively by normalizing common
+/// leading indentation in both the anchor and the canonical text.
 fn anchor_range(canonical: &str, anchor: &str) -> Result<(usize, usize), Box<Diagnostic>> {
-    let occurrences = canonical.matches(anchor).count();
-    match occurrences {
-        0 => Err(Box::new(coded(
-            DiagnosticCode::BldAnchorTextNotFound,
-            format!(
-                "`{}` does not occur in this function",
-                sanitize_for_terminal(anchor)
-            ),
-            "the anchor is matched against canonical source, where comments and original spacing are normalized away",
-        ))),
-        1 => {
-            let start = canonical.find(anchor).unwrap_or_default();
-            Ok((start, start + anchor.len()))
+    if !anchor.contains('\n') {
+        // Single-line anchors use literal matching.
+        let occurrences = canonical.matches(anchor).count();
+        match occurrences {
+            0 => Err(Box::new(coded(
+                DiagnosticCode::BldAnchorTextNotFound,
+                format!(
+                    "`{}` does not occur in this function",
+                    sanitize_for_terminal(anchor)
+                ),
+                "the anchor is matched against canonical source, where comments and original spacing are normalized away",
+            ))),
+            1 => {
+                let start = canonical.find(anchor).unwrap_or_default();
+                Ok((start, start + anchor.len()))
+            }
+            count => Err(Box::new(coded(
+                DiagnosticCode::BldAnchorTextNotUnique,
+                format!(
+                    "`{}` occurs {} times in this function",
+                    sanitize_for_terminal(anchor),
+                    count
+                ),
+                "extend the anchor until it matches one site only",
+            ))),
         }
-        count => Err(Box::new(coded(
-            DiagnosticCode::BldAnchorTextNotUnique,
-            format!(
-                "`{}` occurs {} times in this function",
-                sanitize_for_terminal(anchor),
-                count
-            ),
-            "extend the anchor until it matches one site only",
-        ))),
+    } else {
+        // Multi-line anchors are matched indentation-insensitively.
+        let matches = anchor_sites(canonical, anchor);
+
+        match matches.len() {
+            0 => Err(Box::new(coded(
+                DiagnosticCode::BldAnchorTextNotFound,
+                format!(
+                    "`{}` does not occur in this function",
+                    sanitize_for_terminal(anchor)
+                ),
+                "the anchor is matched against canonical source, where comments and original spacing are normalized away",
+            ))),
+            1 => Ok(matches[0]),
+            count => Err(Box::new(coded(
+                DiagnosticCode::BldAnchorTextNotUnique,
+                format!(
+                    "`{}` occurs {} times in this function",
+                    sanitize_for_terminal(anchor),
+                    count
+                ),
+                "extend the anchor until it matches one site only",
+            ))),
+        }
     }
 }
 
@@ -948,25 +1052,15 @@ fn reindented(source: &str, body_start: usize, body: &str) -> String {
         .take_while(|c| c.is_whitespace())
         .collect();
 
-    let trimmed = body.trim_end_matches('\n');
-    let common = trimmed
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    trimmed
+    let flattened = without_indentation(body.trim_end_matches('\n'));
+    flattened
         .lines()
         .enumerate()
         .map(|(index, line)| {
-            let stripped = line.get(common..).unwrap_or("");
-            if index == 0 {
-                stripped.to_string()
-            } else if stripped.trim().is_empty() {
-                String::new()
+            if index == 0 || line.trim().is_empty() {
+                line.to_string()
             } else {
-                format!("{}{}", indent, stripped)
+                format!("{}{}", indent, line)
             }
         })
         .collect::<Vec<_>>()

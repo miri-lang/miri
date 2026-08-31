@@ -47,7 +47,7 @@ impl AlignmentDiverged {
                 self.token_index, self.expected, self.actual, self.raw_byte_offset
             ))
             .help(
-                "this function contains something whose canonical form differs from what the file says, such as redundant parentheses around an expression or a literal written 1.50 rather than 1.5; rewrite it in canonical form and the anchor will hold"
+                "this function contains something whose canonical form differs from what the file says, such as redundant parentheses around an expression or a literal written 1.50 rather than 1.5; run `miri fmt` to rewrite it in canonical form and the anchor will hold"
                     .to_string(),
             )
             .build()

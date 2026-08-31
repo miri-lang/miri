@@ -259,6 +259,21 @@ pub enum Commands {
         format: Format,
     },
 
+    /// Rewrite a file to its canonical form
+    Fmt {
+        /// Path to the Miri source file to format
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Validate without writing; exit non-zero if file is not already canonical
+        #[arg(long, action = ArgAction::SetTrue)]
+        check: bool,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+    },
+
     /// Apply source edits with re-validation
     Patch {
         /// Path to the Miri source file

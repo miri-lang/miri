@@ -421,6 +421,8 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_BLD_015", "Command-invocation diagnostic (miri skill install cannot write its target); not reachable from .mi source"),
     ("MER_BLD_016", "Command-invocation diagnostic (a skill embedded in this build has no readable header); not reachable from .mi source"),
     ("MER_BLD_017", "Command-invocation diagnostic (miri patch --insert-fn was given a name the file already declares); not reachable from .mi source"),
+    ("MER_BLD_018", "Command-invocation diagnostic (miri fmt rendered text that renders differently again); reports a formatter defect rather than anything a .mi source can state"),
+    ("MER_BLD_019", "Command-invocation diagnostic (miri fmt would have dropped a comment); refuses a rewrite rather than reporting a property of the source"),
     ("MER_CG_001", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),
     ("MER_CG_002", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),
     ("MER_CG_003", "Cranelift-internal ISA/module/function/object emission; not reachable from .mi source"),

@@ -1361,6 +1361,20 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "BLD",
+    "018",
+    BldFormatterNotIdempotent,
+    "Formatter Not Idempotent",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "019",
+    BldFormatWouldLoseContent,
+    "Formatting Would Lose Content",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
 );
 
 #[cfg(test)]

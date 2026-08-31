@@ -213,6 +213,7 @@ pub enum JsonCommand {
     Fix,
     View,
     Patch,
+    Fmt,
     Determinism,
     Skill,
 }

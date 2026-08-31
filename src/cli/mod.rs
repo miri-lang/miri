@@ -8,6 +8,7 @@ pub mod determinism;
 pub mod dev;
 pub mod explain;
 pub mod fix;
+pub mod fmt;
 pub mod patch;
 pub mod resolve;
 pub mod skill;
