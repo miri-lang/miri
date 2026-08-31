@@ -172,6 +172,12 @@ pub struct ServerCapabilities {
     pub reserved_methods: Vec<String>,
     /// Whether a request can be withdrawn before it starts.
     pub cancellation: bool,
+    /// JSON-Schema fragments for each method's parameters.
+    ///
+    /// Maps method name to a JSON-Schema object describing the method's
+    /// accepted parameters and their types. Always present and populated
+    /// by the server.
+    pub method_schemas: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The answer to the handshake that opens a session.

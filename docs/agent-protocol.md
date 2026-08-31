@@ -26,6 +26,15 @@ the `Content-Type` a language server sends. Closing stdin ends the session.
 **stdout carries nothing but response frames.** Everything written for a person
 goes to stderr, so a client can read the stream without filtering it.
 
+The `tools/agent_client.py` script in this repository is a reference
+implementation of framing and session management in Python (standard library
+only). Run `python3 tools/agent_client.py --help` to see an example of how to
+drive the protocol. A client's implementation of framing is the hardest part to
+debug and the easiest to get subtly wrong (off-by-one on the byte count, for
+instance); the reference client has been validated to work against the binary
+and is the quickest way to test your understanding before writing in your own
+language.
+
 A message body may declare at most **64 MiB**, and a single header line at most
 **8 KiB**. `Content-Length` is the one number a client states before anything
 has validated it, and it sizes the buffer the body is read into; a frame over
@@ -50,7 +59,7 @@ not serve, or omitted a parameter.
 | `-32700` | The message did not parse as JSON. |
 | `-32600` | The message parsed but is not a JSON-RPC request. |
 | `-32601` | The method is not served by this build. |
-| `-32602` | A parameter is missing, or names a file that cannot be read. |
+| `-32602` | A parameter is missing, or names a file that cannot be read. The `message` field names the accepted parameters. |
 | `-32603` | The compiler could not act on a request it understood. |
 | `-32800` | The request was withdrawn before it started. |
 
@@ -60,13 +69,25 @@ not serve, or omitted a parameter.
 
 Opens a session and describes the build serving it. Takes no parameters.
 
+Request: `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+
+Response:
+
 ```json
 {
-  "serverInfo": { "name": "miri", "version": "0.6.0-beta.4", "schemaVersion": 1 },
-  "capabilities": {
-    "methods": ["initialize", "check", "explain", "fixPlan", "fixApply", "view", "patch", "skillsGet"],
-    "reservedMethods": ["tokens", "parse", "graph", "targets", "doctor"],
-    "cancellation": true
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "serverInfo": { "name": "miri", "version": "0.6.0-beta.4", "schemaVersion": 1 },
+    "capabilities": {
+      "methods": ["initialize", "check", "explain", "fixPlan", "fixApply", "view", "patch", "skillsGet"],
+      "reservedMethods": ["tokens", "parse", "graph", "targets", "doctor"],
+      "methodSchemas": {
+        "initialize": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": {} },
+        "check": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": {} }
+      },
+      "cancellation": true
+    }
   }
 }
 ```
@@ -80,7 +101,15 @@ client must ignore members it does not recognise. The number changes only when
 a field it already reads changes shape or meaning, which is what makes it worth
 comparing at all.
 
-Calling `initialize` is not required before other methods.
+`capabilities.methodSchemas` is a map from method name to a JSON-Schema 2020-12
+fragment describing that method's parameters. A client should read this instead
+of guessing or hardcoding parameter names, so that a mismatched client version
+gets `-32602` ("parameter missing") with a helpful message rather than
+silently sending the wrong shape. The schema includes `required` (which
+parameters must be present), `properties` (the acceptable types for each), and
+`dependentRequired` (e.g., `around` requires `fn`). A client that caches the
+handshake keeps working: `capabilities.methods` remains a string array, so a
+cached client can still tell what is served.
 
 `capabilities.reservedMethods` is **advisory and may grow** between releases, as
 the commands behind those names land. A client that caches the handshake should
@@ -88,9 +117,26 @@ re-read it after a toolchain upgrade. Growth is never breaking: a reserved
 method answers "not yet" both before and after it appears in the list, and a
 method only leaves the list by starting to work.
 
+Calling `initialize` is not required before other methods.
+
 ### `check`
 
-`{ "path": "main.mi", "verifyMir": false }` → a `check` envelope.
+Request: `{ "path": "main.mi", "verifyMir": false }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "check",
+    "diagnostics": []
+  }
+}
+```
 
 `verifyMir` is optional and defaults to false. It runs the MIR verification pass
 after reference-counting insertion, the same as the CLI's `--verify-mir`.
@@ -100,7 +146,25 @@ Warnings never make `ok` false. A check that reports only warnings answers
 
 ### `explain`
 
-`{ "code": "MER_TYP_030" }` → an `explain` envelope carrying `explanation`.
+Request: `{ "code": "MER_TYP_030" }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "explain",
+    "explanation": {
+      "code": "MER_TYP_030",
+      "rule": "A type error in the program"
+    }
+  }
+}
+```
 
 A code that is not in the registry is answered as a diagnostic carrying
 `MER_BLD_001`, not as a protocol error: the command's whole subject is codes, so
@@ -108,12 +172,43 @@ an unrecognised one is something it has an opinion about.
 
 ### `fixPlan`
 
-`{ "path": "main.mi" }` → a `fix` envelope. Reports the repairs the compiler
-recorded and edits nothing.
+Request: `{ "path": "main.mi" }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "fix",
+    "diagnostics": []
+  }
+}
+```
+
+Reports the repairs the compiler recorded and edits nothing.
 
 ### `fixApply`
 
-`{ "path": "main.mi", "allowRisky": false }` → a `fix` envelope.
+Request: `{ "path": "main.mi", "allowRisky": false }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "fix",
+    "diagnostics": []
+  }
+}
+```
 
 `ok` says whether the apply succeeded, not whether the file now compiles. Those
 are different questions: send `check` afterwards to ask the second one.
@@ -129,7 +224,92 @@ Only the file named in `path` is written. A repair for a diagnostic raised
 inside an imported file is reported and skipped, because the caller never named
 that file.
 
+### `view`
+
+Request: `{ "path": "main.mi" }` (without `fn`, returns an outline — all declarations' headers and spans)
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "view",
+    "diagnostics": [],
+    "view": {
+      "shape": "outline",
+      "text": "fn double(x i32) i32\nfn main()\n",
+      "spans": [
+        { "start": 0, "end": 20, "kind": "function", "name": "double" },
+        { "start": 21, "end": 30, "kind": "function", "name": "main" }
+      ]
+    }
+  }
+}
+```
+
+Alternatively, request a specific function:
+
+Request: `{ "path": "main.mi", "fn": "double" }` (with `fn`, returns the function body)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "view",
+    "diagnostics": [],
+    "view": {
+      "shape": "fn",
+      "text": "fn double(x i32) i32\n    return x * 2\n",
+      "spans": [
+        { "start": 0, "end": 37, "kind": "function", "name": "double" }
+      ]
+    }
+  }
+}
+```
+
+`path` is required and names the source file to view. Without `fn`, the whole
+file's **outline** comes back: a canonical rendering of all top-level
+declarations and their byte spans.
+
+`fn` is optional and names one declaration to view in full. When `fn` is given,
+the response shape changes to `"fn"` and the text field holds the complete
+rendering of that function or class.
+
+`around` is optional and only meaningful when `fn` is also given. It narrows
+the view to the part of the function that spans or contains the given text. If
+`around` is given without `fn`, the request is refused with `-32602`, because
+the compiler cannot know which declaration to search inside.
+
 ### `patch`
+
+Request: `{ "path": "main.mi", "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }] }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "patch",
+    "diagnostics": [],
+    "patch": {
+      "fileWritten": true,
+      "revalidations": 1
+    }
+  }
+}
+```
 
 Applies source edits and re-validates the edited program in one step.
 
@@ -151,9 +331,30 @@ Each entry of `operations` names a `function` and carries one of three shapes,
 told apart by which keys are present:
 
 ```json
-{ "function": "total",        "old": "sum + 1", "new": "sum + 2" }
-{ "function": "Cart.total",   "body": "return self.sum" }
-{ "function": "quadruple",    "insert": "fn quadruple(x i32) i32\n    return double(x) * 2", "after": "double" }
+{
+  "function": "total",
+  "old": "sum + 1",
+  "new": "sum + 2"
+}
+```
+
+Or:
+
+```json
+{
+  "function": "Cart.total",
+  "body": "return self.sum"
+}
+```
+
+Or:
+
+```json
+{
+  "function": "quadruple",
+  "insert": "fn quadruple(x i32) i32\n    return double(x) * 2",
+  "after": "double"
+}
 ```
 
 `old` with `new` replaces one occurrence inside the named declaration, and
@@ -200,8 +401,31 @@ canonical without writing to it.
 
 ### `skillsGet`
 
-`{ "name": "miri-lang" }` → a `skill` envelope carrying `skills`. Without a
-`name`, every skill this build carries comes back.
+Request: `{ "name": "miri-lang" }`
+
+Response:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "result": {
+    "schemaVersion": 1,
+    "ok": true,
+    "command": "skill",
+    "skills": [
+      {
+        "name": "miri-lang",
+        "description": "The Miri language syntax and semantics",
+        "compilerVersion": "0.6.0-beta.4",
+        "body": "…the markdown content with header removed…"
+      }
+    ]
+  }
+}
+```
+
+`name` is optional. Without a `name`, every skill this build carries comes back.
 
 Each entry is `{ "name", "description", "compilerVersion", "body" }`. The body
 is the skill's markdown with its header removed, and it is the same text
