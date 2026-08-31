@@ -26,6 +26,8 @@
 //! normally: the pipeline has no cancellation point to unwind from, and adding
 //! one would thread a token through every pass for a transport's benefit.
 
+pub mod schema;
+
 use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -38,17 +40,13 @@ use crate::diagnostics::rpc::{
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, REQUEST_CANCELLED,
 };
 
-/// The methods this build answers.
-const SERVED_METHODS: &[&str] = &[
-    "initialize",
-    "check",
-    "explain",
-    "fixPlan",
-    "fixApply",
-    "view",
-    "patch",
-    "skillsGet",
-];
+/// The methods this build answers, derived from the schema registry.
+fn served_methods() -> Vec<String> {
+    schema::METHODS
+        .iter()
+        .map(|m| m.method.to_string())
+        .collect()
+}
 
 /// The methods this build knows by name but does not yet answer.
 ///
@@ -363,8 +361,8 @@ fn dispatch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         "initialize" => serialize(id, &initialize()),
         "check" => run_check(request, id),
         "explain" => run_explain(request, id),
-        "fixPlan" => run_fix(request, id, false),
-        "fixApply" => run_fix(request, id, true),
+        "fixPlan" => run_fix(request, id, "fixPlan", false),
+        "fixApply" => run_fix(request, id, "fixApply", true),
         "view" => run_view(request, id),
         "patch" => run_patch(request, id),
         "skillsGet" => run_skills_get(request, id),
@@ -391,9 +389,10 @@ fn initialize() -> InitializeResult {
             schema_version: crate::diagnostics::json::SCHEMA_VERSION,
         },
         capabilities: ServerCapabilities {
-            methods: SERVED_METHODS.iter().map(|m| m.to_string()).collect(),
+            methods: served_methods(),
             reserved_methods: RESERVED_METHODS.iter().map(|m| m.to_string()).collect(),
             cancellation: true,
+            method_schemas: schema::fragments().into_iter().collect(),
         },
     }
 }
@@ -401,7 +400,7 @@ fn initialize() -> InitializeResult {
 /// Type-check the file the request names.
 fn run_check(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let Some(path) = required_path(request) else {
-        return missing_path(id);
+        return missing_path(id, "check");
     };
 
     let source = match std::fs::read_to_string(&path) {
@@ -425,7 +424,10 @@ fn run_explain(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         return RpcResponse::failure(
             id,
             INVALID_PARAMS,
-            "explain needs a `code` parameter naming a diagnostic code",
+            invalid_params(
+                "explain",
+                "explain needs a `code` parameter naming a diagnostic code",
+            ),
         );
     };
     serialize(id, &explain::envelope(&code))
@@ -449,7 +451,10 @@ fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         return RpcResponse::failure(
             id,
             INVALID_PARAMS,
-            "skillsGet takes a `name` parameter that is a string",
+            invalid_params(
+                "skillsGet",
+                "skillsGet takes a `name` parameter that is a string",
+            ),
         );
     }
 
@@ -463,7 +468,7 @@ fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
 /// optionally narrowed by `around`, and its absence reads the file's outline.
 fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let Some(path) = required_path(request) else {
-        return missing_path(id);
+        return missing_path(id, "view");
     };
 
     let source = match std::fs::read_to_string(&path) {
@@ -478,7 +483,7 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
             return RpcResponse::failure(
                 id,
                 INVALID_PARAMS,
-                "view needs a `fn` parameter for `around` to narrow",
+                invalid_params("view", "view needs a `fn` parameter for `around` to narrow"),
             )
         }
         None => view::Shape::Outline,
@@ -494,12 +499,14 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
 /// writing the file itself and asking for a check afterwards.
 fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let Some(path) = required_path(request) else {
-        return missing_path(id);
+        return missing_path(id, "patch");
     };
 
     let operations = match patch_operations(request) {
         Ok(operations) => operations,
-        Err(reason) => return RpcResponse::failure(id, INVALID_PARAMS, reason),
+        Err(reason) => {
+            return RpcResponse::failure(id, INVALID_PARAMS, invalid_params("patch", reason))
+        }
     };
 
     let mode = match string_param(request, "mode").as_deref() {
@@ -510,9 +517,12 @@ fn run_patch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
             return RpcResponse::failure(
                 id,
                 INVALID_PARAMS,
-                format!(
-                    "unknown mode '{}'; expected apply, checkOnly or dryRun",
-                    other
+                invalid_params(
+                    "patch",
+                    format!(
+                        "unknown mode '{}'; expected apply, checkOnly or dryRun",
+                        other
+                    ),
                 ),
             )
         }
@@ -579,9 +589,9 @@ fn patch_operation(entry: &serde_json::Value) -> Result<patch::Operation, String
 /// `fixApply` has no terminal to confirm at, so the caller says outright
 /// whether a repair the compiler classes as risky may be written. The default
 /// is that it may not.
-fn run_fix(request: &RpcRequest, id: Option<RpcId>, apply: bool) -> RpcResponse {
+fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -> RpcResponse {
     let Some(path) = required_path(request) else {
-        return missing_path(id);
+        return missing_path(id, method);
     };
 
     let source = match std::fs::read_to_string(&path) {
@@ -611,12 +621,30 @@ fn required_path(request: &RpcRequest) -> Option<PathBuf> {
 }
 
 /// Report a request that named no file to work on.
-fn missing_path(id: Option<RpcId>) -> RpcResponse {
+fn missing_path(id: Option<RpcId>, method: &str) -> RpcResponse {
     RpcResponse::failure(
         id,
         INVALID_PARAMS,
-        "this method needs a `path` parameter naming a source file",
+        invalid_params(
+            method,
+            format!("{} needs a `path` parameter naming a source file", method),
+        ),
     )
+}
+
+/// Build an error message for a method that received invalid parameters.
+///
+/// The message includes the method's accepted parameters so the caller knows
+/// what to send next time.
+fn invalid_params(method: &str, reason: impl Into<String>) -> String {
+    let reason = reason.into();
+    match schema::accepted(method) {
+        Some(params) if !params.is_empty() => {
+            format!("{}; {} accepts: {}", reason, method, params)
+        }
+        Some(_) => reason,
+        None => reason,
+    }
 }
 
 /// Read one string-valued parameter.
@@ -874,9 +902,10 @@ mod tests {
 
     #[test]
     fn test_every_reserved_method_is_distinct_from_a_served_one() {
+        let served = served_methods();
         for reserved in RESERVED_METHODS {
             assert!(
-                !SERVED_METHODS.contains(reserved),
+                !served.iter().any(|s| s == *reserved),
                 "{} is listed as both served and reserved",
                 reserved
             );
