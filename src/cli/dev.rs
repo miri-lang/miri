@@ -139,10 +139,22 @@ fn report_once(
 ) -> std::io::Result<()> {
     let ts = session_start.elapsed().as_millis() as u64;
 
-    let source = match fs::read_to_string(watched) {
+    // A watch session reports itself as a stream of events, so a file that
+    // cannot be read is written for a person rather than folded into an
+    // envelope the stream does not carry. The diagnostic is the shared one, so
+    // the code and the help line are the ones every other command shows.
+    let source = match crate::cli::source::read(watched) {
         Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read {}: {}", watched.display(), error);
+        Err(diagnostic) => {
+            eprint!(
+                "{}",
+                crate::error::format::format_diagnostic_with_color(
+                    "",
+                    &diagnostic,
+                    Some(&watched.display().to_string()),
+                    color_mode.into(),
+                )
+            );
             return Ok(());
         }
     };

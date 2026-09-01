@@ -428,12 +428,10 @@ pub fn run(
     _color_mode: ColorMode,
     build_opts: &BuildOptions,
 ) -> Outcome {
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read {}: {}", path.display(), error);
-            return Outcome::BuildFailed;
-        }
+    let Some(source) =
+        crate::cli::source::read_or_report(path, JsonCommand::Determinism, format, _color_mode)
+    else {
+        return Outcome::BuildFailed;
     };
 
     let (outcome, envelope) = check(path, &source, verify_mir, build_opts);

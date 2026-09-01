@@ -173,11 +173,16 @@ pub enum Commands {
 
     /// Run tests
     ///
-    /// Discovers and executes all `@test` functions under the specified directory.
+    /// Discovers and executes all `@test` functions under the specified directory or file.
     /// Exit codes: 0 on success, 1 when a test fails and no files were rejected,
     /// 2 when any file was rejected from the test run (rejected files take priority,
     /// indicating tests never ran). The JSON envelope's exitCode matches the process status.
     Test {
+        /// File or directory to test. Defaults to the current directory.
+        /// Mutually exclusive with --dir.
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+
         /// Filter tests by a substring in the path
         #[arg(long)]
         filter: Option<String>,
@@ -186,9 +191,9 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
         format: Format,
 
-        /// Directory to search for tests
-        #[arg(long, default_value = ".")]
-        dir: PathBuf,
+        /// Directory to search for tests (mutually exclusive with positional PATH)
+        #[arg(long, conflicts_with = "path")]
+        dir: Option<PathBuf>,
     },
 
     /// Serve JSON-RPC requests over stdin and stdout

@@ -1248,7 +1248,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::TargetChanging,
-    // BLD — Build and command-invocation (16 codes: 001-016)
+    // BLD — Build and command-invocation (20 codes: 001-020)
     "BLD",
     "001",
     BldUnknownDiagnosticCode,
@@ -1379,6 +1379,13 @@ diagnostics!(
     "019",
     BldFormatWouldLoseContent,
     "Formatting Would Lose Content",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "020",
+    BldNoRepairsApplied,
+    "No Repairs Applied",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

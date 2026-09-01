@@ -13,11 +13,14 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use crate::cli::{serialize_envelope, Format};
+use crate::cli::{serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonEdit};
-use crate::diagnostics::{DiagnosticCode, RefusedRepair};
+use crate::diagnostics::{DiagnosticCode, RefusedRepair, Severity};
 use crate::error::diagnostic::to_json;
 use crate::pipeline::Pipeline;
+
+/// Why an apply that wrote nothing is a failure rather than a no-op.
+const NO_REPAIRS_HELP: &str = "The file has errors, but none of them carry automatic repairs.";
 
 /// How the command finished, mapped onto a process exit code by the caller.
 pub enum Outcome {
@@ -95,22 +98,27 @@ impl ApplyReport {
 }
 
 /// Run the command against `path`.
-pub fn run(path: &Path, apply: bool, yes: bool, allow_risky: bool, format: Format) -> Outcome {
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read {}: {}", path.display(), error);
-            return Outcome::Failed;
-        }
+pub fn run(
+    path: &Path,
+    apply: bool,
+    yes: bool,
+    allow_risky: bool,
+    format: Format,
+    color_mode: ColorMode,
+) -> Outcome {
+    let Some(source) =
+        crate::cli::source::read_or_report(path, JsonCommand::Fix, format, color_mode)
+    else {
+        return Outcome::Failed;
     };
 
-    let (diagnostics, ok) = diagnose(path, &source);
+    let (diagnostics, _) = diagnose(path, &source);
 
     if apply {
-        return apply_repairs(path, &source, &diagnostics, yes, allow_risky, format, ok);
+        return apply_repairs(path, &source, &diagnostics, yes, allow_risky, format);
     }
 
-    report_plan(&diagnostics, &source, ok, format);
+    report_plan(&diagnostics, &source, format);
     Outcome::Succeeded
 }
 
@@ -218,9 +226,15 @@ pub fn apply(
     }
 }
 
-/// The envelope reporting the repairs the compiler found, edited nothing.
-pub fn plan_envelope(diagnostics: &[JsonDiagnostic], ok: bool) -> DiagnosticsEnvelope {
-    DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec()).with_exit_code(0)
+/// The envelope reporting the repairs the compiler found, having edited nothing.
+///
+/// `ok` reports that the plan was produced, not that the file compiles. Those
+/// are different questions and a caller needs both: the diagnostics the plan
+/// was built from travel in the same envelope, and `check` is the command that
+/// answers the second one. Reporting the file's verdict here would say `false`
+/// about a plan produced exactly as asked.
+pub fn plan_envelope(diagnostics: &[JsonDiagnostic]) -> DiagnosticsEnvelope {
+    DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec()).with_exit_code(0)
 }
 
 /// The envelope reporting what an apply did.
@@ -271,6 +285,53 @@ fn refusal_diagnostic() -> JsonDiagnostic {
     }
 }
 
+/// The diagnostic that stands for an apply which wrote nothing.
+///
+/// Reported the way a refusal is, so a consumer reads it as one more entry
+/// carrying a code rather than as text written for a person.
+fn no_repairs_diagnostic() -> JsonDiagnostic {
+    let code = DiagnosticCode::BldNoRepairsApplied;
+    JsonDiagnostic {
+        severity: code.severity().as_str().to_string(),
+        code: Some(code.to_string()),
+        message: code.title().to_string(),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: Some(NO_REPAIRS_HELP.to_string()),
+        fix_safety: Some(code.fix_safety().as_str().to_string()),
+        repair: None,
+        related: vec![],
+        preexisting: None,
+    }
+}
+
+/// Report an apply that was asked to write repairs and found none to write.
+///
+/// The errors that prompted the run travel with it, so the caller sees what
+/// was left unrepaired rather than only that nothing happened.
+fn report_no_repairs(diagnostics: &[JsonDiagnostic], format: Format) -> Outcome {
+    let code = DiagnosticCode::BldNoRepairsApplied;
+    let mut reported = diagnostics.to_vec();
+    reported.push(no_repairs_diagnostic());
+
+    match format {
+        Format::Json => {
+            let envelope =
+                DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
+            println!("{}", serialize_envelope(&envelope));
+        }
+        Format::Pretty => {
+            eprintln!("error[{}]: {}", code, code.title());
+            eprintln!("note: {}", NO_REPAIRS_HELP);
+        }
+    }
+    Outcome::Refused
+}
+
 /// The diagnostic describing why an apply stopped part-way.
 fn failure_diagnostic(failure: &ApplyFailure) -> JsonDiagnostic {
     let (refusal, help) = match failure {
@@ -302,10 +363,10 @@ fn failure_diagnostic(failure: &ApplyFailure) -> JsonDiagnostic {
 }
 
 /// Render the repairs without touching any file. Returns a string (JSON or pretty text).
-fn render_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: Format) -> String {
+fn render_plan(diagnostics: &[JsonDiagnostic], source: &str, format: Format) -> String {
     match format {
         Format::Json => {
-            let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec())
+            let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec())
                 .with_exit_code(0);
             serialize_envelope(&envelope)
         }
@@ -314,8 +375,8 @@ fn render_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: F
 }
 
 /// Print the repairs without touching any file.
-fn report_plan(diagnostics: &[JsonDiagnostic], source: &str, ok: bool, format: Format) {
-    let output = render_plan(diagnostics, source, ok, format);
+fn report_plan(diagnostics: &[JsonDiagnostic], source: &str, format: Format) {
+    let output = render_plan(diagnostics, source, format);
     println!("{}", output);
 }
 
@@ -376,7 +437,6 @@ fn apply_repairs(
     yes: bool,
     allow_risky: bool,
     format: Format,
-    ok: bool,
 ) -> Outcome {
     // A terminal to confirm at is a property of this transport, not of the
     // repairs, so the check belongs here rather than in the shared core.
@@ -407,8 +467,20 @@ fn apply_repairs(
     }
 
     if report.applied.is_empty() {
+        // Warnings never fail a command, so only an error left unrepaired makes
+        // an apply that wrote nothing a failure. A file carrying nothing but
+        // warnings had nothing to repair and is reported as the success it is.
+        let has_repairs = diagnostics.iter().any(|d| d.repair.is_some());
+        let has_errors = diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error.as_str());
+
+        if has_errors && !has_repairs {
+            return report_no_repairs(diagnostics, format);
+        }
+
         if format == Format::Json {
-            let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, ok, diagnostics.to_vec())
+            let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec())
                 .with_exit_code(0);
             println!("{}", serialize_envelope(&envelope));
         } else {

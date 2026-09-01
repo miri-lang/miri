@@ -261,12 +261,10 @@ impl FmtReport {
 /// With `check=true`, the file is not written; instead, a non-zero exit code
 /// is returned if the file is not already canonical.
 pub fn run(path: &Path, check: bool, format: Format, color_mode: ColorMode) -> Outcome {
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read {}: {}", path.display(), error);
-            return Outcome::Failed;
-        }
+    let Some(source) =
+        crate::cli::source::read_or_report(path, JsonCommand::Fmt, format, color_mode)
+    else {
+        return Outcome::Failed;
     };
 
     let mode = if check { Mode::Check } else { Mode::Write };
