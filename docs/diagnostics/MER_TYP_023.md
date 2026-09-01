@@ -2,6 +2,10 @@
 
 A double negation (`- - x`) is semantically equivalent to a single identity operation (`x`). This warning suggests simplifying the code by removing the redundant negation operator.
 
+## Messages
+
+- `Unnecessary double negation`
+
 ## Before
 
 ```miri

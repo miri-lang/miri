@@ -2,6 +2,10 @@
 
 An array element in a GPU-resident buffer has a value that exceeds the 32-bit signed range (`-2147483648` to `2147483647`). On the GPU, array elements are stored as 32-bit integers, so large literal values are silently truncated. To use wider integer types, explicitly specify the element type in the array constructor.
 
+## Messages
+
+- `Array element {index} has value {value} which exceeds i32 range [{min}, {max}]; use Array<i32, N> for explicit 32-bit GPU storage`
+
 ## Before
 
 ```miri

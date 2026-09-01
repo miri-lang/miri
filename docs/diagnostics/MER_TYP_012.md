@@ -2,6 +2,11 @@
 
 Attributes are a closed set of identifiers prefixed with `@`. The compiler defines a fixed list of valid attributes (`@test`, `@non_exhaustive`, `@must_use`, etc.). Using any other attribute name is rejected.
 
+## Messages
+
+- `Unknown attribute: @{attr}`
+- `Attributes are a closed set. Known attributes: {list}.`
+
 ## Before
 
 ```miri

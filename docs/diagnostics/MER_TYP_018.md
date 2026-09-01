@@ -2,6 +2,10 @@
 
 Some attributes require a companion attribute to be present on the same declaration. For example, `@ignore` and `@xfail` are only valid on functions already marked with `@test`. This error is raised when a dependent attribute is used without its required companion.
 
+## Messages
+
+- `Attribute @{attr} requires @{required} to be present on the same declaration`
+
 ## Before
 
 ```miri

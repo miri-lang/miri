@@ -1,6 +1,11 @@
 ## Rule
 
-An import statement references a type that does not exist in the target module. The compiler cannot locate the requested type name in the module's public exports.
+A type name used in the program cannot be resolved by the type checker. The type may be undeclared, or declared in a module that the program has not imported. When the type exists in a known module, the compiler provides a help message naming the module to import.
+
+## Messages
+
+- `Unknown type: {name}`
+- `Unknown type '{name}' in type declaration`
 
 ## Before
 
@@ -22,4 +27,4 @@ fn main()
 
 ## Reference
 
-[Imports and Module Loading](../reference/imports.md)
+[Types](../reference/types.md)

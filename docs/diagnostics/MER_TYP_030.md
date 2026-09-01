@@ -2,6 +2,14 @@
 
 This code covers a family of argument count mismatches. When a generic type is instantiated with the wrong number of type arguments (e.g., `Map<int>` instead of `Map<int, string>`), or when a function call provides duplicate named arguments, this error is raised.
 
+## Messages
+
+- `Missing argument for parameter '{param}'`
+- `Duplicate argument '{arg}'`
+- `{fn} expects exactly two arguments, but got {count}`
+- `Unknown argument '{arg}'`
+- `Missing argument for field '{field}'`
+
 ## Before
 
 ```miri

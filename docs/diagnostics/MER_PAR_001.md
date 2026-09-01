@@ -23,6 +23,10 @@ The last five change the shape of the code rather than its text, so they carry
 help but no repair: writing them would mean inventing code the author has not
 written.
 
+## Messages
+
+- `Expected {expected}, but found {actual}`
+
 ## Before
 
 ```miri

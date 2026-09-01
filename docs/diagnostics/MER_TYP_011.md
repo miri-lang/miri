@@ -2,6 +2,10 @@
 
 When matching on an enum declared with `@non_exhaustive` from outside its defining module, a `default:` arm must be present. This ensures the code remains compatible if the enum gains new variants in the future.
 
+## Messages
+
+- `` Match on `@non_exhaustive` enum '{enum}' requires a `default` arm outside its defining module '{module}' ``
+
 ## Before
 
 ```miri

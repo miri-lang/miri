@@ -2,6 +2,11 @@
 
 A cast operation attempted to convert between incompatible types. Not all type pairs can be cast; certain conversions are forbidden (e.g., casting a class to an unrelated type, or casting to a type that does not support it).
 
+## Messages
+
+- `cannot cast from non-numeric type '{source}' to '{target}'`
+- `cannot cast from '{source}' to non-numeric type '{target}'`
+
 ## Before
 
 ```miri

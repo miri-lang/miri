@@ -2,6 +2,10 @@
 
 A constant expression was evaluated at compile time and resulted in an invalid arithmetic operation. This includes division by zero, overflow in integer arithmetic, or other errors that prevent evaluation of constant expressions.
 
+## Messages
+
+- `Division by zero`
+
 ## Before
 
 ```miri

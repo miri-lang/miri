@@ -2,6 +2,10 @@
 
 A runtime function declaration specifies an unknown runtime name. Runtime functions use the `runtime` keyword to declare FFI bindings to a named runtime (e.g. `"core"`). The compiler only recognizes specific runtime names; an unknown or misspelled name causes this error.
 
+## Messages
+
+- `Unknown runtime '{name}'`
+
 ## Before
 
 ```miri

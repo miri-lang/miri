@@ -2,6 +2,14 @@
 
 A slice operation (e.g., `list[1..5]`) was performed on an invalid type or with invalid range bounds. Slicing requires an integer-typed `Range` and is only valid on sequences (lists, arrays, strings). The range bounds must be non-negative and in valid order.
 
+## Messages
+
+- `Slice range must be of integer type`
+- `Type {type} is not sliceable`
+- `Cannot slice heterogeneous tuple`
+- `Slice start index ({start}) is greater than end index ({end})`
+- `slice expects a bounded range argument, e.g. 'g.slice(0..10)'`
+
 ## Before
 
 ```miri

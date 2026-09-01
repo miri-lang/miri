@@ -556,6 +556,20 @@
             "null"
           ],
           "description": "Relative path to the reference page covering this area."
+        },
+        "referenceTitle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Title of the referenced page (from its # Heading). Absent or null if the page has no title or reference is absent."
+        },
+        "referenceSummary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Lead paragraph of the referenced page, before the first ## section heading. Absent or null if the page has no lead paragraph or reference is absent."
         }
       },
       "required": [

@@ -2,6 +2,10 @@
 
 An expression value of a type marked `@must_use` was discarded. The type author has declared that values of this type should never be ignored, usually because ignoring the value represents a logical error or a performance mistake.
 
+## Messages
+
+- `Unused value of type '{type}': this value must be used`
+
 ## Before
 
 ```miri

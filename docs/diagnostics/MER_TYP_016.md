@@ -2,6 +2,10 @@
 
 Regex literals use Miri's regex syntax. This error is raised when a regex literal contains an invalid pattern (such as mismatched parentheses, invalid escape sequences, or invalid flags).
 
+## Messages
+
+- `Invalid regex literal: {error}`
+
 ## Before
 
 ```miri

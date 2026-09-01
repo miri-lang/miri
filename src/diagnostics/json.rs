@@ -356,6 +356,12 @@ pub struct JsonExplanation {
     /// Relative path to the reference page covering this area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    /// Title of the referenced page (from its `# Heading`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_title: Option<String>,
+    /// Lead paragraph of the referenced page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_summary: Option<String>,
 }
 
 /// Test summary (mirrors TestSummary in camelCase).

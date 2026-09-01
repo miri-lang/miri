@@ -10,6 +10,11 @@ For `use local.module` imports, only the project root is searched. For bare `use
 
 If the module is in the standard library, ensure the module name matches the stdlib path exactly. If it is a user module, verify the file exists relative to the entry file's directory, and that the working directory does not prevent resolution.
 
+## Messages
+
+- `Failed to read module '{module}': {error}`
+- `Module '{module}' not found`
+
 ## Before
 
 ```miri

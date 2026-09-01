@@ -2,6 +2,12 @@
 
 An operation is not supported in GPU code. This code covers a family of GPU restrictions: functions cannot be recursive, return values cannot be optional, and static methods cannot be GPU kernels. These constraints exist because the GPU execution model does not support certain Miri features.
 
+## Messages
+
+- `recursion is not allowed in GPU code`
+- `Static methods cannot be GPU kernels`
+- `{target} returns an optional value, which cannot be represented in device code`
+
 ## Before
 
 ```miri

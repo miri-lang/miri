@@ -24,6 +24,12 @@ pub struct Explanation {
     pub example_after: Option<String>,
     /// The relative path to the reference documentation.
     pub reference: Option<String>,
+    /// The title of the referenced page (from `# Heading`).
+    pub reference_title: Option<String>,
+    /// The lead paragraph of the referenced page.
+    pub reference_summary: Option<String>,
+    /// Message shapes that this code can emit (backticked, from `## Messages` section).
+    pub messages: Vec<String>,
 }
 
 impl Explanation {
@@ -36,6 +42,14 @@ impl Explanation {
         let example_before = extract_section_opt(doc, "Before").map(|s| strip_code_fence(&s));
         let example_after = extract_section_opt(doc, "After").map(|s| strip_code_fence(&s));
         let reference = extract_reference_link(doc);
+        let messages = extract_messages(doc);
+
+        // Extract reference title and summary if a reference path exists
+        let (reference_title, reference_summary) = reference
+            .as_ref()
+            .and_then(|path| get_embedded_reference(path))
+            .map(extract_reference_title_and_summary)
+            .unwrap_or((None, None));
 
         Self {
             code,
@@ -43,6 +57,9 @@ impl Explanation {
             example_before,
             example_after,
             reference,
+            reference_title,
+            reference_summary,
+            messages,
         }
     }
 
@@ -60,6 +77,8 @@ impl Explanation {
             example_before: self.example_before.clone(),
             example_after: self.example_after.clone(),
             reference: self.reference.clone(),
+            reference_title: self.reference_title.clone(),
+            reference_summary: self.reference_summary.clone(),
         }
     }
 }
@@ -117,23 +136,220 @@ fn strip_code_fence(section: &str) -> String {
     }
 }
 
-/// Extract the relative path from a markdown link in the Reference section.
+/// Extract all markdown links from the Reference section.
+/// Looks for patterns like `[text](../reference/x.md)` or `[../reference/x.md](../reference/x.md)`.
+/// Returns all link destinations found, in order.
+#[allow(dead_code)]
+fn extract_all_reference_links(doc: &str) -> Vec<String> {
+    let section = match extract_section_opt(doc, "Reference") {
+        Some(s) => s,
+        None => return vec![],
+    };
+
+    let mut links = Vec::new();
+    for line in section.lines() {
+        for (idx, _) in line.match_indices("](") {
+            if let Some(end_pos) = line[idx + 2..].find(")") {
+                let path = &line[idx + 2..idx + 2 + end_pos];
+                if !path.is_empty() {
+                    links.push(path.to_string());
+                }
+            }
+        }
+    }
+    links
+}
+
+/// Extract the first markdown link from the Reference section (for backward compatibility).
 /// Looks for patterns like `[text](../reference/x.md)` or `[../reference/x.md](../reference/x.md)`.
 fn extract_reference_link(doc: &str) -> Option<String> {
     let section = extract_section_opt(doc, "Reference")?;
-
     for line in section.lines() {
-        if let Some(start) = line.find("](") {
-            if let Some(end) = line[start + 2..].find(")") {
-                let path = &line[start + 2..start + 2 + end];
+        for (idx, _) in line.match_indices("](") {
+            if let Some(end_pos) = line[idx + 2..].find(")") {
+                let path = &line[idx + 2..idx + 2 + end_pos];
                 if !path.is_empty() {
                     return Some(path.to_string());
                 }
             }
         }
     }
-
     None
+}
+
+/// Extract message shapes from the `## Messages` section.
+/// The section is a bullet list with backticked shapes: `- \`Unknown type: {name}\``.
+/// Each backticked shape is extracted and returned in order.
+///
+/// Uses CommonMark code-span rules: a span opens with N backticks and closes at
+/// exactly N backticks. If both the first and last character of the content are
+/// spaces, a single space is removed from each end (CommonMark spec).
+/// Empty shapes are silently skipped (never added to the list).
+fn extract_messages(doc: &str) -> Vec<String> {
+    let section = match extract_section_opt(doc, "Messages") {
+        Some(s) => s,
+        None => return vec![],
+    };
+
+    let mut messages = vec![];
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if let Some(after_dash) = trimmed.strip_prefix('-') {
+            let after_dash = after_dash.trim();
+            // Look for a code span: one or more backticks, followed by content,
+            // followed by the same number of backticks.
+            if let Some(shape) = extract_code_span(after_dash) {
+                // Only push non-empty shapes.
+                if !shape.is_empty() {
+                    messages.push(shape);
+                }
+            }
+        }
+    }
+    messages
+}
+
+/// Extract a CommonMark code span from the beginning of a string.
+/// Returns the content inside the backticks (with space trimming applied),
+/// or None if no valid code span is found.
+fn extract_code_span(text: &str) -> Option<String> {
+    // Count leading backticks.
+    let mut backtick_count = 0;
+    for ch in text.chars() {
+        if ch == '`' {
+            backtick_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    // If no leading backticks, no code span.
+    if backtick_count == 0 {
+        return None;
+    }
+
+    // The content starts after the opening backticks.
+    let content_start = backtick_count;
+    let rest = &text[content_start..];
+
+    // Look for the closing backtick sequence of the same length.
+    // Iterate via char_indices to stay at valid character boundaries.
+    for (pos, _) in rest.char_indices() {
+        if rest[pos..].starts_with(&"`".repeat(backtick_count)) {
+            // Check that this is a valid close (not followed by more backticks).
+            let close_end = pos + backtick_count;
+            let is_valid_close = close_end >= rest.len() || rest.as_bytes()[close_end] != b'`';
+            if is_valid_close {
+                // Found the closing backticks.
+                let mut content = rest[..pos].to_string();
+                // Apply CommonMark space trimming: if content starts and ends with a space,
+                // remove one space from each end.
+                if content.starts_with(' ') && content.ends_with(' ') && content.len() > 1 {
+                    content.remove(0);
+                    content.pop();
+                }
+                return Some(content);
+            }
+        }
+    }
+
+    // No closing backticks found.
+    None
+}
+
+/// Embedded reference pages (relative path -> markdown content).
+const EMBEDDED_REFERENCES: &[(&str, &str)] = &[
+    (
+        "../reference/build.md",
+        include_str!("../../docs/reference/build.md"),
+    ),
+    (
+        "../reference/codegen.md",
+        include_str!("../../docs/reference/codegen.md"),
+    ),
+    (
+        "../reference/imports.md",
+        include_str!("../../docs/reference/imports.md"),
+    ),
+    (
+        "../reference/lexer.md",
+        include_str!("../../docs/reference/lexer.md"),
+    ),
+    (
+        "../reference/mir.md",
+        include_str!("../../docs/reference/mir.md"),
+    ),
+    (
+        "../reference/naming.md",
+        include_str!("../../docs/reference/naming.md"),
+    ),
+    (
+        "../reference/ownership.md",
+        include_str!("../../docs/reference/ownership.md"),
+    ),
+    (
+        "../reference/parser.md",
+        include_str!("../../docs/reference/parser.md"),
+    ),
+    (
+        "../reference/runtime.md",
+        include_str!("../../docs/reference/runtime.md"),
+    ),
+    (
+        "../reference/targets.md",
+        include_str!("../../docs/reference/targets.md"),
+    ),
+    (
+        "../reference/types.md",
+        include_str!("../../docs/reference/types.md"),
+    ),
+];
+
+/// Get the content of an embedded reference page by its relative path.
+fn get_embedded_reference(path: &str) -> Option<&'static str> {
+    EMBEDDED_REFERENCES
+        .iter()
+        .find(|(ref_path, _)| ref_path == &path)
+        .map(|(_, content)| *content)
+}
+
+/// Extract the title (first `# ` line) and lead paragraph from reference markdown.
+/// Returns (title, summary) as Options. Both are Some only if both are found.
+fn extract_reference_title_and_summary(content: &str) -> (Option<String>, Option<String>) {
+    let mut title = None;
+    let mut summary = String::new();
+    let mut in_summary = false;
+
+    for line in content.lines() {
+        // Extract title from first `# ` line
+        if title.is_none() && line.starts_with("# ") {
+            title = Some(line[2..].trim().to_string());
+            in_summary = true;
+            continue;
+        }
+
+        // If we found a title, collect lines until we hit `## ` (section heading)
+        if in_summary {
+            if line.starts_with("## ") {
+                break;
+            }
+            // Skip empty lines at the start of the summary
+            if !summary.is_empty() || !line.trim().is_empty() {
+                if !summary.is_empty() {
+                    summary.push('\n');
+                }
+                summary.push_str(line);
+            }
+        }
+    }
+
+    let summary = summary.trim().to_string();
+    let summary = if summary.is_empty() {
+        None
+    } else {
+        Some(summary)
+    };
+    (title, summary)
 }
 
 #[cfg(test)]
@@ -173,5 +389,129 @@ mod tests {
         let doc = "## Reference\n\nNo link here.";
         let link = extract_reference_link(doc);
         assert_eq!(link, None);
+    }
+
+    #[test]
+    fn test_extract_messages_simple() {
+        let doc =
+            "## Messages\n\n- `Unknown type: {name}`\n- `Unknown type '{name}' in declaration`";
+        let messages = extract_messages(doc);
+        assert_eq!(
+            messages,
+            vec![
+                "Unknown type: {name}".to_string(),
+                "Unknown type '{name}' in declaration".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_extract_messages_missing() {
+        let doc = "## Rule\n\nSome rule.";
+        let messages = extract_messages(doc);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_embedded_reference_pages_have_title_and_summary() {
+        for (path, content) in EMBEDDED_REFERENCES {
+            let (title, summary) = extract_reference_title_and_summary(content);
+            assert!(
+                title.is_some() && !title.as_ref().unwrap().is_empty(),
+                "Reference page {} must have a non-empty title (# Heading)",
+                path
+            );
+            assert!(
+                summary.is_some() && !summary.as_ref().unwrap().is_empty(),
+                "Reference page {} must have a non-empty lead paragraph before the first ## section",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_reference_links_resolve_to_embedded_pages() {
+        use crate::diagnostics::DiagnosticCode;
+
+        for code in DiagnosticCode::all() {
+            let doc = code.doc();
+            let all_links = extract_all_reference_links(&doc);
+
+            for link in all_links {
+                assert!(
+                    get_embedded_reference(&link).is_some(),
+                    "Code {}: Reference link '{}' does not resolve to an embedded page",
+                    code.as_str(),
+                    link
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_code_span_single_backtick() {
+        let input = "`hello world`";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_double_backtick_with_inner_single() {
+        let input = "``hello `code` world``";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("hello `code` world".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_space_trimming_both_sides() {
+        let input = "` content with spaces `";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("content with spaces".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_space_trimming_only_one_side() {
+        let input = "`content `";
+        let result = extract_code_span(input);
+        // Only trailing space, no leading space, so no trimming
+        assert_eq!(result, Some("content ".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_no_closing_backticks() {
+        let input = "`unclosed";
+        let result = extract_code_span(input);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_code_span_no_leading_backtick() {
+        let input = "hello world";
+        let result = extract_code_span(input);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_code_span_multibyte_character_inside() {
+        // Test with em dash (U+2014, 3-byte UTF-8)
+        let input = "`—message`";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("—message".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_multibyte_character_after_opening() {
+        // Test with em dash immediately after opening backtick
+        let input = "`—after`";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("—after".to_string()));
+    }
+
+    #[test]
+    fn test_extract_code_span_multiple_multibyte_characters() {
+        // Test with multiple multi-byte characters and quotes
+        let input = "`café with quotes`";
+        let result = extract_code_span(input);
+        assert_eq!(result, Some("café with quotes".to_string()));
     }
 }

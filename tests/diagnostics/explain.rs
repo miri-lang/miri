@@ -161,18 +161,29 @@ fn test_section_headings_are_exactly_as_contracted() {
         // A retired code documents the rule and where to read more. It carries
         // no example pair, because the check it named no longer runs and there
         // is nothing to reproduce.
-        let expected: &[&str] = if code.is_reserved() {
-            &["Rule", "Reference"]
+        // A live code may have a Messages section (newly added documentation) between
+        // Rule and Before, which describes the shapes the code can emit.
+        if code.is_reserved() {
+            assert_eq!(
+                headings,
+                &["Rule", "Reference"],
+                "{} has the wrong sections; reserved codes must have Rule and Reference",
+                code.as_str()
+            );
         } else {
-            &["Rule", "Before", "After", "Reference"]
-        };
-
-        assert_eq!(
-            headings,
-            expected,
-            "{} has the wrong sections; the explain command parses these by name and order",
-            code.as_str()
-        );
+            // Live codes may optionally have a Messages section between Rule and Before
+            let valid_patterns = vec![
+                vec!["Rule", "Before", "After", "Reference"],
+                vec!["Rule", "Messages", "Before", "After", "Reference"],
+            ];
+            assert!(
+                valid_patterns.iter().any(|pattern| headings == *pattern),
+                "{} has the wrong sections; live codes must be [Rule, Before, After, Reference] \
+                 or [Rule, Messages, Before, After, Reference], got {:?}",
+                code.as_str(),
+                headings
+            );
+        }
     }
 }
 

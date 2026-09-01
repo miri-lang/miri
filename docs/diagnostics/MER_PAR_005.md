@@ -2,6 +2,10 @@
 
 An integer literal could not be parsed. The lexer tokenized the input as an integer, but parsing the token's value as a number failed. This may occur if the integer literal is malformed in a way the regex did not catch, or if there is an internal parsing error.
 
+## Messages
+
+- `Invalid Integer Literal`
+
 ## Before
 
 ```miri

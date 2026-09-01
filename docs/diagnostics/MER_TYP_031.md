@@ -2,6 +2,10 @@
 
 In function calls that use named arguments, all positional (unnamed) arguments must come before named arguments. This error is raised when a positional argument appears after a named argument.
 
+## Messages
+
+- `Positional arguments cannot follow named arguments`
+
 ## Before
 
 ```miri

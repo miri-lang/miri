@@ -106,7 +106,21 @@ fn render_pretty(explanation: &Explanation, color_mode: ColorMode) -> String {
         out.push_str(&section(&scheme, "After", after));
     }
     if let Some(reference) = &explanation.reference {
-        out.push_str(&section(&scheme, "Reference", reference));
+        // Convert ../reference/path.md to docs/reference/path.md for readability
+        let repo_relative_path = if reference.starts_with("../reference/") {
+            format!("docs/{}", &reference[3..]) // Skip the "../" prefix
+        } else {
+            reference.clone()
+        };
+
+        let ref_text = if let (Some(title), Some(summary)) =
+            (&explanation.reference_title, &explanation.reference_summary)
+        {
+            format!("{} ({})\n\n{}", title, repo_relative_path, summary)
+        } else {
+            repo_relative_path
+        };
+        out.push_str(&section(&scheme, "Reference", &ref_text));
     }
     out
 }

@@ -2,6 +2,10 @@
 
 When a function, class, or enum marked with `@deprecated` is used, this warning is raised to alert the user that the entity is going out of favor and should not be relied upon. The deprecation message provides guidance on what to use instead. Deprecated code still compiles and runs.
 
+## Messages
+
+- `function '{name}' is deprecated: {reason}`
+
 ## Before
 
 ```miri

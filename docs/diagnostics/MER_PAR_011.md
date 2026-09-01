@@ -2,6 +2,10 @@
 
 A `match` expression does not cover all possible cases. Every value the match expression could evaluate to must be handled. If there is no catch-all `_` pattern and some values are not explicitly matched, the compiler rejects the match as incomplete.
 
+## Messages
+
+- `Missing Match Branches`
+
 ## Before
 
 ```miri

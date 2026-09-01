@@ -2,6 +2,10 @@
 
 When a variable is declared with an explicit `Option<T>` type but is initialized with a non-null value (not `Option.None`), the `Option` wrapper is redundant. The compiler infers the correct type from the initializer.
 
+## Messages
+
+- `Unnecessary optional declaration for variable '{name}'`
+
 ## Before
 
 ```miri
