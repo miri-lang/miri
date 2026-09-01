@@ -1,0 +1,9 @@
+// expect-stdout: success
+// command: run
+// summary: Assertion passes at runtime when values match correctly.
+
+use system.testing
+
+fn main()
+    assert_eq(2, 2)
+    println("success")

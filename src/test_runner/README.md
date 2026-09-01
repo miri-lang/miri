@@ -57,6 +57,26 @@ Exit status carries the verdict. Zero means the test passed; non-zero means it f
 
 Leak checking is deliberately **not** enabled for test subprocesses. Several known leaks live in the standard library rather than in user code, and failing an honest test over one of them would say nothing about the test.
 
+## The structured assertion report
+
+Exit status and stderr say *that* a test failed; they do not say where, or what was compared. The line, the compared values and the user's message would all be trapped inside one prose string, which a tool then has to parse back apart.
+
+So a failing assertion also writes a structured record to the path named by `MIRI_ASSERT_REPORT_PATH`, which the runner sets to a fresh file per spawn. Every field is written as `key:<byte-len>:<raw bytes>` followed by a newline. The length prefix is what makes escaping unnecessary: `expected`, `actual`, `message` and the asserted expression's source text are arbitrary user strings that may hold colons and newlines, and a reader that honours the byte count can never be confused by their contents.
+
+The record is written by the test's own process, which is compiled from the user's source and is therefore **untrusted**. The reader treats it that way: it accepts only a regular file, caps the size, rejects an unknown or repeated key, checks every length against the bytes actually present, and does all of its arithmetic checked. Anything it dislikes is discarded whole. The prose `detail` is always populated regardless, so a missing, truncated or hostile record costs the structured fields and nothing else — the failure is still reported exactly as it would have been before.
+
+## What `miri test` returns
+
+The command's own exit status is distinct from the dispatcher statuses above, which belong to the individual test processes:
+
+| Status | Meaning |
+|---|---|
+| `0` | Every test passed, was ignored, or failed as its `@xfail` documents |
+| `1` | At least one test failed, and every discovered file ran |
+| `2` | At least one file was refused, whatever the tests that did run reported |
+
+A refusal outranks a failure because it means tests never ran at all, so the run is incomplete rather than merely red. The JSON envelope's `exitCode` is the same value the process returns; both are computed once, in one place, so the two cannot drift apart.
+
 ## Files a test file may not be
 
 Three shapes are refused outright rather than run, because each would otherwise fail silently:

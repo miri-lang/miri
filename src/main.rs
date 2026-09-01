@@ -534,6 +534,72 @@ fn rejection_reason_to_string(reason: miri::test_runner::RejectionReason) -> Str
     }
 }
 
+/// Build DiagnosticsEnvelope for test results in JSON format.
+fn build_test_envelope(
+    summary: &miri::test_runner::TestSummary,
+    elapsed_ms: u64,
+    exit_code: i32,
+) -> DiagnosticsEnvelope {
+    let json_results = summary
+        .results
+        .iter()
+        .map(|result| {
+            let (code, line, column, expression, expected, actual, message) = result
+                .failure
+                .as_ref()
+                .map(|f| {
+                    (
+                        Some(f.code.clone()),
+                        f.line,
+                        f.column,
+                        f.expression.clone(),
+                        f.expected.clone(),
+                        f.actual.clone(),
+                        f.message.clone(),
+                    )
+                })
+                .unwrap_or((None, None, None, None, None, None, None));
+
+            miri::diagnostics::json::JsonTestResult {
+                path: result.path.clone(),
+                name: result.name.clone(),
+                outcome: outcome_to_string(result.outcome),
+                detail: result.detail.clone(),
+                code,
+                line,
+                column,
+                expression,
+                expected,
+                actual,
+                message,
+            }
+        })
+        .collect();
+
+    let json_rejected = summary
+        .rejected_files
+        .iter()
+        .map(|rf| miri::diagnostics::json::JsonRejectedFile {
+            path: rf.path.clone(),
+            reason: rejection_reason_to_string(rf.reason),
+        })
+        .collect();
+
+    let json_summary = miri::diagnostics::json::JsonTestSummary {
+        total: summary.total,
+        passed: summary.passed,
+        failed: summary.failed,
+        ignored: summary.ignored,
+        results: json_results,
+        rejected_files: json_rejected,
+    };
+
+    DiagnosticsEnvelope::new(JsonCommand::Test, summary.is_green(), vec![])
+        .with_duration_ms(elapsed_ms)
+        .with_tests(json_summary)
+        .with_exit_code(exit_code)
+}
+
 fn run_tests(
     filter: Option<String>,
     format: Format,
@@ -546,50 +612,26 @@ fn run_tests(
     let summary = miri::test_runner::run_tests(&dir, filter.as_deref())?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    // Compute exit code once: rejected files take priority (incomplete run),
+    // then test failures, then success.
+    let exit_code = if !summary.rejected_files.is_empty() {
+        2 // Any rejected file means tests never ran
+    } else if summary.failed > 0 {
+        1 // Tests failed
+    } else {
+        0 // All green
+    };
+
     if format == Format::Json {
-        // Wrap test summary in DiagnosticsEnvelope
-        let json_results = summary
-            .results
-            .iter()
-            .map(|result| miri::diagnostics::json::JsonTestResult {
-                path: result.path.clone(),
-                name: result.name.clone(),
-                outcome: outcome_to_string(result.outcome),
-                detail: result.detail.clone(),
-            })
-            .collect();
-
-        let json_rejected = summary
-            .rejected_files
-            .iter()
-            .map(|rf| miri::diagnostics::json::JsonRejectedFile {
-                path: rf.path.clone(),
-                reason: rejection_reason_to_string(rf.reason),
-            })
-            .collect();
-
-        let json_summary = miri::diagnostics::json::JsonTestSummary {
-            total: summary.total,
-            passed: summary.passed,
-            failed: summary.failed,
-            ignored: summary.ignored,
-            results: json_results,
-            rejected_files: json_rejected,
-        };
-
-        let envelope = DiagnosticsEnvelope::new(JsonCommand::Test, summary.is_green(), vec![])
-            .with_duration_ms(elapsed_ms)
-            .with_tests(json_summary)
-            .with_exit_code(if summary.is_green() { 0 } else { 101 });
-
+        let envelope = build_test_envelope(&summary, elapsed_ms, exit_code);
         let output = miri::cli::serialize_envelope(&envelope);
         println!("{}", output);
     } else {
         print!("{}", miri::test_runner::report::format_pretty(&summary));
     }
 
-    if !summary.is_green() {
-        std::process::exit(101);
+    if exit_code != 0 {
+        std::process::exit(exit_code);
     }
 
     Ok(())

@@ -53,6 +53,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_PAR_021 | Triggers MER_PAR_021: Recursion Limit Exceeded. |
 | MER_RT_001 | Triggers MER_RT_001: an integer division whose divisor is zero at run time. |
 | MER_RT_002 | Triggers MER_RT_002: an integer remainder whose divisor is zero at run time. |
+| MER_RT_005 | Triggers MER_RT_005: an assertion failed at run time. |
 | MER_TAR_002 | Triggers MER_TAR_002: Unsupported Operation in GPU Code. |
 | MER_TAR_005 | Triggers MER_TAR_005: Invalid GPU Parallel Construct. |
 | MER_TAR_006 | Triggers MER_TAR_006: GPU Residency Violation. |
@@ -153,6 +154,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_PAR_021 | Accepted counterpart of MER_PAR_021: Recursion Limit Exceeded does not fire. |
 | MER_RT_001 | Accepted counterpart of MER_RT_001: a non-zero divisor divides normally. |
 | MER_RT_002 | Accepted counterpart of MER_RT_002: a non-zero divisor yields a remainder. |
+| MER_RT_005 | Accepted counterpart of MER_RT_005: an assertion passes at run time. |
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |

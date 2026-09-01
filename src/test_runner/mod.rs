@@ -23,7 +23,7 @@ pub use discovery::{RejectedFile, RejectionReason};
 /// `@ignore` and `@xfail` both require a reason argument, so the presence of a
 /// reason *is* the marker — there is no separate boolean to fall out of step
 /// with it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TestMarker {
     pub name: String,
     pub ignore_reason: Option<String>,
@@ -72,6 +72,19 @@ impl Outcome {
     }
 }
 
+/// Structured information about an assertion failure (read from sidecar file).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssertionFailure {
+    pub code: String,
+    pub kind: String,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub expression: Option<String>,
+    pub expected: Option<String>,
+    pub actual: Option<String>,
+    pub message: Option<String>,
+}
+
 /// The result of one test, ready to report.
 #[derive(Debug, Clone, Serialize)]
 pub struct TestResult {
@@ -80,6 +93,9 @@ pub struct TestResult {
     pub outcome: Outcome,
     /// The ignore/xfail reason, the captured stderr, or the fault description.
     pub detail: Option<String>,
+    /// Structured assertion failure information (if available).
+    #[serde(skip)]
+    pub failure: Option<AssertionFailure>,
 }
 
 /// Everything one `miri test` invocation produced.
@@ -169,6 +185,8 @@ fn run_file(
     display: &str,
     selected: &[&TestMarker],
 ) -> Vec<TestResult> {
+    use tempfile::TempDir;
+
     let to_run: Vec<TestMarker> = selected
         .iter()
         .filter(|test| !test.is_ignored())
@@ -193,14 +211,30 @@ fn run_file(
         }
     };
 
+    // Create a temporary directory for sidecar files (or None if creation fails)
+    let temp_dir = TempDir::new().ok();
+
+    run_selected_tests(selected, display, artifact.executable(), temp_dir.as_ref())
+}
+
+/// Run selected tests with or without sidecar support.
+/// If temp_dir is None, execution proceeds without sidecar files.
+fn run_selected_tests(
+    selected: &[&TestMarker],
+    display: &str,
+    executable: &std::path::Path,
+    temp_dir: Option<&tempfile::TempDir>,
+) -> Vec<TestResult> {
     selected
         .iter()
         .map(|test| {
             if test.is_ignored() {
                 return ignored_result(test, display);
             }
-            let execution = runner::execute_test(artifact.executable(), &test.name);
-            runner::to_test_result(display, test, execution)
+            let sidecar_path = temp_dir.map(|d| d.path().join(format!("assert_{}", test.name)));
+            let (execution, failure) =
+                runner::execute_test(executable, &test.name, sidecar_path.as_deref());
+            runner::to_test_result(display, test, execution, failure)
         })
         .collect()
 }
@@ -211,6 +245,7 @@ fn ignored_result(test: &TestMarker, display: &str) -> TestResult {
         name: test.name.clone(),
         outcome: Outcome::Ignored,
         detail: test.ignore_reason.clone(),
+        failure: None,
     }
 }
 
@@ -223,6 +258,7 @@ fn compile_failure_result(test: &TestMarker, display: &str, error: &str) -> Test
         name: test.name.clone(),
         outcome: Outcome::Failed,
         detail: Some(error.to_string()),
+        failure: None,
     }
 }
 
@@ -257,6 +293,7 @@ mod tests {
             name: name.to_string(),
             outcome,
             detail: None,
+            failure: None,
         }
     }
 

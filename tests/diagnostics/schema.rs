@@ -187,6 +187,13 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 name: "test_addition".to_string(),
                 outcome: "passed".to_string(),
                 detail: Some("Completed in 5ms".to_string()),
+                code: Some("MER_RT_005".to_string()),
+                line: Some(10),
+                column: Some(5),
+                expected: Some("42".to_string()),
+                actual: Some("41".to_string()),
+                expression: Some("x == 42".to_string()),
+                message: Some("off by one".to_string()),
             }],
             rejected_files: vec![JsonRejectedFile {
                 path: "tests/unparseable.mi".to_string(),

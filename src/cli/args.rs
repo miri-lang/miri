@@ -172,6 +172,11 @@ pub enum Commands {
     },
 
     /// Run tests
+    ///
+    /// Discovers and executes all `@test` functions under the specified directory.
+    /// Exit codes: 0 on success, 1 when a test fails and no files were rejected,
+    /// 2 when any file was rejected from the test run (rejected files take priority,
+    /// indicating tests never ran). The JSON envelope's exitCode matches the process status.
     Test {
         /// Filter tests by a substring in the path
         #[arg(long)]

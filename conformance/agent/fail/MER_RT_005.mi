@@ -1,0 +1,8 @@
+// expect: MER_RT_005
+// command: run
+// summary: Triggers MER_RT_005: an assertion failed at runtime when values do not match.
+
+use system.testing
+
+fn main()
+    assert_eq(1, 2)

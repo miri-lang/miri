@@ -105,6 +105,7 @@ mod tests {
             name: name.to_string(),
             outcome,
             detail: detail.map(str::to_string),
+            failure: None,
         }
     }
 

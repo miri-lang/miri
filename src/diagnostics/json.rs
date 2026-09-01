@@ -383,6 +383,27 @@ pub struct JsonTestResult {
     /// The ignore/xfail reason, the captured stderr, or the fault description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Diagnostic code for assertion failures (e.g., "MER_RT_005").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// 1-indexed line number where the assertion failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// 1-indexed column number where the assertion failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    /// For assert_eq, the expected value; for assert_panics, the expected message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    /// For assert_eq, the actual value; for assert_panics, the caught message; for assert_ne, the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    /// The expression text for bare assert; the user-provided message for other assertions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    /// Optional user-provided message for the assertion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// A file rejected during test discovery, and why.
