@@ -963,3 +963,98 @@ fn test_the_miri_spellings_of_the_recognised_constructs_are_left_alone() {
         );
     }
 }
+
+/// An apply that was asked to write repairs and wrote none, because the errors
+/// in the file carry none, is a failure. Reporting it as success would tell a
+/// caller the file was repaired when it was not.
+#[test]
+fn test_apply_with_no_repair_for_an_error_exits_non_zero() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("main.mi");
+    std::fs::write(&path, "fn main()\n    undefined_thing()\n").unwrap();
+
+    let output = miri_cmd()
+        .arg("fix")
+        .arg(&path)
+        .arg("--apply")
+        .arg("--yes")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap())
+            .expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["exitCode"], 1);
+    assert_eq!(output.status.code(), Some(1));
+    let codes: Vec<&str> = parsed["diagnostics"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|d| d["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"MER_BLD_020"),
+        "the refusal names itself: {:?}",
+        codes
+    );
+}
+
+/// A file with nothing wrong with it had nothing to repair, so an apply that
+/// writes nothing did exactly what was asked and succeeds.
+#[test]
+fn test_apply_on_a_clean_file_succeeds() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("main.mi");
+    std::fs::write(&path, "fn main()\n    println(\"hi\")\n").unwrap();
+
+    let output = miri_cmd()
+        .arg("fix")
+        .arg(&path)
+        .arg("--apply")
+        .arg("--yes")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap())
+            .expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["exitCode"], 0);
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// A plan is reported as the success it is. Whether the file compiles is a
+/// different question, answered by the diagnostics the plan was built from.
+#[test]
+fn test_plan_for_a_broken_file_reports_the_plan_as_produced() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("main.mi");
+    std::fs::write(&path, "fn main()\n    undefined_thing()\n").unwrap();
+
+    let output = miri_cmd()
+        .arg("fix")
+        .arg(&path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap())
+            .expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["ok"], true, "the plan was produced");
+    assert_eq!(parsed["exitCode"], 0);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !parsed["diagnostics"].as_array().expect("a list").is_empty(),
+        "the file's errors still travel in the envelope"
+    );
+}

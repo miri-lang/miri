@@ -136,12 +136,10 @@ impl CheckReport {
 /// Diagnostics go to stderr and the closing summary to stdout, so a caller can
 /// keep the two apart.
 pub fn run(path: &Path, format: Format, verify_mir: bool, color_mode: ColorMode) -> Outcome {
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read {}: {}", path.display(), error);
-            return Outcome::Failed;
-        }
+    let Some(source) =
+        crate::cli::source::read_or_report(path, JsonCommand::Check, format, color_mode)
+    else {
+        return Outcome::Failed;
     };
 
     let report = check(path, &source, verify_mir);

@@ -143,16 +143,21 @@ impl TestSummary {
     }
 }
 
-/// Discover and run every `@test` function under `dir`.
+/// Discover and run every `@test` function `target` names.
 ///
-/// `filter` keeps only tests whose `<path>::<name>` contains the substring.
-/// Formatting is delegated to the caller (CLI layer in main.rs).
-pub fn run_tests(dir: &Path, filter: Option<&str>) -> std::io::Result<TestSummary> {
-    let discovered = discovery::discover(dir)?;
+/// `target` is either one file or a directory to walk. `filter` keeps only
+/// tests whose `<path>::<name>` contains the substring; it narrows what either
+/// form turned up rather than being how a single file is selected, so naming
+/// `a.mi` cannot also run the `xa.mi` beside it.
+///
+/// Formatting is delegated to the caller.
+pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSummary> {
+    let discovered = discovery::discover(target)?;
+    let root = discovery::root_of(target);
     let mut results = Vec::new();
 
     for file in discovered.files {
-        let display = display_path(&file.path, dir);
+        let display = display_path(&file.path, &root);
         let selected = select_tests(&file.tests, &display, filter);
         if selected.is_empty() {
             continue;

@@ -919,3 +919,162 @@ fn test_column_scales_with_indent() {
         "column should point to start of assert_eq at 12-space indent (1-indexed)"
     );
 }
+
+/// A run that names one file runs that file and nothing else. A sibling whose
+/// name contains the named one is not swept in, which is what a caller asked
+/// for by naming a file rather than the directory holding it.
+#[test]
+fn test_a_named_file_runs_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("a.mi"),
+        "use system.testing\n\n@test\nfn test_alpha()\n    assert_eq(1, 1)\n",
+    )
+    .unwrap();
+    // `xa.mi` contains `a.mi`, so selecting by substring would run it too.
+    std::fs::write(
+        directory.path().join("xa.mi"),
+        "use system.testing\n\n@test\nfn test_gamma()\n    assert_eq(3, 3)\n",
+    )
+    .unwrap();
+
+    let output = miri_cmd()
+        .arg("test")
+        .arg(directory.path().join("a.mi"))
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("the test command runs");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("the output parses as JSON");
+
+    assert_eq!(parsed["tests"]["total"], 1);
+    assert_eq!(parsed["tests"]["passed"], 1);
+    assert_eq!(parsed["tests"]["results"][0]["name"], "test_alpha");
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// The directory form still walks, whether it is named positionally or with
+/// the older `--dir` spelling.
+#[test]
+fn test_a_named_directory_walks_the_way_dir_does() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("a.mi"),
+        "use system.testing\n\n@test\nfn test_alpha()\n    assert_eq(1, 1)\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("b.mi"),
+        "use system.testing\n\n@test\nfn test_beta()\n    assert_eq(2, 2)\n",
+    )
+    .unwrap();
+
+    let total = |args: &[&str]| -> i64 {
+        let output = miri_cmd()
+            .args(args)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .expect("the test command runs");
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+                .expect("the output parses as JSON");
+        parsed["tests"]["total"].as_i64().expect("a count")
+    };
+
+    let path = directory.path().to_str().expect("a printable path");
+    assert_eq!(total(&["test", path]), 2);
+    assert_eq!(total(&["test", "--dir", path]), 2);
+}
+
+/// A named file that cannot host a dispatcher is still a rejection, and a
+/// rejection still outranks everything: the tests in it never ran, so the run
+/// is incomplete rather than merely red.
+#[test]
+fn test_a_named_file_that_is_rejected_exits_two() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("broken.mi");
+    std::fs::write(
+        &path,
+        "use system.testing\n\n@test\nfn test_broken(\n    assert(1 == 1)\n",
+    )
+    .unwrap();
+
+    let output = miri_cmd()
+        .arg("test")
+        .arg(&path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("the test command runs");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("the output parses as JSON");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["exitCode"], 2);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(parsed["tests"]["rejectedFiles"][0]["reason"], "unparseable");
+}
+
+/// A path that names nothing discovers no tests, and a run of no tests is
+/// green. Reporting a mistyped path as a passing suite is the one answer this
+/// command must not give.
+#[test]
+fn test_a_path_that_does_not_exist_is_reported_not_green() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("absent.mi");
+
+    let output = miri_cmd()
+        .arg("test")
+        .arg(&missing)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("the test command runs");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("the output parses as JSON");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["diagnostics"][0]["code"], "MER_BLD_008");
+    assert_eq!(output.status.code(), Some(1));
+}
+
+/// Naming one file still resolves its imports from the directory holding it,
+/// so a test that uses a sibling module runs the same way it does under a walk.
+#[test]
+fn test_a_named_file_resolves_its_sibling_imports() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("util.mi"),
+        "public fn helper() int:\n    return 42\n",
+    )
+    .unwrap();
+    let path = directory.path().join("main.mi");
+    std::fs::write(
+        &path,
+        "use system.testing\nuse util\n\n@test\nfn test_helper()\n    assert_eq(helper(), 42)\n",
+    )
+    .unwrap();
+
+    let output = miri_cmd()
+        .arg("test")
+        .arg(&path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("the test command runs");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("the output parses as JSON");
+
+    assert_eq!(parsed["tests"]["passed"], 1, "{}", parsed);
+    assert_eq!(output.status.code(), Some(0));
+}

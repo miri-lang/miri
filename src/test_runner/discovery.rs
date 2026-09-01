@@ -72,14 +72,42 @@ pub struct Discovered {
     pub rejected: Vec<RejectedFile>,
 }
 
-/// Walk `dir` for `.mi` files declaring `@test` functions.
+/// The directory a run's results are named relative to.
+///
+/// A run pointed at one file still names it the way a walk of its directory
+/// would, so the same test reads as the same string whichever way it was asked
+/// for and a filter written against one form matches the other.
+pub fn root_of(target: &Path) -> PathBuf {
+    if target.is_file() {
+        return target
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+    target.to_path_buf()
+}
+
+/// Find the `.mi` files declaring `@test` functions that `target` names.
+///
+/// `target` is either one file or a directory to walk. Naming a file runs that
+/// file and nothing else: a sibling is neither compiled nor able to reject the
+/// run, which is what a caller asked for by naming one file rather than the
+/// directory holding it. Selecting the file this way rather than by matching
+/// its name keeps a sibling whose name contains it from being swept in.
 ///
 /// A file that neither parses nor mentions `@test` is skipped in silence: it is
 /// simply not a test file, and `miri check` is the tool for its syntax errors.
-pub fn discover(dir: &Path) -> std::io::Result<Discovered> {
+pub fn discover(target: &Path) -> std::io::Result<Discovered> {
     let mut discovered = Discovered::default();
+    let root = root_of(target);
 
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    if target.is_file() {
+        let source = std::fs::read_to_string(target)?;
+        classify(target, source, &root, &mut discovered);
+        return Ok(discovered);
+    }
+
+    for entry in WalkDir::new(target).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.extension().is_none_or(|ext| ext != "mi") {
             continue;
@@ -87,7 +115,7 @@ pub fn discover(dir: &Path) -> std::io::Result<Discovered> {
         let Ok(source) = std::fs::read_to_string(path) else {
             continue;
         };
-        classify(path, source, dir, &mut discovered);
+        classify(path, source, &root, &mut discovered);
     }
 
     Ok(discovered)

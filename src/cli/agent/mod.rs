@@ -662,9 +662,9 @@ fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -
         Err(error) => return unreadable(id, &path, &error),
     };
 
-    let (diagnostics, ok) = fix::diagnose(&path, &source);
+    let (diagnostics, _) = fix::diagnose(&path, &source);
     if !apply {
-        return serialize(id, &fix::plan_envelope(&diagnostics, ok));
+        return serialize(id, &fix::plan_envelope(&diagnostics));
     }
 
     let allow_risky = request

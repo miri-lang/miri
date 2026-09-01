@@ -11,7 +11,7 @@
     },
     "ok": {
       "type": "boolean",
-      "description": "True if the command succeeded; false if there were errors that prevented completion."
+      "description": "Whether the command did what was asked. Semantics are per-command; see the per-command table in agent-protocol.md."
     },
     "command": {
       "type": "string",
@@ -48,7 +48,7 @@
         "integer",
         "null"
       ],
-      "description": "Process exit code (for build/run/test commands only). Absent or null for check command."
+      "description": "Process exit code. Semantics vary by command: for run, this is the program's exit status; for other commands, 0 means ok, non-zero means failed. See the per-command table in agent-protocol.md."
     },
     "stdoutTail": {
       "type": [

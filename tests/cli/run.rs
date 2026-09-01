@@ -32,7 +32,51 @@ fn test_run_file_not_found() {
         .arg("non_existent_file.mi")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("Failed to read file"));
+        .stderr(predicates::str::contains("MER_BLD_008"))
+        .stderr(predicates::str::contains("could not read"));
+}
+
+/// A path that names a directory is a coded diagnostic, not an unhandled
+/// operating-system error: the caller pointed the command at a project instead
+/// of a file, and the help line is what says so.
+#[test]
+fn test_run_directory_is_reported_with_a_code_and_help() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let mut cmd = miri_cmd();
+    cmd.arg("run")
+        .arg(directory.path())
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("MER_BLD_008"))
+        .stderr(predicates::str::contains("it is a directory, not a file"))
+        .stderr(predicates::str::contains("name a single .mi file"));
+}
+
+/// The same failure answers a machine in the shape every other command
+/// promises, rather than as a bare line of prose on stderr.
+#[test]
+fn test_run_directory_reports_an_envelope_in_json() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let output = miri_cmd()
+        .arg("run")
+        .arg(directory.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "run");
+    assert_eq!(parsed["exitCode"], 1);
+    assert_eq!(parsed["diagnostics"][0]["code"], "MER_BLD_008");
+    assert!(parsed["diagnostics"][0]["help"].is_string());
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]

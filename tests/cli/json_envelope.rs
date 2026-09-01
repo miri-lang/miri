@@ -317,7 +317,7 @@ fn main() int
 }
 
 #[test]
-fn test_run_format_json_runtime_failure() {
+fn test_run_format_json_program_exit_status() {
     let runtime_fail = r#"fn main() int
     42
 "#;
@@ -338,8 +338,8 @@ fn test_run_format_json_runtime_failure() {
 
     assert_eq!(parsed["schemaVersion"], 1);
     assert_eq!(
-        parsed["ok"], false,
-        "ok should be false when program returns non-zero"
+        parsed["ok"], true,
+        "ok should be true when compile succeeded (program's own exit status is not a compiler failure)"
     );
     assert_eq!(parsed["command"], "run");
     assert_eq!(
@@ -350,7 +350,7 @@ fn test_run_format_json_runtime_failure() {
     let diags = parsed["diagnostics"].as_array().unwrap();
     assert!(
         diags.is_empty(),
-        "diagnostics should be empty for runtime failure"
+        "diagnostics should be empty when compile succeeds"
     );
     assert_eq!(
         output.status.code(),
@@ -628,4 +628,115 @@ fn test_test_json_round_trip() {
     assert_eq!(envelope.schema_version, 1);
     assert_eq!(envelope.command, miri::diagnostics::json::JsonCommand::Test);
     assert!(envelope.tests.is_some());
+}
+
+/// A directory named where a file belongs is reported under one registry code
+/// by every command that reads an input file, so a tool learns the same thing
+/// however it entered the compiler.
+#[test]
+fn test_check_directory_is_reported_under_one_code() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let output = miri_cmd()
+        .arg("check")
+        .arg(directory.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "check");
+    assert_eq!(parsed["exitCode"], 1);
+    assert_eq!(parsed["diagnostics"][0]["code"], "MER_BLD_008");
+    assert_eq!(output.status.code(), Some(1));
+}
+
+/// A trap is what makes a run's `ok` false. The program's own exit status does
+/// not, which is what lets a caller tell a compiler rejection from a program
+/// that chose to fail.
+#[test]
+fn test_run_trap_is_not_ok_while_a_chosen_status_is() {
+    let trapped = create_test_file(
+        r#"fn main() int
+    var x = 0
+    10 / x
+"#,
+    );
+    let chosen = create_test_file(
+        r#"fn main() int
+    7
+"#,
+    );
+
+    let envelope = |path: &str| -> (serde_json::Value, Option<i32>) {
+        let output = miri_cmd()
+            .arg("run")
+            .arg(path)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .unwrap();
+        let status = output.status.code();
+        let parsed = serde_json::from_str(&String::from_utf8(output.stdout).unwrap())
+            .expect("stdout should be valid JSON");
+        (parsed, status)
+    };
+
+    let (trapped, trapped_status) = envelope(trapped.path().to_str().unwrap());
+    assert_eq!(trapped["ok"], false, "a runtime trap makes ok false");
+    assert_eq!(trapped["diagnostics"][0]["code"], "MER_RT_001");
+    assert_eq!(trapped_status, Some(1));
+
+    let (chosen, chosen_status) = envelope(chosen.path().to_str().unwrap());
+    assert_eq!(
+        chosen["ok"], true,
+        "a program's own status is not a compiler failure"
+    );
+    assert_eq!(chosen["exitCode"], 7);
+    assert_eq!(
+        chosen_status,
+        Some(7),
+        "the process carries the program's status"
+    );
+}
+
+/// Every command that reads an input file reports a directory the same way, so
+/// a tool learns the same thing whichever one it drove. The shared seam is what
+/// makes that true; this pins it for the commands that use it.
+#[test]
+fn test_every_reading_command_reports_a_directory_alike() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().to_str().expect("a printable path");
+
+    for command in ["run", "build", "check", "fmt", "fix"] {
+        let output = miri_cmd()
+            .arg(command)
+            .arg(path)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .unwrap();
+
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|_| panic!("`{}` should answer with an envelope: {}", command, stdout));
+
+        assert_eq!(parsed["ok"], false, "`{}` reports the refusal", command);
+        assert_eq!(
+            parsed["diagnostics"][0]["code"], "MER_BLD_008",
+            "`{}` names the code",
+            command
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`{}` exits non-zero",
+            command
+        );
+    }
 }

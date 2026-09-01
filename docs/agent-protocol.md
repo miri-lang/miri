@@ -63,6 +63,25 @@ not serve, or omitted a parameter.
 | `-32603` | The compiler could not act on a request it understood. |
 | `-32800` | The request was withdrawn before it started. |
 
+## The `ok` and `exitCode` contract
+
+**Governing invariant**: `ok` reports whether the compiler did what was asked. `exitCode` is the process status — which for `run` is the program's own.
+
+| Command | `ok: true` when | `exitCode` |
+|---|---|---|
+| `check` | the frontend reported no errors (warnings never make it false) | 0 / 1 |
+| `build` | the artifact was produced | 0 / 1 |
+| `run` | the program compiled **and** was not killed by a runtime trap | the program's own status; 1 when the compile failed |
+| `test` | nothing failed and no file was rejected | 0 green / 1 failure / 2 rejected file |
+| `fix --plan` | the plan was produced (**always true when the file was read**) | 0 |
+| `fix --apply` | every repair this run owned was written, or there was nothing to repair | 0 / 1 |
+| `fmt` | the file is canonical, or was rewritten; with `--check`, already canonical | 0 / 1 |
+| `view` | the requested source was read | 0 / 1 |
+| `patch` | the edits validated and were applied | 0 / 1 |
+| `explain` | the code is registered | 0 / 1 |
+| `determinism` | the artifacts are byte-identical | 0 / 1 |
+| `skill` | the operation completed | 0 / 1 |
+
 ## Methods
 
 ### `initialize`

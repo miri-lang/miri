@@ -13,6 +13,7 @@ pub mod fmt;
 pub mod patch;
 pub mod resolve;
 pub mod skill;
+pub mod source;
 pub mod token_align;
 pub mod version;
 pub mod view;

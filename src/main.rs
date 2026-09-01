@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
-use std::fs;
 use std::path::PathBuf;
 
 use miri::cli::skill;
@@ -115,12 +114,21 @@ fn run_command(cli: Cli) -> Result<()> {
                 yes,
                 allow_risky,
                 format,
-            } => fix_file(path, apply, yes, allow_risky, format),
+            } => fix_file(path, apply, yes, allow_risky, format, cli.color),
             Commands::Test {
+                path,
                 filter,
                 format,
                 dir,
-            } => run_tests(filter, format, dir, cli.verbose, cli.verify_mir, cli.color),
+            } => run_tests(
+                path,
+                filter,
+                format,
+                dir,
+                cli.verbose,
+                cli.verify_mir,
+                cli.color,
+            ),
             Commands::Determinism(cmd) => match cmd {
                 DeterminismCommand::Check {
                     path,
@@ -161,8 +169,11 @@ fn run_file(
     verify_mir: bool,
     color_mode: ColorMode,
 ) -> Result<()> {
-    let source = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+    let Some(source) =
+        miri::cli::source::read_or_report(&path, JsonCommand::Run, format, color_mode)
+    else {
+        std::process::exit(1);
+    };
 
     let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
     // Canonicalize first so that a bare filename like "main.mi" resolves to an
@@ -179,56 +190,13 @@ fn run_file(
         // In JSON mode, capture output and emit envelope
         match pipeline.run_and_capture(&source, &program_args) {
             Ok((exit_code, stdout_bytes, stderr_bytes, trap_code)) => {
-                let elapsed_ms = start.elapsed().as_millis() as u64;
-
-                let (stdout_tail, stdout_truncated) = tail_output(&stdout_bytes, 8192);
-                let (stderr_tail, stderr_truncated) = tail_output(&stderr_bytes, 8192);
-
-                // A trap report is only meaningful for a run that actually died.
-                // A program that completed successfully cannot be carrying a
-                // trap, so its report is ignored rather than allowed to turn a
-                // successful run into a failed one.
-                let trap_code = trap_code.filter(|_| exit_code != 0);
-                let has_trap = trap_code.is_some();
-                let diagnostics = if let Some(code) = trap_code {
-                    let message = match code.as_str() {
-                        "MER_RT_001" => "division by zero",
-                        "MER_RT_002" => "remainder by zero",
-                        _ => "runtime trap",
-                    };
-                    vec![JsonDiagnostic {
-                        severity: "error".to_string(),
-                        code: Some(code),
-                        message: message.to_string(),
-                        path: None,
-                        line: None,
-                        column: None,
-                        length: None,
-                        expected: None,
-                        actual: None,
-                        help: None,
-                        fix_safety: None,
-                        repair: None,
-                        related: vec![],
-                        preexisting: None,
-                    }]
-                } else {
-                    vec![]
-                };
-
-                let envelope = DiagnosticsEnvelope::new(
-                    JsonCommand::Run,
-                    exit_code == 0 && !has_trap,
-                    diagnostics,
-                )
-                .with_exit_code(exit_code)
-                .with_duration_ms(elapsed_ms)
-                .with_stdout(stdout_tail, stdout_truncated)
-                .with_stderr(stderr_tail, stderr_truncated);
-
-                let output = miri::cli::serialize_envelope(&envelope);
-                println!("{}", output);
-
+                let exit_code = report_run(
+                    exit_code,
+                    &stdout_bytes,
+                    &stderr_bytes,
+                    trap_code,
+                    start.elapsed().as_millis() as u64,
+                );
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }
@@ -274,6 +242,76 @@ fn run_file(
     }
 }
 
+/// Write the envelope for a program that compiled and ran, and say how it left.
+///
+/// `ok` reports the run rather than the status the program chose: a `main`
+/// returning 7 succeeded at being compiled and run, and a caller that wants
+/// that number reads `exitCode`. What makes it false is the program dying
+/// rather than finishing — a runtime trap, or a death that produced no status
+/// of its own at all.
+fn report_run(
+    exit_code: i32,
+    stdout_bytes: &[u8],
+    stderr_bytes: &[u8],
+    trap_code: Option<String>,
+    elapsed_ms: u64,
+) -> i32 {
+    let (stdout_tail, stdout_truncated) = tail_output(stdout_bytes, 8192);
+    let (stderr_tail, stderr_truncated) = tail_output(stderr_bytes, 8192);
+
+    // A trap report is only meaningful for a run that actually died. A program
+    // that completed successfully cannot be carrying a trap, so its report is
+    // ignored rather than allowed to turn a successful run into a failed one.
+    let trap_code = trap_code.filter(|_| exit_code != 0);
+    let has_trap = trap_code.is_some();
+    let diagnostics = trap_code.map(trap_diagnostic).into_iter().collect();
+    let completed = !has_trap && exit_code != NO_EXIT_STATUS;
+
+    let envelope = DiagnosticsEnvelope::new(JsonCommand::Run, completed, diagnostics)
+        .with_exit_code(exit_code)
+        .with_duration_ms(elapsed_ms)
+        .with_stdout(stdout_tail, stdout_truncated)
+        .with_stderr(stderr_tail, stderr_truncated);
+
+    println!("{}", miri::cli::serialize_envelope(&envelope));
+    exit_code
+}
+
+/// The diagnostic a runtime trap is reported as.
+///
+/// The trap channel carries only the code, so the sentence a reader sees is
+/// looked up from it here rather than travelling with it.
+fn trap_diagnostic(code: String) -> JsonDiagnostic {
+    let message = match code.as_str() {
+        "MER_RT_001" => "division by zero",
+        "MER_RT_002" => "remainder by zero",
+        _ => "runtime trap",
+    };
+    JsonDiagnostic {
+        severity: "error".to_string(),
+        code: Some(code),
+        message: message.to_string(),
+        path: None,
+        line: None,
+        column: None,
+        length: None,
+        expected: None,
+        actual: None,
+        help: None,
+        fix_safety: None,
+        repair: None,
+        related: vec![],
+        preexisting: None,
+    }
+}
+
+/// The status stood in for a program that finished without one of its own.
+///
+/// A process killed by a signal has no exit status to report, and the run
+/// reports that stand-in rather than a number the program chose: a program
+/// that exits with -1 is reported as 255, so the two cannot be confused.
+const NO_EXIT_STATUS: i32 = -1;
+
 /// Extract the last N bytes of a UTF-8 string, truncating on char boundaries.
 /// Returns (tail_string, was_truncated).
 fn tail_output(bytes: &[u8], max_len: usize) -> (String, bool) {
@@ -312,8 +350,11 @@ fn build_file(
     verify_mir: bool,
     color_mode: ColorMode,
 ) -> Result<()> {
-    let source = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+    let Some(source) =
+        miri::cli::source::read_or_report(&path, JsonCommand::Build, format, color_mode)
+    else {
+        std::process::exit(1);
+    };
 
     let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -421,8 +462,9 @@ fn fix_file(
     yes: bool,
     allow_risky: bool,
     format: Format,
+    color_mode: ColorMode,
 ) -> Result<()> {
-    match miri::cli::fix::run(&path, apply, yes, allow_risky, format) {
+    match miri::cli::fix::run(&path, apply, yes, allow_risky, format, color_mode) {
         miri::cli::fix::Outcome::Succeeded => Ok(()),
         miri::cli::fix::Outcome::Refused | miri::cli::fix::Outcome::Failed => std::process::exit(1),
     }
@@ -601,15 +643,34 @@ fn build_test_envelope(
 }
 
 fn run_tests(
+    path: Option<PathBuf>,
     filter: Option<String>,
     format: Format,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
     _verbose: u8,
     _verify_mir: bool,
-    _color_mode: ColorMode,
+    color_mode: ColorMode,
 ) -> Result<()> {
     let start = std::time::Instant::now();
-    let summary = miri::test_runner::run_tests(&dir, filter.as_deref())?;
+    // A run names one file or one directory. `--dir` is the older spelling of
+    // the directory form and clap keeps the two apart, so at most one is set.
+    let target = path.or(dir).unwrap_or_else(|| PathBuf::from("."));
+
+    // A path that is not there discovers no tests, and a run of no tests is
+    // green. Reporting that would answer a mistyped path with a passing suite,
+    // so the path is checked before anything is discovered.
+    if !target.exists() {
+        let diagnostic = miri::cli::source::missing(&target);
+        miri::cli::source::report_unreadable(
+            &target,
+            &diagnostic,
+            JsonCommand::Test,
+            format,
+            color_mode,
+        );
+        std::process::exit(1);
+    }
+    let summary = miri::test_runner::run_tests(&target, filter.as_deref())?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     // Compute exit code once: rejected files take priority (incomplete run),
