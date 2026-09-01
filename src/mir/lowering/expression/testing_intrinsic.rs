@@ -23,8 +23,8 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::{emit_string_concat, emit_to_string, lower_expression};
 use crate::mir::place::Local;
 use crate::mir::{
-    BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind,
-    Terminator, TerminatorKind,
+    BasicBlock, BinOp, Constant, Discriminant, Operand, Place, Rvalue,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
 
@@ -90,7 +90,11 @@ fn lower_assert(
     let watermark = ctx.body.local_decls.len();
     let cond_op = lower_expression(ctx, &args[0], None)?;
     let msg_op = lower_optional_string_arg(ctx, args.get(1), span)?;
-    let loc_op = build_location_operand(ctx, span);
+
+    let path_op = build_path_operand(ctx, span);
+    let line_op = build_line_operand(ctx, span);
+    let column_op = build_column_operand(ctx, span);
+    let expr_text_op = build_expression_text_operand(ctx, span, &args[0]);
 
     let fail_bb = ctx.new_basic_block();
     let after_bb = ctx.new_basic_block();
@@ -109,12 +113,18 @@ fn lower_assert(
         ctx,
         span,
         rt::ASSERT_FAIL,
-        vec![msg_op.clone(), loc_op.clone()],
+        vec![
+            expr_text_op.clone(),
+            msg_op.clone(),
+            path_op.clone(),
+            line_op.clone(),
+            column_op.clone(),
+        ],
         after_bb,
     );
 
     ctx.set_current_block(after_bb);
-    drop_managed_operands(ctx, span, &[&msg_op, &loc_op], watermark);
+    drop_managed_operands(ctx, span, &[&expr_text_op, &msg_op, &path_op], watermark);
     Ok(materialize_void(ctx, span, dest))
 }
 
@@ -123,14 +133,25 @@ fn lower_assert(
 // `assert_ne<T>(a T, b T, message String = "")`
 // ----------------------------------------------------------------------------
 
-fn lower_assert_eq(
+/// Build operands and metadata for assert_eq/assert_ne failure path.
+struct AssertEqPreamble {
+    watermark: usize,
+    actual_op: Operand,
+    expected_op: Operand,
+    value_kind: TypeKind,
+    user_msg: Operand,
+    path_op: Operand,
+    line_op: Operand,
+    column_op: Operand,
+    cmp_op: Operand,
+}
+
+fn build_assert_eq_preamble(
     ctx: &mut LoweringContext,
     expr: &Expression,
     span: Span,
     args: &[Expression],
-    dest: Option<Place>,
-    cmp: AssertCmp,
-) -> Result<Operand, LoweringError> {
+) -> Result<AssertEqPreamble, LoweringError> {
     if args.len() < 2 {
         return Err(LoweringError::unsupported_expression(
             "assert_eq / assert_ne require two value arguments".to_string(),
@@ -157,7 +178,10 @@ fn lower_assert_eq(
         pick_concrete_kind(ctx, &actual_op, &expected_op, ast_kind)
     };
     let user_msg = lower_optional_string_arg(ctx, args.get(2), span)?;
-    let loc_op = build_location_operand(ctx, span);
+
+    let path_op = build_path_operand(ctx, span);
+    let line_op = build_line_operand(ctx, span);
+    let column_op = build_column_operand(ctx, span);
 
     let eq_local = emit_equality(
         ctx,
@@ -167,6 +191,95 @@ fn lower_assert_eq(
         expected_op.clone(),
     )?;
     let cmp_op = Operand::Copy(Place::new(eq_local));
+
+    Ok(AssertEqPreamble {
+        watermark,
+        actual_op,
+        expected_op,
+        value_kind,
+        user_msg,
+        path_op,
+        line_op,
+        column_op,
+        cmp_op,
+    })
+}
+
+struct AssertEqFailArgs {
+    cmp: AssertCmp,
+    value_kind: TypeKind,
+    actual_op: Operand,
+    expected_op: Operand,
+    user_msg: Operand,
+    path_op: Operand,
+    line_op: Operand,
+    column_op: Operand,
+    after_bb: BasicBlock,
+}
+
+fn emit_assert_eq_fail_block(
+    ctx: &mut LoweringContext,
+    span: Span,
+    args: AssertEqFailArgs,
+) -> Result<(), LoweringError> {
+    let AssertEqFailArgs {
+        cmp,
+        value_kind,
+        actual_op,
+        expected_op,
+        user_msg,
+        path_op,
+        line_op,
+        column_op,
+        after_bb,
+    } = args;
+    let expected_str_local = emit_value_to_quoted_string(ctx, &value_kind, expected_op, span)?;
+    let actual_str_local = emit_value_to_quoted_string(ctx, &value_kind, actual_op, span)?;
+
+    let expected_op_s = Operand::Copy(Place::new(expected_str_local));
+    let actual_op_s = Operand::Copy(Place::new(actual_str_local));
+
+    let (fail_fn, fail_args) = match cmp {
+        AssertCmp::Eq => (
+            rt::ASSERT_EQ_FAIL,
+            vec![
+                expected_op_s,
+                actual_op_s,
+                user_msg,
+                path_op,
+                line_op,
+                column_op,
+            ],
+        ),
+        AssertCmp::Ne => (
+            rt::ASSERT_NE_FAIL,
+            vec![actual_op_s, user_msg, path_op, line_op, column_op],
+        ),
+    };
+    emit_call_no_return(ctx, span, fail_fn, fail_args, after_bb);
+    Ok(())
+}
+
+fn lower_assert_eq(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    span: Span,
+    args: &[Expression],
+    dest: Option<Place>,
+    cmp: AssertCmp,
+) -> Result<Operand, LoweringError> {
+    let preamble = build_assert_eq_preamble(ctx, expr, span, args)?;
+    let AssertEqPreamble {
+        watermark,
+        actual_op,
+        expected_op,
+        value_kind,
+        user_msg,
+        path_op,
+        line_op,
+        column_op,
+        cmp_op,
+    } = preamble;
 
     let fail_bb = ctx.new_basic_block();
     let after_bb = ctx.new_basic_block();
@@ -186,31 +299,27 @@ fn lower_assert_eq(
     ));
 
     ctx.set_current_block(fail_bb);
-
-    let expected_str_local =
-        emit_value_to_quoted_string(ctx, &value_kind, expected_op.clone(), span)?;
-    let actual_str_local = emit_value_to_quoted_string(ctx, &value_kind, actual_op.clone(), span)?;
-
-    let expected_op_s = Operand::Copy(Place::new(expected_str_local));
-    let actual_op_s = Operand::Copy(Place::new(actual_str_local));
-
-    let (fail_fn, fail_args) = match cmp {
-        AssertCmp::Eq => (
-            rt::ASSERT_EQ_FAIL,
-            vec![expected_op_s, actual_op_s, user_msg.clone(), loc_op.clone()],
-        ),
-        AssertCmp::Ne => (
-            rt::ASSERT_NE_FAIL,
-            vec![actual_op_s, user_msg.clone(), loc_op.clone()],
-        ),
-    };
-    emit_call_no_return(ctx, span, fail_fn, fail_args, after_bb);
+    emit_assert_eq_fail_block(
+        ctx,
+        span,
+        AssertEqFailArgs {
+            cmp,
+            value_kind,
+            actual_op: actual_op.clone(),
+            expected_op: expected_op.clone(),
+            user_msg: user_msg.clone(),
+            path_op: path_op.clone(),
+            line_op: line_op.clone(),
+            column_op: column_op.clone(),
+            after_bb,
+        },
+    )?;
 
     ctx.set_current_block(after_bb);
     drop_managed_operands(
         ctx,
         span,
-        &[&actual_op, &expected_op, &user_msg, &loc_op],
+        &[&actual_op, &expected_op, &user_msg, &path_op],
         watermark,
     );
     Ok(materialize_void(ctx, span, dest))
@@ -235,7 +344,10 @@ fn lower_assert_panics(
     let watermark = ctx.body.local_decls.len();
     let closure_op = lower_expression(ctx, &args[0], None)?;
     let expected_op = lower_optional_string_arg(ctx, args.get(1), span)?;
-    let loc_op = build_location_operand(ctx, span);
+
+    let path_op = build_path_operand(ctx, span);
+    let line_op = build_line_operand(ctx, span);
+    let column_op = build_column_operand(ctx, span);
 
     let next_bb = ctx.new_basic_block();
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
@@ -244,7 +356,13 @@ fn lower_assert_panics(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
-            args: vec![closure_op.clone(), expected_op.clone(), loc_op.clone()],
+            args: vec![
+                closure_op.clone(),
+                expected_op.clone(),
+                path_op.clone(),
+                line_op.clone(),
+                column_op.clone(),
+            ],
             out_args: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
@@ -254,7 +372,7 @@ fn lower_assert_panics(
     ));
 
     ctx.set_current_block(next_bb);
-    drop_managed_operands(ctx, span, &[&closure_op, &expected_op, &loc_op], watermark);
+    drop_managed_operands(ctx, span, &[&closure_op, &expected_op, &path_op], watermark);
     Ok(materialize_void(ctx, span, dest))
 }
 
@@ -279,12 +397,62 @@ fn drop_managed_operands(
 // Shared helpers
 // ----------------------------------------------------------------------------
 
-/// Build an `Operand` carrying the call-site location string. Falls back to
-/// `"line N"` when no source path is attached to the context (which is the
-/// case for the in-memory test driver).
-fn build_location_operand(ctx: &mut LoweringContext, span: Span) -> Operand {
-    let location = ctx.format_span_location(span);
-    string_literal_operand(ctx, span, location)
+/// Build an `Operand` carrying the source file path as a string.
+/// Returns empty string if no path is available.
+fn build_path_operand(ctx: &mut LoweringContext, span: Span) -> Operand {
+    let path = ctx.source_path.unwrap_or("").to_string();
+    string_literal_operand(ctx, span, path)
+}
+
+/// Build an `Operand` carrying the line number as an i64.
+fn build_line_operand(ctx: &mut LoweringContext, span: Span) -> Operand {
+    use crate::ast::literal::IntegerLiteral;
+    let line = ctx.line_of(span.start) as i64;
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::I64, span),
+        literal: Literal::Integer(IntegerLiteral::I64(line)),
+    }))
+}
+
+/// Build an `Operand` carrying the column number as an i64.
+fn build_column_operand(ctx: &mut LoweringContext, span: Span) -> Operand {
+    use crate::ast::literal::IntegerLiteral;
+    let column = ctx.column_of(span.start) as i64;
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::I64, span),
+        literal: Literal::Integer(IntegerLiteral::I64(column)),
+    }))
+}
+
+/// Build an `Operand` carrying the expression text for the argument expression.
+/// Uses the span of the argument to extract text from the source.
+/// Returns empty string if source is unavailable or the span is unusable.
+fn build_expression_text_operand(
+    ctx: &mut LoweringContext,
+    span: Span,
+    arg_expr: &Expression,
+) -> Operand {
+    let expr_text = extract_expression_text(ctx, arg_expr);
+    string_literal_operand(ctx, span, expr_text)
+}
+
+/// Extract the source text of an expression from its span.
+/// Returns empty string if source is unavailable or the span is out of bounds.
+fn extract_expression_text(ctx: &LoweringContext, expr: &Expression) -> String {
+    let Some(src) = ctx.source else {
+        return String::new();
+    };
+    let span = expr.span;
+
+    // Bounds check both ends of the span
+    if span.start > src.len() || span.end > src.len() || span.start > span.end {
+        return String::new();
+    }
+
+    // Extract the text slice
+    src[span.start..span.end].to_string()
 }
 
 /// Lower an optional `String` argument, falling back to an empty literal when

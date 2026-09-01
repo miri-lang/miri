@@ -221,6 +221,32 @@ impl<'a> LoweringContext<'a> {
             + 1
     }
 
+    /// Compute a 1-indexed column number (in bytes from line start) for the given
+    /// byte offset within `self.source`. Returns `0` if no source is attached or
+    /// the offset is out of range. The column is counted in bytes, not characters,
+    /// so multi-byte UTF-8 sequences count as multiple columns.
+    ///
+    /// This matches the convention used by `JsonDiagnostic.column` — 1-indexed,
+    /// byte-based column numbers in source.
+    pub fn column_of(&self, byte_offset: usize) -> usize {
+        let Some(src) = self.source else {
+            return 0;
+        };
+        if byte_offset > src.len() {
+            return 0;
+        }
+
+        // Find the start of the line containing this offset
+        let line_start = src.as_bytes()[..byte_offset]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+
+        // Column is offset from the line start, 1-indexed
+        (byte_offset - line_start) + 1
+    }
+
     /// Format a span as a `"path:line"` (or `":line"` if no path is known)
     /// human-readable location string, suitable for embedding in runtime
     /// diagnostic messages.

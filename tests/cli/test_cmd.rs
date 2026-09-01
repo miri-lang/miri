@@ -546,3 +546,376 @@ fn test_file_with_only_ignored_tests_is_never_compiled() {
             "test result: ok. 0 passed; 0 failed; 1 ignored",
         ));
 }
+
+// Tests for structured assertion failure reporting in JSON format
+
+#[test]
+fn test_json_assert_eq_failure_has_structured_fields() {
+    let dir = test_dir_with(
+        "assert_eq_test.mi",
+        &format!(
+            "{}@test\nfn test_eq_fails()\n    assert_eq(42, 41, \"off by one\")\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    // Verify structure exists and has fields
+    let results = json["tests"]["results"]
+        .as_array()
+        .expect("results should be an array");
+    let result = results.first().expect("should have at least one result");
+
+    assert_eq!(result["outcome"].as_str(), Some("failed"));
+    assert_eq!(result["code"].as_str(), Some("MER_RT_005"));
+    assert!(result["line"].is_number(), "line should be a number");
+    assert!(result["column"].is_number(), "column should be a number");
+    assert_eq!(result["expected"].as_str(), Some("41"));
+    assert_eq!(result["actual"].as_str(), Some("42"));
+    assert_eq!(result["message"].as_str(), Some("off by one"));
+
+    // Verify exit code
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "exit code should be 1 for test failure"
+    );
+    assert_eq!(
+        json["exitCode"].as_i64(),
+        Some(1),
+        "JSON exitCode should also be 1"
+    );
+}
+
+#[test]
+fn test_json_assert_ne_failure_has_structured_fields() {
+    let dir = test_dir_with(
+        "assert_ne_test.mi",
+        &format!(
+            "{}@test\nfn test_ne_fails()\n    assert_ne(5, 5, \"values must differ\")\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let results = json["tests"]["results"]
+        .as_array()
+        .expect("results should be an array");
+    let result = results.first().expect("should have at least one result");
+
+    assert_eq!(result["outcome"].as_str(), Some("failed"));
+    assert_eq!(result["code"].as_str(), Some("MER_RT_005"));
+    assert!(result["line"].is_number(), "line should be a number");
+    assert!(result["column"].is_number(), "column should be a number");
+    // assert_ne does not report expected value, only actual
+    assert!(
+        result["expected"].is_null(),
+        "expected should not be present for assert_ne"
+    );
+    assert_eq!(result["actual"].as_str(), Some("5"));
+    assert_eq!(result["message"].as_str(), Some("values must differ"));
+}
+
+#[test]
+fn test_json_bare_assert_has_expression_text() {
+    let dir = test_dir_with(
+        "bare_assert_test.mi",
+        &format!(
+            "{}@test\nfn test_bare_assert()\n    assert(1 == 2, \"should be equal\")\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    assert_eq!(result["outcome"].as_str(), Some("failed"));
+    // The expression text should be exactly the condition from the assert
+    assert_eq!(
+        result["expression"].as_str(),
+        Some("1 == 2"),
+        "expression should be the exact condition"
+    );
+    assert_eq!(
+        result["message"].as_str(),
+        Some("should be equal"),
+        "message should be preserved"
+    );
+}
+
+#[test]
+fn test_json_passing_test_has_no_structured_fields() {
+    let dir = test_dir_with(
+        "passing_test.mi",
+        &format!(
+            "{}@test\nfn test_passes()\n    assert(1 == 1)\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    assert_eq!(result["outcome"].as_str(), Some("passed"));
+    // Passing tests should not have these fields
+    assert!(
+        result.get("code").is_none() || result["code"].is_null(),
+        "passing test should not have code"
+    );
+    assert!(
+        result.get("line").is_none() || result["line"].is_null(),
+        "passing test should not have line"
+    );
+    assert!(
+        result.get("expression").is_none() || result["expression"].is_null(),
+        "passing test should not have expression"
+    );
+
+    // Process exit code should be 0
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "exit code should be 0 for passing"
+    );
+    assert_eq!(
+        json["exitCode"].as_i64(),
+        Some(0),
+        "JSON exitCode should be 0"
+    );
+}
+
+#[test]
+fn test_json_assert_panics_closure_did_not_panic() {
+    let dir = test_dir_with(
+        "assert_panics_test.mi",
+        &format!(
+            "{}@test\nfn test_panics_fails()\n    assert_panics(fn(): println(\"hi\"))\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    assert_eq!(result["outcome"].as_str(), Some("failed"));
+    assert_eq!(result["code"].as_str(), Some("MER_RT_005"));
+    assert!(result["line"].is_number(), "line should be a number");
+    assert!(result["column"].is_number(), "column should be a number");
+    // assert_panics has a message when closure doesn't panic
+    assert!(result["message"].is_string(), "message should be present");
+}
+
+#[test]
+fn test_json_assert_panics_message_mismatch() {
+    let dir = test_dir_with(
+        "assert_panics_msg_test.mi",
+        &format!(
+            "{}@test\nfn test_panics_msg_fails()\n    assert_panics(fn(): panic(\"wrong\"), \"expected\")\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    assert_eq!(result["outcome"].as_str(), Some("failed"));
+    assert_eq!(result["code"].as_str(), Some("MER_RT_005"));
+    assert!(result["line"].is_number(), "line should be a number");
+    assert!(result["column"].is_number(), "column should be a number");
+    // assert_panics with message mismatch has expected and actual
+    assert_eq!(
+        result["expected"].as_str(),
+        Some("expected"),
+        "expected message should be in JSON"
+    );
+    assert_eq!(
+        result["actual"].as_str(),
+        Some("wrong"),
+        "actual panic message should be in JSON"
+    );
+}
+
+#[test]
+fn test_exit_code_2_when_file_rejected() {
+    let dir = test_dir_with(
+        "unparseable.mi",
+        "this is not valid miri code }{][\n@test\nfn test()\n",
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    // Exit code should be 2 (rejected file takes priority)
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "exit code should be 2 when file is rejected"
+    );
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    assert_eq!(
+        json["exitCode"].as_i64(),
+        Some(2),
+        "JSON exitCode should also be 2"
+    );
+
+    // Should have rejected files
+    assert!(
+        json["tests"]["rejectedFiles"].as_array().unwrap().len() > 0,
+        "should have rejected files"
+    );
+}
+
+#[test]
+fn test_column_is_1_indexed_and_accurate() {
+    let dir = test_dir_with(
+        "column_test.mi",
+        &format!(
+            "{}@test\nfn test_column()\n    var x = 5\n    assert_eq(x, 6)\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    let column = result["column"]
+        .as_u64()
+        .expect("column should be a positive number");
+    // Column should be 5: 4 spaces (1-4) + 'a' (5) in "assert_eq"
+    assert_eq!(
+        column, 5,
+        "column should point to the start of assert_eq (1-indexed)"
+    );
+}
+
+#[test]
+fn test_column_scales_with_indent() {
+    let dir = test_dir_with(
+        "column_deep_test.mi",
+        &format!(
+            "{}@test\nfn test_column_deep()\n    if true:\n        if true:\n            assert_eq(7, 8)\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("test command should run");
+
+    let json_text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("output should be valid JSON");
+
+    let result = json["tests"]["results"][0].clone();
+    let column = result["column"]
+        .as_u64()
+        .expect("column should be a positive number");
+    // Column should be 13: 12 spaces (1-12) + 'a' (13) in "assert_eq" at deepest indent
+    assert_eq!(
+        column, 13,
+        "column should point to start of assert_eq at 12-space indent (1-indexed)"
+    );
+}

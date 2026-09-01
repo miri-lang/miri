@@ -21,4 +21,4 @@ this file on every run. The harness prints it to stdout instead.
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 4 | 1402 | 85 |
 | e | recover from a capability rejection | yes | 5 | 1697 | 118 |
-| f | make a failing test pass | yes | 4 | 629 | 128 |
+| f | make a failing test pass | yes | 4 | 631 | 128 |

@@ -193,25 +193,21 @@ pub mod ffi {
         die();
     }
 
-    /// Helper that formats the standard "assertion failed at <location>" prefix.
-    unsafe fn format_assert_prefix(location: *const MiriString) -> String {
-        if location.is_null() {
-            "assertion failed".to_string()
+    /// Helper that formats prefix from separate location components.
+    fn format_assert_prefix_structured(path: &str, line: i64, column: i64) -> String {
+        if path.is_empty() {
+            format!("assertion failed at line {}:{}", line, column)
         } else {
-            format!("assertion failed at {}", (*location).as_str())
+            format!("assertion failed at {}:{}:{}", path, line, column)
         }
     }
 
-    /// Helper that returns the user message suffix (": <msg>") if non-empty.
-    unsafe fn user_msg_suffix(user_msg: *const MiriString) -> String {
+    /// Helper that returns user message as owned string (or empty if null).
+    unsafe fn user_msg_to_string(user_msg: *const MiriString) -> String {
         if user_msg.is_null() {
-            return String::new();
-        }
-        let s = (*user_msg).as_str();
-        if s.is_empty() {
             String::new()
         } else {
-            format!(": {}", s)
+            (*user_msg).as_str().to_string()
         }
     }
 
@@ -230,6 +226,50 @@ pub mod ffi {
         }
     }
 
+    /// Writes a structured assertion failure report to a sidecar file.
+    ///
+    /// Format: `<key>:<byte-len>:<raw bytes>\n` for each field.
+    /// Keys: version, code, kind, path, line, column, expression, expected, actual, message.
+    /// A field with nothing to say is written with length 0, mapping to None in the reader.
+    ///
+    /// This is best-effort: failures are silent and do not affect the process exit.
+    #[allow(clippy::too_many_arguments)]
+    fn write_assert_report(
+        code: &str,
+        kind: &str,
+        path: &str,
+        line: i64,
+        column: i64,
+        expression: &str,
+        expected: &str,
+        actual: &str,
+        message: &str,
+    ) {
+        use std::env;
+        use std::fs::File;
+
+        if let Ok(report_path) = env::var("MIRI_ASSERT_REPORT_PATH") {
+            if let Ok(mut file) = File::create(&report_path) {
+                let _ = write_report_field(&mut file, "version", "1");
+                let _ = write_report_field(&mut file, "code", code);
+                let _ = write_report_field(&mut file, "kind", kind);
+                let _ = write_report_field(&mut file, "path", path);
+                let _ = write_report_field(&mut file, "line", &line.to_string());
+                let _ = write_report_field(&mut file, "column", &column.to_string());
+                let _ = write_report_field(&mut file, "expression", expression);
+                let _ = write_report_field(&mut file, "expected", expected);
+                let _ = write_report_field(&mut file, "actual", actual);
+                let _ = write_report_field(&mut file, "message", message);
+            }
+        }
+    }
+
+    /// Helper to write a single length-prefixed field to the report file.
+    fn write_report_field(file: &mut std::fs::File, key: &str, value: &str) -> std::io::Result<()> {
+        use std::io::Write as _;
+        writeln!(file, "{}:{}:{}", key, value.len(), value)
+    }
+
     /// Clean-exit termination for user-facing runtime errors.
     ///
     /// Flushes stderr (so the preceding `eprintln!` is visible), then calls
@@ -246,24 +286,67 @@ pub mod ffi {
 
     /// Reports a failed `assert(cond)` and aborts.
     ///
+    /// New signature: accepts expression text and individual location components.
+    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    ///
     /// # Safety
-    /// - `user_msg` and `location` must be valid pointers to `MiriString`s or null.
+    /// - `expr_text`, `user_msg`, `path` must be valid pointers to `MiriString`s or null.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_assert_fail(
+        expr_text: *const MiriString,
         user_msg: *const MiriString,
-        location: *const MiriString,
+        path: *const MiriString,
+        line: i64,
+        column: i64,
     ) {
-        let prefix = format_assert_prefix(location);
-        let suffix = user_msg_suffix(user_msg);
-        eprintln!("Runtime error: {}{}", prefix, suffix);
+        let path_s = if path.is_null() {
+            String::new()
+        } else {
+            (*path).as_str().to_string()
+        };
+        let expr_s = if expr_text.is_null() {
+            String::new()
+        } else {
+            (*expr_text).as_str().to_string()
+        };
+        let msg_s = user_msg_to_string(user_msg);
+
+        let prefix = format_assert_prefix_structured(&path_s, line, column);
+        let suffix = if msg_s.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", msg_s)
+        };
+        let expr_suffix = if expr_s.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", expr_s)
+        };
+
+        eprintln!("Runtime error: {}{}{}", prefix, expr_suffix, suffix);
+        write_assert_report(
+            "MER_RT_005",
+            "assert",
+            &path_s,
+            line,
+            column,
+            &expr_s,
+            "",
+            "",
+            &msg_s,
+        );
+        write_trap_report("MER_RT_005");
         die();
     }
 
     /// Reports a failed `assert_eq(actual, expected)` and aborts.
     ///
+    /// New signature: accepts individual location components.
+    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    ///
     /// # Safety
-    /// - `expected_str`, `actual_str`, `user_msg`, and `location` must be valid
+    /// - `expected_str`, `actual_str`, `user_msg`, `path` must be valid
     ///   `MiriString` pointers or null.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
@@ -271,50 +354,105 @@ pub mod ffi {
         expected_str: *const MiriString,
         actual_str: *const MiriString,
         user_msg: *const MiriString,
-        location: *const MiriString,
+        path: *const MiriString,
+        line: i64,
+        column: i64,
     ) {
-        let prefix = format_assert_prefix(location);
-        let expected_s = if expected_str.is_null() {
-            "<null>"
+        let path_s = if path.is_null() {
+            String::new()
         } else {
-            (*expected_str).as_str()
+            (*path).as_str().to_string()
+        };
+        let expected_s = if expected_str.is_null() {
+            String::new()
+        } else {
+            (*expected_str).as_str().to_string()
         };
         let actual_s = if actual_str.is_null() {
-            "<null>"
+            String::new()
         } else {
-            (*actual_str).as_str()
+            (*actual_str).as_str().to_string()
         };
-        let suffix = user_msg_suffix(user_msg);
+        let msg_s = user_msg_to_string(user_msg);
+
+        let prefix = format_assert_prefix_structured(&path_s, line, column);
+        let suffix = if msg_s.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", msg_s)
+        };
+
         eprintln!(
             "Runtime error: {}: expected {}, got {}{}",
             prefix, expected_s, actual_s, suffix
         );
+        write_assert_report(
+            "MER_RT_005",
+            "assert_eq",
+            &path_s,
+            line,
+            column,
+            "",
+            &expected_s,
+            &actual_s,
+            &msg_s,
+        );
+        write_trap_report("MER_RT_005");
         die();
     }
 
     /// Reports a failed `assert_ne(a, b)` and aborts.
     ///
+    /// New signature: accepts individual location components.
+    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    ///
     /// # Safety
-    /// - `value_str`, `user_msg`, and `location` must be valid `MiriString`
+    /// - `value_str`, `user_msg`, `path` must be valid `MiriString`
     ///   pointers or null.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_assert_ne_fail(
         value_str: *const MiriString,
         user_msg: *const MiriString,
-        location: *const MiriString,
+        path: *const MiriString,
+        line: i64,
+        column: i64,
     ) {
-        let prefix = format_assert_prefix(location);
-        let val_s = if value_str.is_null() {
-            "<null>"
+        let path_s = if path.is_null() {
+            String::new()
         } else {
-            (*value_str).as_str()
+            (*path).as_str().to_string()
         };
-        let suffix = user_msg_suffix(user_msg);
+        let val_s = if value_str.is_null() {
+            String::new()
+        } else {
+            (*value_str).as_str().to_string()
+        };
+        let msg_s = user_msg_to_string(user_msg);
+
+        let prefix = format_assert_prefix_structured(&path_s, line, column);
+        let suffix = if msg_s.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", msg_s)
+        };
+
         eprintln!(
             "Runtime error: {}: values must differ, both were {}{}",
             prefix, val_s, suffix
         );
+        write_assert_report(
+            "MER_RT_005",
+            "assert_ne",
+            &path_s,
+            line,
+            column,
+            "",
+            "",
+            &val_s,
+            &msg_s,
+        );
+        write_trap_report("MER_RT_005");
         die();
     }
 
@@ -353,6 +491,9 @@ pub mod ffi {
     /// environment pointer passed to the closure as its implicit first
     /// argument.
     ///
+    /// New signature: accepts individual location components.
+    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    ///
     /// Behavior:
     /// - If the closure returns normally → emits an assertion-failed message
     ///   at `location` and aborts.
@@ -370,24 +511,27 @@ pub mod ffi {
     /// - `closure_ptr` must point to a valid Miri closure payload whose first
     ///   word is the closure function pointer of signature
     ///   `extern "C" fn(*mut u8)`.
-    /// - `expected` and `location` must be valid pointers to `MiriString`s or null.
+    /// - `expected` and `path` must be valid pointers to `MiriString`s or null.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_assert_panics(
         closure_ptr: *mut u8,
         expected: *const MiriString,
-        location: *const MiriString,
+        path: *const MiriString,
+        line: i64,
+        column: i64,
     ) {
         if closure_ptr.is_null() {
             eprintln!("Runtime error: assert_panics: null closure");
             die();
         }
 
-        let loc_str: String = if location.is_null() {
-            "<unknown location>".to_string()
+        let path_s = if path.is_null() {
+            String::new()
         } else {
-            (*location).as_str().to_string()
+            (*path).as_str().to_string()
         };
+        let prefix = format_assert_prefix_structured(&path_s, line, column);
 
         // Stack-allocated jump buffer. We `sigsetjmp` here, install the buf
         // pointer in TLS, then invoke the closure. If the closure calls
@@ -417,8 +561,20 @@ pub mod ffi {
             PANIC_CATCH_BUF.with(|c| c.set(prev_buf));
             eprintln!(
                 "Runtime error: {}: assertion failed: assert_panics: closure did not panic",
-                loc_str
+                prefix
             );
+            write_assert_report(
+                "MER_RT_005",
+                "assert_panics",
+                &path_s,
+                line,
+                column,
+                "",
+                "",
+                "",
+                "closure did not panic",
+            );
+            write_trap_report("MER_RT_005");
             die();
         }
 
@@ -435,8 +591,20 @@ pub mod ffi {
             if !exp.is_empty() && !captured.contains(exp) {
                 eprintln!(
                     "Runtime error: {}: assertion failed: assert_panics: expected panic containing \"{}\", got \"{}\"",
-                    loc_str, exp, captured
+                    prefix, exp, captured
                 );
+                write_assert_report(
+                    "MER_RT_005",
+                    "assert_panics",
+                    &path_s,
+                    line,
+                    column,
+                    "",
+                    exp,
+                    &captured,
+                    "",
+                );
+                write_trap_report("MER_RT_005");
                 die();
             }
         }

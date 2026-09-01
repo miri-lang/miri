@@ -1148,7 +1148,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps (4 codes: 001-004)
+    // RT — Runtime traps and assertion failures (5 codes: 001-005)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1174,6 +1174,13 @@ diagnostics!(
     "004",
     RtInvalidOperand,
     "Invalid Operand",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "RT",
+    "005",
+    RtAssertionFailed,
+    "Assertion Failure",
     Severity::Error,
     false,
     FixSafety::LocalEdit,

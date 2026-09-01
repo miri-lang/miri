@@ -432,6 +432,55 @@
             "null"
           ],
           "description": "Additional detail about the test result (e.g., error message or timing). Absent or null if no detail."
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Diagnostic code for assertion failures (e.g., \"MER_RT_005\"). Absent or null if no failure."
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "1-indexed line number where the assertion failed. Absent or null if not applicable."
+        },
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "1-indexed column number where the assertion failed. Absent or null if not applicable."
+        },
+        "expected": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For assert_eq, the expected value; for assert_panics, the expected message. Absent or null if not applicable."
+        },
+        "actual": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For assert_eq, the actual value; for assert_panics, the caught message. Absent or null if not applicable."
+        },
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The expression text for bare assert, or null/absent for other assertions."
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional user-provided message for the assertion."
         }
       },
       "required": [
