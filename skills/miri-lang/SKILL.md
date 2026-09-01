@@ -11,123 +11,53 @@ This skill teaches the core syntax and idioms for writing `.mi` source files. It
 
 Miri's syntax is indentation-sensitive. Variables use space-separated type annotations (not colon form). Here is the core:
 
-**Variables and functions:**
-
 ```miri
-fn main()
-    let x int = 5       // space-separated type annotation
-    var y int = 10      // mutable with type
-    y = 20
-    
-fn add(a int, b int) int
-    a + b
-```
+use system.collections.list
 
-**Structs:**
-
-```miri
 struct Point
     x int
     y int
 
-fn main()
-    let p = Point(3, 4)
-```
-
-**Enums:**
-
-```miri
 enum Color
     Red
-    Green
     Blue
 
-fn main()
-    let c = Color.Red
-```
+fn add(a int, b int) int
+    a + b
 
-**Match (exhaustive, no default):**
+fn demo_color(color Color)
+    match color
+        Color.Red: println("red")
+        Color.Blue: println("blue")
 
-```miri
-enum Status
-    Active
-    Inactive
+class Shape
+    fn area() int: 0
 
-fn process(s Status)
-    match s
-        Status.Active: println("running")
-        Status.Inactive: println("stopped")
-```
-
-**Classes and methods:**
-
-```miri
-class Box
-    fn open()
-        println("opened")
-
-fn main()
-    let b = Box()
-    b.open()
-```
-
-**Traits:**
-
-```miri
 trait Drawable
     fn draw()
 
 class Circle implements Drawable
-    fn draw()
-        println("drawing circle")
-```
+    fn draw(): println("circle")
 
-**Generics:**
-
-```miri
 fn identity<T>(x T) T
     x
 
 fn main()
-    let n = identity(42)
-    let s = identity("hello")
-```
-
-**Single-line blocks with colon:**
-
-```miri
-fn double(x int) int:
-    x * 2
-```
-
-**Result (no import needed):**
-
-```miri
-fn main()
-    let r = Result.Ok(5)
-    match r
-        Result.Ok(x): println("ok")
-        Result.Err: println("error")
-```
-
-**Nullability with `T?` (no import needed):**
-
-```miri
-fn main()
-    let x int? = None
-    match x
-        Some(v): v
-        None: 0
-```
-
-**Collections (require imports):**
-
-```miri
-use system.collections.list
-
-fn main()
-    let empty = List<int>()
-    let filled = List([1, 2, 3])
+    let x int = 5
+    var y int = 10
+    y = 20
+    let p = Point(3, 4)
+    let sum = add(x, y)
+    let items = List([1, 2, 3])
+    println(f"{sum} {p.x} {items.length()} {identity(7)}")
+    demo_color(Color.Red)
+    match Result.Ok(5)
+        Result.Ok(v): println(f"ok {v}")
+        Result.Err: println("err")
+    let maybe int? = None
+    match maybe
+        Some(v): println(f"some {v}")
+        None: println("none")
 ```
 
 This core powers all Miri programs. The rest of this skill covers what the language **does not** support, because those gaps matter just as much as the syntax that works.
@@ -141,7 +71,7 @@ Miri deliberately leaves these off the surface to avoid ambiguity. Every example
 
 The colon form does not exist. Use space-separated type annotations instead:
 
-```miri,fails=MER_PAR_001
+```miri,fails=MER_PAR_001,expects-message=Expected an expression, but found :
 let x: int = 5
 ```
 
@@ -162,7 +92,7 @@ let z = 5 as i64  // explicit cast when needed
 
 No suffix syntax like `1i32` or `3.14f64`:
 
-```miri,fails=MER_TYP_034
+```miri,fails=MER_TYP_034,expects-message=Undefined variable: i32
 let x = 42i32
 ```
 
@@ -177,7 +107,7 @@ let y = 42 as i64
 
 **Result** requires the constructor prefix (`Result.Ok`, `Result.Err`). Omitting it causes a type error:
 
-```miri,fails=MER_TYP_038
+```miri,fails=MER_TYP_038,expects-message=Expected enum variant pattern like EnumName.Ok
 fn main()
     let r = Result.Ok(5)
     match r
@@ -217,7 +147,7 @@ The three forms are distinct and mean different things:
 
 Confusing them is the most common error:
 
-```miri,fails=MER_TYP_036
+```miri,fails=MER_TYP_036,expects-message=Cannot instantiate generic class 'List<T>' without explicit type arguments
 use system.collections.list
 
 fn main()
@@ -242,7 +172,7 @@ fn main()
 
 The keyword `let mut` does not exist:
 
-```miri,fails=MER_PAR_001
+```miri,fails=MER_PAR_001,expects-message=Expected an end of statement, but found identifier
 let mut x = 5
 ```
 
@@ -257,7 +187,7 @@ x = 10
 
 Function parameters are immutable, even if the argument is mutable. To mutate the caller's variable, the method must exist in the stdlib or be written as a free function accepting a mutable reference pattern (not yet available). The closest common case:
 
-```miri,fails=MER_TYP_042
+```miri,fails=MER_TYP_042,expects-message=Cannot assign to element of immutable variable
 use system.collections.list
 
 fn increment(arr [int]):
@@ -283,58 +213,155 @@ fn main():
 
 ## Module Resolution
 
-Modules are located by dot-notation paths (e.g., `system.io` or `utils.math`). The search order determines where the compiler looks for each import:
+Bare imports are searched in this order: stdlib (via `MIRI_STDLIB_PATH` env var), the entry file's directory, then the current working directory. Local imports (`use local.*`) resolve only against the entry file's directory. The stdlib cannot be shadowed; `system` is reserved. Set `MIRI_STDLIB_PATH` to override the stdlib location when the binary is not beside `stdlib/`.
 
-### Bare Imports (`use util`, `use system.io`)
+## Iteration and Control Flow
 
-Searched in order:
-1. **Standard library** (if available): `MIRI_STDLIB_PATH` env var, exe directory, or manifest directory (`src/stdlib` at build time)
-2. **Project root**: The directory containing the entry file (the `.mi` file you pass to `miri run` or `miri check`)
-3. **Current working directory**: Where the compiler was invoked from
+**For loops over collections and ranges:**
 
-Example: if you run `miri run src/main.mi` from the repo root, the project root is `src/`. A bare `use util` will first search the stdlib, then look for `src/util.mi`, then `./util.mi`.
+```miri
+use system.collections.list
 
-**Standard library cannot be shadowed**: if both `src/system/io.mi` (a user file) and the real `system/io.mi` stdlib exist, the stdlib wins. Since `system` is a reserved keyword, local modules cannot use names from the `system` namespace.
+fn main()
+    let xs = List([1, 2, 3])
+    for x in xs
+        println(f"{x}")
+    for n in 0..3
+        println(f"n {n}")
+    var i = 0
+    while i < 3
+        i = i + 1
+```
 
-### Local Imports (`use local.utils`, `use local.models.user`)
+**Early return and if/else chains:**
 
-Resolved **only** against the project root (the entry file's directory). The working directory has no effect, so:
-- `use local.utils` always resolves to the same file, no matter where the compiler is invoked from.
-- Deeply nested imports like `use local.utils.math.calculations` work the same way: `calculations.mi` at `utils/math/calculations.mi` relative to the project root.
+```miri
+fn classify(n int) String
+    if n < 0
+        return "negative"
+    else if n == 0
+        return "zero"
+    "positive"
 
-### Finding the Stdlib When CWD Matters
+fn main()
+    println(classify(-1))
+    println(classify(0))
+    println(classify(5))
+```
 
-If you invoke `miri run /tmp/myproject/main.mi` from the `/` directory (not the repo root), the compiler must find the stdlib. It looks in this order:
+## String Conversion and Collections
 
-1. `MIRI_STDLIB_PATH` environment variable (if you set it to the repo's `src/stdlib`)
-2. A `stdlib/` directory next to the `miri` binary
-3. Install prefix paths (`<prefix>/lib/miri/stdlib`)
-4. **Manifest directory**: `src/stdlib` relative to the repo at build time (automatic fallback)
+**f-strings are the only int→String conversion path:**
 
-The fourth rule makes `miri run` work from any directory without `MIRI_STDLIB_PATH`, as long as the `miri` binary was built from the repo. If the stdlib is not found, the error will list all the roots that were searched and mention `MIRI_STDLIB_PATH` as an override.
+```miri
+fn main()
+    let n = 42
+    let s = f"{n}"
+    println("count: " + s)
+    println(f"n={n} half={n / 2}")
+```
+
+Attempting other conversion methods fails:
+
+```miri,fails=MER_TYP_002,expects-message=cannot add String and int
+fn main()
+    let n = 42
+    println("count: " + n)
+```
+
+```miri,fails=MER_TYP_033,expects-message=Type 'int' does not have members
+fn main()
+    let n = 42
+    println(n.to_string())
+```
+
+**Collections — length, push, first(), is_empty, contains:**
+
+```miri
+use system.collections.list
+
+fn main()
+    var l = List<int>()
+    l.push(10)
+    l.push(20)
+    println(f"len {l.length()}")
+    println(f"empty {l.is_empty()}")
+    println(f"has {l.contains(10)}")
+    match l.first()
+        Some(v): println(f"first {v}")
+        None: println("none")
+```
+
+**Map — index-set, get, iteration:**
+
+```miri
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["a"] = 1
+    m["b"] = 2
+    println(f"size {m.length()}")
+    match m.get("a")
+        Some(v): println(f"a {v}")
+        None: println("missing")
+    for k in m
+        println(f"key {k}")
+```
+
+Map iteration happens over keys. A common mistake is calling `.keys()`:
+
+```miri,fails=MER_TYP_033,expects-message=has no field or method 'keys'
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    for k in m.keys()
+        println(k)
+```
+
+**String methods:**
+
+```miri
+fn main()
+    let s = "  Hello, World  "
+    let t = s.trim()
+    println(t.to_lower())
+    println(f"{t.length()}")
+    let has = t.contains("World")
+    println(f"{has}")
+    for part in t.split(", ")
+        println(part)
+    match "42".to_int()
+        Some(n): println(f"parsed {n}")
+        None: println("not a number")
+```
+
+**Exit codes from main:**
+
+```miri
+fn main() int
+    let ok = false
+    if ok
+        return 0
+    return 3
+```
 
 ## Verification Loop
 
-After writing or editing any `.mi` file, always run:
+The workflow for writing correct Miri code:
 
-```bash
-miri check <file> --format json
-```
+1. **miri check** — compile and collect diagnostics: `miri check myfile.mi --format json`
+2. **miri run** — execute and see real output: `miri run myfile.mi`
+3. **miri test** — run tests in a directory: `miri test --dir <DIR>`
+4. **miri view** — read scoped code: `miri view myfile.mi --outline` or `--fn name`
+5. **miri patch** — make scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`
+6. **miri fix** — repair errors: `miri explain CODE`, `miri fix --plan myfile.mi`, `miri fix --apply --yes myfile.mi`
+7. **miri agent** — tool integration (see `tools/agent_client.py` and `docs/agent-protocol.md`)
 
-Iterate on diagnostics until clean. The `--format json` flag gives machine-readable output; parse `diagnostics` for codes and fix messages:
+**Loop:** check → (if errors) explain + fix --plan → fix --apply → run/test → re-check. Iterate until clean.
 
-```bash
-# One-shot check
-miri check myfile.mi --format json | jq '.diagnostics | length'
-
-# If diagnostics exist, explain a code
-miri explain MER_TYP_044
-
-# Request a fix plan
-miri fix --plan myfile.mi --format json
-```
-
-Running `miri fix --plan` on a file with errors prints structured repair suggestions. The auto-applicable repairs are:
+The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.
 - `arrow-return-type`: Drop the `->` before a return type.
 - `colon-annotation`: Drop the `:` before a type annotation.
@@ -343,11 +370,3 @@ Running `miri fix --plan` on a file with errors prints structured repair suggest
 - `let-to-var`: Rebind an immutable declaration as mutable.
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
 - `println-bang`: Drop the `!` from a macro-style call.
-
-Apply them with:
-
-```bash
-miri fix --apply --yes myfile.mi
-```
-
-The loop is: check → (if errors) explain + fix --plan → fix --apply → re-check. Stay in this loop until clean.

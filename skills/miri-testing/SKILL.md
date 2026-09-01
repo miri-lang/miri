@@ -60,26 +60,54 @@ miri test -v                    # Verbose
 miri test --verify-mir          # Verify MIR optimization pass
 ```
 
-## Top-Level Statements
+## Test File Rules
 
-Executable statements at the top level of a test file are silently dropped by `miri run`. However, the `miri test` command explicitly rejects such files and refuses to run them:
+A test file holds only declarations (types, functions, test functions). It must not declare `fn main` and must not have executable statements outside a function. The `miri test` runner enforces both rules:
+
+**Correct test file:**
 
 ```miri
 use system.testing.{assert_eq}
 
-println("this is a top-level statement")
-
 @test fn my_test()
     assert_eq(1, 1)
+
+@test fn another()
+    assert_eq(2, 2)
 ```
 
-Running `miri test` on this file produces an error:
+**Declaring `fn main` is rejected:**
 
+The runner says:
 ```
-has executable statements outside a function; move them into a `@test` function
+declares its own `main`; a test file holds only declarations, and the runner supplies the entry point
+```
+The runner appends its own `main` dispatcher, so any user-declared `main` causes a conflict.
+
+**Top-level executable statements are rejected:**
+
+The runner says:
+```
+has executable statements outside a function; move them into a `@test` function, where they would otherwise be silently skipped
 ```
 
-All executable code must be inside a `@test fn` or another function. If you need startup code, write a separate `.mi` file with a `fn main()` instead.
+**Non-parsing test files are rejected:**
+
+The runner says:
+```
+declares `@test` but does not parse; run `miri check` on it for the syntax error
+```
+A test file must be valid Miri syntax; files with syntax errors are rejected without running any tests.
+
+**Why these rules have no `fails=` blocks:**
+
+Files with `fn main`, top-level statements, or parse errors type-check cleanly (or fail to parse entirely), so the compiler-driven gate cannot express them as `fails=` blocks. Only the `miri test` runner enforces these rejection rules at runtime.
+
+To run executable setup code outside a test, write a separate `.mi` file with a regular `fn main()` instead.
+
+## Module Resolution in Tests
+
+`miri test --dir <DIR>` works from any working directory. Imports in a test file resolve against the **entry file's directory** (where the test file is located), not the shell's current working directory. Set `MIRI_STDLIB_PATH` to override the stdlib search when the binary is not beside `stdlib/`.
 
 ## Anti-Hallucination: Test Syntax That Does Not Exist
 
@@ -87,7 +115,7 @@ All executable code must be inside a `@test fn` or another function. If you need
 
 Test functions must have zero parameters:
 
-```miri,fails=MER_TYP_017
+```miri,fails=MER_TYP_017,expects-message=test functions must take zero parameters
 @test fn bad_test(x int)
     println("test")
 ```
@@ -96,7 +124,7 @@ Test functions must have zero parameters:
 
 Test functions must have no explicit return type:
 
-```miri,fails=MER_TYP_017
+```miri,fails=MER_TYP_017,expects-message=test functions must not declare a return type
 @test fn bad_test() int
     5
 ```
@@ -105,7 +133,7 @@ Test functions must have no explicit return type:
 
 Assertion functions are not in the prelude:
 
-```miri,fails=MER_TYP_034
+```miri,fails=MER_TYP_034,expects-message=Undefined variable: assert_eq
 @test fn test_add()
     assert_eq(2 + 2, 4)
 ```
