@@ -2,6 +2,10 @@
 
 A type expression is required but missing or invalid. In contexts where the parser expects a type (e.g. in a type parameter, type annotation, or generic argument), the input was not a valid type expression.
 
+## Messages
+
+- `Missing Type Expression`
+
 ## Before
 
 ```miri

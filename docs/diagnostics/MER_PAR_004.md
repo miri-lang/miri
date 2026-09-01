@@ -2,6 +2,10 @@
 
 The left-hand side of an assignment is not a valid lvalue. An assignment target must be an identifier, object member, or collection subscript that can receive a new value. Literals, function calls, or other expressions that do not refer to a storage location cannot be assigned to.
 
+## Messages
+
+- `Invalid Left-Hand Side Expression`
+
 ## Before
 
 ```miri

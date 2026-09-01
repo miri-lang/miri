@@ -2,6 +2,10 @@
 
 A value was used inside a string interpolation expression (e.g., `"value: {x}"`) but its type is not valid for string interpolation. Only types with well-defined string representations can be interpolated; custom types without `to_string` implementations or certain special types are forbidden.
 
+## Messages
+
+- `Type '{type}' cannot be used in string interpolation`
+
 ## Before
 
 ```miri

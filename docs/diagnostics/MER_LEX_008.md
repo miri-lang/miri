@@ -2,6 +2,10 @@
 
 A decimal number literal has invalid underscore placement. Underscores are allowed to separate digit groups (e.g. `1_000_000`) but cannot appear at the start, end, or consecutively. A leading underscore, trailing underscore, or repeated underscores (e.g. `1__0`) are all invalid.
 
+## Messages
+
+- `Invalid Number Literal`
+
 ## Before
 
 ```miri

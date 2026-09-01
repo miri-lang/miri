@@ -2,6 +2,25 @@
 
 A vector builtin function (e.g., `vec2()`, `vec3()`) was called with an invalid number of arguments or argument types that do not match the vector's component type. Vector constructors have fixed arities and strict type requirements.
 
+## Messages
+
+- `abs expects exactly one argument, but got {count}`
+- `dot expects exactly two arguments, but got {count}`
+- `dot expects vector with f32 elements, got {type}`
+- `dot expects both vector arguments to have the same type, got {type1} and {type2}`
+- `length expects exactly one argument, but got {count}`
+- `length expects vector with f32 elements, got {type}`
+- `normalize expects exactly one argument, but got {count}`
+- `normalize expects vector with f32 elements, got {type}`
+- `cross expects exactly two arguments, but got {count}`
+- `cross expects Vec3 arguments, got {type}`
+- `reflect expects exactly two arguments, but got {count}`
+- `reflect expects vector with f32 elements, got {type}`
+- `reflect expects both vector arguments to have the same type, got {type1} and {type2}`
+- `mix expects exactly three arguments, but got {count}`
+- `mix expects vector with f32 elements, got {type}`
+- `mix expects both vector arguments to have the same type, got {type1} and {type2}`
+
 ## Before
 
 ```miri

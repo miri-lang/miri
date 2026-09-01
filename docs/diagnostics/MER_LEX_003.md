@@ -2,6 +2,10 @@
 
 An indentation level does not match any enclosing block. The lexer tracks indentation depth when entering (`Indent` token) and exiting (`Dedent` token) code blocks, and requires that all `Dedent` operations align with a previously seen indentation level. An outdent to a level that was never introduced is a mismatch.
 
+## Messages
+
+- `Indentation Mismatch`
+
 ## Before
 
 ```miri

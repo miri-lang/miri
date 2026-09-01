@@ -2,6 +2,10 @@
 
 A struct member declaration is missing its type. Struct fields must each be declared with both a name and a type. A field name without a following type annotation causes this error.
 
+## Messages
+
+- `Missing Struct Member Type`
+
 ## Before
 
 ```miri

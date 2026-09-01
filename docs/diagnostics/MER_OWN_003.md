@@ -2,6 +2,10 @@
 
 A value was consumed and then used again. For resource types (classes with `fn drop(self)`), assignment is a move: the source variable is transferred to the destination and cannot be accessed afterward. For other types, the same rule applies at top-level scope. Call `.clone()` to keep an independent copy.
 
+## Messages
+
+- `'{var}' was consumed by '{sink}' and cannot be used again\n  fix: call .clone() to keep your copy independent`
+
 ## Before
 
 ```miri

@@ -2,6 +2,10 @@
 
 Miri does not support the decrement operator. The `--` syntax is parsed as two negation operators, not a decrement. Instead, use explicit subtraction (e.g., `x = x - 1`) to decrement a variable.
 
+## Messages
+
+- `Decrement operator not supported`
+
 ## Before
 
 ```miri

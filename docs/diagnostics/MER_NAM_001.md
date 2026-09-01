@@ -2,6 +2,10 @@
 
 The name `gpu` (lowercase) is deprecated and will be removed in a future release. Use `kernel` instead. Both refer to GPU kernel code context, but the new name aligns with Miri's terminology.
 
+## Messages
+
+- `` `{old}` is deprecated; use `{new}` instead ``
+
 ## Before
 
 ```miri

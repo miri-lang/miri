@@ -20,4 +20,4 @@ fn example()
 
 ## Reference
 
-[Build and Command Line](../reference/build.md) - [miri fmt](../reference/fmt.md)
+[Build and Command Line](../reference/build.md)

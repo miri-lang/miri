@@ -209,6 +209,8 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             example_before: Some("let x = 1\nx = \"two\"\n".to_string()),
             example_after: Some("let x = 1\nx = 2\n".to_string()),
             reference: Some("../reference/types.md".to_string()),
+            reference_title: Some("Types".to_string()),
+            reference_summary: Some("Type system overview and rules.".to_string()),
         }),
         view: Some(JsonView {
             shape: "fn".to_string(),

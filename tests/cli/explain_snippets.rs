@@ -190,12 +190,40 @@ fn before_example(code: DiagnosticCode) -> Option<String> {
     Some(body[..close].trim_start_matches('\n').to_string())
 }
 
-/// Diagnostic codes reported by `miri check` for one source file.
+/// Compile a source file and extract the first diagnostic code and message.
 ///
 /// The file is written inside the repository because module resolution is
 /// relative to the working directory: the same source checked from elsewhere
 /// fails to find the standard library and reports that instead of the error
 /// under test.
+fn first_diagnostic(source: &str, slot: &str) -> Option<(String, String)> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
+    std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
+    let path = dir.join(format!("{}.mi", slot));
+    std::fs::write(&path, source).expect("could not write the snippet");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_miri"));
+    let output = Command::new(binary)
+        .args(["check", &path.display().to_string(), "--format", "json"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("could not run the compiler");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&stdout) else {
+        return None;
+    };
+    envelope["diagnostics"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|d| {
+            let code = d["code"].as_str().map(str::to_string);
+            let message = d["message"].as_str().map(str::to_string);
+            code.zip(message)
+        })
+}
+
+/// All diagnostic codes reported by `miri check` for one source file.
 fn codes_reported_for(source: &str, slot: &str) -> Vec<String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
     std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
@@ -224,6 +252,65 @@ fn codes_reported_for(source: &str, slot: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Check if a message matches one of the documented shapes.
+/// A shape is a template where {identifier} matches any sequence of characters (including newlines).
+/// All other text is literal and must match exactly.
+fn message_matches_shape(message: &str, shape: &str) -> bool {
+    // Build a regex: literal text is escaped, {identifier} becomes a capturing group for .+,
+    // and \n (backslash followed by 'n') becomes a literal newline.
+    let mut regex_str = String::from("^(?s)");
+    let mut chars = shape.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            // Collect identifier name
+            let mut found_close = false;
+            while let Some(&c) = chars.peek() {
+                if c == '}' {
+                    chars.next();
+                    found_close = true;
+                    break;
+                }
+                chars.next(); // consume the character without storing it
+            }
+            if !found_close {
+                panic!(
+                    "shape '{}' has an unterminated placeholder (unclosed '{{')  — fix the shape definition",
+                    shape
+                );
+            }
+            // Placeholder matches any sequence including newlines
+            regex_str.push_str("([\\s\\S]+)");
+        } else if ch == '\\' && chars.peek() == Some(&'n') {
+            // Handle \n escape: consume the 'n' and add a literal newline to the regex
+            chars.next();
+            regex_str.push('\n');
+        } else {
+            // Escape special regex characters for literal text
+            match ch {
+                '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}'
+                | '|' => {
+                    regex_str.push('\\');
+                    regex_str.push(ch);
+                }
+                _ => regex_str.push(ch),
+            }
+        }
+    }
+    regex_str.push('$');
+
+    // Compile and match the regex
+    match regex::Regex::new(&regex_str) {
+        Ok(re) => re.is_match(message),
+        Err(e) => {
+            panic!(
+                "shape '{}' produced an invalid regex: {} — fix the shape definition",
+                shape, e
+            );
+        }
+    }
+}
+
 #[test]
 fn every_live_code_is_either_verified_or_carries_a_reason() {
     for code in DiagnosticCode::all() {
@@ -244,19 +331,69 @@ fn every_live_code_is_either_verified_or_carries_a_reason() {
 
 #[test]
 fn verified_examples_emit_the_code_they_document() {
+    let mut failures = Vec::new();
+
     for wire in VERIFIED {
-        let code: DiagnosticCode = wire
-            .parse()
-            .unwrap_or_else(|_| panic!("{} is not a registered code", wire));
-        let example =
-            before_example(code).unwrap_or_else(|| panic!("{} has no Before example", wire));
+        let code: DiagnosticCode = match wire.parse() {
+            Ok(c) => c,
+            Err(_) => {
+                failures.push(format!("{} is not a registered code", wire));
+                continue;
+            }
+        };
+
+        let example = match before_example(code) {
+            Some(e) => e,
+            None => {
+                failures.push(format!("{} has no Before example", wire));
+                continue;
+            }
+        };
+
         let reported = codes_reported_for(&example, wire);
-        assert_eq!(
-            reported.first().map(String::as_str),
-            Some(*wire),
-            "the documented example for {} must report it first; it reported {:?}",
-            wire,
-            reported
+        if reported.first().map(String::as_str) != Some(*wire) {
+            failures.push(format!(
+                "{}: the documented example must report it first; it reported {:?}",
+                wire, reported
+            ));
+        }
+
+        // Also verify that the message matches a documented shape
+        let explanation = code.explanation();
+        if explanation.messages.is_empty() {
+            failures.push(format!(
+                "{} has no ## Messages section documenting the shapes this code can emit. \
+                 Add a ## Messages section with backticked message shapes.",
+                wire
+            ));
+            continue;
+        }
+
+        match first_diagnostic(&example, wire) {
+            Some((_, message)) => {
+                let matches_any = explanation
+                    .messages
+                    .iter()
+                    .any(|shape| message_matches_shape(&message, shape));
+
+                if !matches_any {
+                    failures.push(format!(
+                        "{}: the first diagnostic message '{}' does not match any declared shape: {:?}",
+                        wire, message, explanation.messages
+                    ));
+                }
+            }
+            None => {
+                failures.push(format!("{}: could not extract the first diagnostic", wire));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{} verified codes failed:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
         );
     }
 }
@@ -270,6 +407,170 @@ fn every_reason_is_written_out() {
             wire
         );
     }
+}
+
+/// Verify that every declared message shape actually appears in the compiler source.
+///
+/// A message shape with no literal text that is verifiable (at least 8 characters)
+/// is considered too vague to gate. A shape that declares something the compiler
+/// never emits is a documentation error — an invented message that may never show up
+/// when a user encounters the code, breaking trust.
+#[test]
+fn declared_shapes_appear_in_compiler_sources() {
+    use std::fs;
+    use std::path::Path;
+
+    // Read all Rust source files from src/ into a single buffer for fast searching.
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest_dir.join("src");
+
+    let mut all_source = String::new();
+    fn walk_source(dir: &Path, buffer: &mut String) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            // Skip target directory
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n == "target")
+            {
+                continue;
+            }
+
+            if path.is_dir() {
+                walk_source(&path, buffer)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let content = fs::read_to_string(&path)?;
+                buffer.push_str(&content);
+                buffer.push('\n');
+            }
+        }
+        Ok(())
+    }
+
+    walk_source(&src_dir, &mut all_source).expect("could not read src directory");
+
+    // Normalize the source to handle Rust string literal line continuations:
+    // a backslash immediately followed by a newline and any following whitespace
+    // becomes nothing (what the Rust lexer does).
+    all_source = normalize_rust_string_literals(&all_source);
+
+    let mut failures = Vec::new();
+
+    for wire in VERIFIED {
+        let Ok(code) = wire.parse::<DiagnosticCode>() else {
+            continue;
+        };
+
+        let explanation = code.explanation();
+        for shape in &explanation.messages {
+            // Split the shape on {placeholders} and collect literal runs.
+            let mut literal_runs = Vec::new();
+            let mut current_literal = String::new();
+
+            let mut chars = shape.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch == '{' {
+                    // End current literal run if it has >= 8 chars (trimmed for length check)
+                    if current_literal.trim().len() >= 8 {
+                        // Keep the literal run as-is (with whitespace) for source matching
+                        literal_runs.push(current_literal.clone());
+                    }
+                    current_literal.clear();
+
+                    // Skip the placeholder name until '}'
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c == '}' {
+                            break;
+                        }
+                    }
+                } else if ch == '\\' && chars.peek() == Some(&'n') {
+                    // Handle \n escape: insert literal newline into the literal run
+                    chars.next();
+                    current_literal.push('\n');
+                } else {
+                    current_literal.push(ch);
+                }
+            }
+
+            // Don't forget the final run
+            if current_literal.trim().len() >= 8 {
+                literal_runs.push(current_literal);
+            }
+
+            // If the shape has no verifiable literal run, that's a gate failure
+            if literal_runs.is_empty() {
+                failures.push(format!(
+                    "{}: shape '{}' is too vague to verify (no literal text ≥8 chars) — \
+                     document the exact format string the compiler builds",
+                    wire, shape
+                ));
+                continue;
+            }
+
+            // Check that at least one literal run appears in src/ (with exact whitespace)
+            let found = literal_runs
+                .iter()
+                .any(|run| all_source.contains(run.as_str()));
+            if !found {
+                failures.push(format!(
+                    "{}: shape '{}' has no verifiable literal text in the compiler source",
+                    wire, shape
+                ));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{} message shapes do not appear in compiler source:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+}
+
+/// Normalize Rust source by collapsing string literal line continuations.
+/// A backslash immediately followed by a newline and any following whitespace
+/// becomes nothing (what the Rust lexer does with string literal continuations).
+/// An escaped backslash (two backslashes followed by a newline) is NOT a continuation.
+fn normalize_rust_string_literals(source: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && chars.peek() == Some(&'\n') {
+            // This is a backslash followed by a newline. But we need to check if
+            // the backslash itself is escaped (preceded by another backslash).
+            // We've already added characters to result, so check if the last
+            // character we added is a backslash.
+            if result.ends_with('\\') {
+                // The backslash we just processed is escaped by the previous backslash.
+                // Add both the backslash and newline normally (the newline is NOT a continuation).
+                result.push(ch);
+            } else {
+                // This is a genuine line continuation: backslash + newline + whitespace.
+                // Consume the newline.
+                chars.next();
+                // Consume any following whitespace (spaces and tabs).
+                while let Some(&c) = chars.peek() {
+                    if c == ' ' || c == '\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                // Don't add anything to result; the continuation is removed.
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 /// An excuse has to stay true, or the list becomes a place to hide failures.
@@ -302,4 +603,75 @@ fn excused_examples_still_fail_to_report_their_code() {
             reported
         );
     }
+}
+
+#[test]
+fn test_message_matches_shape_literal_text() {
+    let shape = "Unknown type: {name}";
+    assert!(message_matches_shape("Unknown type: MyClass", shape));
+    // Placeholder matches any text including spaces, so "extra" is included
+    assert!(message_matches_shape("Unknown type: MyClass extra", shape));
+    // But a message that doesn't start with "Unknown type: " won't match
+    assert!(!message_matches_shape("Type mismatch: MyClass", shape));
+}
+
+#[test]
+fn test_message_matches_shape_regex_metacharacters_literal() {
+    let shape = "Expected [a-z]+";
+    assert!(message_matches_shape("Expected [a-z]+", shape));
+    assert!(!message_matches_shape("Expected aaa", shape));
+}
+
+#[test]
+fn test_message_matches_shape_multiple_placeholders() {
+    let shape = "{lhs} {op} {rhs}";
+    assert!(message_matches_shape("5 + 3", shape));
+    assert!(message_matches_shape("hello world foo", shape));
+    assert!(!message_matches_shape("5 +", shape));
+}
+
+#[test]
+fn test_message_matches_shape_anchoring_no_prefix() {
+    let shape = "Division by zero";
+    assert!(message_matches_shape("Division by zero", shape));
+    assert!(!message_matches_shape(
+        "Division by zero in constant folding",
+        shape
+    ));
+    assert!(!message_matches_shape("Error: Division by zero", shape));
+}
+
+#[test]
+fn test_message_matches_shape_newline_escape() {
+    let shape = "Expected {thing}\nFound {other}";
+    assert!(message_matches_shape("Expected int\nFound string", shape));
+    assert!(!message_matches_shape("Expected int Found string", shape));
+}
+
+#[test]
+fn test_message_matches_shape_placeholder_across_newline() {
+    let shape = "Message: {content}";
+    assert!(message_matches_shape("Message: line 1\nline 2", shape));
+}
+
+#[test]
+fn test_normalize_rust_string_literals_line_continuation() {
+    let source = "\"hello \\\n  world\"";
+    let result = normalize_rust_string_literals(source);
+    assert_eq!(result, "\"hello world\"");
+}
+
+#[test]
+fn test_normalize_rust_string_literals_escaped_backslash() {
+    let source = "\"hello \\\\\n  world\"";
+    let result = normalize_rust_string_literals(source);
+    // First backslash escapes second, so newline is NOT a continuation
+    assert_eq!(result, "\"hello \\\\\n  world\"");
+}
+
+#[test]
+fn test_normalize_rust_string_literals_no_continuation() {
+    let source = "\"hello world\"";
+    let result = normalize_rust_string_literals(source);
+    assert_eq!(result, "\"hello world\"");
 }
