@@ -181,7 +181,7 @@ Not all scalar types are valid in GPU device memory. Miri enforces strict portab
 
 Attempting to create a GPU array with `bool` fails at compile time:
 
-```miri,fails=MER_TAR_007
+```miri,fails=MER_TAR_007,expects-message=does not implement 'Accelerable' and cannot be gpu-resident
 use system.collections.array
 
 gpu var buf = Array<bool, 4>()
@@ -209,7 +209,7 @@ gpu frame
 
 GPU kernels return values through `out` parameters only:
 
-```miri,fails=MER_TAR_008
+```miri,fails=MER_TAR_008,expects-message=GPU functions must not have an explicit return type
 use system.gpu
 
 gpu fn twice(x int) int
