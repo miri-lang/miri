@@ -23,7 +23,6 @@ use system.accelerator
 ///     println(f"{a[0]}")  // 1
 ///     for x in a
 ///         println(f"{x}")
-
 public class Array<T, Size> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self

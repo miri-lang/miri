@@ -4,6 +4,21 @@
 use system.ops
 use system.memory
 
+/// A collection of unique elements of a single type.
+///
+/// Set<T> holds distinct elements and provides methods to add, remove, and check
+/// membership. Attempting to add an element already in the set leaves it unchanged.
+/// The iteration order is unspecified and must not be relied upon; elements are
+/// accessed sequentially via `element_at()`. Sets are passed by reference, so
+/// `add()` and `remove()` affect the original; use `clone()` for an independent copy.
+///
+/// Example:
+///     var s = Set<int>()
+///     s.add(10)
+///     s.add(20)
+///     s.add(10)  // no effect; 10 already in set
+///     println(f"{s.length()}")       // 2
+///     println(f"{s.contains(10)}")   // true
 public class Set<T> implements Iterable<T>, Cloneable
 
     runtime "core" fn miri_rt_set_new(elem_size int) Self

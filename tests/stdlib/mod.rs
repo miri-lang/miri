@@ -2,5 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod dispatch_intercepts;
+pub mod doc_placement;
 pub mod mi_suite;
 pub mod runtime_fns_sync;

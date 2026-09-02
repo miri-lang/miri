@@ -4,6 +4,21 @@
 use system.ops
 use system.memory
 
+/// A key-value collection where each key maps to a value.
+///
+/// Map<K, V> holds distinct keys with associated values, accessed by key using
+/// `get()`, `set()`, and `remove()`. The iteration order is unspecified and must
+/// not be relied upon; keys are accessed via `element_at()` and values via `value_at()`.
+/// A repeated key keeps its most recent value. Maps are passed by reference, so
+/// `set()` and `remove()` affect the original; use `clone()` for an independent copy.
+///
+/// Example:
+///     var m = Map<String, int>()
+///     m.set("alice", 30)
+///     m.set("bob", 25)
+///     let score = m.get("alice") ?? 0
+///     println(f"{score}")                 // 30
+///     println(f"{m.length()}")            // 2
 public class Map<K, V> implements Iterable<K>, Cloneable
 
     runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
