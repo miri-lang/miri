@@ -220,6 +220,8 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 end: 27,
                 kind: "function".to_string(),
                 name: Some("main".to_string()),
+                line: Some(1),
+                end_line: Some(2),
             }],
         }),
         patch: Some(miri::diagnostics::json::JsonPatch {
@@ -234,10 +236,18 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
         skills: Some(vec![miri::diagnostics::json::JsonSkill {
             name: "miri-lang".to_string(),
             description: "Writing Miri source files".to_string(),
-            compiler_version: "0.6.0-beta.4".to_string(),
+            compiler_version: env!("CARGO_PKG_VERSION").to_string(),
             installed_path: Some(".claude/skills/miri-lang/SKILL.md".to_string()),
             unchanged: Some(false),
             body: Some("# Miri Language Essentials\n".to_string()),
+        }]),
+        codes: Some(vec![miri::diagnostics::json::JsonCode {
+            code: "MER_TYP_001".to_string(),
+            title: "Type Mismatch".to_string(),
+            severity: "error".to_string(),
+            area: "type".to_string(),
+            retired: false,
+            fix_safety: "local-edit".to_string(),
         }]),
     }
 }

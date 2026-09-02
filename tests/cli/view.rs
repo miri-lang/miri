@@ -550,3 +550,331 @@ fn agent_call(request: &serde_json::Value) -> serde_json::Value {
     let start = text.find('{').expect("the response carries a body");
     serde_json::from_str(&text[start..]).expect("the response body parses")
 }
+
+/// A fixture whose declarations sit at lines the assertions name outright.
+///
+/// Line 1 is the doc comment, so `stamp` is declared on line 2 and its body
+/// ends on line 3; `Ledger` runs from line 5 to line 13.
+const LOCATED: &str = "\
+// Stamps a value.
+fn stamp(v int) int
+    return v + 1
+
+class Ledger
+    private fn audit() int
+        return 0
+
+    protected fn seal() int
+        return 1
+
+    fn total() int
+        return 2
+";
+
+#[test]
+fn test_outline_json_locates_each_declaration_in_the_source() {
+    with_source(LOCATED, |path| {
+        let (stdout, _, ok) = view(&[
+            "--outline",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(ok, "an outline of a well-formed file should succeed");
+        let view = envelope(&stdout).view.expect("an outline carries a view");
+        let located: Vec<(String, Option<usize>, Option<usize>)> = view
+            .spans
+            .iter()
+            .map(|span| {
+                (
+                    span.name.clone().unwrap_or_default(),
+                    span.line,
+                    span.end_line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            located,
+            vec![
+                ("stamp".to_string(), Some(2), Some(3)),
+                ("Ledger".to_string(), Some(5), Some(13)),
+                ("audit".to_string(), Some(6), Some(7)),
+                ("seal".to_string(), Some(9), Some(10)),
+                ("total".to_string(), Some(12), Some(13)),
+            ],
+            "every outline entry carries the source lines it was read from"
+        );
+    });
+}
+
+#[test]
+fn test_fn_json_locates_the_declaration_in_the_source() {
+    with_source(LOCATED, |path| {
+        let (stdout, _, ok) = view(&[
+            "--fn",
+            "Ledger.total",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(ok, "viewing a method should succeed");
+        let view = envelope(&stdout)
+            .view
+            .expect("a function read carries a view");
+        let span = view.spans.first().expect("the declaration is recorded");
+        assert_eq!(
+            (span.line, span.end_line),
+            (Some(12), Some(13)),
+            "the method's own source lines travel with the rendering"
+        );
+    });
+}
+
+#[test]
+fn test_around_json_locates_the_narrowed_block() {
+    with_source(LOCATED, |path| {
+        let (stdout, _, ok) = view(&[
+            "--fn",
+            "stamp",
+            "--around",
+            "return v + 1",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(ok, "narrowing to a block should succeed");
+        let view = envelope(&stdout)
+            .view
+            .expect("a narrowed read carries a view");
+        let span = view
+            .spans
+            .first()
+            .expect("a narrowed block is recorded as a span of its own");
+        assert_eq!(
+            span.kind, "block",
+            "the narrowed region is reported as a block"
+        );
+        assert_eq!(
+            (span.line, span.end_line),
+            (Some(3), Some(3)),
+            "a narrowed block reports the source lines it covers"
+        );
+    });
+}
+
+#[test]
+fn test_outline_public_hides_private_and_protected_members() {
+    with_source(LOCATED, |path| {
+        let (stdout, _, ok) = view(&[
+            "--outline",
+            "--public",
+            path.to_str().expect("a utf-8 path"),
+        ]);
+        assert!(ok, "a public outline should succeed");
+        assert!(stdout.contains("fn total()"), "a public method stays");
+        assert!(!stdout.contains("audit"), "a private method is hidden");
+        assert!(!stdout.contains("seal"), "a protected method is hidden");
+    });
+}
+
+#[test]
+fn test_outline_public_hides_runtime_bindings() {
+    let source = "\
+class Buffer
+    runtime \"core\" fn miri_rt_buffer_new(size int) Self
+
+    fn length() int
+        return 0
+";
+    with_source(source, |path| {
+        let target = path.to_str().expect("a utf-8 path");
+        let (plain, _, _) = view(&["--outline", target]);
+        assert!(
+            plain.contains("runtime"),
+            "the default outline still lists a runtime binding"
+        );
+        let (public, _, ok) = view(&["--outline", "--public", target]);
+        assert!(ok, "a public outline should succeed");
+        assert!(
+            !public.contains("runtime"),
+            "a public outline omits runtime bindings"
+        );
+        assert!(public.contains("fn length()"), "a public method stays");
+    });
+}
+
+#[test]
+fn test_neither_fn_nor_outline_names_both_alternatives() {
+    with_source(LOCATED, |path| {
+        let (_, stderr, ok) = view(&[path.to_str().expect("a utf-8 path")]);
+        assert!(!ok, "a read with no shape should fail");
+        assert!(
+            stderr.contains("--fn <NAME>") && stderr.contains("--outline"),
+            "the failure names both ways to ask for a shape, got: {stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_public_cannot_be_combined_with_fn() {
+    with_source(LOCATED, |path| {
+        let (_, stderr, ok) = view(&[
+            "--fn",
+            "stamp",
+            "--public",
+            path.to_str().expect("a utf-8 path"),
+        ]);
+        assert!(!ok, "--public applies to an outline only");
+        assert!(
+            stderr.contains("--public"),
+            "the failure names the flag that does not apply, got: {stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_help_opens_with_one_sentence() {
+    let output = miri_cmd()
+        .args(["view", "--help"])
+        .output()
+        .expect("the help runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = stdout.lines().next().unwrap_or_default();
+    assert_eq!(
+        first, "Read part of a Miri source file: one function, or an outline of it",
+        "the summary is one sentence, not two run together"
+    );
+    assert!(
+        stdout.contains("<--fn <NAME>|--outline>"),
+        "the usage line offers both shapes, got: {stdout}"
+    );
+}
+
+/// Declaration shapes whose extent is easy to compute one line short.
+///
+/// An attribute sits above its function, a `:` body shares the signature's
+/// line, a `match` ends inside a nested arm, a lambda carries a body of its
+/// own, a generic struct ends on a field, and the last declaration runs to the
+/// end of the file with no closing token and no trailing newline.
+const SHAPES: &str = "@must_use
+fn attributed(x int) int
+    return x + 1
+
+fn single_line(x int) int: x * 2
+
+fn matched(v int) int
+    match v
+        1: 1
+        _: 0
+
+fn lambda_holder() int
+    let f = fn (x int) int: x + 1
+    return f(1)
+
+struct Pair<A>
+    left A
+    right A
+
+fn at_eof() int
+    return 9";
+
+#[test]
+fn test_outline_locates_declarations_whose_extent_is_easy_to_cut_short() {
+    with_source(SHAPES, |path| {
+        let (stdout, _, ok) = view(&[
+            "--outline",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(ok, "an outline of a well-formed file should succeed");
+        let view = envelope(&stdout).view.expect("an outline carries a view");
+        let located: Vec<(String, Option<usize>, Option<usize>)> = view
+            .spans
+            .iter()
+            .map(|span| {
+                (
+                    span.name.clone().unwrap_or_default(),
+                    span.line,
+                    span.end_line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            located,
+            vec![
+                // The attribute on line 1 is not part of the declaration's own
+                // line, the way a doc comment above it is not.
+                ("attributed".to_string(), Some(2), Some(3)),
+                ("single_line".to_string(), Some(5), Some(5)),
+                ("matched".to_string(), Some(7), Some(10)),
+                ("lambda_holder".to_string(), Some(12), Some(14)),
+                ("Pair".to_string(), Some(16), Some(18)),
+                ("at_eof".to_string(), Some(20), Some(21)),
+            ],
+            "each declaration reaches the last line it actually covers"
+        );
+    });
+}
+
+#[test]
+fn test_located_spans_are_consistent_wherever_they_are_reported() {
+    with_source(SHAPES, |path| {
+        let (stdout, _, ok) = view(&[
+            "--outline",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(ok, "an outline of a well-formed file should succeed");
+        let view = envelope(&stdout).view.expect("an outline carries a view");
+        let line_count = SHAPES.lines().count();
+        for span in &view.spans {
+            assert_eq!(
+                span.line.is_some(),
+                span.end_line.is_some(),
+                "a span carries both source lines or neither"
+            );
+            let (Some(line), Some(end_line)) = (span.line, span.end_line) else {
+                continue;
+            };
+            assert!(line >= 1, "source lines are 1-based, got {line}");
+            assert!(
+                end_line >= line,
+                "a declaration does not end before it starts: {line}..{end_line}"
+            );
+            assert!(
+                end_line <= line_count,
+                "a declaration does not run past the end of the file: {end_line} > {line_count}"
+            );
+        }
+    });
+}
+
+#[test]
+fn test_public_outline_keeps_a_container_whose_every_member_is_hidden() {
+    let source = "class Hidden
+    private fn secret() int: 0
+
+    runtime \"core\" fn miri_rt_hidden() int
+";
+    with_source(source, |path| {
+        let (stdout, _, ok) = view(&[
+            "--outline",
+            "--public",
+            path.to_str().expect("a utf-8 path"),
+            "--format",
+            "json",
+        ]);
+        assert!(
+            ok,
+            "a public outline of a fully hidden class still succeeds"
+        );
+        let view = envelope(&stdout).view.expect("an outline carries a view");
+        assert_eq!(
+            view.text, "class Hidden\n",
+            "the container survives even when nothing inside it does"
+        );
+        assert_eq!(view.spans.len(), 1, "only the container is recorded");
+    });
+}

@@ -16,7 +16,9 @@
 
 use std::path::Path;
 
+use crate::ast::common::MemberVisibility;
 use crate::ast::doc_comments::DocComments;
+use crate::ast::extent;
 use crate::ast::formatter::{self, Rendered};
 use crate::ast::statement::StatementKind;
 use crate::ast::{Program, Statement};
@@ -27,6 +29,7 @@ use crate::diagnostics::json::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::{to_json, Diagnostic, Reportable};
 use crate::error::format::format_diagnostic_with_color;
+use crate::error::syntax::find_line_info;
 use crate::error::type_error::TypeError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -42,7 +45,7 @@ pub enum Shape {
         around: Option<String>,
     },
     /// Every declaration's signature, with no bodies.
-    Outline,
+    Outline { public_only: bool },
 }
 
 impl Shape {
@@ -53,7 +56,7 @@ impl Shape {
                 around: Some(_), ..
             } => "around",
             Shape::Function { around: None, .. } => "fn",
-            Shape::Outline => "outline",
+            Shape::Outline { .. } => "outline",
         }
     }
 }
@@ -112,8 +115,10 @@ pub fn view(path: &Path, source: &str, shape: &Shape) -> ViewReport {
     };
 
     let rendered = match shape {
-        Shape::Outline => Ok(outline(&program, source)),
-        Shape::Function { name, around } => function_view(&program, name, around.as_deref()),
+        Shape::Outline { public_only } => Ok(outline(&program, source, *public_only)),
+        Shape::Function { name, around } => {
+            function_view(&program, source, name, around.as_deref())
+        }
     };
 
     match rendered {
@@ -134,23 +139,88 @@ fn parse(source: &str) -> Result<Program, Box<Diagnostic>> {
 /// Render one function, narrowed to a block when an anchor is given.
 fn function_view(
     program: &Program,
+    source: &str,
     name: &str,
     anchor: Option<&str>,
-) -> Result<Rendered, Box<Diagnostic>> {
+) -> Result<LocatedRender, Box<Diagnostic>> {
     let declaration = resolve::resolve(program, name)?;
     let rendered = formatter::declaration(declaration);
     let Some(anchor) = anchor else {
-        return Ok(rendered);
+        return Ok(located_declaration(source, declaration, rendered));
     };
-    narrow(declaration, &rendered, anchor)
+    let (narrowed, node) = narrow(declaration, &rendered, anchor)?;
+    Ok(located_block(source, node, narrowed))
+}
+
+/// Locate a whole rendered declaration in the file it was read from.
+///
+/// The declaration occupies the rendering from its first byte, so the span
+/// starting there is the declaration itself; a span recorded further in belongs
+/// to something nested, which this call has no source statement for.
+fn located_declaration(source: &str, declaration: &Statement, rendered: Rendered) -> LocatedRender {
+    let (line, end_line) = source_lines(source, declaration);
+    LocatedRender {
+        text: rendered.text,
+        spans: rendered
+            .spans
+            .into_iter()
+            .map(|span| {
+                let whole = span.start == 0;
+                LocatedSpan {
+                    span,
+                    line: whole.then_some(line).flatten(),
+                    end_line: whole.then_some(end_line).flatten(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// Locate a narrowed block in the file it was read from.
+///
+/// A block is not a declaration, so the formatter records no span for it. One
+/// is synthesized over the whole rendering, because the lines a reader needs in
+/// order to edit what it just read are exactly the block's own.
+fn located_block(source: &str, block: &Statement, rendered: Rendered) -> LocatedRender {
+    let (line, end_line) = source_lines(source, block);
+    LocatedRender {
+        spans: vec![LocatedSpan {
+            span: formatter::RecordedSpan {
+                start: 0,
+                end: rendered.text.len(),
+                kind: "block".to_string(),
+                name: None,
+            },
+            line,
+            end_line,
+        }],
+        text: rendered.text,
+    }
+}
+
+/// The source lines `node` was read from, 1-based and inclusive.
+///
+/// A declaration is anchored at its name, which is where a reader looking for
+/// it starts; anything else is anchored at the first byte of source it covers.
+fn source_lines(source: &str, node: &Statement) -> (Option<usize>, Option<usize>) {
+    let Some(extent) = extent::source_extent(node) else {
+        return (None, None);
+    };
+    let start = declaration_offset(node).unwrap_or(extent.start);
+    let (line, _, _) = find_line_info(source, start);
+    let (end_line, _, _) = find_line_info(source, extent.end);
+    (Some(line), Some(end_line))
 }
 
 /// Narrow a rendered function to the innermost block holding `anchor`.
-fn narrow(
-    declaration: &Statement,
+///
+/// Returns the rendering together with the statement it came from, so the
+/// caller can report where in the file that block lives.
+fn narrow<'a>(
+    declaration: &'a Statement,
     rendered: &Rendered,
     anchor: &str,
-) -> Result<Rendered, Box<Diagnostic>> {
+) -> Result<(Rendered, &'a Statement), Box<Diagnostic>> {
     let occurrences = rendered.text.matches(anchor).count();
     if occurrences == 0 {
         return Err(anchor_not_found(anchor));
@@ -165,12 +235,12 @@ fn narrow(
     // rendering every block in the function to compare their lengths.
     let innermost = blocks(declaration)
         .into_iter()
-        .map(formatter::declaration)
-        .find(|block| block.text.contains(anchor));
+        .map(|block| (formatter::declaration(block), block))
+        .find(|(text, _)| text.text.contains(anchor));
 
     // An anchor that matches only the signature belongs to no block; the
     // function itself is then the narrowest honest answer.
-    Ok(innermost.unwrap_or_else(|| rendered.clone()))
+    Ok(innermost.unwrap_or_else(|| (rendered.clone(), declaration)))
 }
 
 /// Every block statement inside a declaration, deepest first.
@@ -198,19 +268,43 @@ fn collect_blocks<'a>(node: &'a Statement, depth: usize, found: &mut Vec<(&'a St
 ///
 /// Members are listed under the declaration that holds them, indented, so a
 /// reader can find a method without opening the class it belongs to.
-fn outline(program: &Program, source: &str) -> Rendered {
+fn outline(program: &Program, source: &str, public_only: bool) -> LocatedRender {
     let comments = DocComments::harvest(source);
     let mut outline = Outline {
         comments,
         source,
         text: String::new(),
         spans: Vec::new(),
+        public_only,
     };
     outline.write_all(&program.body.iter().collect::<Vec<_>>(), 0);
-    Rendered {
+    LocatedRender {
         text: outline.text,
         spans: outline.spans,
     }
+}
+
+/// Canonical text together with each declaration's place in it and in the file.
+struct LocatedRender {
+    /// The rendered source.
+    text: String,
+    /// Where each declaration landed, in the rendering and in the file.
+    spans: Vec<LocatedSpan>,
+}
+
+/// One declaration's span in the rendered text, carrying the source lines it
+/// was read from.
+///
+/// The rendered span lets a reader cite what it just read; the source lines let
+/// it go back to the file and edit there. Both are needed, and neither can be
+/// derived from the other.
+struct LocatedSpan {
+    /// Where the declaration sits in the rendered text.
+    span: formatter::RecordedSpan,
+    /// First line of the declaration in the source file, 1-based.
+    line: Option<usize>,
+    /// Last line of the declaration in the source file, 1-based and inclusive.
+    end_line: Option<usize>,
 }
 
 /// Accumulates an outline as it walks a program's declarations.
@@ -218,14 +312,60 @@ struct Outline<'a> {
     comments: DocComments,
     source: &'a str,
     text: String,
-    spans: Vec<formatter::RecordedSpan>,
+    spans: Vec<LocatedSpan>,
+    public_only: bool,
 }
 
 impl Outline<'_> {
     /// Write every declaration among `statements`, and their members.
     fn write_all(&mut self, statements: &[&Statement], depth: usize) {
         for statement in statements {
-            self.write_one(statement, depth);
+            if self.should_include(statement) {
+                self.write_one(statement, depth);
+            }
+        }
+    }
+
+    /// Check if a statement should be included in the outline.
+    /// Whether a declaration belongs in the outline being written.
+    ///
+    /// A `runtime` declaration binds a symbol in another library and a
+    /// non-public member is not callable from outside, so neither is part of
+    /// the surface a caller reads. Everything else is either public or not a
+    /// declaration at all, and a statement that declares nothing is dropped
+    /// later for want of a signature.
+    fn should_include(&self, statement: &Statement) -> bool {
+        if !self.public_only {
+            return true;
+        }
+
+        match &statement.node {
+            StatementKind::RuntimeFunctionDeclaration(..) => false,
+            StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, visibility)
+            | StatementKind::Variable(_, visibility)
+            | StatementKind::Type(_, visibility)
+            | StatementKind::Enum(_, _, _, _, visibility, _)
+            | StatementKind::Struct(_, _, _, _, visibility, _)
+            | StatementKind::Trait(_, _, _, _, visibility) => is_public(visibility),
+            StatementKind::Class(data) => is_public(&data.visibility),
+            StatementKind::FunctionDeclaration(declaration) => {
+                is_public(&declaration.properties.visibility)
+            }
+            // Not declarations: the outline drops these for want of a
+            // signature, whichever surface was asked for.
+            StatementKind::Empty
+            | StatementKind::Break
+            | StatementKind::Continue
+            | StatementKind::Expression(_)
+            | StatementKind::Block(_)
+            | StatementKind::If(..)
+            | StatementKind::While(..)
+            | StatementKind::For(..)
+            | StatementKind::Forall { .. }
+            | StatementKind::GpuFrame(..)
+            | StatementKind::GpuFrameBlock(_)
+            | StatementKind::Return(_)
+            | StatementKind::Use(..) => true,
         }
     }
 
@@ -246,11 +386,18 @@ impl Outline<'_> {
         self.indent(depth);
         let start = self.text.len();
         self.text.push_str(&signature.text);
-        self.spans.push(formatter::RecordedSpan {
-            start,
-            end: self.text.len(),
-            kind: signature.kind.to_string(),
-            name: Some(signature.name),
+
+        let (line, end_line) = source_lines(self.source, statement);
+
+        self.spans.push(LocatedSpan {
+            span: formatter::RecordedSpan {
+                start,
+                end: self.text.len(),
+                kind: signature.kind.to_string(),
+                name: Some(signature.name),
+            },
+            line,
+            end_line,
         });
         self.text.push('\n');
         self.write_all(&container_members(statement), depth + 1);
@@ -261,6 +408,14 @@ impl Outline<'_> {
         for _ in 0..depth {
             self.text.push_str("    ");
         }
+    }
+}
+
+/// Whether a member is reachable from outside the type that declares it.
+fn is_public(visibility: &MemberVisibility) -> bool {
+    match visibility {
+        MemberVisibility::Public => true,
+        MemberVisibility::Private | MemberVisibility::Protected => false,
     }
 }
 
@@ -297,7 +452,7 @@ fn container_members(node: &Statement) -> Vec<&Statement> {
 /// Build the report for a request that was answered.
 fn success(
     shape: &Shape,
-    rendered: Rendered,
+    rendered: LocatedRender,
     source: &str,
     source_path: Option<String>,
 ) -> ViewReport {
@@ -307,11 +462,13 @@ fn success(
         spans: rendered
             .spans
             .iter()
-            .map(|span| JsonViewSpan {
-                start: span.start,
-                end: span.end,
-                kind: span.kind.clone(),
-                name: span.name.clone(),
+            .map(|located| JsonViewSpan {
+                start: located.span.start,
+                end: located.span.end,
+                kind: located.span.kind.clone(),
+                name: located.span.name.clone(),
+                line: located.line,
+                end_line: located.end_line,
             })
             .collect(),
     });

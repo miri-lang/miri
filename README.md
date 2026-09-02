@@ -33,9 +33,9 @@ let host = dst // the only boundary crossing: assignment = readback
 println(f"{host[0]} {host[1]} {host[2]} {host[3]}") // 6.0 8.0 10.0 12.0
 ```
 
-## Current State (v0.6.0-beta.4)
+## Current State (v0.7.0-beta.5)
 
-This release is the **Extended Standard Library**. Miri now ships a standard library broad enough for practical programs — file I/O, platform access, time, regex, JSON, extra collections — plus a native test runner and a pair of memory-diagnostic tools that keep the whole suite provably leak- and corruption-free.
+The last feature release was the **Extended Standard Library**. Miri now ships a standard library broad enough for practical programs — file I/O, platform access, time, regex, JSON, extra collections — plus a native test runner and a pair of memory-diagnostic tools that keep the whole suite provably leak- and corruption-free.
 
 **New in v0.6.0-beta.4:**
 - **`system.fs`, `system.os`, `system.time`** — capability-class access to the outside world: an `Fs` handle for files and directories, `Env`/`Args` for the environment and argv, `platform()`, `exit()`, and `Clock`/`Instant`/`Duration` for time. A function without the capability parameter cannot touch that part of the world.

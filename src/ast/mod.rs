@@ -7,6 +7,7 @@ pub mod captures;
 pub mod common;
 pub mod doc_comments;
 pub mod expression;
+pub mod extent;
 pub mod factory;
 pub mod formatter;
 pub mod literal;

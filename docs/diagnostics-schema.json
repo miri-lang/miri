@@ -126,6 +126,16 @@
       "items": {
         "$ref": "#/$defs/JsonSkill"
       }
+    },
+    "codes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Diagnostic code registry (explain list command only). Absent or null for other commands.",
+      "items": {
+        "$ref": "#/$defs/JsonCode"
+      }
     }
   },
   "required": [
@@ -616,15 +626,15 @@
       "properties": {
         "start": {
           "type": "integer",
-          "description": "Byte offset where the declaration starts."
+          "description": "Byte offset into the rendered text where the declaration starts."
         },
         "end": {
           "type": "integer",
-          "description": "Byte offset one past the declaration's last byte."
+          "description": "Byte offset into the rendered text one past the declaration's last byte."
         },
         "kind": {
           "type": "string",
-          "description": "What kind of declaration this is, such as 'function' or 'class'."
+          "description": "What kind of declaration this is, such as 'function', 'class', 'struct', 'enum', 'trait', 'type' or 'use'. The value 'block' marks the region an '--around' read narrowed to, which is not a declaration and is produced by the view rather than found in the source."
         },
         "name": {
           "type": [
@@ -632,6 +642,20 @@
             "null"
           ],
           "description": "The declared name, when the declaration has one."
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "First line of the declaration in the source file, 1-based."
+        },
+        "endLine": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Last line of the declaration in the source file, 1-based and inclusive."
         }
       },
       "required": [
@@ -730,6 +754,49 @@
         "name",
         "description",
         "compilerVersion"
+      ]
+    },
+    "JsonCode": {
+      "type": "object",
+      "description": "One diagnostic code in the registry.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "The code identifier (e.g., MER_TYP_010)."
+        },
+        "title": {
+          "type": "string",
+          "description": "The short title of the code."
+        },
+        "severity": {
+          "type": "string",
+          "description": "The severity level (error, warning, note).",
+          "enum": [
+            "error",
+            "warning",
+            "note"
+          ]
+        },
+        "area": {
+          "type": "string",
+          "description": "The area this code belongs to."
+        },
+        "retired": {
+          "type": "boolean",
+          "description": "Whether this code is retired."
+        },
+        "fixSafety": {
+          "type": "string",
+          "description": "The fix safety level."
+        }
+      },
+      "required": [
+        "code",
+        "title",
+        "severity",
+        "area",
+        "retired",
+        "fixSafety"
       ]
     }
   }

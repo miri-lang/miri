@@ -516,7 +516,7 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
                 invalid_params("view", "view needs a `fn` parameter for `around` to narrow"),
             )
         }
-        None => view::Shape::Outline,
+        None => view::Shape::Outline { public_only: false },
     };
 
     serialize(id, &view::view(&path, &source, &shape).envelope)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, ArgGroup, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::cli::version::version_ref;
@@ -62,29 +62,48 @@ pub enum AgentFlavor {
 
 /// Top-level CLI argument definition parsed by clap.
 #[derive(Parser, Debug)]
-#[command(name = "miri", version = version_ref(), about = "Miri Compiler", author = "Slavik Shynkarenko <slavik@slavikdev.com>")]
+#[command(
+    name = "miri",
+    version = version_ref(),
+    about = "Miri Compiler",
+    author = "Slavik Shynkarenko <slavik@slavikdev.com>",
+    long_about = "Miri Compiler - a modern, GPU-first, statically-typed programming language.\n\n\
+Global options:\n\n\
+--verify-mir: Run the MIR verification pass after Perceus RC insertion, checking RC invariants \
+(StorageLive/Dead balance, no RC ops on parameters). Disabled by default. Also enabled by \
+setting MIRI_VERIFY_MIR to any non-empty value in the environment.\n\n\
+--color: Control ANSI color codes in diagnostic output. `auto` (default) detects TTY and emits \
+colors only if stderr is a terminal. `always` forces color codes on; useful for piping to \
+another tool that supports them. `never` disables all color codes. Note: JSON format \
+(`--format json`) never emits ANSI codes regardless of this setting."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    #[arg(short, long, action = ArgAction::Count, global = true, help = "Increase verbosity level")]
+    #[arg(short, long, action = ArgAction::Count, global = true, help = "Increase verbosity level", help_heading = "Global options")]
     pub verbose: u8,
 
-    /// Run the MIR verification pass after Perceus RC insertion.
-    ///
-    /// When enabled, the compiler checks RC invariants (StorageLive/Dead balance,
-    /// no RC ops on parameters) and reports any violations as errors. Disabled
-    /// by default. Also enabled by setting MIRI_VERIFY_MIR to any non-empty value in the environment.
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Verify RC invariants after Perceus",
+        help_heading = "Global options"
+    )]
     pub verify_mir: bool,
 
-    /// Control ANSI color codes in diagnostic output.
-    ///
-    /// `auto` (default) detects TTY and emits colors only if stderr is a terminal.
-    /// `always` forces color codes on; useful for piping to another tool that supports them.
-    /// `never` disables all color codes.
-    /// Note: JSON format (`--format json`) never emits ANSI codes regardless of this setting.
-    #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
+    // The variants are named in the help text rather than enumerated by clap:
+    // this flag is repeated on every subcommand, and a six-line value listing
+    // there is documentation a tool pays for on every command it reads.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ColorMode::Auto,
+        global = true,
+        help = "ANSI color in diagnostics: auto, always, never",
+        help_heading = "Global options",
+        hide_possible_values = true
+    )]
     pub color: ColorMode,
 }
 
@@ -160,11 +179,16 @@ pub enum Commands {
         format: Format,
     },
 
-    /// Explain a diagnostic code
+    /// Explain a diagnostic code or list all codes in the registry
+    #[command(group = ArgGroup::new("explain_mode").required(true).multiple(false))]
     Explain {
         /// Diagnostic code to explain (e.g. MER_TYP_010)
-        #[arg(required = true)]
-        code: String,
+        #[arg(group = "explain_mode")]
+        code: Option<String>,
+
+        /// List all diagnostic codes in the registry
+        #[arg(long, action = ArgAction::SetTrue, group = "explain_mode")]
+        list: bool,
 
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
@@ -240,25 +264,25 @@ pub enum Commands {
     #[command(subcommand)]
     Determinism(DeterminismCommand),
 
-    /// View scoped portions of source code
     /// Read part of a Miri source file: one function, or an outline of it
+    #[command(group = ArgGroup::new("view_mode").required(true).multiple(false))]
     View {
         /// Path to the Miri source file
         #[arg(required = true)]
         path: PathBuf,
 
         /// Show one function: its name, or `Class.method` for a method
-        #[arg(
-            long = "fn",
-            value_name = "NAME",
-            conflicts_with = "outline",
-            required_unless_present = "outline"
-        )]
+        #[arg(long = "fn", value_name = "NAME", group = "view_mode")]
         fn_name: Option<String>,
 
         /// List every declaration's signature, with no bodies
-        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "fn_name")]
+        #[arg(long, action = ArgAction::SetTrue, group = "view_mode")]
         outline: bool,
+
+        /// With `--outline`, list only the public surface: no `runtime`
+        /// bindings and no `private` or `protected` members
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "fn_name")]
+        public: bool,
 
         /// Narrow `--fn` to the innermost block containing this text
         #[arg(long, value_name = "TEXT", requires = "fn_name")]
@@ -303,11 +327,11 @@ pub enum Commands {
         new: Vec<String>,
 
         /// Read multi-line --old text from a file or stdin (-); pairs positionally with --new-file
-        #[arg(long, value_name = "PATH|")]
+        #[arg(long, value_name = "PATH|-")]
         old_file: Vec<String>,
 
         /// Read multi-line --new text from a file or stdin (-); pairs positionally with --old-file
-        #[arg(long, value_name = "PATH|")]
+        #[arg(long, value_name = "PATH|-")]
         new_file: Vec<String>,
 
         /// Function to replace wholly: its name, or `Class.method`; pairs with --body-file
@@ -315,7 +339,7 @@ pub enum Commands {
         replace_fn: Vec<String>,
 
         /// Read function body from a file or stdin (-); pairs positionally with --replace-fn
-        #[arg(long, value_name = "PATH|")]
+        #[arg(long, value_name = "PATH|-")]
         body_file: Vec<String>,
 
         /// Function to insert: its name, or `Class.method`; pairs with --body-file

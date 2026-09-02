@@ -75,14 +75,15 @@ fn run_command(cli: Cli) -> Result<()> {
             Commands::Check { path, format } => check_file(path, format, cli.verify_mir, cli.color),
             Commands::Dev { path, format } => dev_watch(path, format, cli.verify_mir, cli.color),
             Commands::Agent {} => serve_agent(),
-            Commands::Explain { code, format } => explain_code(&code, format, cli.color),
+            Commands::Explain { code, list, format } => explain_code(code, list, format, cli.color),
             Commands::View {
                 path,
                 fn_name,
                 outline,
+                public,
                 around,
                 format,
-            } => view_file(path, fn_name, outline, around, format, cli.color),
+            } => view_file(path, fn_name, outline, public, around, format, cli.color),
             Commands::Fmt {
                 path,
                 check,
@@ -448,10 +449,25 @@ fn serve_agent() -> Result<()> {
 
 /// Explain one diagnostic code. Rendering lives in the CLI layer; this arm only
 /// maps the outcome onto a process exit code.
-fn explain_code(code: &str, format: Format, color_mode: ColorMode) -> Result<()> {
-    match miri::cli::explain::run(code, format, color_mode) {
-        miri::cli::explain::Outcome::Explained => Ok(()),
-        miri::cli::explain::Outcome::UnknownCode => std::process::exit(1),
+fn explain_code(
+    code: Option<String>,
+    list: bool,
+    format: Format,
+    color_mode: ColorMode,
+) -> Result<()> {
+    if list {
+        miri::cli::explain::run_list(format);
+        return Ok(());
+    }
+    match code {
+        Some(code) => match miri::cli::explain::run(&code, format, color_mode) {
+            miri::cli::explain::Outcome::Explained => Ok(()),
+            miri::cli::explain::Outcome::UnknownCode => std::process::exit(1),
+        },
+        // The argument group rejects an invocation carrying neither a code nor
+        // `--list`, so this stands as the exhaustive branch rather than a
+        // reachable failure.
+        None => std::process::exit(1),
     }
 }
 
@@ -475,6 +491,7 @@ fn view_file(
     path: PathBuf,
     fn_name: Option<String>,
     outline: bool,
+    public: bool,
     around: Option<String>,
     format: Format,
     color_mode: ColorMode,
@@ -485,7 +502,9 @@ fn view_file(
         Some(name) => miri::cli::view::Shape::Function { name, around },
         None => {
             let _ = outline;
-            miri::cli::view::Shape::Outline
+            miri::cli::view::Shape::Outline {
+                public_only: public,
+            }
         }
     };
     match miri::cli::view::run(&path, &shape, format, color_mode) {

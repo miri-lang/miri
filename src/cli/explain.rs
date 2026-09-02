@@ -205,3 +205,58 @@ fn report_unknown_code(code: &str, format: Format, color_mode: ColorMode) {
         }
     }
 }
+
+/// Column widths for the listing, wide enough for the longest value each
+/// column can hold so every row lines up without a second pass over the
+/// registry to measure it.
+const CODE_WIDTH: usize = 12;
+const SEVERITY_WIDTH: usize = 7;
+const AREA_WIDTH: usize = 3;
+const SAFETY_WIDTH: usize = 21;
+
+/// List every diagnostic code in the registry.
+///
+/// The catalogue a tool would otherwise assemble by reading every file under
+/// `docs/diagnostics/`, answered from the registry that generates them.
+pub fn run_list(format: Format) {
+    use crate::diagnostics::json::JsonCode;
+
+    match format {
+        Format::Json => {
+            let codes = DiagnosticCode::all()
+                .iter()
+                .map(|code| JsonCode {
+                    code: code.as_str().to_string(),
+                    title: code.title().to_string(),
+                    severity: code.severity().as_str().to_string(),
+                    area: code.area().to_string(),
+                    retired: code.is_reserved(),
+                    fix_safety: code.fix_safety().as_str().to_string(),
+                })
+                .collect::<Vec<_>>();
+
+            let envelope = DiagnosticsEnvelope::new(JsonCommand::Explain, true, vec![])
+                .with_exit_code(0)
+                .with_codes(codes);
+            println!("{}", serialize_envelope(&envelope));
+        }
+        Format::Pretty => {
+            for code in DiagnosticCode::all() {
+                let retired = if code.is_reserved() { " [retired]" } else { "" };
+                println!(
+                    "{:<CODE_WIDTH$} {:<SEVERITY_WIDTH$} {:<AREA_WIDTH$} {:<SAFETY_WIDTH$} {}{}",
+                    code.as_str(),
+                    code.severity().as_str(),
+                    code.area(),
+                    code.fix_safety().as_str(),
+                    code.title(),
+                    retired,
+                    CODE_WIDTH = CODE_WIDTH,
+                    SEVERITY_WIDTH = SEVERITY_WIDTH,
+                    AREA_WIDTH = AREA_WIDTH,
+                    SAFETY_WIDTH = SAFETY_WIDTH,
+                );
+            }
+        }
+    }
+}

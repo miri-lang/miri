@@ -3078,3 +3078,80 @@ fn test_the_same_multi_line_anchor_applies_when_every_line_is_indented() {
         );
     });
 }
+
+#[test]
+fn test_dry_run_diff_header_carries_one_separator_for_an_absolute_path() {
+    with_source(PROBE, |path| {
+        let target = path.to_str().expect("a utf-8 path");
+        assert!(
+            target.starts_with('/'),
+            "the fixture path is absolute, which is what the header must handle"
+        );
+        let (stdout, _, ok) = patch(&[
+            target,
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "a + b",
+            "--new",
+            "b + a",
+            "--dry-run",
+        ]);
+        assert!(ok, "a dry run over a valid edit should succeed");
+        assert!(
+            stdout.contains(&format!("--- a{target}"))
+                && stdout.contains(&format!("+++ b{target}")),
+            "an absolute path keeps its own leading separator, got: {stdout}"
+        );
+        assert!(
+            !stdout.contains("a//") && !stdout.contains("b//"),
+            "the header never doubles the separator, got: {stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_value_names_offer_stdin_for_the_file_arguments() {
+    let output = miri_cmd()
+        .args(["patch", "--help"])
+        .output()
+        .expect("the help runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for flag in ["--old-file", "--new-file", "--body-file"] {
+        assert!(
+            stdout.contains(&format!("{flag} <PATH|->")),
+            "{flag} names stdin in its value, got: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_dry_run_diff_header_escapes_a_control_character_in_the_path() {
+    // A path may legally hold a newline. Written raw into the header it would
+    // end the line early and leave the rest of the path reading as content.
+    let directory = tempfile::tempdir().expect("a temporary directory can be created");
+    let path = directory.path().join("two\nlines.mi");
+    fs::write(&path, PROBE).expect("the fixture can be written");
+
+    let (stdout, _, ok) = patch(&[
+        path.to_str().expect("a utf-8 path"),
+        "--replace-in-fn",
+        "add",
+        "--old",
+        "a + b",
+        "--new",
+        "b + a",
+        "--dry-run",
+    ]);
+    assert!(ok, "a dry run over a valid edit should succeed");
+    let header: Vec<&str> = stdout.lines().take(2).collect();
+    assert!(
+        header[0].starts_with("--- a") && header[1].starts_with("+++ b"),
+        "the header is two lines, got: {stdout}"
+    );
+    assert!(
+        header[0].contains("two\\nlines.mi"),
+        "the newline is escaped rather than written raw, got: {}",
+        header[0]
+    );
+}
