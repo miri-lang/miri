@@ -48,6 +48,7 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::statements::returns::collect_tail_expression_spans;
 use crate::type_checker::statements::{check_returns, ReturnStatus};
 use crate::type_checker::utils::is_gpu_signature_type;
 use crate::type_checker::TypeChecker;
@@ -476,7 +477,13 @@ impl TypeChecker {
                 self.validate_expression_body(expr, name, return_type, infer_main_return, context);
             }
             _ => {
-                self.check_statement(body, context);
+                let is_non_void_return =
+                    !infer_main_return && !matches!(return_type.kind, TypeKind::Void);
+                if is_non_void_return {
+                    self.check_statement_with_tail_exemptions(body, context);
+                } else {
+                    self.check_statement(body, context);
+                }
             }
         }
 
@@ -494,14 +501,11 @@ impl TypeChecker {
         let last_idx = stmts.len().saturating_sub(1);
         let is_non_void_return = !infer_main_return && !matches!(return_type.kind, TypeKind::Void);
         for (i, stmt) in stmts.iter().enumerate() {
-            if i == last_idx
-                && is_non_void_return
-                && matches!(stmt.node, StatementKind::Expression(_))
-            {
-                context.suppress_must_use = true;
+            if i == last_idx && is_non_void_return {
+                self.check_statement_with_tail_exemptions(stmt, context);
+            } else {
+                self.check_statement(stmt, context);
             }
-            self.check_statement(stmt, context);
-            context.suppress_must_use = false;
         }
 
         if infer_main_return {
@@ -512,22 +516,6 @@ impl TypeChecker {
             if let Some(stmt) = last_meaningful_stmt {
                 if let Some(expr_type) = self.resolve_implicit_return_type(stmt) {
                     self.register_implicit_main_return(name, expr_type, context);
-                }
-            }
-        } else if !matches!(return_type.kind, TypeKind::Void) {
-            if let Some(last_stmt) = stmts.last() {
-                if let StatementKind::Expression(expr) = &last_stmt.node {
-                    let expr_type = self.infer_expression(expr, context);
-                    if !self.are_compatible(return_type, &expr_type, context) {
-                        self.report_error(
-                            DiagnosticCode::TypTypeMismatch,
-                            format!(
-                                "Invalid return type: expected {}, got {}",
-                                return_type, expr_type
-                            ),
-                            expr.span,
-                        );
-                    }
                 }
             }
         }
@@ -560,6 +548,19 @@ impl TypeChecker {
         if infer_main_return {
             self.register_implicit_main_return(name, expr_type, context);
         }
+    }
+
+    /// Checks a statement with tail expression spans exempted from must_use checking.
+    ///
+    /// Collects the tail expression spans from the statement, installs them in the
+    /// context, checks the statement, and restores the previous exempt spans.
+    fn check_statement_with_tail_exemptions(&mut self, stmt: &Statement, context: &mut Context) {
+        let mut tail_spans = Vec::new();
+        collect_tail_expression_spans(stmt, &mut tail_spans);
+        let prev_spans = std::mem::take(&mut context.must_use_exempt_spans);
+        context.must_use_exempt_spans.extend(tail_spans);
+        self.check_statement(stmt, context);
+        context.must_use_exempt_spans = prev_spans;
     }
 
     fn check_return_completeness(&mut self, body: &Statement, return_type: &Type) {

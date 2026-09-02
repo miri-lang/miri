@@ -642,3 +642,90 @@ fn test_function_inline_expression_body() {
         ("fn neg(x bool) bool: not x\nneg(true)", type_bool()),
     ]);
 }
+
+#[test]
+fn test_tail_if_branch_return_type_mismatch() {
+    type_checker_error_test(
+        "
+fn f(t String) int
+    if t == \"\": \"oops\"
+    else: 2
+",
+        "Invalid return type: expected int, got String",
+    );
+}
+
+#[test]
+fn test_tail_if_else_branch_return_type_mismatch() {
+    type_checker_error_test(
+        "
+fn f(t String) int
+    if t == \"\": 1
+    else: \"oops\"
+",
+        "Invalid return type: expected int, got String",
+    );
+}
+
+#[test]
+fn test_tail_if_block_form_branch_return_type_mismatch() {
+    type_checker_error_test(
+        "
+fn f(t String) int
+    if t == \"\":
+        \"oops\"
+    else:
+        2
+",
+        "Invalid return type: expected int, got String",
+    );
+}
+
+#[test]
+fn test_nested_tail_if_leaf_return_type_mismatch() {
+    type_checker_error_test(
+        "
+fn f(n int) int
+    if n == 0: 1
+    else:
+        if n < 0: 2
+        else: \"oops\"
+",
+        "Invalid return type: expected int, got String",
+    );
+}
+
+#[test]
+fn test_tail_if_branches_matching_return_type_accepted() {
+    type_checker_test(
+        "
+fn f(t String) int
+    if t == \"\": 1
+    else: 2
+",
+    );
+}
+
+#[test]
+fn test_tail_if_branch_widens_to_optional_return_type() {
+    type_checker_test(
+        "
+fn f(t String) int?
+    if t == \"\": 1
+    else: 2
+",
+    );
+}
+
+#[test]
+fn test_nested_tail_if_all_leaves_matching_accepted() {
+    type_checker_test(
+        "
+fn f(n int) int
+    if n == 0: 1
+    else:
+        if n < 0: 2
+        else: 3
+",
+    );
+}

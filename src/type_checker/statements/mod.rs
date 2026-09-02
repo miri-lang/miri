@@ -390,7 +390,9 @@ impl TypeChecker {
 
     fn check_expr_stmt(&mut self, expr: &Expression, context: &mut Context, span: Span) {
         let expr_type = self.infer_expression(expr, context);
-        if !context.suppress_must_use {
+        if context.must_use_exempt_spans.contains(&span) {
+            self.check_tail_expression_type(expr, &expr_type, context);
+        } else {
             if let TypeKind::Custom(type_name, _) = &expr_type.kind {
                 if let Some(TypeDefinition::Enum(def)) = self
                     .type_table
@@ -411,6 +413,37 @@ impl TypeChecker {
             }
         }
         self.check_gpu_discarded_expression(&expr_type, context, span);
+    }
+
+    /// A tail expression is the enclosing function's implicit return value, so
+    /// its type must satisfy the declared return type.
+    ///
+    /// This runs here, as the statement is visited, rather than in a pass over
+    /// the body afterwards: a tail expression inside an `if` branch may read
+    /// variables bound in that branch, and the branch scope is already closed
+    /// by the time the body's statement list has been walked.
+    fn check_tail_expression_type(
+        &mut self,
+        expr: &Expression,
+        expr_type: &Type,
+        context: &mut Context,
+    ) {
+        let Some(return_type) = context.return_types.last().cloned() else {
+            return;
+        };
+        if matches!(return_type.kind, TypeKind::Void) {
+            return;
+        }
+        if !self.are_compatible(&return_type, expr_type, context) {
+            self.report_error(
+                DiagnosticCode::TypTypeMismatch,
+                format!(
+                    "Invalid return type: expected {}, got {}",
+                    return_type, expr_type
+                ),
+                expr.span,
+            );
+        }
     }
 
     /// Inside a `gpu fn`, an expression-statement whose value is discarded
