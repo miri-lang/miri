@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
@@ -166,5 +167,72 @@ impl TypeChecker {
                 })));
             }
         }
+    }
+}
+
+/// Collects the statements in tail position within a statement.
+///
+/// Tail position means:
+/// - For a block, the last statement only (recursively into its tail).
+/// - For an if/else with both branches, both branches' tails recursively.
+/// - For an if without else, no tail (cannot produce a value).
+/// - For other statements (loops, declarations, etc.), no tail.
+///
+/// This walk identifies which statements can produce implicit return values.
+/// It must stay consistent with `check_returns` about what counts as value-producing.
+pub(crate) fn collect_tail_statements<'a>(stmt: &'a Statement, out: &mut Vec<&'a Statement>) {
+    match &stmt.node {
+        StatementKind::Expression(_) => {
+            out.push(stmt);
+        }
+        StatementKind::If(_cond, then_stmt, Some(else_stmt), _if_type) => {
+            collect_tail_statements(then_stmt, out);
+            collect_tail_statements(else_stmt, out);
+        }
+        StatementKind::Block(stmts) => {
+            if let Some(last_stmt) = stmts.last() {
+                collect_tail_statements(last_stmt, out);
+            }
+        }
+        // All other statement kinds do not contribute to tail statement analysis.
+        StatementKind::Return(_)
+        | StatementKind::While(_, _, _)
+        | StatementKind::If(_, _, None, _)
+        | StatementKind::Variable(_, _)
+        | StatementKind::For(_, _, _)
+        | StatementKind::Forall { .. }
+        | StatementKind::GpuFrame(_, _, _)
+        | StatementKind::GpuFrameBlock(_)
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Struct(_, _, _, _, _, _)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
+        | StatementKind::Use(_, _)
+        | StatementKind::Empty => {}
+    }
+}
+
+/// Collects the spans of expression statements in tail position within a statement.
+///
+/// Tail position means:
+/// - For a block, the last statement only (recursively into its tail).
+/// - For an if/else with both branches, both branches' tails recursively.
+/// - For an if without else, no tail (cannot produce a value).
+/// - For other statements (loops, declarations, etc.), no tail.
+///
+/// When an expression statement is in tail position, its span is collected so that
+/// the must_use check can exempt it (the value is implicitly returned, not discarded).
+/// This must stay consistent with `check_returns` about what counts as value-producing.
+pub(crate) fn collect_tail_expression_spans(stmt: &Statement, out: &mut Vec<Span>) {
+    let mut tail_stmts = Vec::new();
+    collect_tail_statements(stmt, &mut tail_stmts);
+    for tail_stmt in tail_stmts {
+        out.push(tail_stmt.span);
     }
 }

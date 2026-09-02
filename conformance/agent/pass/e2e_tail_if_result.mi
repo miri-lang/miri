@@ -1,0 +1,41 @@
+// summary: A tail if/else is the function's implicit return value, for a must_use type and an optional alike
+// expect-stdout: qty=3 fallback=0 flag=on
+use system.io
+use system.result
+
+@must_use
+enum Flag
+    On
+    Off
+
+fn parse_qty(text String) Result<int, String>
+    if text == "": Result.Err("empty")
+    else: Result.Ok(3)
+
+fn width(text String) int?
+    if text == "": None
+    else: 0
+
+fn flag_for(text String) Flag
+    if text == "": Flag.Off
+    else: Flag.On
+
+fn main()
+    var qty = 0
+    match parse_qty("5")
+        Result.Ok(n): qty = n
+        Result.Err(_): qty = -1
+
+    let w = width("")
+    var fallback = 0
+    match w
+        None: fallback = 0
+        _: fallback = 1
+
+    let f = flag_for("x")
+    var shown = "off"
+    match f
+        Flag.On: shown = "on"
+        Flag.Off: shown = "off"
+
+    println(f"qty={qty} fallback={fallback} flag={shown}")

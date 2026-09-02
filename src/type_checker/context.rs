@@ -31,7 +31,7 @@
 use crate::ast::statement::BindingResidency;
 use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::escape_analysis::{load_ffi_summaries, EscapeSummary, FunctionId};
 
@@ -433,10 +433,11 @@ pub struct Context {
     /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
     /// Populated during escape analysis; empty until then.
     pub escape_summaries: HashMap<FunctionId, EscapeSummary>,
-    /// When true, suppress must_use warnings for expression statements.
-    /// Set while checking the last statement of a non-void function body,
-    /// where the expression is an implicit return value, not a discarded value.
-    pub suppress_must_use: bool,
+    /// Expression spans that are exempt from must_use checking because they
+    /// occupy a tail position in a non-void function body. Spans in this set
+    /// are implicit return values rather than discarded values, and must not
+    /// trigger MER_OWN_004 even if their type carries @must_use.
+    pub must_use_exempt_spans: HashSet<Span>,
 }
 
 impl Context {
@@ -457,7 +458,7 @@ impl Context {
             current_class_type: None,
             in_static_method: false,
             escape_summaries: load_ffi_summaries(),
-            suppress_must_use: false,
+            must_use_exempt_spans: HashSet::new(),
         }
     }
 

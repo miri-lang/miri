@@ -126,14 +126,55 @@ pub(crate) fn suggest_member(
         if group.contains(failing_name) {
             // Find members in this group that are present in candidates
             let group_members = group.members_in_candidates(candidates);
-            if !group_members.is_empty() {
+
+            // If a call site arity is known, filter to only matching members
+            let filtered_members: Vec<MemberCandidate> = if let Some(arity) = call_site_arity {
+                group_members
+                    .iter()
+                    .filter(|c| c.arity == Some(arity))
+                    .cloned()
+                    .collect()
+            } else {
+                group_members.clone()
+            };
+
+            if !filtered_members.is_empty() {
                 // Pick the closest match by Levenshtein distance
-                if let Some(best) = group_members.iter().min_by_key(|c| {
+                if let Some(best) = filtered_members.iter().min_by_key(|c| {
                     crate::error::format::levenshtein_distance(failing_name, c.name)
                 }) {
                     return Some(best.name.to_string());
                 }
             }
+
+            // Group contains the failing name. Check if we should fall back:
+            // - If arity-aware and the group has members (but none match arity)
+            //   AND there are other candidates with matching arity outside the group,
+            //   then return the best same-arity candidate (no threshold in this context).
+            // - Otherwise, no fallback (this is a synonym group item).
+            if call_site_arity.is_some() && !group_members.is_empty() {
+                // Collect candidates with matching arity
+                let same_arity_candidates: Vec<&str> = candidates
+                    .iter()
+                    .filter(|c| c.arity == call_site_arity)
+                    .map(|c| c.name)
+                    .collect();
+
+                if !same_arity_candidates.is_empty() {
+                    // Return the best same-arity candidate without threshold,
+                    // since we've already filtered the group and found no match.
+                    if let Some(best) = same_arity_candidates.iter().min_by_key(|name| {
+                        crate::error::format::levenshtein_distance(failing_name, name)
+                    }) {
+                        return Some(best.to_string());
+                    }
+                }
+            }
+
+            // The group named the failing member but offered nothing usable —
+            // either the type carries no group member at all, or every one of
+            // them has the wrong arity. Keep looking rather than giving up: a
+            // plain near-miss on the type is still a better hint than silence.
         }
     }
 
