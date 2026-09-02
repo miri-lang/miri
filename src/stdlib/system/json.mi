@@ -50,10 +50,6 @@ public enum JsonError
     TrailingData(int, int)
     DepthExceeded(int, int)
 
-/// A cursor over the source text, tracking position for diagnostics.
-///
-/// The first failure is retained; later ones are ignored, so the reported
-/// position is where the document actually went wrong.
 /// Outcome of reading the separator that follows a collection element.
 ///
 /// Module-private: it names a step of the parser's control flow, not part of
@@ -63,6 +59,10 @@ enum ElementSeparator
     Closed
     Invalid
 
+/// A cursor over the source text, tracking position for diagnostics.
+///
+/// The first failure is retained; later ones are ignored, so the reported
+/// position is where the document actually went wrong.
 class JsonParser
     private var source String
     private var position int

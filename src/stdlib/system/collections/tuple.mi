@@ -21,7 +21,6 @@ use system.collections.queryable
 ///     let t = (10, 20, 30)
 ///     println(f"{t.length()}")      // 3
 ///     println(f"{t.contains(20)}")  // true
-
 public class Tuple<T> implements Queryable<T>, Iterable<T>
 
     runtime "core" fn miri_rt_tuple_len(t Self) int

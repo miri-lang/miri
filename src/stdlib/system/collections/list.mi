@@ -9,6 +9,20 @@ use system.collections.sequenced
 use system.memory
 use system.accelerator
 
+/// A dynamic-length sequence of elements of a single type.
+///
+/// List<T> grows and shrinks at runtime, allowing elements to be added, removed,
+/// and accessed by index. To create a list from a literal, use `List([1, 2, 3])`.
+/// To create an empty list, use `List<T>()`. Lists are passed by reference, so
+/// `push`, `set`, and other mutations affect the original; use `clone()` to make
+/// an independent copy.
+///
+/// Example:
+///     var l = List<int>()
+///     l.push(10)
+///     l.push(20)
+///     println(f"{l.length()}")  // 2
+///     println(f"{l.get(0)}")    // 10
 public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self

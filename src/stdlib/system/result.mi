@@ -4,7 +4,7 @@
 /// A type that represents either success (Ok) or failure (Err).
 ///
 /// Result<T, E> is used for returning and propagating errors. It is a
-/// A `@must_use` enum with two variants: Ok(T), representing success, and
+/// `@must_use` enum with two variants: Ok(T), representing success, and
 /// Err(E), representing failure.
 ///
 /// To extract a value, pattern-match on the Result or use `unwrap_or` with
@@ -20,7 +20,6 @@
 ///     match divide(10, 2)
 ///         Result.Ok(value): println(f"{value}")
 ///         Result.Err(msg): println("Error: " + msg)
-
 @must_use
 enum Result<T, E>
     Ok(T)
