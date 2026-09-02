@@ -250,3 +250,207 @@ fn test_explain_does_not_echo_terminal_escapes_from_its_argument() {
         stderr
     );
 }
+
+/// Every registered code, as the listing reports it.
+fn listed_codes() -> Vec<miri::diagnostics::json::JsonCode> {
+    let output = miri_cmd()
+        .args(["explain", "--list", "--format", "json"])
+        .output()
+        .expect("the listing runs");
+    assert!(
+        output.status.success(),
+        "listing the registry should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: DiagnosticsEnvelope =
+        serde_json::from_str(&stdout).expect("the listing is a parseable envelope");
+    assert!(envelope.ok, "a listing reports success");
+    assert_eq!(envelope.exit_code, Some(0), "a listing exits zero");
+    envelope.codes.expect("the listing carries the registry")
+}
+
+#[test]
+fn test_list_json_covers_the_whole_registry() {
+    let listed = listed_codes();
+    assert_eq!(
+        listed.len(),
+        DiagnosticCode::all().len(),
+        "the listing carries every registered code"
+    );
+    let listed_names: Vec<&str> = listed.iter().map(|entry| entry.code.as_str()).collect();
+    let registry_names: Vec<&str> = DiagnosticCode::all()
+        .iter()
+        .map(|code| code.as_str())
+        .collect();
+    assert_eq!(
+        listed_names, registry_names,
+        "the listing keeps the registry's order"
+    );
+}
+
+#[test]
+fn test_list_json_carries_every_field_for_every_code() {
+    for entry in listed_codes() {
+        assert!(!entry.code.is_empty(), "a listed code names itself");
+        assert!(!entry.title.is_empty(), "{} carries a title", entry.code);
+        // A non-empty string is not enough: a value outside the registry's own
+        // vocabulary would still read as present to a consumer switching on it.
+        assert!(
+            matches!(entry.severity.as_str(), "error" | "warning" | "note"),
+            "{} reports a severity the schema admits, got {}",
+            entry.code,
+            entry.severity
+        );
+        assert!(
+            matches!(
+                entry.fix_safety.as_str(),
+                "format-only"
+                    | "behavior-preserving"
+                    | "local-edit"
+                    | "api-changing"
+                    | "target-changing"
+                    | "requires-human-review"
+            ),
+            "{} reports a fix-safety the schema admits, got {}",
+            entry.code,
+            entry.fix_safety
+        );
+        assert!(
+            entry.code.starts_with("MER_") && entry.code.contains(&format!("_{}_", entry.area)),
+            "{} is spelled as a registry code naming its own area {}",
+            entry.code,
+            entry.area
+        );
+    }
+}
+
+#[test]
+fn test_list_json_reports_retirement_from_the_registry() {
+    let listed = listed_codes();
+    for code in DiagnosticCode::all() {
+        let entry = listed
+            .iter()
+            .find(|entry| entry.code == code.as_str())
+            .unwrap_or_else(|| panic!("{} appears in the listing", code.as_str()));
+        assert_eq!(
+            entry.retired,
+            code.is_reserved(),
+            "{} reports its retirement as the registry holds it",
+            code.as_str()
+        );
+        assert_eq!(
+            entry.severity,
+            code.severity().as_str(),
+            "{} reports the registry's severity",
+            code.as_str()
+        );
+        assert_eq!(
+            entry.area,
+            code.area(),
+            "{} reports the registry's area",
+            code.as_str()
+        );
+        assert_eq!(
+            entry.fix_safety,
+            code.fix_safety().as_str(),
+            "{} reports the registry's fix-safety",
+            code.as_str()
+        );
+    }
+    assert!(
+        listed.iter().any(|entry| entry.retired),
+        "the registry holds at least one retired code, and the listing shows it"
+    );
+    assert!(
+        listed.iter().any(|entry| !entry.retired),
+        "the registry holds live codes, and the listing shows them"
+    );
+}
+
+#[test]
+fn test_list_pretty_names_severity_and_fix_safety() {
+    let output = miri_cmd()
+        .args(["explain", "--list"])
+        .output()
+        .expect("the listing runs");
+    assert!(
+        output.status.success(),
+        "listing the registry should succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.lines().count(),
+        DiagnosticCode::all().len(),
+        "one line per registered code"
+    );
+    let first = stdout.lines().next().expect("the listing is not empty");
+    let head = DiagnosticCode::all()
+        .first()
+        .expect("the registry is not empty");
+    assert!(first.contains(head.as_str()), "a row names its code");
+    assert!(
+        first.contains(head.severity().as_str()),
+        "a row names its severity, got: {first}"
+    );
+    assert!(
+        first.contains(head.fix_safety().as_str()),
+        "a row names its fix-safety, got: {first}"
+    );
+    assert!(first.contains(head.title()), "a row names its title");
+}
+
+#[test]
+fn test_explain_without_a_code_or_list_names_both() {
+    let output = miri_cmd()
+        .arg("explain")
+        .output()
+        .expect("the command runs");
+    assert!(
+        !output.status.success(),
+        "explain needs something to explain"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CODE") && stderr.contains("--list"),
+        "the failure names both ways to ask, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_a_code_and_list_are_mutually_exclusive() {
+    let output = miri_cmd()
+        .args(["explain", "MER_LEX_001", "--list"])
+        .output()
+        .expect("the command runs");
+    assert!(
+        !output.status.success(),
+        "a code and a listing are different requests"
+    );
+}
+
+#[test]
+fn test_subcommand_help_does_not_repeat_the_global_flag_prose() {
+    let output = miri_cmd()
+        .args(["explain", "--help"])
+        .output()
+        .expect("the help runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Global options"),
+        "the globals are grouped under their own heading, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("StorageLive/Dead balance"),
+        "a subcommand does not reprint the global flag's full prose, got: {stdout}"
+    );
+
+    let root = miri_cmd()
+        .arg("--help")
+        .output()
+        .expect("the root help runs");
+    let root_stdout = String::from_utf8_lossy(&root.stdout);
+    assert!(
+        root_stdout.contains("StorageLive/Dead balance"),
+        "the full explanation still reaches a reader at the root, got: {root_stdout}"
+    );
+}

@@ -217,9 +217,14 @@ fn validate_and_apply_anchored(
 /// The label a dry run's diff header carries.
 ///
 /// An in-memory source has no file to point at, so it is named instead.
+///
+/// The label is escaped before it is used: a path may legally contain a newline
+/// or another control character, and one written raw into the header would end
+/// the header line early and leave the rest of the path masquerading as diff
+/// content.
 fn diff_label(path: Option<&Path>, mode: Mode) -> Option<String> {
     matches!(mode, Mode::DryRun).then(|| match path {
-        Some(path) => path.display().to_string(),
+        Some(path) => sanitize_for_terminal(&path.display().to_string()),
         None => "<source>".to_string(),
     })
 }
@@ -1196,10 +1201,16 @@ fn unified_diff(label: &str, before: &str, after: &str) -> String {
     let old_changed = &old[prefix..old.len() - suffix];
     let new_changed = &new[prefix..new.len() - suffix];
 
+    let (old_label, new_label) = if label.starts_with('/') {
+        (format!("a{}", label), format!("b{}", label))
+    } else {
+        (format!("a/{}", label), format!("b/{}", label))
+    };
+
     let mut diff = format!(
-        "--- a/{}\n+++ b/{}\n@@ -{},{} +{},{} @@\n",
-        label,
-        label,
+        "--- {}\n+++ {}\n@@ -{},{} +{},{} @@\n",
+        old_label,
+        new_label,
         prefix + 1,
         old_changed.len(),
         prefix + 1,

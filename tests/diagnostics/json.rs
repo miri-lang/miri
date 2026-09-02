@@ -77,6 +77,7 @@ mod tests {
             view: None,
             patch: None,
             skills: None,
+            codes: None,
         };
 
         let json_str = serde_json::to_string(&envelope).expect("serialize");

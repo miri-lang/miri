@@ -97,7 +97,7 @@ Response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "serverInfo": { "name": "miri", "version": "0.6.0-beta.4", "schemaVersion": 1 },
+    "serverInfo": { "name": "miri", "version": "0.7.0-beta.5", "schemaVersion": 1 },
     "capabilities": {
       "methods": ["initialize", "check", "explain", "fixPlan", "fixApply", "view", "patch", "skillsGet"],
       "reservedMethods": ["tokens", "parse", "graph", "targets", "doctor"],
@@ -476,7 +476,7 @@ Response:
       {
         "name": "miri-lang",
         "description": "The Miri language syntax and semantics",
-        "compilerVersion": "0.6.0-beta.4",
+        "compilerVersion": "0.7.0-beta.5",
         "body": "…the markdown content with header removed…"
       }
     ]

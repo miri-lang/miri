@@ -59,6 +59,9 @@ pub struct DiagnosticsEnvelope {
     /// Skills from the embedded catalogue (skill command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<JsonSkill>>,
+    /// Diagnostic code registry (explain list command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codes: Option<Vec<JsonCode>>,
 }
 
 impl DiagnosticsEnvelope {
@@ -82,6 +85,7 @@ impl DiagnosticsEnvelope {
             view: None,
             patch: None,
             skills: None,
+            codes: None,
         }
     }
 
@@ -146,6 +150,12 @@ impl DiagnosticsEnvelope {
         self.skills = Some(skills);
         self
     }
+
+    /// Set the diagnostic code registry.
+    pub fn with_codes(mut self, codes: Vec<JsonCode>) -> Self {
+        self.codes = Some(codes);
+        self
+    }
 }
 
 /// What a `miri view` call read back.
@@ -164,16 +174,47 @@ pub struct JsonView {
 /// One declaration's position within a view's text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+///
+/// Two coordinate systems meet here and must not be confused. `start` and `end`
+/// are byte offsets into the rendered text this view returned; `line` and
+/// `endLine` are line numbers in the original source file. A reader cites what
+/// it read with the first pair and goes back to the file to edit with the
+/// second.
 pub struct JsonViewSpan {
-    /// Byte offset where the declaration starts.
+    /// Byte offset into the rendered text where the declaration starts.
     pub start: usize,
-    /// Byte offset one past the declaration's last byte.
+    /// Byte offset into the rendered text one past the declaration's last byte.
     pub end: usize,
-    /// What kind of declaration this is, such as `function` or `class`.
+    /// What kind of declaration this is, such as `function` or `class`, or
+    /// `block` for the region a narrowed read returns.
     pub kind: String,
     /// The declared name, when the declaration has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// First line of the declaration in the source file, 1-based.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// Last line of the declaration in the source file, 1-based and inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+}
+
+/// One diagnostic code in the registry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonCode {
+    /// The code identifier (e.g., MER_TYP_010).
+    pub code: String,
+    /// The short title of the code.
+    pub title: String,
+    /// The severity level (error, warning, note).
+    pub severity: String,
+    /// The area this code belongs to.
+    pub area: String,
+    /// Whether this code is retired.
+    pub retired: bool,
+    /// The fix safety level.
+    pub fix_safety: String,
 }
 
 /// Results of a patch command: applied edits and metadata.
