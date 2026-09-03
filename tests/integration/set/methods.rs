@@ -133,3 +133,24 @@ println(f"{s.length()}")
         "false\n3",
     );
 }
+
+/// Set.add with a projected int field.
+#[test]
+fn test_set_add_projected_int_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+struct Item
+    value int
+
+fn main()
+    let i = Item(42)
+    var s = Set<int>()
+    s.add(i.value)
+    println(f"{s.length()}")
+    println(f"{s.contains(42)}")
+"#,
+        "1\ntrue",
+    );
+}

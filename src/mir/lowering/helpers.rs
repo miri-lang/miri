@@ -716,3 +716,25 @@ pub fn gpu_math_return_type(
     }
     declared
 }
+
+/// The type an argument expression carries, read from the type checker rather
+/// than from the operand's place.
+///
+/// `Operand::ty` answers for a place's base local and ignores its projections,
+/// so an argument spelled `o.amount` reports the struct's type instead of the
+/// field's. A temp declared at that type is reference-counted as a pointer when
+/// it holds a plain integer, and given a pointer-width slot when it holds a
+/// float. The checked type of the expression is already recorded, so read that
+/// and resolve `Self` against the enclosing class.
+///
+/// The base-local type is still the answer when nothing was recorded, which
+/// keeps an expression the type checker never saw lowering exactly as before.
+pub(super) fn resolve_arg_type(
+    ctx: &LoweringContext,
+    arg_expr: &Expression,
+    arg_op: &Operand,
+) -> Type {
+    ctx.recorded_type(arg_expr.id)
+        .map(|ty| ctx.resolve_self_in(&ty))
+        .unwrap_or_else(|| arg_op.ty(&ctx.body).clone())
+}

@@ -16,7 +16,8 @@ use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{
-    coerce_rvalue, gpu_math_return_type, release_coerced_source, spellings_of_one_value,
+    coerce_rvalue, gpu_math_return_type, release_coerced_source, resolve_arg_type,
+    spellings_of_one_value,
 };
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
@@ -591,7 +592,7 @@ fn lower_list_push(
 
     let item_op_src = operand_src_local(&item_op);
     let item_copy = move_to_copy(item_op);
-    let item_ty = item_copy.ty(&ctx.body).clone();
+    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
     let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
     let func_op = runtime_fn_operand(rt::LIST_PUSH, *span);
     let target_bb = ctx.new_basic_block();
@@ -621,14 +622,19 @@ fn lower_list_push(
 /// the value is then released, so the net effect is one reference handed over:
 /// the caller keeps releasing whatever it already owned, and the container
 /// releases the donated one through its drop callback.
+///
+/// The `arg_expr` is required to resolve the operand's actual type when it has
+/// projections (e.g., a field access), using the type checker's recorded type
+/// instead of the base local's type.
 fn donate_operand_to_container(
     ctx: &mut LoweringContext,
     op: Operand,
+    arg_expr: &Expression,
     span: Span,
 ) -> (Operand, Option<Local>) {
     let src = operand_src_local(&op);
     let copied = move_to_copy(op);
-    let ty = copied.ty(&ctx.body).clone();
+    let ty = resolve_arg_type(ctx, arg_expr, &copied);
     let local = store_operand_temp(ctx, copied, ty, span);
     (Operand::Copy(Place::new(local)), src)
 }
@@ -652,9 +658,10 @@ fn lower_map_set(
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::MAP_COW, *span);
 
     let key_op = lower_expression(ctx, key_arg, None)?;
-    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_arg.span);
+    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_arg, key_arg.span);
     let value_op = lower_expression(ctx, value_arg, None)?;
-    let (value_op, value_src) = donate_operand_to_container(ctx, value_op, value_arg.span);
+    let (value_op, value_src) =
+        donate_operand_to_container(ctx, value_op, value_arg, value_arg.span);
 
     let func_op = runtime_fn_operand(rt::MAP_SET, *span);
     let target_bb = ctx.new_basic_block();
@@ -697,7 +704,7 @@ fn lower_set_add(
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::SET_COW, *span);
 
     let elem_op = lower_expression(ctx, elem_arg, None)?;
-    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_arg.span);
+    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_arg, elem_arg.span);
 
     // The intrinsic reports whether the element was newly inserted, so the
     // result has to land in the caller's destination when it asked for one.
@@ -740,7 +747,7 @@ fn lower_list_insert(
 
     let item_op_src = operand_src_local(&item_op);
     let item_copy = move_to_copy(item_op);
-    let item_ty = item_copy.ty(&ctx.body).clone();
+    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
     let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
     let func_op = runtime_fn_operand(rt::LIST_INSERT, *span);
     let target_bb = ctx.new_basic_block();
@@ -791,12 +798,29 @@ fn lower_collection_set(
     indexed_place
         .projection
         .push(crate::mir::PlaceElem::Index(index_local));
+
+    let item_copy = move_to_copy(item_op);
+    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
+    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+
     ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(indexed_place, Rvalue::Use(move_to_copy(item_op))),
+        kind: StatementKind::Assign(
+            indexed_place,
+            Rvalue::Use(Operand::Copy(Place::new(item_local))),
+        ),
         span: *span,
     });
 
     ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+    // Reading the value into a temp of its own type is what lets reference
+    // counting see the value rather than the struct it may have been projected
+    // out of, and the read is what takes the reference the temp then owns.
+    // Releasing it here is what balances that: without this the value stays
+    // owned at the return, which the RC verifier reports as a missing release.
+    // A collection whose elements sit inline takes no reference on the write,
+    // and an unmanaged element type is never counted at all; both are already
+    // excluded, the first by the write itself and the second by this call.
+    ctx.emit_temp_drop(item_local, obj_watermark, *span);
     if let Some(src_local) = obj_op_src {
         ctx.emit_temp_drop(src_local, obj_watermark, *span);
     }

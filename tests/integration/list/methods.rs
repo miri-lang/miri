@@ -276,3 +276,153 @@ fn main()
         "none\n0",
     );
 }
+
+/// Push with a projected field (struct field) should read the field's actual type,
+/// not the struct's type, so RC accounting doesn't try to manage an int.
+#[test]
+fn list_push_projected_int_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Order
+    amount int
+
+fn main()
+    let o = Order(100)
+    var l = List<int>()
+    l.push(o.amount)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\n100",
+    );
+}
+
+/// Push with a projected float field should also work without Cranelift verifier error.
+#[test]
+fn list_push_projected_float_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Price
+    cost float
+
+fn main()
+    let p = Price(49.99)
+    var l = List<float>()
+    l.push(p.cost)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\n49.99",
+    );
+}
+
+/// Push with a projected bool field.
+#[test]
+fn list_push_projected_bool_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Flag
+    enabled bool
+
+fn main()
+    let f = Flag(true)
+    var l = List<bool>()
+    l.push(f.enabled)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\ntrue",
+    );
+}
+
+/// Push with a managed (String) field should still work (regression guard).
+#[test]
+fn list_push_projected_string_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Item
+    name String
+
+fn main()
+    let i = Item("widget")
+    var l = List<String>()
+    l.push(i.name)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\nwidget",
+    );
+}
+
+/// Insert with a projected int field.
+#[test]
+fn list_insert_projected_int_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Order
+    amount int
+
+fn main()
+    let o = Order(100)
+    var l = List<int>()
+    l.insert(0, o.amount)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\n100",
+    );
+}
+
+/// Set (list.set) with a projected int field.
+#[test]
+fn list_set_projected_int_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Order
+    amount int
+
+fn main()
+    let o = Order(100)
+    var l = List([0, 0])
+    l.set(0, o.amount)
+    println(f"{l[0]}")
+    println(f"{l[1]}")
+"#,
+        "100\n0",
+    );
+}
+
+/// Push with a call-result temp that has a projected field.
+#[test]
+fn list_push_projected_from_call_result() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Order
+    amount int
+
+fn make_order() Order
+    Order(100)
+
+fn main()
+    var l = List<int>()
+    l.push(make_order().amount)
+    println(f"{l.length()}")
+    println(f"{l[0]}")
+"#,
+        "1\n100",
+    );
+}

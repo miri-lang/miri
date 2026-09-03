@@ -17,7 +17,8 @@ use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue, ensure_place, release_coerced_source, resolve_type, spellings_of_one_value,
+    coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, resolve_type,
+    spellings_of_one_value,
 };
 
 fn assign_to_identifier(
@@ -539,16 +540,17 @@ fn assign_to_index_map(
     obj: &Expression,
     idx: &Expression,
     val: Operand,
+    rhs: &Expression,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_op = lower_expression(ctx, idx, None)?;
 
-    let val_ty = val.ty(&ctx.body).clone();
+    let val_ty = resolve_arg_type(ctx, rhs, &val);
     inc_ref_if_managed(ctx, &val, &val_ty, expr);
 
-    let key_ty = key_op.ty(&ctx.body).clone();
+    let key_ty = resolve_arg_type(ctx, idx, &key_op);
     inc_ref_if_managed(ctx, &key_op, &key_ty, expr);
 
     let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr);
@@ -746,7 +748,7 @@ pub(crate) fn lower_assignment_expr(
                 if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
                     if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
                         let val = lower_expression(ctx, rhs, None)?;
-                        return assign_to_index_map(ctx, obj, idx, val, expr, dest);
+                        return assign_to_index_map(ctx, obj, idx, val, rhs, expr, dest);
                     }
                 }
                 let val = lower_expression(ctx, rhs, None)?;
