@@ -1,0 +1,64 @@
+// summary: A struct field passed to an intercepted collection mutator is typed as the field, not as the struct it was read from
+// expect-stdout: push=100
+// expect-stdout: insert=200
+// expect-stdout: list_set=300
+// expect-stdout: map_set_value=400
+// expect-stdout: map_set_key=401
+// expect-stdout: set_add=600
+// expect-stdout: index_assign_value=700
+// expect-stdout: index_assign_key=801
+// expect-stdout: map_managed_value=bob
+// expect-stdout: source_still_readable=bob
+
+use system.collections.list
+use system.collections.map
+use system.collections.set
+
+struct Item
+    value int
+    name String
+
+fn main()
+    let pushed = Item(100, "pushed")
+    let inserted = Item(200, "inserted")
+    let assigned = Item(300, "assigned")
+    let map_value = Item(400, "map_value")
+    let map_key = Item(500, "map_key")
+    let added = Item(600, "added")
+    let index_value = Item(700, "index_value")
+    let index_key = Item(800, "index_key")
+    let managed = Item(0, "bob")
+
+    var l = List<int>()
+    l.push(pushed.value)
+    println(f"push={l[0]}")
+
+    l.insert(0, inserted.value)
+    println(f"insert={l[0]}")
+
+    l.set(0, assigned.value)
+    println(f"list_set={l[0]}")
+
+    var m = Map<int, int>()
+    m.set(1, map_value.value)
+    println(f"map_set_value={m[1]}")
+
+    m.set(map_key.value, 401)
+    println(f"map_set_key={m[map_key.value]}")
+
+    var s = Set<int>()
+    s.add(added.value)
+    if s.contains(added.value): println(f"set_add={added.value}")
+
+    var indexed = Map<int, int>()
+    indexed[1] = index_value.value
+    println(f"index_assign_value={indexed[1]}")
+
+    indexed[index_key.value] = 801
+    println(f"index_assign_key={indexed[index_key.value]}")
+
+    var names = Map<String, String>()
+    names["who"] = managed.name
+    let stored = names["who"]
+    println(f"map_managed_value={stored}")
+    println(f"source_still_readable={managed.name}")

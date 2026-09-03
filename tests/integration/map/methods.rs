@@ -171,3 +171,117 @@ println(f"{v}")
         "single\n100",
     );
 }
+
+/// Set method with a projected int value field.
+#[test]
+fn map_set_projected_int_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Entry
+    value int
+
+fn main()
+    let e = Entry(42)
+    var m = Map<String, int>()
+    m.set("key", e.value)
+    let v = m.get("key")
+    match v
+        Some(x): println(f"{x}")
+        None: println("not found")
+"#,
+        "42",
+    );
+}
+
+/// Set method with a projected int key field.
+#[test]
+fn map_set_projected_int_key() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Entry
+    k int
+
+fn main()
+    let e = Entry(1)
+    var m = Map<int, String>()
+    m.set(e.k, "value")
+    let v = m.get(1)
+    match v
+        Some(x): println(x)
+        None: println("not found")
+"#,
+        "value",
+    );
+}
+
+/// Index-assign with a projected int value.
+#[test]
+fn map_index_assign_projected_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Entry
+    value int
+
+fn main()
+    let e = Entry(99)
+    var m = Map<String, int>()
+    m["key"] = e.value
+    let v = m.get("key")
+    match v
+        Some(x): println(f"{x}")
+        None: println("not found")
+"#,
+        "99",
+    );
+}
+
+/// Index-assign with a projected int key.
+#[test]
+fn map_index_assign_projected_key() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Entry
+    k int
+
+fn main()
+    let e = Entry(2)
+    var m = Map<int, String>()
+    m[e.k] = "hello"
+    let v = m.get(2)
+    match v
+        Some(x): println(x)
+        None: println("not found")
+"#,
+        "hello",
+    );
+}
+
+/// Index-assign with a projected managed (String) value verifies RC is correct.
+/// The source value is used after the assignment to ensure it was not freed.
+#[test]
+fn map_index_assign_projected_managed_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Item
+    name String
+
+fn main()
+    let i = Item("widget")
+    var m = Map<String, String>()
+    m["item"] = i.name
+    println(m["item"])
+    println(i.name)
+"#,
+        "widget\nwidget",
+    );
+}

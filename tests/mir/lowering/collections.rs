@@ -161,3 +161,45 @@ fn test_large_list() {
         &["// l", "Array(int"],
     );
 }
+
+#[test]
+fn test_list_push_projected_field_types_the_field_not_the_base() {
+    mir_snapshot_contains_test(
+        r#"
+use system.collections.list
+
+struct Order
+    amount int
+
+fn main()
+    let o = Order(100)
+    var l = List<int>()
+    l.push(o.amount)
+"#,
+        &[
+            // The temp donated to `miri_rt_list_push` reads the projected field
+            // and must be declared at the field's type. Declaring it at the base
+            // struct's type makes reference counting treat a plain integer as a
+            // pointer, and gives codegen a pointer slot for a scalar.
+            "let _4: int;",
+            "_4 = _1.0;",
+            "miri_rt_list_push\")(move _2, _4)",
+        ],
+    );
+}
+
+#[test]
+fn test_array_set_projected_field_types_the_field_not_the_base() {
+    mir_snapshot_contains_test(
+        r#"
+struct Order
+    amount int
+
+fn main()
+    let o = Order(100)
+    var a = [0, 0]
+    a.set(0, o.amount)
+"#,
+        &["let _5: int;", "_5 = _1.0;"],
+    );
+}

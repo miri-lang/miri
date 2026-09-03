@@ -34,6 +34,29 @@ println(f"{a[0]} {a[1]} {a[2]}")
     );
 }
 
+/// A struct field passed to `set` is stored at the field's own type. Reading it
+/// back at the struct's type instead counts a plain integer as a pointer, so the
+/// untouched neighbour proves the write landed in one slot at the right width.
+#[test]
+fn test_array_set_projected_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+struct Reading
+    amount int
+
+fn main()
+    let r = Reading(100)
+    var a = [0, 0]
+    a.set(0, r.amount)
+    println(f"{a[0]} {a[1]}")
+    println(f"{r.amount}")
+"#,
+        "100 0\n100",
+    );
+}
+
 #[test]
 fn test_array_set_method() {
     assert_runs_with_output(
