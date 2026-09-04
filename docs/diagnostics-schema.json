@@ -50,6 +50,13 @@
       ],
       "description": "Process exit code. Semantics vary by command: for run, this is the program's exit status; for other commands, 0 means ok, non-zero means failed. See the per-command table in agent-protocol.md."
     },
+    "signal": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Signal number if the process was killed by a signal (for run/test commands on Unix only). Absent or null if the process exited normally or on non-Unix platforms."
+    },
     "stdoutTail": {
       "type": [
         "string",

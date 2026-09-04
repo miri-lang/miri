@@ -190,12 +190,13 @@ fn run_file(
     if format == Format::Json {
         // In JSON mode, capture output and emit envelope
         match pipeline.run_and_capture(&source, &program_args) {
-            Ok((exit_code, stdout_bytes, stderr_bytes, trap_code)) => {
+            Ok(result) => {
                 let exit_code = report_run(
-                    exit_code,
-                    &stdout_bytes,
-                    &stderr_bytes,
-                    trap_code,
+                    result.exit_code,
+                    result.signal,
+                    &result.stdout,
+                    &result.stderr,
+                    result.trap_code,
                     start.elapsed().as_millis() as u64,
                 );
                 if exit_code != 0 {
@@ -220,9 +221,28 @@ fn run_file(
             }
         }
     } else {
-        // In pretty mode, use the existing run() method which prints output
-        match pipeline.run(&source, &program_args) {
-            Ok(exit_code) => {
+        // In pretty mode, capture output to handle signals properly
+        match pipeline.run_and_capture(&source, &program_args) {
+            Ok(result) => {
+                if !result.stdout.is_empty() {
+                    print!("{}", String::from_utf8_lossy(&result.stdout));
+                }
+                if !result.stderr.is_empty() {
+                    eprint!("{}", String::from_utf8_lossy(&result.stderr));
+                }
+
+                #[cfg(unix)]
+                let exit_code = if let Some(sig) = result.signal {
+                    let message = miri::diagnostics::signal::signal_message(sig);
+                    eprintln!("error: {}", message);
+                    128 + sig
+                } else {
+                    result.exit_code
+                };
+
+                #[cfg(not(unix))]
+                let exit_code = result.exit_code;
+
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }
@@ -248,10 +268,11 @@ fn run_file(
 /// `ok` reports the run rather than the status the program chose: a `main`
 /// returning 7 succeeded at being compiled and run, and a caller that wants
 /// that number reads `exitCode`. What makes it false is the program dying
-/// rather than finishing — a runtime trap, or a death that produced no status
-/// of its own at all.
+/// rather than finishing — a runtime trap, or a signal death, or a trap that
+/// produced no status of its own at all.
 fn report_run(
     exit_code: i32,
+    signal: Option<i32>,
     stdout_bytes: &[u8],
     stderr_bytes: &[u8],
     trap_code: Option<String>,
@@ -260,38 +281,57 @@ fn report_run(
     let (stdout_tail, stdout_truncated) = tail_output(stdout_bytes, 8192);
     let (stderr_tail, stderr_truncated) = tail_output(stderr_bytes, 8192);
 
+    // Compute the final exit code: if killed by signal, use 128 + signal; otherwise use the status code.
+    // If there's no status code and no signal, NO_EXIT_STATUS (-1) reports as 255.
+    #[cfg(unix)]
+    let (final_exit_code, signal_diagnostic) = if let Some(sig) = signal {
+        let code = 128_i32.saturating_add(sig);
+        let (diag_code, _) = miri::diagnostics::signal::signal_to_code_and_name(sig);
+        let message = miri::diagnostics::signal::signal_message(sig);
+        let diag = error_diagnostic(diag_code.to_string(), message);
+        (code, Some(diag))
+    } else {
+        (exit_code, None)
+    };
+
+    #[cfg(not(unix))]
+    let (final_exit_code, signal_diagnostic) = (exit_code, None);
+
     // A trap report is only meaningful for a run that actually died. A program
     // that completed successfully cannot be carrying a trap, so its report is
     // ignored rather than allowed to turn a successful run into a failed one.
-    let trap_code = trap_code.filter(|_| exit_code != 0);
+    let trap_code = trap_code.filter(|_| final_exit_code != 0);
     let has_trap = trap_code.is_some();
-    let diagnostics = trap_code.map(trap_diagnostic).into_iter().collect();
-    let completed = !has_trap && exit_code != NO_EXIT_STATUS;
+    let has_signal = signal_diagnostic.is_some();
 
-    let envelope = DiagnosticsEnvelope::new(JsonCommand::Run, completed, diagnostics)
-        .with_exit_code(exit_code)
+    // Build diagnostics: signal diagnostic takes priority, then trap diagnostic
+    let diagnostics = signal_diagnostic
+        .into_iter()
+        .chain(trap_code.map(trap_diagnostic))
+        .collect();
+
+    let completed = !has_trap && !has_signal && final_exit_code != NO_EXIT_STATUS;
+
+    let mut envelope = DiagnosticsEnvelope::new(JsonCommand::Run, completed, diagnostics)
+        .with_exit_code(final_exit_code)
         .with_duration_ms(elapsed_ms)
         .with_stdout(stdout_tail, stdout_truncated)
         .with_stderr(stderr_tail, stderr_truncated);
 
+    if let Some(sig) = signal {
+        envelope = envelope.with_signal(sig);
+    }
+
     println!("{}", miri::cli::serialize_envelope(&envelope));
-    exit_code
+    final_exit_code
 }
 
-/// The diagnostic a runtime trap is reported as.
-///
-/// The trap channel carries only the code, so the sentence a reader sees is
-/// looked up from it here rather than travelling with it.
-fn trap_diagnostic(code: String) -> JsonDiagnostic {
-    let message = match code.as_str() {
-        "MER_RT_001" => "division by zero",
-        "MER_RT_002" => "remainder by zero",
-        _ => "runtime trap",
-    };
+/// Create an error diagnostic from a code and message.
+fn error_diagnostic(code: String, message: String) -> JsonDiagnostic {
     JsonDiagnostic {
         severity: "error".to_string(),
         code: Some(code),
-        message: message.to_string(),
+        message,
         path: None,
         line: None,
         column: None,
@@ -304,6 +344,19 @@ fn trap_diagnostic(code: String) -> JsonDiagnostic {
         related: vec![],
         preexisting: None,
     }
+}
+
+/// The diagnostic a runtime trap is reported as.
+///
+/// The trap channel carries only the code, so the sentence a reader sees is
+/// looked up from it here rather than travelling with it.
+fn trap_diagnostic(code: String) -> JsonDiagnostic {
+    let message = match code.as_str() {
+        "MER_RT_001" => "division by zero",
+        "MER_RT_002" => "remainder by zero",
+        _ => "runtime trap",
+    };
+    error_diagnostic(code, message.to_string())
 }
 
 /// The status stood in for a program that finished without one of its own.
@@ -620,6 +673,9 @@ fn build_test_envelope(
                     )
                 })
                 .unwrap_or((None, None, None, None, None, None, None));
+
+            // Signal-killed tests carry the code in the TestResult, not in failure
+            let code = code.or_else(|| result.code.clone());
 
             miri::diagnostics::json::JsonTestResult {
                 path: result.path.clone(),

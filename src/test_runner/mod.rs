@@ -96,6 +96,9 @@ pub struct TestResult {
     /// Structured assertion failure information (if available).
     #[serde(skip)]
     pub failure: Option<AssertionFailure>,
+    /// Diagnostic code for errors or crashes (e.g., "MER_RT_006" for SIGSEGV).
+    #[serde(skip)]
+    pub code: Option<String>,
 }
 
 /// Everything one `miri test` invocation produced.
@@ -251,6 +254,7 @@ fn ignored_result(test: &TestMarker, display: &str) -> TestResult {
         outcome: Outcome::Ignored,
         detail: test.ignore_reason.clone(),
         failure: None,
+        code: None,
     }
 }
 
@@ -264,6 +268,7 @@ fn compile_failure_result(test: &TestMarker, display: &str, error: &str) -> Test
         outcome: Outcome::Failed,
         detail: Some(error.to_string()),
         failure: None,
+        code: None,
     }
 }
 
@@ -299,6 +304,7 @@ mod tests {
             outcome,
             detail: None,
             failure: None,
+            code: None,
         }
     }
 

@@ -67,6 +67,7 @@ mod tests {
             diagnostics: vec![],
             artifact: None,
             exit_code: None,
+            signal: None,
             stdout_tail: None,
             stderr_tail: None,
             stdout_truncated: None,

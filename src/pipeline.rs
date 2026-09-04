@@ -31,8 +31,19 @@ use crate::type_checker::TypeChecker;
 /// used to mangle the per-instantiation symbol.
 type InstantiationSub = (std::collections::HashMap<String, Type>, Vec<(String, Type)>);
 
-/// Return type for `run_and_capture`: exit code, stdout, stderr, and optional trap code.
-type RunCaptureResult = (i32, Vec<u8>, Vec<u8>, Option<String>);
+/// Result of running and capturing a program's output and exit status.
+pub struct RunCaptureResult {
+    /// The exit code from the process (from status.code() when available).
+    pub exit_code: i32,
+    /// The signal number if the process was killed by a signal (Unix only).
+    pub signal: Option<i32>,
+    /// Standard output bytes.
+    pub stdout: Vec<u8>,
+    /// Standard error bytes.
+    pub stderr: Vec<u8>,
+    /// Optional trap code from the runtime.
+    pub trap_code: Option<String>,
+}
 
 fn has_main_function(program: &Program) -> bool {
     program.body.iter().any(|s| {
@@ -666,9 +677,23 @@ impl Pipeline {
 
         let exit_code = output.status.code().unwrap_or(-1);
 
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            output.status.signal()
+        };
+        #[cfg(not(unix))]
+        let signal = None;
+
         let trap_code = read_trap_report(&trap_report_path);
 
-        Ok((exit_code, output.stdout, output.stderr, trap_code))
+        Ok(RunCaptureResult {
+            exit_code,
+            signal,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            trap_code,
+        })
     }
 
     /// Compile and execute the source, returning the process exit code.
@@ -682,16 +707,16 @@ impl Pipeline {
     /// execution rather than to compilation, which is why they are a parameter
     /// instead of builder state like the source directory or the verifier flag.
     pub fn run(&self, source: &str, program_args: &[String]) -> Result<i32, CompilerError> {
-        let (exit_code, stdout, stderr, _trap_code) = self.run_and_capture(source, program_args)?;
+        let result = self.run_and_capture(source, program_args)?;
 
-        if !stdout.is_empty() {
-            print!("{}", String::from_utf8_lossy(&stdout));
+        if !result.stdout.is_empty() {
+            print!("{}", String::from_utf8_lossy(&result.stdout));
         }
-        if !stderr.is_empty() {
-            eprint!("{}", String::from_utf8_lossy(&stderr));
+        if !result.stderr.is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&result.stderr));
         }
 
-        Ok(exit_code)
+        Ok(result.exit_code)
     }
 
     /// Compile source code to a native executable, returning the artifact path.

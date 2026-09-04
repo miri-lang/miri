@@ -1078,3 +1078,32 @@ fn test_a_named_file_resolves_its_sibling_imports() {
     assert_eq!(parsed["tests"]["passed"], 1, "{}", parsed);
     assert_eq!(output.status.code(), Some(0));
 }
+
+/// A test the operating system kills carries the same diagnostic code the
+/// `run` command reports for that signal. Before this, the runner had a
+/// crashed outcome but no code, leaving a tool with nothing to explain.
+#[test]
+fn test_signal_killed_test_carries_the_signal_diagnostic_code() {
+    let dir = test_dir_with(
+        "crash.mi",
+        "@test\nfn test_overflows()\n    let x = deep(1)\n    println(f\"{x}\")\n\nfn deep(n int) int\n    return deep(n + 1)\n",
+    );
+
+    let output = miri_cmd()
+        .arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    let result = &parsed["tests"]["results"][0];
+    assert_eq!(result["outcome"], "crashed");
+    assert_eq!(result["code"], "MER_RT_006");
+    assert_eq!(result["detail"], "terminated by signal 11 (SIGSEGV)");
+}
