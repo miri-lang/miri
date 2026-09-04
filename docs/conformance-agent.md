@@ -61,6 +61,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TAR_008 | Triggers MER_TAR_008: GPU-Incompatible Function Signature. |
 | MER_TAR_009 | Triggers MER_TAR_009: Value Out of Range for GPU Storage. |
 | MER_TYP_002 | Triggers MER_TYP_002: Type Mismatch. |
+| MER_TYP_002_match_value_mismatch | match expression with genuinely mismatched value arm types |
 | MER_TYP_011 | Triggers MER_TYP_011: Non-Exhaustive Enum Match. |
 | MER_TYP_012 | Triggers MER_TYP_012: Unknown Attribute. |
 | MER_TYP_013 | Triggers MER_TYP_013: Attribute Not Valid. |
@@ -158,6 +159,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |
+| assignment_match_arms | match arm bodies that are assignments produce no value type |
 | MER_TYP_011 | Accepted counterpart of MER_TYP_011: Non-Exhaustive Enum Match does not fire. |
 | MER_TYP_012 | Accepted counterpart of MER_TYP_012: Unknown Attribute does not fire. |
 | MER_TYP_013 | Accepted counterpart of MER_TYP_013: Attribute Not Valid does not fire. |

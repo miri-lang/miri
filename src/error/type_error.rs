@@ -65,6 +65,8 @@ pub enum TypeErrorKind {
         code: DiagnosticCode,
         message: String,
         help: Option<String>,
+        expected: Option<String>,
+        actual: Option<String>,
     },
     /// E0112: Unknown attribute name
     /// E0111: Match on an open enum outside its defining module lacks a catch-all
@@ -115,11 +117,6 @@ pub enum TypeErrorKind {
 
 impl TypeErrorKind {
     /// Returns the expected and actual values for type mismatch errors, if applicable.
-    ///
-    /// Note: Family-coded variants (Coded and ParseError) do not carry structured
-    /// expected/actual values; they return (None, None) even when the message text
-    /// may describe a type mismatch. See notes/PLAN.md for follow-up to extract
-    /// structured pairs from family-coded error messages.
     pub fn expected_actual(&self) -> (Option<String>, Option<String>) {
         match self {
             Self::TypeMismatch { expected, found } => (Some(expected.clone()), Some(found.clone())),
@@ -134,7 +131,9 @@ impl TypeErrorKind {
             Self::MissingVariant { .. } => (None, None),
             Self::ImmutableAssignment { .. } => (None, None),
             Self::InvalidCall { .. } => (None, None),
-            Self::Coded { .. } => (None, None),
+            Self::Coded {
+                expected, actual, ..
+            } => (expected.clone(), actual.clone()),
             Self::NonExhaustiveEnumNeedsCatchAll { .. } => (None, None),
             Self::UnknownAttribute { .. } => (None, None),
             Self::AttributeNotValid { .. } => (None, None),
@@ -206,6 +205,7 @@ impl TypeErrorKind {
                 code,
                 message,
                 help,
+                ..
             } => crate::error::diagnostic::coded_properties(*code, message, help),
             Self::NonExhaustiveEnumNeedsCatchAll { enum_name, module } => {
                 ErrorProperties::simple(DiagnosticCode::TypNonExhaustiveMatchNeedsDefault)
@@ -316,6 +316,31 @@ impl TypeError {
                 code,
                 message,
                 help,
+                expected: None,
+                actual: None,
+            },
+            span,
+            source_override: None,
+            repair: None,
+        }
+    }
+
+    /// Creates a type error under the given registry code with structured expected/actual types.
+    pub fn coded_with_types(
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: Option<String>,
+        expected: Option<String>,
+        actual: Option<String>,
+    ) -> Self {
+        Self {
+            kind: TypeErrorKind::Coded {
+                code,
+                message,
+                help,
+                expected,
+                actual,
             },
             span,
             source_override: None,

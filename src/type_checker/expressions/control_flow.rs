@@ -60,10 +60,61 @@ struct EnumMatchFacts {
 }
 
 impl TypeChecker {
-    /// Infers the type of a match expression.
+    /// Returns `true` if the given expression is an assignment of any form.
     ///
-    /// Validates exhaustiveness for enum subjects, checks pattern types,
-    /// and ensures all branch bodies produce compatible types.
+    /// Detects all assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
+    fn is_assignment_expression(&self, expr: &Expression) -> bool {
+        matches!(expr.node, ExpressionKind::Assignment(_, _, _))
+    }
+
+    /// Returns `true` if the given arm body produces a value of its own.
+    ///
+    /// An assignment performs a side effect; it does not produce a value the
+    /// surrounding construct can hand back. Such an arm therefore constrains
+    /// nothing about what the other arms produce.
+    fn arm_produces_value(&self, body: &Statement) -> bool {
+        match &body.node {
+            StatementKind::Expression(expr) => !self.is_assignment_expression(expr),
+            _ => true,
+        }
+    }
+
+    /// Checks type agreement across non-void arms and returns the agreed type.
+    ///
+    /// Applies the Void-skip rule (if all arms are void, returns Void) and the
+    /// "first non-void arm seeds the type" rule. Reports mismatches at the
+    /// offending arm's span with structured expected/actual types.
+    fn check_branch_agreement(
+        &mut self,
+        arm_types: &[(Type, Span)],
+        format_message: impl Fn(&str, &str) -> String,
+        context: &mut Context,
+    ) -> Type {
+        let mut first_branch_type = None;
+        for (body_type, arm_span) in arm_types {
+            if matches!(body_type.kind, TypeKind::Void) {
+                continue;
+            }
+
+            if let Some(first) = &first_branch_type {
+                if !self.are_compatible(first, body_type, context) {
+                    let message = format_message(&first.to_string(), &body_type.to_string());
+                    self.report_error_with_types(
+                        DiagnosticCode::TypTypeMismatch,
+                        message,
+                        *arm_span,
+                        first.to_string(),
+                        body_type.to_string(),
+                    );
+                }
+            } else {
+                first_branch_type = Some(body_type.clone());
+            }
+        }
+
+        first_branch_type.unwrap_or(make_type(TypeKind::Void))
+    }
+
     pub(crate) fn infer_match(
         &mut self,
         subject: &Expression,
@@ -293,6 +344,11 @@ impl TypeChecker {
     }
 
     /// Infers the result type from match branches, checking type compatibility.
+    ///
+    /// Only when all arms are assignments or void does the match type as Void
+    /// (no agreement check). When at least one arm produces a genuine value,
+    /// agreement is enforced across all non-void arms (including assignments),
+    /// because assignment arms materialize their value into the shared result slot.
     fn infer_match_body_type(
         &mut self,
         subject_type: &Type,
@@ -300,7 +356,8 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        let mut first_branch_type = None;
+        let mut arm_types = Vec::new();
+        let mut has_genuine_value = false;
 
         for branch in branches {
             context.enter_scope();
@@ -309,29 +366,39 @@ impl TypeChecker {
             }
 
             let body_type = self.infer_statement_type(&branch.body, context);
+            let arm_span = self.get_body_expression_span(&branch.body);
             context.exit_scope();
 
-            if matches!(body_type.kind, TypeKind::Void) {
-                continue;
-            }
-
-            if let Some(first) = &first_branch_type {
-                if !self.are_compatible(first, &body_type, context) {
-                    self.report_error(
-                        DiagnosticCode::TypTypeMismatch,
-                        format!(
-                            "Match branch types mismatch: expected {}, got {}",
-                            first, body_type
-                        ),
-                        span,
-                    );
-                }
-            } else {
-                first_branch_type = Some(body_type);
-            }
+            has_genuine_value |=
+                self.arm_produces_value(&branch.body) && !matches!(body_type.kind, TypeKind::Void);
+            arm_types.push((body_type, arm_span));
         }
 
-        first_branch_type.unwrap_or(make_type(TypeKind::Void))
+        if !has_genuine_value {
+            return make_type(TypeKind::Void);
+        }
+
+        self.check_branch_agreement(
+            &arm_types,
+            |expected, actual| {
+                format!(
+                    "Match branch types mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            },
+            context,
+        )
+    }
+
+    /// Returns the span of the expression inside a statement body.
+    ///
+    /// For statement kinds that are expressions (like an assignment or function call),
+    /// returns the expression's span. For other statement kinds, returns the statement's span.
+    fn get_body_expression_span(&self, body: &Statement) -> Span {
+        match &body.node {
+            StatementKind::Expression(expr) => expr.span,
+            _ => body.span,
+        }
     }
 
     pub(crate) fn infer_conditional(
@@ -355,17 +422,31 @@ impl TypeChecker {
 
         if let Some(else_expr) = else_expr_opt {
             let else_type = self.infer_expression(else_expr, context);
-            if !self.are_compatible(&then_type, &else_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypTypeMismatch,
+
+            let then_is_assignment = self.is_assignment_expression(then_expr);
+            let else_is_assignment = self.is_assignment_expression(else_expr);
+            let then_is_void = matches!(then_type.kind, TypeKind::Void);
+            let else_is_void = matches!(else_type.kind, TypeKind::Void);
+
+            let has_genuine_value =
+                (!then_is_assignment && !then_is_void) || (!else_is_assignment && !else_is_void);
+
+            if !has_genuine_value {
+                return make_type(TypeKind::Void);
+            }
+
+            let branch_types = [(then_type, then_expr.span), (else_type, else_expr.span)];
+
+            self.check_branch_agreement(
+                &branch_types,
+                |expected, actual| {
                     format!(
                         "Conditional branches must have the same type: expected {}, got {}",
-                        then_type, else_type
-                    ),
-                    span,
-                );
-            }
-            then_type
+                        expected, actual
+                    )
+                },
+                context,
+            )
         } else {
             if !self.are_compatible(&then_type, &make_type(TypeKind::Void), context) {
                 self.report_error(

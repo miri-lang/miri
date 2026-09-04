@@ -283,17 +283,17 @@ pub struct JsonDiagnostic {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<usize>,
     /// Expected type/value for type mismatch errors.
-    /// Note: Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc).
-    /// Family-coded errors (those carrying a DiagnosticCode and message string) do not populate
-    /// this field in schema version 1, even if the message describes a type mismatch.
-    /// See notes/PLAN.md for the follow-up to extract structured pairs from message text.
+    /// Note: Populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc)
+    /// and selectively for family-coded errors (e.g., MER_TYP_002 match branch mismatch).
+    /// Absence does not imply types are unknown; some families do not yet carry structured
+    /// type information. A consumer must consult the error-family documentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<String>,
     /// Actual type/value for type mismatch errors.
-    /// Note: Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc).
-    /// Family-coded errors (those carrying a DiagnosticCode and message string) do not populate
-    /// this field in schema version 1, even if the message describes a type mismatch.
-    /// See notes/PLAN.md for the follow-up to extract structured pairs from message text.
+    /// Note: Populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc)
+    /// and selectively for family-coded errors (e.g., MER_TYP_002 match branch mismatch).
+    /// Absence does not imply types are unknown; some families do not yet carry structured
+    /// type information. A consumer must consult the error-family documentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual: Option<String>,
     /// Actionable help text.

@@ -420,6 +420,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                         name, info.by_fn, chain_section
                     ),
                     help: None,
+                    expected: None,
+                    actual: None,
                 },
                 span: expr.span,
                 source_override: None,

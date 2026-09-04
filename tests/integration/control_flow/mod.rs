@@ -9,6 +9,7 @@ pub mod forall_cpu;
 pub mod forever;
 pub mod if_else;
 pub mod jump;
+pub mod match_assignment;
 pub mod unless;
 pub mod until;
 pub mod while_for;

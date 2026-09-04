@@ -202,14 +202,14 @@
             "string",
             "null"
           ],
-          "description": "Expected type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
+          "description": "Expected type/value for type mismatch errors. Populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc) and selectively for family-coded errors (e.g., MER_TYP_002). Absence does not imply types are unknown; some families do not yet carry structured type information."
         },
         "actual": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Actual type/value for type mismatch errors. Only populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc). Family-coded errors (those carrying a DiagnosticCode and message string) do not populate this field in schema version 1. See notes/PLAN.md for the follow-up to extract structured pairs from message text."
+          "description": "Actual type/value for type mismatch errors. Populated for explicitly-typed error variants (TypeMismatch, ArityMismatch, etc) and selectively for family-coded errors (e.g., MER_TYP_002). Absence does not imply types are unknown; some families do not yet carry structured type information."
         },
         "help": {
           "type": [

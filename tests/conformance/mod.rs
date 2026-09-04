@@ -27,6 +27,8 @@ struct FixtureDirectives {
     command: Option<String>,
     expect_stdout_lines: Vec<String>,
     expect_help: Option<String>,
+    expect_line: Option<u32>,
+    expect_column: Option<u32>,
     summary: String,
 }
 
@@ -38,6 +40,8 @@ const SUPPORTED_DIRECTIVES: &[&str] = &[
     "expect",
     "expect-help",
     "expect-stdout",
+    "expect-line",
+    "expect-column",
     "command",
     "summary",
 ];
@@ -70,6 +74,8 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
     let mut command = None;
     let mut expect_stdout_lines = Vec::new();
     let mut expect_help = None;
+    let mut expect_line = None;
+    let mut expect_column = None;
     let mut summary = None;
 
     for line in content.lines() {
@@ -88,6 +94,20 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
             expect_stdout_lines.push(stdout.to_string());
         } else if let Some(help) = comment.strip_prefix("expect-help: ") {
             expect_help = Some(help.to_string());
+        } else if let Some(line_str) = comment.strip_prefix("expect-line: ") {
+            expect_line = Some(line_str.parse().map_err(|_| {
+                format!(
+                    "Fixture {} expects an integer for '// expect-line: <N>'",
+                    path.display()
+                )
+            })?);
+        } else if let Some(col_str) = comment.strip_prefix("expect-column: ") {
+            expect_column = Some(col_str.parse().map_err(|_| {
+                format!(
+                    "Fixture {} expects an integer for '// expect-column: <N>'",
+                    path.display()
+                )
+            })?);
         } else if let Some(c) = comment.strip_prefix("command: ") {
             command = Some(c.trim().to_string());
         } else if let Some(s) = comment.strip_prefix("summary: ") {
@@ -140,6 +160,8 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
         command,
         expect_stdout_lines,
         expect_help,
+        expect_line,
+        expect_column,
         summary,
     })
 }
@@ -224,6 +246,40 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
             return Err(format!(
                 "Expected help text:\n  {:?}\nbut got:\n  {:?}",
                 expected_help, actual_help
+            ));
+        }
+    }
+
+    if let Some(expected_line) = directives.expect_line {
+        let actual_line = matching_diag["line"].as_u64().ok_or_else(|| {
+            format!(
+                "Fixture {} expects line={}, but {} carries no line field",
+                path.display(),
+                expected_line,
+                expect_code
+            )
+        })?;
+        if actual_line as u32 != expected_line {
+            return Err(format!(
+                "Expected line {}, but {} reports line {}",
+                expected_line, expect_code, actual_line
+            ));
+        }
+    }
+
+    if let Some(expected_column) = directives.expect_column {
+        let actual_column = matching_diag["column"].as_u64().ok_or_else(|| {
+            format!(
+                "Fixture {} expects column={}, but {} carries no column field",
+                path.display(),
+                expected_column,
+                expect_code
+            )
+        })?;
+        if actual_column as u32 != expected_column {
+            return Err(format!(
+                "Expected column {}, but {} reports column {}",
+                expected_column, expect_code, actual_column
             ));
         }
     }
