@@ -1,0 +1,9 @@
+// summary: match arm bodies that are assignments produce no value type
+
+fn main()
+    var i = 0
+    var c = true
+    match c
+        true: i = i + 1
+        false: c = false
+    println('ok')

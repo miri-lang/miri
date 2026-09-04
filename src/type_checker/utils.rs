@@ -2548,6 +2548,34 @@ impl TypeChecker {
         }
     }
 
+    /// Reports a type error with structured expected and actual type information,
+    /// deduplicating identical (message, span) pairs.
+    pub(crate) fn report_error_with_types(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        expected: String,
+        actual: String,
+    ) {
+        if self.suppress_diagnostics {
+            return;
+        }
+        let key = (message.clone(), span);
+        if self.diagnostics.mark_reported(key) {
+            let mut err = TypeError::coded_with_types(
+                code,
+                message,
+                span,
+                None,
+                Some(expected),
+                Some(actual),
+            );
+            err.source_override = self.modules.current_source_override.clone();
+            self.diagnostics.push_error(err);
+        }
+    }
+
     /// Reports a type error with both help text and a repair suggestion.
     /// The help text is presented to the user, and the repair is returned as an
     /// auto-applicable fix. Both are preserved in the diagnostic output.

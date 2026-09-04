@@ -1,0 +1,9 @@
+// expect: MER_TYP_002
+// expect-line: 9
+// expect-column: 16
+// summary: match expression with genuinely mismatched value arm types
+
+fn main()
+    let x = match true
+        true: 1
+        false: 'string'
