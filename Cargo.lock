@@ -765,6 +765,7 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "inkwell",
+ "libc",
  "logos",
  "naga",
  "predicates",

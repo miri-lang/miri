@@ -1,0 +1,9 @@
+// expect: MER_RT_006
+// command: run
+// summary: Triggers MER_RT_006: a stack overflow from unbounded recursion causes a segmentation fault.
+fn deep(n int) int
+    return deep(n + 1)
+
+fn main()
+    let x = deep(1)
+    println(f"{x}")

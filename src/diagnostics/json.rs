@@ -29,6 +29,9 @@ pub struct DiagnosticsEnvelope {
     /// Process exit code (build/run/test commands).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// Signal number if process was killed by a signal (run/test commands, Unix only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
     /// Last N bytes of stdout (build/run/test commands).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_tail: Option<String>,
@@ -75,6 +78,7 @@ impl DiagnosticsEnvelope {
             diagnostics,
             artifact: None,
             exit_code: None,
+            signal: None,
             stdout_tail: None,
             stderr_tail: None,
             stdout_truncated: None,
@@ -92,6 +96,12 @@ impl DiagnosticsEnvelope {
     /// Set the exit code.
     pub fn with_exit_code(mut self, code: i32) -> Self {
         self.exit_code = Some(code);
+        self
+    }
+
+    /// Set the signal number.
+    pub fn with_signal(mut self, sig: i32) -> Self {
+        self.signal = Some(sig);
         self
     }
 

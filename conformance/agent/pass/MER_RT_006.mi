@@ -1,0 +1,13 @@
+// summary: Accepted counterpart of MER_RT_006: bounded recursion completes without stack overflow.
+// expect-stdout: 1
+use system.io
+
+fn countdown(n int) int
+    if n <= 0
+        return 1
+    else
+        return countdown(n - 1)
+
+fn main()
+    let result = countdown(10)
+    println(f"{result}")

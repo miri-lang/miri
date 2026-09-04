@@ -106,6 +106,7 @@ mod tests {
             outcome,
             detail: detail.map(str::to_string),
             failure: None,
+            code: None,
         }
     }
 

@@ -15,6 +15,7 @@ pub mod refusal;
 pub mod repair;
 pub mod rpc;
 pub mod severity;
+pub mod signal;
 
 pub use codes::DiagnosticCode;
 pub use explain::Explanation;

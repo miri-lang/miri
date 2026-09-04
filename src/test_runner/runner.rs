@@ -315,14 +315,21 @@ pub fn to_test_result(
     execution: Execution,
     failure: Option<crate::test_runner::AssertionFailure>,
 ) -> TestResult {
-    let (outcome, detail) = match (execution, test.is_xfail()) {
-        (Execution::Succeeded, false) => (Outcome::Passed, None),
-        (Execution::Succeeded, true) => (Outcome::UnexpectedPass, unexpected_pass_detail(test)),
-        (Execution::Errored(stderr), false) => (Outcome::Failed, non_empty(stderr)),
-        (Execution::Errored(_), true) => (Outcome::ExpectedFailure, test.xfail_reason.clone()),
-        (Execution::Killed(signal), false) => (Outcome::Crashed, Some(signal_detail(signal))),
-        (Execution::Killed(_), true) => (Outcome::ExpectedFailure, test.xfail_reason.clone()),
-        (Execution::Fault(reason), _) => (Outcome::RunnerFault, Some(reason)),
+    let (outcome, detail, code) = match (execution, test.is_xfail()) {
+        (Execution::Succeeded, false) => (Outcome::Passed, None, None),
+        (Execution::Succeeded, true) => {
+            (Outcome::UnexpectedPass, unexpected_pass_detail(test), None)
+        }
+        (Execution::Errored(stderr), false) => (Outcome::Failed, non_empty(stderr), None),
+        (Execution::Errored(_), true) => {
+            (Outcome::ExpectedFailure, test.xfail_reason.clone(), None)
+        }
+        (Execution::Killed(signal), false) => {
+            let (detail_msg, code_str) = signal_detail(signal);
+            (Outcome::Crashed, Some(detail_msg), Some(code_str))
+        }
+        (Execution::Killed(_), true) => (Outcome::ExpectedFailure, test.xfail_reason.clone(), None),
+        (Execution::Fault(reason), _) => (Outcome::RunnerFault, Some(reason), None),
     };
 
     TestResult {
@@ -331,6 +338,7 @@ pub fn to_test_result(
         outcome,
         detail,
         failure,
+        code,
     }
 }
 
@@ -342,8 +350,13 @@ fn unexpected_pass_detail(test: &TestMarker) -> Option<String> {
     ))
 }
 
-fn signal_detail(signal: i32) -> String {
-    format!("the test process was killed by signal {}", signal)
+fn signal_detail(signal: i32) -> (String, String) {
+    let (diag_code, _) = crate::diagnostics::signal::signal_to_code_and_name(signal);
+    #[cfg(unix)]
+    let message = crate::diagnostics::signal::signal_message(signal);
+    #[cfg(not(unix))]
+    let message = String::new();
+    (message, diag_code.to_string())
 }
 
 fn non_empty(stderr: String) -> Option<String> {

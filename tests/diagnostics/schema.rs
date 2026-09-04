@@ -172,6 +172,7 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
         }],
         artifact: Some("output.bin".to_string()),
         exit_code: Some(1),
+        signal: Some(11),
         stdout_tail: Some("Hello, world!".to_string()),
         stderr_tail: Some("Error occurred".to_string()),
         stdout_truncated: Some(false),
