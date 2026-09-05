@@ -235,15 +235,9 @@ fn main()
 
 // ── Trait as variable / parameter type (polymorphic dispatch) ─────────────────
 //
-// BUG: Virtual dispatch through a trait-typed variable is NOT yet implemented.
-// `class_needs_vtable` in context.rs only walks the `extends` chain for
-// abstract ancestors — it does NOT check the `implements` list.
-// The type checker also rejects member access on a trait-typed variable with
-// "Type 'X' does not have members".
-//
-// Fix required: extend `class_needs_vtable` to return true when a class
-// implements at least one trait, generate a vtable for trait methods, and
-// allow the type checker to resolve method calls on trait-typed variables.
+// Virtual dispatch through a trait-typed variable is supported via trait vtables.
+// `class_needs_vtable` in `context.rs` checks both abstract ancestor chains and
+// trait implementation (`implements`) lists to ensure proper vtable layout and dynamic dispatch.
 
 #[test]
 fn test_trait_typed_variable_dispatches_correctly() {
