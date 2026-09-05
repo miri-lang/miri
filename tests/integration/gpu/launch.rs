@@ -679,14 +679,22 @@ println(f'{h[0]} {h[1]} {h[2]}')
     assert_gpu_runs_with_output(source, "1 2 3");
 }
 
-// NOTE: the former `gpu_i64_divide_large_constant` / `gpu_i64_modulo_large_constant`
-// tests were removed. They asserted the old i64-constant-narrowing behaviour, where a
-// near-`i64::MAX` constant in a kernel was silently truncated into i32 range. GPU
-// integers are now i32 end-to-end (WebGPU/WGSL has no 64-bit integer type), so a
-// constant exceeding i32 range is genuinely unrepresentable in a kernel. In-range
-// integer div/mod stays covered by `gpu_i64_divide_roundtrips` / `gpu_i64_modulo_roundtrips`.
-// TODO: reject an out-of-i32-range integer constant inside a GPU kernel with a
-// clean compile-time error instead of the current shader-compile abort.
+/// Test that integer constants exceeding i32 range inside a GPU kernel
+/// produce a compile-time error.
+#[test]
+fn gpu_integer_constant_out_of_i32_range_rejected() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+
+gpu forall i in 0..4
+    dst[i] = src[i] + 3000000000
+";
+    assert_compiler_error(source, "3000000000");
+}
 
 /// Test negative dividend with division (i32 semantics: truncate toward zero).
 #[test]
