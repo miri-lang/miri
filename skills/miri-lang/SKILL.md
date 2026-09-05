@@ -107,7 +107,7 @@ let y = 42 as i64
 
 **Result** requires the constructor prefix (`Result.Ok`, `Result.Err`). Omitting it causes a type error:
 
-```miri,fails=MER_TYP_038,expects-message=Expected enum variant pattern like EnumName.Ok
+```miri,fails=MER_TYP_038,expects-message=Expected enum variant pattern like Result.Ok
 fn main()
     let r = Result.Ok(5)
     match r

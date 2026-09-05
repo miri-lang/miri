@@ -2529,6 +2529,32 @@ impl TypeChecker {
         }
     }
 
+    /// Records a type error together with the other places the same defect
+    /// shows up.
+    ///
+    /// The related notes travel on the one report rather than becoming reports
+    /// of their own, so a consumer repairs a single thing instead of chasing
+    /// each echo of it separately.
+    pub(crate) fn report_error_with_related(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: Option<String>,
+        related: Vec<crate::error::diagnostic::RelatedNote>,
+    ) {
+        if self.suppress_diagnostics {
+            return;
+        }
+        let key = (message.clone(), span);
+        if self.diagnostics.mark_reported(key) {
+            let mut err = TypeError::coded(code, message, span, help);
+            err.source_override = self.modules.current_source_override.clone();
+            err.related = related;
+            self.diagnostics.push_error(err);
+        }
+    }
+
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(
         &mut self,

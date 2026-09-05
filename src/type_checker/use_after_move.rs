@@ -426,6 +426,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 span: expr.span,
                 source_override: None,
                 repair: None,
+                related: Vec::new(),
             });
         }
     }
