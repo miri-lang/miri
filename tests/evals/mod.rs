@@ -170,14 +170,28 @@ fn normalize_output(output: &str, work_dir: &Path) -> String {
             roots.push(canonical);
         }
     }
-    for root in roots {
+
+    normalize_paths(&result, &roots)
+}
+
+/// Rewrite every occurrence of `roots` in `text` to a fixed stand-in.
+///
+/// The longest root is rewritten first. One root can contain another — macOS
+/// canonicalizes `/var/...` to `/private/var/...` — and rewriting the shorter
+/// one first would consume its tail and strand the `/private` prefix, leaving
+/// the byte count carrying a platform-dependent eight characters per path.
+fn normalize_paths(text: &str, roots: &[PathBuf]) -> String {
+    let mut ordered: Vec<&PathBuf> = roots.iter().collect();
+    ordered.sort_by_key(|root| std::cmp::Reverse(root.as_os_str().len()));
+
+    let mut result = text.to_string();
+    for root in ordered {
         if let Some(text) = root.to_str() {
             let re = regex::Regex::new(&regex::escape(text))
                 .expect("an escaped literal path must compile as a pattern");
             result = re.replace_all(&result, ".").into_owned();
         }
     }
-
     result
 }
 
@@ -860,6 +874,28 @@ mod tests {
         let normalized = normalize_output(raw, work);
         assert!(normalized.contains(r#""durationMs":0"#));
         assert!(normalized.contains(r#""path":"./program.mi""#));
+    }
+
+    #[test]
+    fn test_a_root_nested_in_another_root_is_fully_rewritten() {
+        // macOS resolves a temporary directory through /private, so the
+        // harness holds /var/... while the compiler reports /private/var/...
+        // The shorter root is a substring of the longer one; rewriting it
+        // first would strip the tail and strand the /private prefix.
+        let nested = PathBuf::from("/var/t/eval");
+        let canonical = PathBuf::from("/private/var/t/eval");
+        let raw = r#"{"path":"/private/var/t/eval/program.mi"}"#;
+
+        for roots in [
+            vec![nested.clone(), canonical.clone()],
+            vec![canonical.clone(), nested.clone()],
+        ] {
+            assert_eq!(
+                normalize_paths(raw, &roots),
+                r#"{"path":"./program.mi"}"#,
+                "the canonical root must be rewritten whichever order it arrives in"
+            );
+        }
     }
 
     #[test]
