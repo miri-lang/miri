@@ -4,4 +4,5 @@
 pub use crate::integration::utils;
 
 pub mod basic;
+pub mod entry_point;
 pub mod imports;

@@ -128,13 +128,15 @@ fn main()
 fn test_module_scope_let_reassignment_accepted_with_allow_risky() {
     let fixture = Fixture::new(
         "module_scope_allowed",
+        // A script, deliberately: a module-scope binding is not visible inside a
+        // function body, and a file that declares `main` drops its top-level
+        // statements. Both shapes fail to compile whatever this repair does, so
+        // neither can show that the repaired file checks.
         r#"let counter = 0
 
-fn bump()
-    counter = counter + 1
+counter = counter + 1
 
-fn main()
-    bump()
+println(f"{counter}")
 "#,
     );
 

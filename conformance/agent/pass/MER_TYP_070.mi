@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_TYP_070: the second function is renamed.
+fn f() int
+    1
+
+fn g() int
+    2
+
+fn main()
+    println(f"{f()} {g()}")

@@ -16,6 +16,15 @@ impl Span {
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+
+    /// True when the span covers no source text.
+    ///
+    /// An AST node built without a recorded span carries one of these, and a
+    /// diagnostic reported against it renders at the file's first token rather
+    /// than where the construct is written.
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
 }
 
 /// A syntax error from the lexer or parser, with its source location.

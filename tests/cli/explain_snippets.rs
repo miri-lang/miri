@@ -90,10 +90,13 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_065",
     "MER_TYP_067",
     "MER_TYP_068",
+    "MER_TYP_069",
+    "MER_TYP_070",
 ];
 
 /// Codes whose example cannot be verified this way, each with the reason.
 const NOT_VERIFIABLE: &[(&str, &str)] = &[
+    ("MER_BLD_021", "raised by run/build about the program as a whole; documented with shell prose because no source line carries it"),
     ("MER_BLD_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_BLD_002", "emitted by CLI refusal logic, not by compiling a source file"),
     ("MER_BLD_003", "emitted by comparing two builds' artifacts, not by compiling a source file"),
