@@ -95,6 +95,41 @@ fn test_find_best_match_threshold() {
     assert_eq!(find_best_match("abc", &candidates), None);
 }
 
+/// A suggestion has to leave something of the name the author wrote. Rewriting
+/// every character is not a correction, it is a different name.
+#[test]
+fn test_a_suggestion_never_rewrites_the_whole_name() {
+    use miri::error::format::find_best_match;
+    let candidates = vec!["r", "x"];
+    assert_eq!(
+        find_best_match("n", &candidates),
+        None,
+        "'r' shares nothing with 'n'; suggesting it points away from the fix"
+    );
+}
+
+#[test]
+fn test_a_suggestion_further_than_the_name_is_long_is_refused() {
+    use miri::error::format::find_best_match;
+    let candidates = vec!["Set", "List", "Map"];
+    assert_eq!(
+        find_best_match("e", &candidates),
+        None,
+        "'Set' is three edits from 'e', which is longer than 'e' itself"
+    );
+}
+
+/// The bound is relative, so a longer name still gets the help it needs.
+#[test]
+fn test_a_long_name_still_gets_its_near_miss() {
+    use miri::error::format::find_best_match;
+    let candidates = vec!["calculate_total", "reset"];
+    assert_eq!(
+        find_best_match("calculate_totl", &candidates),
+        Some("calculate_total".to_string())
+    );
+}
+
 #[test]
 fn test_find_best_match_empty_candidates() {
     use miri::error::format::find_best_match;

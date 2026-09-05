@@ -3,7 +3,7 @@
 
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, RelatedNote, Reportable};
 use crate::error::syntax::Span;
 
 /// A type error detected during type checking, with its source location.
@@ -17,6 +17,9 @@ pub struct TypeError {
     /// edit is determined. Absent for every condition whose repair would have
     /// to be guessed.
     pub repair: Option<RepairRequest>,
+    /// Secondary locations that belong to this same defect, so a cascade
+    /// arrives as one report a tool can act on rather than several.
+    pub related: Vec<RelatedNote>,
 }
 
 /// All possible type error variants produced by the type checker.
@@ -292,6 +295,7 @@ impl TypeError {
             span,
             source_override: None,
             repair: None,
+            related: Vec::new(),
         }
     }
 
@@ -306,6 +310,7 @@ impl TypeError {
             span: syntax_err.span,
             source_override: None,
             repair: None,
+            related: Vec::new(),
         }
     }
 
@@ -322,6 +327,7 @@ impl TypeError {
             span,
             source_override: None,
             repair: None,
+            related: Vec::new(),
         }
     }
 
@@ -345,6 +351,7 @@ impl TypeError {
             span,
             source_override: None,
             repair: None,
+            related: Vec::new(),
         }
     }
 
@@ -365,6 +372,7 @@ impl Reportable for TypeError {
         diag.expected = expected;
         diag.actual = actual;
         diag.repair = self.repair.clone();
+        diag.notes = self.related.clone();
         diag
     }
 }

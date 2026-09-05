@@ -18,6 +18,28 @@ use crate::error::syntax::Span;
 /// The official URL for reporting internal compiler errors.
 pub const BUG_REPORT_URL: &str = "https://github.com/miri-lang/miri/issues";
 
+/// A secondary message attached to a diagnostic, with the place it concerns.
+///
+/// A note without a location can only be read; a note with one can be acted on,
+/// which is what lets a tool treat a cascade as the single defect it is rather
+/// than as several unrelated reports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelatedNote {
+    pub message: String,
+    /// Where in the source this note points, when it points anywhere.
+    pub span: Option<Span>,
+}
+
+impl RelatedNote {
+    /// A note about `span`.
+    pub fn at(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            message: message.into(),
+            span: Some(span),
+        }
+    }
+}
+
 /// A rich, user-facing diagnostic message.
 ///
 /// Diagnostics provide all the context needed to display helpful error messages:
@@ -41,8 +63,8 @@ pub struct Diagnostic {
     pub span: Option<Span>,
     /// Actionable help text.
     pub help: Option<String>,
-    /// Additional notes/context.
-    pub notes: Vec<String>,
+    /// Additional notes, each optionally naming the place it concerns.
+    pub notes: Vec<RelatedNote>,
     /// Optional (file_path, source_text) for errors originating from imported files.
     /// When present, the formatter uses this source instead of the main file's source.
     pub source_override: Option<(String, String)>,
@@ -172,7 +194,7 @@ pub struct DiagnosticBuilder {
     message: Option<String>,
     span: Option<Span>,
     help: Option<String>,
-    notes: Vec<String>,
+    notes: Vec<RelatedNote>,
     source_override: Option<(String, String)>,
     expected: Option<String>,
     actual: Option<String>,
@@ -236,9 +258,18 @@ impl DiagnosticBuilder {
         self
     }
 
-    /// Add a note.
+    /// Add a note that names no particular place.
     pub fn add_note(mut self, note: impl Into<String>) -> Self {
-        self.notes.push(note.into());
+        self.notes.push(RelatedNote {
+            message: note.into(),
+            span: None,
+        });
+        self
+    }
+
+    /// Add a note about a second location.
+    pub fn add_related(mut self, note: impl Into<String>, span: Span) -> Self {
+        self.notes.push(RelatedNote::at(note, span));
         self
     }
 
@@ -321,13 +352,26 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
     let related = diag
         .notes
         .iter()
-        .map(|note| JsonRelated {
-            severity: "note".to_string(),
-            message: note.clone(),
-            code: None,
-            path: None,
-            line: None,
-            column: None,
+        .map(|note| {
+            // A note points into the same file as the diagnostic that carries
+            // it, so it takes that file's label and is resolved against the
+            // same source.
+            let (line, column) = note
+                .span
+                .map(|span| {
+                    let (line_num, col_num, _) =
+                        crate::error::syntax::find_line_info(effective_source, span.start);
+                    (Some(line_num), Some(col_num))
+                })
+                .unwrap_or((None, None));
+            JsonRelated {
+                severity: "note".to_string(),
+                message: note.message.clone(),
+                code: None,
+                path: note.span.and(file_label.map(str::to_string)),
+                line,
+                column,
+            }
         })
         .collect();
 

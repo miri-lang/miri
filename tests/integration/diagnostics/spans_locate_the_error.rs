@@ -10,8 +10,6 @@
 //! with nothing to do with the error. These tests pin the location of the
 //! reports that used to land there.
 
-use crate::integration::utils::*;
-
 /// The location the renderer prints for a diagnostic that carries no span.
 const FILE_START: &str = ":1:1";
 

@@ -46,6 +46,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
+use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
@@ -124,17 +125,68 @@ impl TypeChecker {
     ) -> Type {
         let subject_type = self.infer_expression(subject, context);
 
-        // Exhaustiveness is a property of the subject's variant set, so the
-        // report points at the subject rather than at the `match` keyword: that
-        // is the expression whose type the author has to cover.
-        self.check_exhaustiveness_enum(&subject_type, branches, subject.span, context);
-        self.check_exhaustiveness_option(&subject_type, branches, subject.span, context);
+        // A pattern that named a constructor without its enum never resolved,
+        // so the match covers no variant at all. Reporting it non-exhaustive on
+        // top of that would tell the author to add an arm they already wrote,
+        // and every name those patterns bind would be reported undefined in the
+        // arm bodies. One report for one mistake: the prefix is missing.
+        let unresolved = unresolved_variant_patterns(&subject_type, branches);
+        if unresolved.is_empty() {
+            // Exhaustiveness is a property of the subject's variant set, so the
+            // report points at the subject rather than at the `match` keyword:
+            // that is the expression whose type the author has to cover.
+            self.check_exhaustiveness_enum(&subject_type, branches, subject.span, context);
+            self.check_exhaustiveness_option(&subject_type, branches, subject.span, context);
+        } else {
+            self.report_unresolved_variant_patterns(&subject_type, &unresolved);
+        }
 
         if branches.is_empty() {
             return make_type(TypeKind::Void);
         }
 
         self.infer_match_body_type(&subject_type, branches, span, context)
+    }
+
+    /// Reports every pattern that named a variant constructor without its enum
+    /// as one diagnostic.
+    ///
+    /// The first is the primary; the rest hang off it as related notes carrying
+    /// their own location, because they are the same mistake repeated and one
+    /// repair covers them all.
+    fn report_unresolved_variant_patterns(
+        &mut self,
+        subject_type: &Type,
+        unresolved: &[UnresolvedVariantPattern],
+    ) {
+        let Some((primary, echoes)) = unresolved.split_first() else {
+            return;
+        };
+        let qualified = |pattern: &UnresolvedVariantPattern| {
+            format!(
+                "Expected enum variant pattern like {}.{}",
+                subject_enum_name(subject_type).unwrap_or("EnumName"),
+                pattern.variant
+            )
+        };
+        let related = echoes
+            .iter()
+            .map(|echo| RelatedNote::at(qualified(echo), echo.span))
+            .collect();
+        let help = subject_enum_name(subject_type).map(|enum_name| {
+            format!(
+                "write '{}.{}' so the pattern names the variant it matches; a bare \
+                 name binds a new variable instead.",
+                enum_name, primary.variant
+            )
+        });
+        self.report_error_with_related(
+            DiagnosticCode::TypEnumVariant,
+            qualified(primary),
+            primary.span,
+            help,
+            related,
+        );
     }
 
     /// Checks exhaustiveness for enum types in match expressions.
@@ -703,7 +755,26 @@ impl TypeChecker {
 
         let (enum_name, variant_name) = match self.extract_enum_variant_name(parent_pattern, span) {
             Some((e, v)) => (e, v),
-            None => return,
+            None => {
+                // A subject that names no enum is not covered by the
+                // whole-match pass, so the report is raised here instead.
+                if subject_enum_name(subject_type).is_none() {
+                    self.report_error(
+                        DiagnosticCode::TypEnumVariant,
+                        format!(
+                            "Expected an enum variant pattern, but the subject has type {}",
+                            subject_type
+                        ),
+                        span,
+                    );
+                }
+                // The pattern named no enum, so nothing can be resolved from
+                // it. Its bindings are still defined, at the error type, so the
+                // arm body is not reported against the enclosing scope for
+                // names the author did write.
+                self.bind_unresolved_pattern_names(bindings, is_mutable, context);
+                return;
+            }
         };
 
         self.check_enum_variant_bindings(
@@ -755,6 +826,38 @@ impl TypeChecker {
         }
     }
 
+    /// Defines the names `bindings` introduces at the error type.
+    ///
+    /// A pattern that failed to resolve binds nothing, and an arm body that
+    /// then mentions those names reports each as an undefined variable — a
+    /// cascade of the one mistake, complete with a `Did you mean` line drawn
+    /// from a scope the pattern never reached. Binding them here keeps the
+    /// report to the pattern itself; the error type suppresses what follows.
+    fn bind_unresolved_pattern_names(
+        &mut self,
+        bindings: &[Pattern],
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        for binding in bindings {
+            match binding {
+                Pattern::Identifier(name) => {
+                    self.check_pattern_identifier(
+                        name,
+                        &make_type(TypeKind::Error),
+                        is_mutable,
+                        context,
+                    );
+                }
+                Pattern::EnumVariant(_, nested) | Pattern::Tuple(nested) => {
+                    self.bind_unresolved_pattern_names(nested, is_mutable, context);
+                }
+                Pattern::Literal(_) | Pattern::Member(_, _) | Pattern::Regex(_) => {}
+                Pattern::Default => {}
+            }
+        }
+    }
+
     /// Extracts enum and variant names from a parent pattern.
     fn extract_enum_variant_name(
         &mut self,
@@ -774,14 +877,10 @@ impl TypeChecker {
                     None
                 }
             }
-            Pattern::Identifier(name) => {
-                self.report_error(
-                    DiagnosticCode::TypEnumVariant,
-                    format!("Expected enum variant pattern like EnumName.{}", name),
-                    span,
-                );
-                None
-            }
+            // A bare constructor name over an enum subject is reported once for
+            // the whole match, by `report_unresolved_variant_patterns`, so that
+            // repeating the mistake on several arms stays one diagnostic.
+            Pattern::Identifier(_) => None,
             _ => {
                 self.report_error(
                     DiagnosticCode::TypEnumVariant,
@@ -898,4 +997,57 @@ impl TypeChecker {
         };
         make_type(TypeKind::Custom(enum_name.to_string(), generic_args))
     }
+}
+
+/// A pattern that named a variant constructor without the enum that owns it,
+/// such as `Ok(n)` where `Result.Ok(n)` is required.
+struct UnresolvedVariantPattern {
+    variant: String,
+    span: Span,
+}
+
+/// The enum a match subject names, when it names one.
+fn subject_enum_name(subject_type: &Type) -> Option<&str> {
+    let TypeKind::Custom(name, _) = &subject_type.kind else {
+        return None;
+    };
+    Some(name)
+}
+
+/// Every pattern across `branches` that carries bindings but names its variant
+/// without an enum.
+///
+/// `Some(v)` and `None` over a `T?` subject are spelled bare on purpose, so a
+/// match on an optional yields nothing here.
+fn unresolved_variant_patterns(
+    subject_type: &Type,
+    branches: &[MatchBranch],
+) -> Vec<UnresolvedVariantPattern> {
+    // `Option` reaches here spelled either way — as the sugar `T?` or as the
+    // named type — and its constructors are written bare in both.
+    let Some(enum_name) = subject_enum_name(subject_type) else {
+        return Vec::new();
+    };
+    if enum_name == OPTION_TYPE_NAME {
+        return Vec::new();
+    }
+    let mut unresolved = Vec::new();
+    for branch in branches {
+        for (index, pattern) in branch.patterns.iter().enumerate() {
+            let Pattern::EnumVariant(parent, _) = pattern else {
+                continue;
+            };
+            let Pattern::Identifier(variant) = &**parent else {
+                continue;
+            };
+            let Some(span) = branch.pattern_span(index) else {
+                continue;
+            };
+            unresolved.push(UnresolvedVariantPattern {
+                variant: variant.clone(),
+                span,
+            });
+        }
+    }
+    unresolved
 }

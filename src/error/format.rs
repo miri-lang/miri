@@ -144,7 +144,7 @@ pub fn format_diagnostic_with_color(
         None => append_spanless_body(&mut output, diag),
     }
 
-    append_notes(&mut output, diag, &colors);
+    append_notes(&mut output, diag, effective_source, file_label, &colors);
     output
 }
 
@@ -172,7 +172,7 @@ pub fn format_diagnostic(source: &str, diag: &Diagnostic, source_path: Option<&s
         None => append_spanless_body(&mut output, diag),
     }
 
-    append_notes(&mut output, diag, &colors);
+    append_notes(&mut output, diag, effective_source, file_label, &colors);
     output
 }
 
@@ -266,11 +266,31 @@ fn append_spanless_body(out: &mut String, diag: &Diagnostic) {
     }
 }
 
-fn append_notes(out: &mut String, diag: &Diagnostic, colors: &ColorScheme) {
+fn append_notes(
+    out: &mut String,
+    diag: &Diagnostic,
+    source: &str,
+    file_label: Option<&str>,
+    colors: &ColorScheme,
+) {
     for note in &diag.notes {
         out.push_str(&format!(
             "  {}= note:{} {}\n",
-            colors.cyan, colors.reset, note
+            colors.cyan, colors.reset, note.message
+        ));
+        // A note that names a second place has to say where, or the reader is
+        // told a fact they cannot act on.
+        let Some(span) = note.span else {
+            continue;
+        };
+        let (line, column, _) = crate::error::syntax::find_line_info(source, span.start);
+        let location = match file_label {
+            Some(path) => format!("{}:{}:{}", path, line, column),
+            None => format!("line {}:{}", line, column),
+        };
+        out.push_str(&format!(
+            "      {}-->{} {}\n",
+            colors.blue, colors.reset, location
         ));
     }
 }
@@ -316,13 +336,25 @@ pub fn find_best_match<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<
         }
     }
 
-    // Threshold for suggestion: roughly 33% of the word length, minimum 2 edits.
-    // Tighter than the old max(3, len/2) to avoid suggesting unrelated names
-    // for short identifiers (e.g. "User" no longer matches "Err").
-    let threshold = std::cmp::max(2, target.len() / 3);
-    if min_distance <= threshold {
+    if min_distance <= suggestion_threshold(target) {
         best_candidate
     } else {
         None
     }
+}
+
+/// How far from `target` a candidate may sit and still be offered as the name
+/// the author meant.
+///
+/// Two bounds, and a candidate must satisfy both. The relative one allows
+/// roughly a third of the name to change, with a floor of two edits so a typo
+/// in a short name is still caught. The absolute one requires the candidate to
+/// leave at least one character of `target` standing: a suggestion that
+/// rewrites every character is not a correction but a different name, and
+/// offering it points the reader away from the fix. Without it the floor alone
+/// matches any one- or two-character name against any other — `n` against `r`,
+/// or `e` against `Set`.
+fn suggestion_threshold(target: &str) -> usize {
+    let relative = std::cmp::max(2, target.chars().count() / 3);
+    relative.min(target.chars().count().saturating_sub(1))
 }
