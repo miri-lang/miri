@@ -124,8 +124,11 @@ impl TypeChecker {
     ) -> Type {
         let subject_type = self.infer_expression(subject, context);
 
-        self.check_exhaustiveness_enum(&subject_type, branches, span, context);
-        self.check_exhaustiveness_option(&subject_type, branches, span, context);
+        // Exhaustiveness is a property of the subject's variant set, so the
+        // report points at the subject rather than at the `match` keyword: that
+        // is the expression whose type the author has to cover.
+        self.check_exhaustiveness_enum(&subject_type, branches, subject.span, context);
+        self.check_exhaustiveness_option(&subject_type, branches, subject.span, context);
 
         if branches.is_empty() {
             return make_type(TypeKind::Void);
@@ -361,8 +364,18 @@ impl TypeChecker {
 
         for branch in branches {
             context.enter_scope();
-            for pattern in &branch.patterns {
-                self.check_pattern(pattern, subject_type, context, span, branch.is_mutable);
+            // A pattern diagnostic points at the pattern the author wrote, not
+            // at the `match` that holds it; the whole-match span stands in only
+            // for a branch built programmatically, which has no source text.
+            for (index, pattern) in branch.patterns.iter().enumerate() {
+                let pattern_span = branch.pattern_span(index).unwrap_or(span);
+                self.check_pattern(
+                    pattern,
+                    subject_type,
+                    context,
+                    pattern_span,
+                    branch.is_mutable,
+                );
             }
 
             let body_type = self.infer_statement_type(&branch.body, context);

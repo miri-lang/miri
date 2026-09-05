@@ -26,6 +26,13 @@ impl<'source> Parser<'source> {
         match token {
             Some((ref t, ref span)) if expected(t) => {
                 let result = (t.clone(), *span);
+                // Layout tokens — indent, dedent, end of statement — are
+                // zero-width and sit at the start of the line that follows the
+                // construct they close. Letting one extend the reach would push
+                // a statement's recorded range onto the next line.
+                if span.end > span.start {
+                    self.last_consumed_end = self.last_consumed_end.max(span.end);
+                }
                 self.lookahead = self.lexer.next().transpose()?;
                 Ok(result)
             }

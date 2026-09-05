@@ -213,7 +213,7 @@ fn append_span_context(
 ) {
     let level_color = colors.severity_color(diag.severity);
     let (line_num, col_num, line_str) = find_line_info(source, span.start);
-    let len = span.end.saturating_sub(span.start).max(1);
+    let len = crate::error::syntax::highlight_length(source, span).max(1);
     let gutter_width = line_num.to_string().len();
     let gutter = " ".repeat(gutter_width);
     let padding = " ".repeat(col_num.saturating_sub(1));

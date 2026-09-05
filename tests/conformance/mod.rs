@@ -167,7 +167,7 @@ fn parse_fixture(path: &Path) -> Result<FixtureDirectives, String> {
 }
 
 /// Verify that fail/<CODE>.mi contains expected error code.
-fn test_fail_fixture(path: &Path) -> Result<(), String> {
+fn test_fail_fixture(path: &Path) -> Result<usize, String> {
     let directives = parse_fixture(path)?;
 
     let expect_code = directives.expect_code.clone().ok_or_else(|| {
@@ -284,11 +284,11 @@ fn test_fail_fixture(path: &Path) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    count_locatable_diagnostics(path, diags)
 }
 
 /// Verify that warn/<CODE>.mi contains expected warning code and ok=true.
-fn test_warn_fixture(path: &Path) -> Result<(), String> {
+fn test_warn_fixture(path: &Path) -> Result<usize, String> {
     let directives = parse_fixture(path)?;
 
     let expect_code = directives.expect_code.clone().ok_or_else(|| {
@@ -362,7 +362,7 @@ fn test_warn_fixture(path: &Path) -> Result<(), String> {
         ));
     }
 
-    Ok(())
+    count_locatable_diagnostics(path, diags)
 }
 
 /// Verify that pass/<CODE>.mi or pass/e2e_<name>.mi compiles + runs cleanly.
@@ -438,6 +438,46 @@ fn test_pass_fixture(path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Codes whose report genuinely belongs on the file's first token, and so are
+/// exempt from the locatability check below. Each entry must name why.
+const FIRST_TOKEN_DIAGNOSTICS: &[(&str, &str)] = &[];
+
+/// Rejects any diagnostic that arrives without a location, returning how many
+/// were inspected.
+///
+/// A span every AST node starts with is the empty one, and a check that never
+/// carries its subject's span down to the report emits it unchanged. The
+/// renderer then underlines the file's first token — usually a `use` line with
+/// nothing to do with the error — and a machine consumer has nowhere to go.
+/// Enforcing this over the whole corpus, rather than per fixture, is what keeps
+/// a newly added check from reintroducing the pattern.
+fn count_locatable_diagnostics(
+    path: &Path,
+    diagnostics: &[serde_json::Value],
+) -> Result<usize, String> {
+    for diagnostic in diagnostics {
+        let code = diagnostic["code"].as_str().unwrap_or("<uncoded>");
+        if FIRST_TOKEN_DIAGNOSTICS
+            .iter()
+            .any(|(exempt, _)| *exempt == code)
+        {
+            continue;
+        }
+        let line = diagnostic["line"].as_u64();
+        let column = diagnostic["column"].as_u64();
+        let length = diagnostic["length"].as_u64().unwrap_or(0);
+        if line == Some(1) && column == Some(1) && length == 0 {
+            return Err(format!(
+                "{} reports {} at line 1, column 1, length 0: the check dropped its subject's \
+                 span, so the report lands on the file's first token",
+                path.display(),
+                code
+            ));
+        }
+    }
+    Ok(diagnostics.len())
 }
 
 /// Explicit exclusion table for codes that cannot be triggered via .mi source.
@@ -529,7 +569,6 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_TYP_029", "Shadowed by MER_TYP_033 (type error fires first)"),
     ("MER_TYP_036", "Shadowed by MER_PAR_001 (parser error fires first)"),
     ("MER_TYP_037", "Shadowed by MER_PAR_001 (parser error fires first)"),
-    ("MER_TYP_038", "Shadowed by MER_PAR_014 (parser error fires first)"),
     ("MER_TYP_045", "No Before snippet in doc"),
     ("MER_TYP_046", "No Before snippet in doc"),
     ("MER_TYP_047", "Shadowed by MER_PAR_001 (parser error fires first)"),
@@ -778,6 +817,7 @@ fn run_conformance_tests(corpus_root: &Path) -> Result<(), String> {
 
     let mut pass_count = 0;
     let mut fail_count = 0;
+    let mut located_count = 0;
 
     // Test fail/ fixtures
     if fail_dir.exists() {
@@ -787,7 +827,10 @@ fn run_conformance_tests(corpus_root: &Path) -> Result<(), String> {
                 let path = e.path();
                 if path.extension().map(|s| s == "mi").unwrap_or(false) {
                     match test_fail_fixture(&path) {
-                        Ok(()) => pass_count += 1,
+                        Ok(inspected) => {
+                            pass_count += 1;
+                            located_count += inspected;
+                        }
                         Err(err) => {
                             eprintln!("FAIL: {}: {}", path.display(), err);
                             fail_count += 1;
@@ -806,7 +849,10 @@ fn run_conformance_tests(corpus_root: &Path) -> Result<(), String> {
                 let path = e.path();
                 if path.extension().map(|s| s == "mi").unwrap_or(false) {
                     match test_warn_fixture(&path) {
-                        Ok(()) => pass_count += 1,
+                        Ok(inspected) => {
+                            pass_count += 1;
+                            located_count += inspected;
+                        }
                         Err(err) => {
                             eprintln!("FAIL: {}: {}", path.display(), err);
                             fail_count += 1;
@@ -840,7 +886,18 @@ fn run_conformance_tests(corpus_root: &Path) -> Result<(), String> {
         return Err(format!("{} fixture(s) failed", fail_count));
     }
 
-    println!("Conformance: {} fixtures passed", pass_count);
+    // A locatability gate that inspected nothing would report green over a
+    // corpus it never read, so the count it covered is part of the verdict.
+    if located_count == 0 {
+        return Err(
+            "no diagnostic was checked for a location: the corpus produced none".to_string(),
+        );
+    }
+
+    println!(
+        "Conformance: {} fixtures passed, {} diagnostics carry a location",
+        pass_count, located_count
+    );
     Ok(())
 }
 
@@ -863,6 +920,51 @@ fn test_conformance_agent() {
     match run_conformance_tests(&corpus_root) {
         Ok(()) => {}
         Err(err) => panic!("Conformance tests failed: {}", err),
+    }
+}
+
+mod locatability_tests {
+    use super::*;
+
+    fn diagnostic(code: &str, line: u64, column: u64, length: u64) -> serde_json::Value {
+        serde_json::json!({
+            "code": code,
+            "line": line,
+            "column": column,
+            "length": length,
+        })
+    }
+
+    #[test]
+    fn test_a_diagnostic_without_a_span_is_rejected() {
+        let diagnostics = vec![diagnostic("MER_TYP_054", 1, 1, 0)];
+        let verdict = count_locatable_diagnostics(Path::new("fixture.mi"), &diagnostics);
+        let message = verdict.expect_err("a report at 1:1:0 carries no location");
+        assert!(
+            message.contains("MER_TYP_054"),
+            "the rejection should name the code that lost its span: {message}"
+        );
+    }
+
+    #[test]
+    fn test_a_located_diagnostic_is_accepted_and_counted() {
+        let diagnostics = vec![
+            diagnostic("MER_TYP_038", 7, 11, 1),
+            diagnostic("MER_TYP_054", 3, 1, 22),
+        ];
+        let inspected = count_locatable_diagnostics(Path::new("fixture.mi"), &diagnostics)
+            .expect("both reports carry a location");
+        assert_eq!(inspected, 2);
+    }
+
+    /// A report on the file's genuine first token is locatable, not lost, so it
+    /// is only the zero-length one that fails.
+    #[test]
+    fn test_the_first_token_is_a_location_when_the_span_has_width() {
+        let diagnostics = vec![diagnostic("MER_PAR_001", 1, 1, 3)];
+        let inspected = count_locatable_diagnostics(Path::new("fixture.mi"), &diagnostics)
+            .expect("a span with width points at the first token on purpose");
+        assert_eq!(inspected, 1);
     }
 }
 

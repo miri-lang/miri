@@ -268,6 +268,7 @@ fn test_normalize_walks_return_expression_inside_function_body() {
 #[test]
 fn test_normalize_walks_match_branch_bodies() {
     let branch = MatchBranch {
+        pattern_spans: Vec::new(),
         patterns: vec![Pattern::Default],
         guard: None,
         body: Box::new(expression_statement(int_literal_expression(0))),

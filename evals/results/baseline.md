@@ -20,5 +20,5 @@ this file on every run. The harness prints it to stdout instead.
 | b | repair a broken program using check, explain and fix | yes | 6 | 2290 | 74 |
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 4 | 1361 | 85 |
-| e | recover from a capability rejection | yes | 5 | 2022 | 118 |
+| e | recover from a capability rejection | yes | 5 | 2023 | 118 |
 | f | make a failing test pass | yes | 4 | 631 | 128 |

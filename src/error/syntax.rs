@@ -252,6 +252,28 @@ impl Reportable for SyntaxError {
     }
 }
 
+/// How much of `span` to highlight: its extent, stopped at the end of the line
+/// it starts on.
+///
+/// A span may cover a whole declaration and run over many lines, while both a
+/// caret run and a machine consumer's highlight apply to the single line the
+/// reported location names. Clamping here keeps the underline and the reported
+/// length from spilling past that line.
+pub fn highlight_length(source: &str, span: Span) -> usize {
+    let start = span.start.min(source.len());
+    let end = span.end.min(source.len()).max(start);
+    // A span that does not start on a character boundary cannot be sliced;
+    // reporting no width leaves the renderer its single-caret minimum rather
+    // than panicking on input that produced such a span.
+    let Some(rest) = source.get(start..) else {
+        return 0;
+    };
+    let line_end = rest
+        .find('\n')
+        .map_or(source.len(), |offset| start + offset);
+    end.min(line_end) - start
+}
+
 /// Finds the line number, column number, and line content for a byte position in source.
 pub fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
     let mut line_start = 0;
