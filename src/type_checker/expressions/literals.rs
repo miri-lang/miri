@@ -86,6 +86,7 @@ impl TypeChecker {
         lit: &Literal,
         expr_id: usize,
         span: Span,
+        context: &Context,
     ) {
         let Literal::Integer(int_lit) = lit else {
             return;
@@ -96,6 +97,28 @@ impl TypeChecker {
             return;
         }
         let value = int_lit.to_i128();
+
+        if context.in_gpu_function {
+            let max = if self.negated_int_literals.contains(&expr_id) {
+                i32::MAX as i128 + 1
+            } else {
+                i32::MAX as i128
+            };
+            if value > max {
+                self.report_error(
+                    DiagnosticCode::TarGpuValueOutOfRange,
+                    format!(
+                        "Integer literal '{}' is out of range for GPU 32-bit signed integer (i32 range is {} to {})",
+                        value,
+                        i32::MIN,
+                        i32::MAX
+                    ),
+                    span,
+                );
+            }
+            return;
+        }
+
         let max = if self.negated_int_literals.contains(&expr_id) {
             i64::MAX as i128 + 1
         } else {
