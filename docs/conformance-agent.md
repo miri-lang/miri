@@ -95,6 +95,8 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_065 | Triggers MER_TYP_065: Invalid Constant Arithmetic. |
 | MER_TYP_067 | Triggers MER_TYP_067: Type Not Valid in String Interpolation. |
 | MER_TYP_068 | Triggers MER_TYP_068: Integer Literal Out of Range. |
+| MER_TYP_069 | Triggers MER_TYP_069: a top-level statement beside a declared 'main'. |
+| MER_TYP_070 | Triggers MER_TYP_070: two top-level functions share a name. |
 
 ## Warning fixtures (`warn/`) — 7
 
@@ -197,6 +199,8 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_065 | Accepted counterpart of MER_TYP_065: Invalid Constant Arithmetic does not fire. |
 | MER_TYP_067 | Accepted counterpart of MER_TYP_067: Type Not Valid in String Interpolation does not fire. |
 | MER_TYP_068 | Small integer literal fits in range |
+| MER_TYP_069 | Accepted counterpart of MER_TYP_069: the statement moved into 'main'. |
+| MER_TYP_070 | Accepted counterpart of MER_TYP_070: the second function is renamed. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

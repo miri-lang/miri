@@ -9,7 +9,7 @@ A constant expression was evaluated at compile time and resulted in an invalid a
 ## Before
 
 ```miri
-let SIZE = 10 / 0
+const SIZE = 10 / 0
 
 fn main() i32:
   0
@@ -18,7 +18,7 @@ fn main() i32:
 ## After
 
 ```miri
-let SIZE = 10 / 2
+const SIZE = 10 / 2
 
 fn main() i32:
   0

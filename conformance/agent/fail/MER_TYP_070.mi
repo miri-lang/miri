@@ -1,0 +1,10 @@
+// expect: MER_TYP_070
+// summary: Triggers MER_TYP_070: two top-level functions share a name.
+fn f() int
+    1
+
+fn f() int
+    2
+
+fn main()
+    println(f"{f()}")

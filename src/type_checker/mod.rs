@@ -289,6 +289,15 @@ impl TypeChecker {
         &self.diagnostics.warnings
     }
 
+    /// Records a warning raised outside the checking passes.
+    ///
+    /// The pipeline uses this for a warning about the program as a whole that
+    /// only `run` and `build` should raise, so it travels with the rest rather
+    /// than through a channel of its own.
+    pub fn record_warning(&mut self, warning: crate::error::diagnostic::Diagnostic) {
+        self.diagnostics.push_warning(warning);
+    }
+
     /// Walk the inheritance chain to find a static method, avoiding ClassDefinition clones.
     ///
     /// Returns `Some((defining_class_name, method_info))` if found, `None` otherwise.
@@ -346,6 +355,7 @@ impl TypeChecker {
         self.run_pass_collect_type_shells(program);
         self.load_shadowable_prelude(&mut context);
         self.run_pass_collect_declarations(program, &mut context);
+        self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);

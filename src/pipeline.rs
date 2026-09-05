@@ -102,6 +102,46 @@ pub fn is_script_body_statement(stmt: &Statement) -> bool {
     is_wrappable_stmt(stmt) && !is_top_level_const_stmt(stmt)
 }
 
+/// True when running the program would execute something the author wrote.
+///
+/// A program qualifies by declaring `main`, or by carrying a statement that
+/// script-mode wrapping would demote into a synthetic one. A file holding only
+/// declarations satisfies neither: the synthetic `main` would contain nothing
+/// but its own `return 0`, so building it yields an executable that prints
+/// nothing and exits zero — which a caller reading the exit status cannot
+/// distinguish from a program that ran and had nothing to say. `miri check`
+/// still accepts such a file; validating a module is what `check` is for.
+fn has_executable_entry_point(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.name == "main")
+            || is_script_body_statement(stmt)
+    })
+}
+
+/// What `run` and `build` report for a program with nothing to execute.
+///
+/// A warning rather than an error, because an empty program, a file of `const`
+/// declarations and a file of functions alone are all accepted shapes that
+/// build and exit zero — behaviour the suite asserts directly. What was missing
+/// is that the caller was never told, so a run that could not have produced
+/// output looked exactly like one that had nothing to say.
+fn nothing_to_run_warning() -> crate::error::diagnostic::Diagnostic {
+    use crate::diagnostics::DiagnosticCode;
+    use crate::error::diagnostic::DiagnosticBuilder;
+
+    let code = DiagnosticCode::BldNothingToRun;
+    DiagnosticBuilder::warning(code.title())
+        .code(code.as_str())
+        .message(
+            "this file has nothing to run: it declares no 'main' and carries no top-level \
+             statements",
+        )
+        .help(
+            "add a 'main' function, or check the file instead with 'miri check' if it is a module.",
+        )
+        .build()
+}
+
 /// Returns true if the statement should stay at the top level (not wrapped in main).
 fn is_top_level_stmt(stmt: &Statement) -> bool {
     matches!(
@@ -598,6 +638,8 @@ impl Pipeline {
 
         crate::ast::normalize::normalize(&mut ast);
 
+        let nothing_to_run = !has_executable_entry_point(&ast);
+
         wrap_script_in_main(&mut ast);
         patch_main_return(&mut ast);
 
@@ -609,6 +651,13 @@ impl Pipeline {
                 warnings: type_checker.warnings().to_vec(),
             })?;
         expand_nested_generic_instantiations(&mut type_checker);
+
+        // Reported after checking, so a file that also has real errors reports
+        // those instead: a module whose imports collide should say so, not that
+        // it has no entry point.
+        if nothing_to_run {
+            type_checker.record_warning(nothing_to_run_warning());
+        }
 
         for warning in type_checker.warnings() {
             eprintln!(

@@ -155,6 +155,30 @@ pub fn assert_builds(code: &str) {
     }
 }
 
+/// Assert that the code builds successfully and the build reports `expected_warning`.
+///
+/// Separate from `assert_compiler_warning`, which drives `miri check`: a
+/// warning about the program as a whole — whether running it could execute
+/// anything — is raised only by the commands that would run it.
+pub fn assert_build_warning(code: &str, expected_warning: &str) {
+    let result = miri_build(code);
+
+    if !result.success {
+        panic!(
+            "Expected program to build successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    let output = result.output();
+    if !output.contains(expected_warning) {
+        panic!(
+            "Expected warning '{}' not found in build output:\n{}",
+            expected_warning, output
+        );
+    }
+}
+
 /// Assert that the code fails during the build (full compilation pipeline) with a specific error message.
 /// This is distinct from assert_compiler_error, which only runs the type-checker.
 /// Use this for errors that occur during MIR lowering or code generation.

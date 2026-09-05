@@ -277,6 +277,25 @@ impl Backend for CraneliftBackend {
     }
 }
 
+/// The environment variable that opts a failing build into a backend IR dump.
+const DUMP_IR_ENV: &str = "MIRI_DUMP_BACKEND_IR";
+
+/// What a failed `define_function` reports.
+///
+/// The backend's own IR is the first thing a compiler engineer wants here and
+/// the last thing a caller of the published diagnostics envelope should
+/// receive: it carries no source position, cannot be acted on, and is compiler
+/// internals reaching a machine-readable contract. It travels only when
+/// `MIRI_DUMP_BACKEND_IR` is set, which is how someone debugging the backend
+/// asks for it.
+fn define_failure_details(error: &impl fmt::Display, ctx: &Context) -> String {
+    if std::env::var_os(DUMP_IR_ENV).is_some() {
+        format!("{}\n\nCranelift IR:\n{}", error, ctx.func.display())
+    } else {
+        error.to_string()
+    }
+}
+
 impl CraneliftBackend {
     /// Resolve the target ISA. Reuses the cached default ISA when options match
     /// defaults; otherwise rebuilds with the requested opt-level/PIC flags.
@@ -550,14 +569,9 @@ impl CraneliftBackend {
         ctx.func = translator.into_function();
 
         // Define the function
-        module.define_function(func_id, ctx).map_err(|e| {
-            // Include the Cranelift IR in the error message for diagnostics.
-            // This replaces direct println! to keep output channels clean.
-            CodegenError::define_function(
-                name,
-                format!("{}\n\nCranelift IR:\n{}", e, ctx.func.display()),
-            )
-        })?;
+        module
+            .define_function(func_id, ctx)
+            .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
 
         // Clear context for next function
         ctx.clear();

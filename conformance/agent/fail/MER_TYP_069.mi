@@ -1,0 +1,6 @@
+// expect: MER_TYP_069
+// summary: Triggers MER_TYP_069: a top-level statement beside a declared 'main'.
+println("never runs")
+
+fn main()
+    println("in main")

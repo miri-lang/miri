@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_TYP_069: the statement moved into 'main'.
+fn main()
+    println("never runs")
+    println("in main")
