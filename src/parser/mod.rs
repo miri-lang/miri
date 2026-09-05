@@ -25,6 +25,14 @@ pub struct Parser<'source> {
     pub(super) source: &'source str,
     pub(super) lookahead: Option<TokenSpan>,
     pub(super) depth: usize,
+    /// End offset of the most recently consumed token.
+    ///
+    /// A statement's extent is only known once its last token is read, and the
+    /// lookahead by then points past it. Recording the end as tokens are eaten
+    /// lets [`Parser::statement`] close a span over everything the statement
+    /// consumed, so a check that runs over a whole declaration has a location
+    /// to report.
+    pub(super) last_consumed_end: usize,
 }
 
 impl<'source> Parser<'source> {
@@ -35,6 +43,7 @@ impl<'source> Parser<'source> {
             source,
             lookahead: None,
             depth: 0,
+            last_consumed_end: 0,
         }
     }
 

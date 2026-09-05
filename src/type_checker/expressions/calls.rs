@@ -924,7 +924,7 @@ impl TypeChecker {
         context: &Context,
     ) {
         // Check argument types
-        for (_, arg_type) in positional_args {
+        for (arg, arg_type) in positional_args {
             if matches!(arg_type.kind, TypeKind::Error) {
                 continue;
             }
@@ -934,7 +934,7 @@ impl TypeChecker {
                         "Type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may cross a call boundary inside a 'gpu fn'",
                         arg_type
                     ),
-                    Span::default(),
+                    arg.span,
                 );
             }
         }
@@ -1043,16 +1043,20 @@ impl TypeChecker {
         // Clone the body Rc to avoid borrow checker issues with `&mut self`.
         let body_opt = self.fn_analysis.function_bodies.get(func_name).cloned();
         if let Some(body) = body_opt {
-            self.validate_gpu_function_body(func_name, &body);
+            self.validate_gpu_function_body(func_name, &body, func.span);
         }
     }
 
     /// Validates that a function body is GPU-compatible (basic checks).
     /// Detects calls to host-only intrinsics and recursion.
+    /// Reports at `call_span`, the call that pulled the body onto the device:
+    /// the body itself may be legal on the host, and the call is what made its
+    /// restrictions apply.
     fn validate_gpu_function_body(
         &mut self,
         func_name: &str,
         body: &std::rc::Rc<crate::ast::Statement>,
+        call_span: Span,
     ) {
         // Check for recursion
         let mut visited = std::collections::HashSet::new();
@@ -1060,7 +1064,7 @@ impl TypeChecker {
             self.report_error(
                 DiagnosticCode::TarGpuCodeRestriction,
                 "recursion is not allowed in GPU code".to_string(),
-                Span::default(),
+                call_span,
             );
             return;
         }
@@ -1072,7 +1076,7 @@ impl TypeChecker {
             self.report_error(
                 DiagnosticCode::TarGpuIncompatibleSignature,
                 "Function calls host-only intrinsic which is not GPU-compatible".to_string(),
-                Span::default(),
+                call_span,
             );
         }
     }

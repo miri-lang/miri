@@ -25,6 +25,7 @@ match x
             identifier("x"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(1))],
                     guard: None,
                     body: Box::new(expression_statement(call(
@@ -34,6 +35,7 @@ match x
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(2))],
                     guard: None,
                     body: Box::new(block(vec![expression_statement(call(
@@ -43,6 +45,7 @@ match x
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Default],
                     guard: None,
                     body: Box::new(expression_statement(call(
@@ -64,18 +67,21 @@ fn test_match_expression_fully_inline() {
             identifier("x"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(1))],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("one"))),
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(2))],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("two"))),
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Default],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("other"))),
@@ -98,6 +104,7 @@ match num
             identifier("num"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("x".to_string())],
                     guard: Some(Box::new(binary(
                         identifier("x"),
@@ -108,6 +115,7 @@ match num
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("x".to_string())],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("small"))),
@@ -130,6 +138,7 @@ match code
             identifier("code"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![
                         Pattern::Literal(int_literal(200)),
                         Pattern::Literal(int_literal(201)),
@@ -140,6 +149,7 @@ match code
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(404))],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("Not Found"))),
@@ -162,6 +172,7 @@ match point
             identifier("point"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Tuple(vec![
                         Pattern::Literal(int_literal(0)),
                         Pattern::Literal(int_literal(0)),
@@ -171,6 +182,7 @@ match point
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Tuple(vec![
                         Pattern::Identifier("x".to_string()),
                         Pattern::Literal(int_literal(0)),
@@ -196,6 +208,7 @@ match text
             identifier("text"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Regex(RegexToken {
                         body: "^\\d+$".to_string(),
                         ignore_case: false,
@@ -211,6 +224,7 @@ match text
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Regex(RegexToken {
                         body: "^[a-z]+$".to_string(),
                         ignore_case: false,
@@ -297,6 +311,7 @@ match x
             identifier("x"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("x".to_string())],
                     guard: opt_expr(binary(
                         identifier("x"),
@@ -307,6 +322,7 @@ match x
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("x".to_string())],
                     guard: opt_expr(binary(
                         identifier("x"),
@@ -340,12 +356,14 @@ match get_value() + 1
             ),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(1))],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("one"))),
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("_".to_string())],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("other"))),
@@ -371,12 +389,14 @@ let result = match x: 1: 'one', _: 'other'
                     identifier("x"),
                     vec![
                         MatchBranch {
+                            pattern_spans: Vec::new(),
                             patterns: vec![Pattern::Literal(int_literal(1))],
                             guard: None,
                             body: Box::new(expression_statement(string_literal_expression("one"))),
                             is_mutable: false,
                         },
                         MatchBranch {
+                            pattern_spans: Vec::new(),
                             patterns: vec![Pattern::Identifier("_".to_string())],
                             guard: None,
                             body: Box::new(expression_statement(string_literal_expression(
@@ -407,12 +427,14 @@ match a
             identifier("a"),
             vec![
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Literal(int_literal(1))],
                     guard: None,
                     body: Box::new(expression_statement(match_expression(
                         identifier("b"),
                         vec![
                             MatchBranch {
+                                pattern_spans: Vec::new(),
                                 patterns: vec![Pattern::Literal(int_literal(2))],
                                 guard: None,
                                 body: Box::new(expression_statement(string_literal_expression(
@@ -421,6 +443,7 @@ match a
                                 is_mutable: false,
                             },
                             MatchBranch {
+                                pattern_spans: Vec::new(),
                                 patterns: vec![Pattern::Identifier("_".to_string())],
                                 guard: None,
                                 body: Box::new(expression_statement(string_literal_expression(
@@ -433,6 +456,7 @@ match a
                     is_mutable: false,
                 },
                 MatchBranch {
+                    pattern_spans: Vec::new(),
                     patterns: vec![Pattern::Identifier("_".to_string())],
                     guard: None,
                     body: Box::new(expression_statement(string_literal_expression("outer"))),
@@ -486,6 +510,7 @@ match c
                 identifier("c"),
                 vec![
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::Member(
                             Box::new(Pattern::Identifier("Color".to_string())),
                             "Red".to_string(),
@@ -495,6 +520,7 @@ match c
                         is_mutable: false,
                     },
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::Member(
                             Box::new(Pattern::Identifier("Color".to_string())),
                             "Green".to_string(),
@@ -504,6 +530,7 @@ match c
                         is_mutable: false,
                     },
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::Member(
                             Box::new(Pattern::Identifier("Color".to_string())),
                             "Blue".to_string(),
@@ -557,6 +584,7 @@ match c
                 identifier("c"),
                 vec![
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::EnumVariant(
                             Box::new(Pattern::Member(
                                 Box::new(Pattern::Identifier("Color".to_string())),
@@ -569,6 +597,7 @@ match c
                         is_mutable: false,
                     },
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::EnumVariant(
                             Box::new(Pattern::Member(
                                 Box::new(Pattern::Identifier("Color".to_string())),
@@ -581,6 +610,7 @@ match c
                         is_mutable: false,
                     },
                     MatchBranch {
+                        pattern_spans: Vec::new(),
                         patterns: vec![Pattern::EnumVariant(
                             Box::new(Pattern::Member(
                                 Box::new(Pattern::Identifier("Color".to_string())),

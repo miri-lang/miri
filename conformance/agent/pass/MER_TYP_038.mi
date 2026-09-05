@@ -1,0 +1,15 @@
+// summary: Covering every variant clears MER_TYP_038.
+// expect-stdout: red
+enum Color
+    Red
+    Green
+    Blue
+
+fn describe(c Color) String
+    match c
+        Color.Red: "red"
+        Color.Green: "green"
+        Color.Blue: "blue"
+
+fn main()
+    println(describe(Color.Red))

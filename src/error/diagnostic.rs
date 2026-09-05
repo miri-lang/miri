@@ -312,7 +312,7 @@ pub fn to_json(diag: &Diagnostic, source: &str, source_path: Option<&str>) -> Js
     let (line, column, length) = if let Some(span) = diag.span {
         let (line_num, col_num, _) =
             crate::error::syntax::find_line_info(effective_source, span.start);
-        let len = span.end.saturating_sub(span.start);
+        let len = crate::error::syntax::highlight_length(effective_source, span);
         (Some(line_num), Some(col_num), Some(len))
     } else {
         (None, None, None)

@@ -157,12 +157,35 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn statement(&mut self) -> Result<Statement, SyntaxError> {
         let leading = self.lexer.take_leading_comments();
+        let start = self.current_token_span().start;
         self.enter_recursion()?;
         let res = self.dispatch_statement();
         self.exit_recursion();
         let mut statement = res?;
+        self.close_span(&mut statement, start);
         self.claim_trivia(&mut statement, leading);
         Ok(statement)
+    }
+
+    /// Give `statement` the source range it was parsed from, unless it already
+    /// carries a narrower one.
+    ///
+    /// Most statement constructors take no span, because the AST factory has no
+    /// access to source text. Closing the range here — from the statement's
+    /// first token to the last token its parse consumed — is what lets a check
+    /// that runs over a whole declaration or a whole loop report a location
+    /// instead of the file's first byte. The constructors that do record a span
+    /// keep it: an expression statement points at its expression, which is more
+    /// precise than the line it sits on.
+    ///
+    /// A statement that consumed no source text keeps its empty span: at end of
+    /// input the parse yields an empty statement covering nothing, and giving it
+    /// the range `len..len` would put a node at the end of every file.
+    fn close_span(&self, statement: &mut Statement, start: usize) {
+        if !statement.span.is_empty() || self.last_consumed_end <= start {
+            return;
+        }
+        statement.span = Span::new(start, self.last_consumed_end);
     }
 
     /// Give `statement` the comments written around it.
@@ -610,6 +633,7 @@ impl<'source> Parser<'source> {
         let token = if is_mutable { Token::Var } else { Token::Let };
         self.eat_token(&token)?;
 
+        let pattern_span = self.current_token_span();
         let pattern = self.pattern()?;
         self.eat_token(&Token::Assign)?;
         let value = self.expression()?;
@@ -630,12 +654,17 @@ impl<'source> Parser<'source> {
 
         let then_branch = MatchBranch {
             patterns: vec![pattern],
+            pattern_spans: vec![pattern_span],
             guard: None,
             body: Box::new(then_body),
             is_mutable,
         };
+        // The complement is synthesized rather than written, so it has no
+        // source range of its own; it borrows the pattern it complements,
+        // which is the text an author would edit.
         let else_branch = MatchBranch {
             patterns: vec![else_pattern],
+            pattern_spans: vec![pattern_span],
             guard: None,
             body: Box::new(else_body.unwrap_or_else(ast::empty_statement)),
             is_mutable: false,
@@ -715,6 +744,7 @@ impl<'source> Parser<'source> {
         let token = if is_mutable { Token::Var } else { Token::Let };
         self.eat_token(&token)?;
 
+        let pattern_span = self.current_token_span();
         let pattern = self.pattern()?;
         self.eat_token(&Token::Assign)?;
         let value = self.expression()?;
@@ -724,12 +754,14 @@ impl<'source> Parser<'source> {
 
         let match_branch = MatchBranch {
             patterns: vec![pattern],
+            pattern_spans: vec![pattern_span],
             guard: None,
             body: Box::new(body),
             is_mutable,
         };
         let break_branch = MatchBranch {
             patterns: vec![break_pattern],
+            pattern_spans: vec![pattern_span],
             guard: None,
             body: Box::new(ast::break_statement()),
             is_mutable: false,
@@ -1097,6 +1129,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn import_path_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let start = self.current_token_span().start;
         let mut segments = vec![];
 
         if self.match_lookahead_type(|t| t == &Token::System) {
@@ -1133,7 +1166,11 @@ impl<'source> Parser<'source> {
 
             segments.push(self.import_path_segment()?);
         }
-        Ok(ast::import_path_expression(segments, kind))
+        Ok(ast::import_path_expression_with_span(
+            segments,
+            kind,
+            Span::new(start, self.last_consumed_end.max(start)),
+        ))
     }
 
     fn import_path_segment(&mut self) -> Result<Expression, SyntaxError> {

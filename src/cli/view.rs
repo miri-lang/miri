@@ -421,10 +421,10 @@ fn is_public(visibility: &MemberVisibility) -> bool {
 
 /// Where a declaration's name sits in the source.
 ///
-/// A declaration statement is built by the AST factory, which has no source
-/// text and so leaves the statement's own span empty; the name carries the real
-/// position. That name is on the declaration's first line, which is what a
-/// comment above it attaches to.
+/// A declaration's own span opens at the keyword that introduces it, but a
+/// reader looking for the declaration searches for its name, so the name's
+/// position is the anchor. That name is on the declaration's first line, which
+/// is what a comment above it attaches to.
 fn declaration_offset(node: &Statement) -> Option<usize> {
     if let StatementKind::FunctionDeclaration(declaration) = &node.node {
         return Some(declaration.name_span.start);

@@ -11,7 +11,6 @@
 use crate::ast::statement::{FunctionDeclarationData, StatementKind};
 use crate::ast::{Program, Statement};
 use crate::diagnostics::DiagnosticCode;
-use crate::error::syntax::Span;
 use crate::pipeline::is_script_body_statement;
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
@@ -39,7 +38,7 @@ impl TypeChecker {
                 "top-level statement will never run: this file declares 'main', so nothing \
                  executes it"
                     .to_string(),
-                locatable_span(statement),
+                statement.span,
                 "move the statement into 'main', or remove the 'main' declaration so the file \
                  runs as a script."
                     .to_string(),
@@ -78,53 +77,6 @@ impl TypeChecker {
             );
         }
     }
-}
-
-/// A span that points at the statement rather than at the start of the file.
-///
-/// The factory records a span for an expression statement and for a `let`,
-/// `var` or `const` declaration, but builds `if`, `while`, `for`, `forall` and
-/// `return` statements with an empty one. A diagnostic carrying an empty span
-/// renders against the file's first token, which is not a location a reader or
-/// a tool can act on, so the statement's own subject expression stands in.
-/// Recording spans on those statement kinds is the fix at the right layer and
-/// is tracked separately; this keeps the diagnostic locatable meanwhile.
-fn locatable_span(statement: &Statement) -> Span {
-    if !statement.span.is_empty() {
-        return statement.span;
-    }
-    match &statement.node {
-        StatementKind::If(condition, then, ..) => {
-            first_located([condition.span, locatable_span(then)], statement.span)
-        }
-        StatementKind::While(condition, body, _) => {
-            first_located([condition.span, locatable_span(body)], statement.span)
-        }
-        StatementKind::For(_, iterable, body) => {
-            first_located([iterable.span, locatable_span(body)], statement.span)
-        }
-        StatementKind::Forall { iterable, body, .. } => {
-            first_located([iterable.span, locatable_span(body)], statement.span)
-        }
-        StatementKind::GpuFrame(_, iterable, body) => {
-            first_located([iterable.span, locatable_span(body)], statement.span)
-        }
-        StatementKind::GpuFrameBlock(inner) => locatable_span(inner),
-        StatementKind::Return(Some(value)) => value.span,
-        StatementKind::Block(statements) => statements
-            .first()
-            .map(locatable_span)
-            .unwrap_or(statement.span),
-        _ => statement.span,
-    }
-}
-
-/// The first candidate that covers source text, or `fallback` when none does.
-fn first_located<const N: usize>(candidates: [Span; N], fallback: Span) -> Span {
-    candidates
-        .into_iter()
-        .find(|span| !span.is_empty())
-        .unwrap_or(fallback)
 }
 
 fn declares_main(program: &Program) -> bool {

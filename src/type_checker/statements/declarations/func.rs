@@ -63,6 +63,19 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
     pub span: Span,
 }
 
+/// Everything checking a function body needs beyond the checker's own state.
+///
+/// `declaration_span` covers the declaration from its signature onward, so a
+/// diagnostic about the function as a whole — rather than about a statement
+/// inside it — has a location to point at.
+pub(crate) struct FunctionBodyInfo<'a> {
+    pub body: &'a Statement,
+    pub name: &'a str,
+    pub return_type: &'a Type,
+    pub infer_main_return: bool,
+    pub declaration_span: Span,
+}
+
 impl TypeChecker {
     /// Type-checks a function declaration.
     ///
@@ -154,7 +167,7 @@ impl TypeChecker {
             .insert(name.to_string(), out_flags);
 
         let const_value =
-            self.check_function_body(body, name, &return_type, infer_main_return, context);
+            self.check_function_body(body, name, &return_type, infer_main_return, span, context);
 
         if const_value.is_some() {
             self.update_const_symbol(name, const_value, context);
@@ -432,13 +445,23 @@ impl TypeChecker {
         name: &str,
         return_type: &Type,
         infer_main_return: bool,
+        declaration_span: Span,
         context: &mut Context,
     ) -> Option<Literal> {
         let mut const_value: Option<Literal> = None;
 
         if let Some(body) = body {
             const_value = self.extract_const_value(body);
-            self.validate_function_body(body, name, return_type, infer_main_return, context);
+            self.validate_function_body(
+                FunctionBodyInfo {
+                    body,
+                    name,
+                    return_type,
+                    infer_main_return,
+                    declaration_span,
+                },
+                context,
+            );
         }
 
         const_value
@@ -461,14 +484,15 @@ impl TypeChecker {
         None
     }
 
-    fn validate_function_body(
-        &mut self,
-        body: &Statement,
-        name: &str,
-        return_type: &Type,
-        infer_main_return: bool,
-        context: &mut Context,
-    ) {
+    fn validate_function_body(&mut self, info: FunctionBodyInfo, context: &mut Context) {
+        let FunctionBodyInfo {
+            body,
+            name,
+            return_type,
+            infer_main_return,
+            declaration_span,
+        } = info;
+
         match &body.node {
             StatementKind::Block(stmts) => {
                 self.validate_block_body(stmts, name, return_type, infer_main_return, context);
@@ -487,7 +511,7 @@ impl TypeChecker {
             }
         }
 
-        self.check_return_completeness(body, return_type);
+        self.check_return_completeness(body, declaration_span, return_type);
     }
 
     fn validate_block_body(
@@ -563,17 +587,28 @@ impl TypeChecker {
         context.must_use_exempt_spans = prev_spans;
     }
 
-    fn check_return_completeness(&mut self, body: &Statement, return_type: &Type) {
-        if !matches!(return_type.kind, TypeKind::Void) {
-            let status = check_returns(body);
-            if status == ReturnStatus::None {
-                self.report_error(
-                    DiagnosticCode::TypFunctionSignature,
-                    "Missing return statement".to_string(),
-                    body.span,
-                );
-            }
+    /// Reports a non-void function whose body returns on no path.
+    ///
+    /// The report points at the declaration, which starts at the signature: the
+    /// declared return type is half of the mismatch, and it is the line an
+    /// author reads to decide whether to add a return or drop the type.
+    fn check_return_completeness(
+        &mut self,
+        body: &Statement,
+        declaration_span: Span,
+        return_type: &Type,
+    ) {
+        if matches!(return_type.kind, TypeKind::Void) {
+            return;
         }
+        if check_returns(body) != ReturnStatus::None {
+            return;
+        }
+        self.report_error(
+            DiagnosticCode::TypFunctionSignature,
+            "Missing return statement".to_string(),
+            declaration_span,
+        );
     }
 
     fn update_const_symbol(

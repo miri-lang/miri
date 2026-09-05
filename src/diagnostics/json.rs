@@ -289,7 +289,7 @@ pub struct JsonDiagnostic {
     /// 1-indexed column number in source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
-    /// Length in bytes of the error span.
+    /// Bytes to highlight from `line`/`column`, clamped to that line's end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<usize>,
     /// Expected type/value for type mismatch errors.

@@ -1,0 +1,17 @@
+// expect: MER_TYP_038
+// expect-line: 12
+// expect-column: 11
+// summary: Triggers MER_TYP_038: a match over an enum that leaves a variant uncovered.
+// The report points at the subject, the expression whose variants must be covered.
+enum Color
+    Red
+    Green
+    Blue
+
+fn describe(c Color) String
+    match c
+        Color.Red: "red"
+        Color.Green: "green"
+
+fn main()
+    println(describe(Color.Red))

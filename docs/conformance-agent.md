@@ -77,6 +77,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_033 | Triggers MER_TYP_033: Field Not Found. |
 | MER_TYP_034 | Triggers MER_TYP_034: Undefined Name. |
 | MER_TYP_034_null_literal | null literal (JavaScript/C-like, not Miri). |
+| MER_TYP_038 | Triggers MER_TYP_038: a match over an enum that leaves a variant uncovered. |
 | MER_TYP_039 | Triggers MER_TYP_039: Invalid Collection Element Type. |
 | MER_TYP_040 | Triggers MER_TYP_040: Invalid Index Operation. |
 | MER_TYP_041 | Triggers MER_TYP_041: Invalid Slice Operation. |
@@ -185,6 +186,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_033 | Accepted counterpart of MER_TYP_033: Field Not Found does not fire. |
 | MER_TYP_034 | Defined variable can be referenced |
 | MER_TYP_035 | Accepted counterpart of MER_TYP_035: Name Not Visible does not fire. |
+| MER_TYP_038 | Covering every variant clears MER_TYP_038. |
 | MER_TYP_039 | Accepted counterpart of MER_TYP_039: Invalid Collection Element Type does not fire. |
 | MER_TYP_040 | Accepted counterpart of MER_TYP_040: Invalid Index Operation does not fire. |
 | MER_TYP_042 | Mutable variable can be reassigned |
