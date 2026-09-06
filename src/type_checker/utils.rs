@@ -2534,7 +2534,8 @@ impl TypeChecker {
     ///
     /// The related notes travel on the one report rather than becoming reports
     /// of their own, so a consumer repairs a single thing instead of chasing
-    /// each echo of it separately.
+    /// each echo of it separately. A repair given here covers every one of
+    /// them, for the same reason: one mistake, one edit to make.
     pub(crate) fn report_error_with_related(
         &mut self,
         code: DiagnosticCode,
@@ -2542,6 +2543,7 @@ impl TypeChecker {
         span: Span,
         help: Option<String>,
         related: Vec<crate::error::diagnostic::RelatedNote>,
+        repair: Option<RepairRequest>,
     ) {
         if self.suppress_diagnostics {
             return;
@@ -2551,6 +2553,7 @@ impl TypeChecker {
             let mut err = TypeError::coded(code, message, span, help);
             err.source_override = self.modules.current_source_override.clone();
             err.related = related;
+            err.repair = repair;
             self.diagnostics.push_error(err);
         }
     }

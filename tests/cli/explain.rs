@@ -321,7 +321,82 @@ fn test_list_json_carries_every_field_for_every_code() {
             entry.code,
             entry.area
         );
+        for repair in &entry.repairs {
+            assert!(
+                miri::diagnostics::RepairId::all()
+                    .iter()
+                    .any(|known| known.as_str() == repair),
+                "{} names {} as a repair, which is not a repair identifier",
+                entry.code,
+                repair
+            );
+        }
     }
+}
+
+#[test]
+fn test_the_listing_says_which_codes_a_repair_can_be_reached_from() {
+    // A tool reads the fix-safety label to learn how risky an edit would be and
+    // this list to learn whether there is one at all. Most codes carry the same
+    // label and no repair, so the label alone cannot answer the second question.
+    let listed = listed_codes();
+
+    let repairable: Vec<&str> = listed
+        .iter()
+        .filter(|entry| !entry.repairs.is_empty())
+        .map(|entry| entry.code.as_str())
+        .collect();
+    assert!(
+        !repairable.is_empty(),
+        "some code is reachable from a repair"
+    );
+    assert!(
+        repairable.len() < listed.len(),
+        "not every code carries a repair, so the listing must distinguish them"
+    );
+
+    for entry in &listed {
+        let expected: Vec<String> = miri::diagnostics::repair::repairs_for(
+            entry.code.parse().expect("a listed code parses"),
+        )
+        .iter()
+        .map(|repair| repair.as_str().to_string())
+        .collect();
+        assert_eq!(
+            entry.repairs, expected,
+            "{} should publish the repairs recorded against it",
+            entry.code
+        );
+    }
+}
+
+#[test]
+fn test_the_listing_names_a_repair_in_its_readable_form_too() {
+    let output = miri_cmd()
+        .args(["explain", "--list"])
+        .output()
+        .expect("the listing runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let row = stdout
+        .lines()
+        .find(|line| line.starts_with("MER_TYP_042"))
+        .expect("the listing carries the immutability code");
+    assert!(
+        row.contains("let-to-var"),
+        "the readable listing should name the repair too, got: {}",
+        row
+    );
+
+    let unrepaired = stdout
+        .lines()
+        .find(|line| line.starts_with("MER_TYP_001"))
+        .expect("the listing carries a code with no repair");
+    assert!(
+        unrepaired.contains(" - "),
+        "a code with no repair should say so rather than leave the column blank, got: {}",
+        unrepaired
+    );
 }
 
 #[test]

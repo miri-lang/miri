@@ -213,6 +213,23 @@ const CODE_WIDTH: usize = 12;
 const SEVERITY_WIDTH: usize = 7;
 const AREA_WIDTH: usize = 3;
 const SAFETY_WIDTH: usize = 21;
+const REPAIR_WIDTH: usize = 26;
+
+/// The repairs reachable from `code`, as one column of the listing.
+///
+/// A code with none reads `-` rather than blank, so the column is visibly
+/// answered rather than merely absent.
+fn repair_column(code: DiagnosticCode) -> String {
+    let repairs = crate::diagnostics::repair::repairs_for(code);
+    if repairs.is_empty() {
+        return "-".to_string();
+    }
+    repairs
+        .iter()
+        .map(|repair| repair.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// List every diagnostic code in the registry.
 ///
@@ -232,6 +249,10 @@ pub fn run_list(format: Format) {
                     area: code.area().to_string(),
                     retired: code.is_reserved(),
                     fix_safety: code.fix_safety().as_str().to_string(),
+                    repairs: crate::diagnostics::repair::repairs_for(*code)
+                        .iter()
+                        .map(|repair| repair.as_str().to_string())
+                        .collect(),
                 })
                 .collect::<Vec<_>>();
 
@@ -244,17 +265,19 @@ pub fn run_list(format: Format) {
             for code in DiagnosticCode::all() {
                 let retired = if code.is_reserved() { " [retired]" } else { "" };
                 println!(
-                    "{:<CODE_WIDTH$} {:<SEVERITY_WIDTH$} {:<AREA_WIDTH$} {:<SAFETY_WIDTH$} {}{}",
+                    "{:<CODE_WIDTH$} {:<SEVERITY_WIDTH$} {:<AREA_WIDTH$} {:<SAFETY_WIDTH$}                      {:<REPAIR_WIDTH$} {}{}",
                     code.as_str(),
                     code.severity().as_str(),
                     code.area(),
                     code.fix_safety().as_str(),
+                    repair_column(*code),
                     code.title(),
                     retired,
                     CODE_WIDTH = CODE_WIDTH,
                     SEVERITY_WIDTH = SEVERITY_WIDTH,
                     AREA_WIDTH = AREA_WIDTH,
                     SAFETY_WIDTH = SAFETY_WIDTH,
+                    REPAIR_WIDTH = REPAIR_WIDTH,
                 );
             }
         }

@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind, OPTION_TYPE_NAME};
 use crate::ast::*;
+use crate::diagnostics::repair::{RepairRequest, VariantPatternSite};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
@@ -180,12 +181,24 @@ impl TypeChecker {
                 enum_name, primary.variant
             )
         });
+        let repair =
+            subject_enum_name(subject_type).map(|enum_name| RepairRequest::QualifyVariantPattern {
+                enum_name: enum_name.to_string(),
+                sites: unresolved
+                    .iter()
+                    .map(|pattern| VariantPatternSite {
+                        start: pattern.span.start,
+                        variant: pattern.variant.clone(),
+                    })
+                    .collect(),
+            });
         self.report_error_with_related(
             DiagnosticCode::TypEnumVariant,
             qualified(primary),
             primary.span,
             help,
             related,
+            repair,
         );
     }
 

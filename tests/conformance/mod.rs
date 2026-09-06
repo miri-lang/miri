@@ -284,6 +284,7 @@ fn test_fail_fixture(path: &Path) -> Result<usize, String> {
         }
     }
 
+    verify_repairs_are_published(path, diags)?;
     count_locatable_diagnostics(path, diags)
 }
 
@@ -362,6 +363,7 @@ fn test_warn_fixture(path: &Path) -> Result<usize, String> {
         ));
     }
 
+    verify_repairs_are_published(path, diags)?;
     count_locatable_diagnostics(path, diags)
 }
 
@@ -478,6 +480,42 @@ fn count_locatable_diagnostics(
         }
     }
     Ok(diagnostics.len())
+}
+
+/// Rejects a diagnostic carrying a repair the registry does not publish against
+/// its code.
+///
+/// `explain --list` reports, per code, which repairs are reachable from it, and
+/// a tool decides from that whether a condition is fixable at all. A check that
+/// starts attaching a repair to a code the table does not name would make that
+/// listing quietly wrong; this fails the corpus instead, wherever in it the new
+/// pairing shows up.
+fn verify_repairs_are_published(
+    path: &Path,
+    diagnostics: &[serde_json::Value],
+) -> Result<(), String> {
+    for diagnostic in diagnostics {
+        let (Some(code), Some(repair)) = (
+            diagnostic["code"].as_str(),
+            diagnostic["repair"]["id"].as_str(),
+        ) else {
+            continue;
+        };
+        let Ok(parsed) = code.parse::<miri::diagnostics::DiagnosticCode>() else {
+            continue;
+        };
+        let published = miri::diagnostics::repair::repairs_for(parsed);
+        if !published.iter().any(|known| known.as_str() == repair) {
+            return Err(format!(
+                "{} reports {} carrying the repair {}, which the registry does not publish \
+                 against that code",
+                path.display(),
+                code,
+                repair
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Explicit exclusion table for codes that cannot be triggered via .mi source.

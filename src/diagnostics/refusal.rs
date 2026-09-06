@@ -37,46 +37,19 @@ pub fn repair_fix_safety(repair: &RepairRequest) -> FixSafety {
                 FixSafety::LocalEdit
             }
         }
-        RepairRequest::AddImport { module: _, name: _ } => {
-            // Adding an import is a local edit confined to the current file.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::DropExtraArguments { start: _, end: _ } => {
-            // Dropping extra arguments is a local edit to the current function.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::ColonAnnotation {
-            colon_start: _,
-            colon_end: _,
-        } => {
-            // Removing a type annotation colon is a local edit.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::ArrowReturnType {
-            arrow_start: _,
-            arrow_end: _,
-        } => {
-            // Removing a return type arrow is a local edit.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::LetMutToVar {
-            keyword_start: _,
-            mut_end: _,
-        } => {
-            // Replacing let mut with var is a local edit.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::NullToNone {
-            spelling_start: _,
-            spelling_end: _,
-        } => {
-            // Replacing null with None is a local edit.
-            FixSafety::LocalEdit
-        }
-        RepairRequest::PrintlnBang { bang_start: _ } => {
-            // Removing the macro bang is a local edit.
-            FixSafety::LocalEdit
-        }
+        // Every other repair rewrites one expression, statement or import line
+        // in the file the diagnostic was raised against, and changes nothing
+        // another file can see.
+        RepairRequest::AddImport { .. }
+        | RepairRequest::DropExtraArguments { .. }
+        | RepairRequest::ColonAnnotation { .. }
+        | RepairRequest::ArrowReturnType { .. }
+        | RepairRequest::LetMutToVar { .. }
+        | RepairRequest::NullToNone { .. }
+        | RepairRequest::PrintlnBang { .. }
+        | RepairRequest::DropIteratorAccessor { .. }
+        | RepairRequest::ConcatToFormattedString { .. }
+        | RepairRequest::QualifyVariantPattern { .. } => FixSafety::LocalEdit,
     }
 }
 

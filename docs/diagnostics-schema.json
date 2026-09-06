@@ -230,7 +230,7 @@
             "string",
             "null"
           ],
-          "description": "Fix-safety level of this diagnostic's repair, if the diagnostic carries a repair. One of: 'format-only', 'behavior-preserving', 'local-edit', 'api-changing', 'target-changing', or 'requires-human-review'. Absent or null if the diagnostic carries no repair.",
+          "description": "Fix-safety level of this diagnostic's repair, if the diagnostic carries a repair. One of: 'format-only', 'behavior-preserving', 'local-edit', 'api-changing', 'target-changing', or 'requires-human-review'. It classifies the risk of the edit, not whether one exists — the presence of the 'repair' member is what says that. Absent or null if the diagnostic carries no repair.",
           "enum": [
             "format-only",
             "behavior-preserving",
@@ -794,7 +794,14 @@
         },
         "fixSafety": {
           "type": "string",
-          "description": "The fix safety level."
+          "description": "The risk floor for repairing this condition, recorded whether or not a repair exists: it classifies the shape of the edit a repair would make, not whether one is available. Read 'repairs' for availability."
+        },
+        "repairs": {
+          "type": "array",
+          "description": "Wire identifiers of the repairs reachable from this code, in declaration order. Empty when no repair exists, which is how a tool tells an automatically fixable condition from one it has to act on itself.",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -803,7 +810,8 @@
         "severity",
         "area",
         "retired",
-        "fixSafety"
+        "fixSafety",
+        "repairs"
       ]
     }
   }

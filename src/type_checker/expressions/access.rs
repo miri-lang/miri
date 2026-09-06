@@ -49,6 +49,7 @@ use crate::ast::types::{
     WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::*;
+use crate::diagnostics::repair::RepairRequest;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -1139,7 +1140,7 @@ impl TypeChecker {
             return ty;
         }
 
-        self.report_class_member_not_found(name, prop_name, context, span, call_arity)
+        self.report_class_member_not_found(name, prop_name, type_args, context, span, call_arity)
     }
 
     fn search_class_hierarchy(
@@ -1339,53 +1340,18 @@ impl TypeChecker {
         crate::type_checker::generics::value_generic_marker_type(arg_expr.clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn report_class_member_not_found(
         &mut self,
         name: &str,
         prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
         context: &mut Context,
         span: Span,
         call_arity: Option<usize>,
     ) -> Type {
-        let mut member_candidates: Vec<MemberCandidate> = Vec::new();
-        let mut collect_class_name = name;
-        // A circular `extends` chain is reported before this point, but the
-        // report does not stop the walk, so revisiting a class would collect
-        // its members forever.
-        let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        loop {
-            if !visited.insert(collect_class_name) {
-                break;
-            }
-            let collect_def_opt =
-                context
-                    .resolve_type_definition(collect_class_name)
-                    .or_else(|| {
-                        self.type_table
-                            .global_type_definitions
-                            .get(collect_class_name)
-                    });
-
-            if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
-                // Add fields (with None arity)
-                for (field_name, _) in &collect_def.fields {
-                    member_candidates.push(MemberCandidate::field(field_name));
-                }
-                // Add methods (with their param count as arity)
-                for (method_name, method_info) in &collect_def.methods {
-                    member_candidates.push(MemberCandidate::method(
-                        method_name,
-                        method_info.params.len(),
-                    ));
-                }
-
-                if let Some(base_name) = &collect_def.base_class {
-                    collect_class_name = base_name.as_str();
-                    continue;
-                }
-            }
-            break;
-        }
+        let member_candidates =
+            inherited_member_candidates(name, context, &self.type_table.global_type_definitions);
 
         // Try synonym-based suggestions first (with arity preference if available)
         if let Some(suggestion) =
@@ -1403,12 +1369,22 @@ impl TypeChecker {
             name,
             self.type_is_iterable(name, context),
         ) {
-            self.report_error_with_help(
-                DiagnosticCode::TypFieldNotFound,
-                format!("Type '{}' has no field or method '{}'", name, prop_name),
-                span,
-                iteration_help,
-            );
+            let message = format!("Type '{}' has no field or method '{}'", name, prop_name);
+            match self.key_accessor_repair(name, prop_name, type_args, span) {
+                Some(repair) => self.report_error_with_help_and_repair(
+                    DiagnosticCode::TypFieldNotFound,
+                    message,
+                    span,
+                    iteration_help,
+                    repair,
+                ),
+                None => self.report_error_with_help(
+                    DiagnosticCode::TypFieldNotFound,
+                    message,
+                    span,
+                    iteration_help,
+                ),
+            }
         } else {
             self.report_error(
                 DiagnosticCode::TypFieldNotFound,
@@ -1417,6 +1393,41 @@ impl TypeChecker {
             );
         }
         make_type(TypeKind::Error)
+    }
+
+    /// The repair that replaces a key accessor with iterating the receiver.
+    ///
+    /// The help offered alongside it applies to any iterable, but deleting the
+    /// accessor is only *the same sequence* on a receiver whose own iteration
+    /// already yields its keys. That is decided here from the receiver's
+    /// structure — two type arguments, the first of which is what iterating it
+    /// produces — so a keyed collection is repaired and a list, whose iteration
+    /// yields its elements rather than its positions, is not. Nothing about
+    /// this test names a library type.
+    fn key_accessor_repair(
+        &mut self,
+        name: &str,
+        prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+    ) -> Option<RepairRequest> {
+        if prop_name != member_hints::KEY_ACCESSOR {
+            return None;
+        }
+        let args = type_args.as_ref()?;
+        let [key_argument, _] = args.as_slice() else {
+            return None;
+        };
+        let key_type = self.extract_type_from_expression(key_argument).ok()?;
+        let receiver = make_type(TypeKind::Custom(name.to_string(), Some(args.clone())));
+        if self.get_iterable_element_type(&receiver, span).kind != key_type.kind {
+            return None;
+        }
+        Some(RepairRequest::DropIteratorAccessor {
+            access_start: span.start,
+            access_end: span.end,
+            accessor: prop_name.to_string(),
+        })
     }
 
     fn build_class_method_type(
@@ -2092,4 +2103,44 @@ impl TypeChecker {
         }
         (None, type_args.clone())
     }
+}
+
+/// Every field and method reachable on `start`, walking the `extends` chain.
+///
+/// Taking the definitions as an argument rather than reading them through the
+/// checker keeps the borrow to the tables themselves, so the caller can still
+/// report a diagnostic while holding the candidates.
+fn inherited_member_candidates<'a>(
+    start: &'a str,
+    context: &'a Context,
+    global_definitions: &'a HashMap<String, TypeDefinition>,
+) -> Vec<MemberCandidate<'a>> {
+    let mut candidates: Vec<MemberCandidate<'a>> = Vec::new();
+    let mut class_name = start;
+    // A circular `extends` chain is reported before this point, but the report
+    // does not stop the walk, so revisiting a class would collect its members
+    // forever.
+    let mut visited: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    while visited.insert(class_name) {
+        let definition = context
+            .resolve_type_definition(class_name)
+            .or_else(|| global_definitions.get(class_name));
+        let Some(TypeDefinition::Class(class_definition)) = definition else {
+            break;
+        };
+        for (field_name, _) in &class_definition.fields {
+            candidates.push(MemberCandidate::field(field_name));
+        }
+        for (method_name, method_info) in &class_definition.methods {
+            candidates.push(MemberCandidate::method(
+                method_name,
+                method_info.params.len(),
+            ));
+        }
+        let Some(base_name) = &class_definition.base_class else {
+            break;
+        };
+        class_name = base_name.as_str();
+    }
+    candidates
 }

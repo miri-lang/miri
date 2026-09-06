@@ -47,6 +47,7 @@ use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::MemberVisibility;
 use crate::ast::*;
+use crate::diagnostics::repair::ConcatPart;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
@@ -131,16 +132,32 @@ impl TypeChecker {
             Ok(t) => t,
             Err(msg) => {
                 // Generate context-specific help messages for common errors
-                let help = self.generate_binary_op_help(&left_ty, op, &right_ty);
-                if let Some(help_text) = help {
-                    self.report_error_with_help(
+                let remedy = self.binary_op_remedy(&left_ty, op, &right_ty);
+                // The repair belongs to the remedy the help names, never
+                // alongside a different one: an author told to unwrap an
+                // optional must not be handed an edit that interpolates it
+                // instead.
+                let repair = match remedy {
+                    Some(BinaryOpRemedy::InterpolateText) => {
+                        formatted_string_repair(left, right, span)
+                    }
+                    Some(BinaryOpRemedy::UnwrapOptional) | None => None,
+                };
+                match (remedy, repair) {
+                    (Some(remedy), Some(repair)) => self.report_error_with_help_and_repair(
                         DiagnosticCode::TypTypeMismatch,
                         msg,
                         span,
-                        help_text,
-                    );
-                } else {
-                    self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
+                        remedy.help().to_string(),
+                        repair,
+                    ),
+                    (Some(remedy), None) => self.report_error_with_help(
+                        DiagnosticCode::TypTypeMismatch,
+                        msg,
+                        span,
+                        remedy.help().to_string(),
+                    ),
+                    (None, _) => self.report_error(DiagnosticCode::TypTypeMismatch, msg, span),
                 }
                 ast_factory::make_type(TypeKind::Error)
             }
@@ -151,27 +168,21 @@ impl TypeChecker {
     /// types identify one.
     ///
     /// The operand types alone decide this, not the message the operator check
-    /// produced, so a rewording there cannot silently drop the help.
-    fn generate_binary_op_help(
+    /// produced, so a rewording there cannot silently drop the help. An optional
+    /// operand is answered first: unwrapping it is what the author has to do
+    /// whether or not text is also involved.
+    fn binary_op_remedy(
         &self,
         left_ty: &Type,
         op: &BinaryOp,
         right_ty: &Type,
-    ) -> Option<String> {
+    ) -> Option<BinaryOpRemedy> {
         if is_arithmetic_op(op) && (is_optional_type(left_ty) || is_optional_type(right_ty)) {
-            return Some(
-                "An optional value must be unwrapped before arithmetic: supply a default with \
-                 '??' (e.g. `v ?? 0`) or match on it first."
-                    .to_string(),
-            );
+            return Some(BinaryOpRemedy::UnwrapOptional);
         }
 
         if self.mixes_text_with_another_type(left_ty, op, right_ty) {
-            return Some(
-                "'+' does not convert between types — build the text with an f-string, \
-                 e.g. f\"n={n}\"."
-                    .to_string(),
-            );
+            return Some(BinaryOpRemedy::InterpolateText);
         }
 
         None
@@ -517,5 +528,88 @@ fn binary_op_action(op: &BinaryOp) -> Option<&'static str> {
         | BinaryOp::NullCoalesce
         | BinaryOp::Not
         | BinaryOp::Range => None,
+    }
+}
+
+/// The repair that rewrites a `+` chain joining text to values as one formatted
+/// string.
+///
+/// Returns `None` when the chain holds a leaf that cannot be written inside a
+/// formatted string — a formatted string of its own, or a leaf whose source
+/// range the parser did not record. The projection refuses a second time on the
+/// text it actually reads, so a leaf carrying a brace or a quote yields no edit
+/// either.
+fn formatted_string_repair(
+    left: &Expression,
+    right: &Expression,
+    span: Span,
+) -> Option<RepairRequest> {
+    if span.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    collect_concat_parts(left, &mut parts)?;
+    collect_concat_parts(right, &mut parts)?;
+    // A chain of values alone is not the mistake this repairs: the diagnostic
+    // fires because text was joined to something, and the text is what makes
+    // the rewrite a formatted string rather than a bare interpolation.
+    parts
+        .iter()
+        .any(|part| part.is_text)
+        .then_some(RepairRequest::ConcatToFormattedString {
+            start: span.start,
+            end: span.end,
+            parts,
+        })
+}
+
+/// Appends the leaves of `expr`'s `+` chain to `parts`, in source order.
+fn collect_concat_parts(expr: &Expression, parts: &mut Vec<ConcatPart>) -> Option<()> {
+    if let ExpressionKind::Binary(left, BinaryOp::Add, right) = &expr.node {
+        collect_concat_parts(left, parts)?;
+        return collect_concat_parts(right, parts);
+    }
+    // A formatted string cannot nest inside a hole, so a chain containing one
+    // has no rewrite of this shape.
+    if matches!(expr.node, ExpressionKind::FormattedString(_)) {
+        return None;
+    }
+    if expr.span.is_empty() {
+        return None;
+    }
+    parts.push(ConcatPart {
+        start: expr.span.start,
+        end: expr.span.end,
+        is_text: matches!(expr.node, ExpressionKind::Literal(Literal::String(_))),
+    });
+    Some(())
+}
+
+/// The way out of a rejected binary operation that the operand types name.
+///
+/// One value carries both the help an author reads and the decision about which
+/// repair, if any, belongs on the report — so the two can never name different
+/// remedies for the same diagnostic.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BinaryOpRemedy {
+    /// An optional operand has to be unwrapped before the operator applies.
+    UnwrapOptional,
+    /// Text was joined to a value, which a formatted string does directly.
+    InterpolateText,
+}
+
+impl BinaryOpRemedy {
+    /// The line an author reads.
+    fn help(&self) -> &'static str {
+        match self {
+            Self::UnwrapOptional => {
+                "An optional value must be unwrapped before arithmetic: supply a default with \
+                 '??' (e.g. `v ?? 0`) or match on it first."
+            }
+            Self::InterpolateText => {
+                "'+' does not convert between types — build the text with an f-string, \
+                 e.g. f\"n={n}\"."
+            }
+        }
     }
 }

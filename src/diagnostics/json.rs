@@ -224,7 +224,15 @@ pub struct JsonCode {
     /// Whether this code is retired.
     pub retired: bool,
     /// The fix safety level.
+    ///
+    /// The floor a repair of this condition would have to clear, recorded
+    /// whether or not a repair exists. `repairs` answers whether one does.
     pub fix_safety: String,
+    /// The repairs reachable from this code, by their wire identifiers.
+    ///
+    /// Empty when the code carries no repair, which is what a tool reads to
+    /// tell an automatic fix from a diagnosis it has to act on itself.
+    pub repairs: Vec<String>,
 }
 
 /// Results of a patch command: applied edits and metadata.

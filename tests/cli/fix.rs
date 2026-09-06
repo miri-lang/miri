@@ -1058,3 +1058,181 @@ fn test_plan_for_a_broken_file_reports_the_plan_as_produced() {
         "the file's errors still travel in the envelope"
     );
 }
+
+#[test]
+fn test_a_key_accessor_on_a_mapping_is_repaired_into_iterating_it() {
+    let fixture = Fixture::new(
+        "drop-iterator-accessor",
+        "use system.collections.map.{Map}\n\nfn main()\n    let tags = Map({\"a\": \"b\"})\n    \
+         for k in tags.keys()\n        println(k)\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["drop-iterator-accessor"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture.contents().contains("for k in tags\n"),
+        "the accessor and its parentheses should be gone, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_a_key_accessor_on_a_sequence_is_not_repaired() {
+    // Iterating a list yields its elements, not its positions, so deleting
+    // `keys` would change what the loop binds. The help still points at a `for`
+    // loop; only the automatic edit is withheld.
+    let fixture = Fixture::new(
+        "keys-on-a-sequence",
+        "use system.collections.list.{List}\n\nfn main()\n    let l = List([1, 2])\n    \
+         for i in l.keys()\n        println(f\"{i}\")\n",
+    );
+
+    let envelope = plan(fixture.path());
+
+    let diagnostic = diagnostic_with_code(&envelope, "MER_TYP_033");
+    assert!(
+        diagnostic.repair.is_none(),
+        "a sequence's iteration is not its keys, so no edit is determined, got {:?}",
+        diagnostic.repair
+    );
+    assert!(
+        diagnostic.help.is_some(),
+        "the help that names a `for` loop should still be offered"
+    );
+}
+
+#[test]
+fn test_text_joined_to_a_value_is_repaired_into_a_formatted_string() {
+    let fixture = Fixture::new(
+        "concat-to-formatted-string",
+        "fn main()\n    let qty = 3\n    let prefix = \"count\"\n    let line = prefix + \" \" + \
+         qty\n    println(line)\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["concat-to-formatted-string"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture
+            .contents()
+            .contains("let line = f\"{prefix} {qty}\""),
+        "the join should have become one formatted string, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_a_join_that_already_holds_a_formatted_string_is_not_repaired() {
+    // A formatted string cannot nest inside a hole, so there is no rewrite of
+    // this shape to offer.
+    let fixture = Fixture::new(
+        "concat-with-a-formatted-string",
+        "fn main()\n    let qty = 3\n    let line = f\"n={qty}\" + qty\n    println(line)\n",
+    );
+
+    let envelope = plan(fixture.path());
+
+    let diagnostic = diagnostic_with_code(&envelope, "MER_TYP_002");
+    assert!(
+        diagnostic.repair.is_none(),
+        "a formatted string cannot be quoted into another one, got {:?}",
+        diagnostic.repair
+    );
+}
+
+#[test]
+fn test_a_bare_variant_pattern_is_repaired_into_a_qualified_one() {
+    let fixture = Fixture::new(
+        "qualify-variant-pattern",
+        "fn get() Result<int, String>\n    Result.Ok(1)\n\nfn main()\n    match get()\n        \
+         Ok(n): println(f\"{n}\")\n        Result.Err(e): println(e)\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["qualify-variant-pattern"]);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        fixture.contents().contains("Result.Ok(n):"),
+        "the pattern should now name its enum, got: {}",
+        fixture.contents()
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+#[test]
+fn test_every_bare_arm_of_one_match_is_qualified_by_a_single_run() {
+    // The arms are one mistake repeated, so they travel on one repair. Applying
+    // it once has to leave nothing for a second run to find.
+    let fixture = Fixture::new(
+        "qualify-every-arm",
+        "fn get() Result<int, String>\n    Result.Ok(1)\n\nfn main()\n    match get()\n        \
+         Ok(n): println(f\"{n}\")\n        Err(e): println(e)\n",
+    );
+
+    let envelope = plan(fixture.path());
+    let diagnostic = diagnostic_with_code(&envelope, "MER_TYP_038");
+    let repair = diagnostic
+        .repair
+        .as_ref()
+        .expect("the bare arms should carry a repair");
+    assert_eq!(
+        repair.edits.len(),
+        2,
+        "both arms should be edited by the one repair"
+    );
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+    assert!(
+        checks_clean(fixture.path()),
+        "one run should be enough, got: {}",
+        fixture.contents()
+    );
+}
+
+#[test]
+fn test_an_optional_operand_is_told_to_unwrap_and_offered_no_rewrite() {
+    // Text joined to an optional trips both readings — the operand is optional
+    // and one side is text. Unwrapping is the remedy the help names, so the
+    // report must not also carry an edit that interpolates it instead.
+    let fixture = Fixture::new(
+        "optional-operand",
+        "fn pick(flag bool) int?\n    if flag\n        return 1\n    None\n\nfn main()\n    let v \
+         = pick(true)\n    let s = \"x\" + v\n    println(s)\n",
+    );
+
+    let envelope = plan(fixture.path());
+
+    let diagnostic = diagnostic_with_code(&envelope, "MER_TYP_002");
+    assert!(
+        diagnostic
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("unwrapped")),
+        "the optional reading is the one that answers first, got {:?}",
+        diagnostic.help
+    );
+    assert!(
+        diagnostic.repair.is_none(),
+        "no edit may contradict the help that was given, got {:?}",
+        diagnostic.repair
+    );
+}

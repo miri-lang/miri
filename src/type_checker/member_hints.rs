@@ -82,6 +82,14 @@ const ITERATOR_GROUP: SynonymGroup = SynonymGroup {
     names: &["keys", "values", "items", "entries"],
 };
 
+/// The accessor that names a keyed collection's keys.
+///
+/// It is the one member of [`ITERATOR_GROUP`] whose sequence a keyed
+/// collection's own iteration already yields, which is what makes deleting it
+/// a repair rather than a guess. The other three name the values, and a
+/// receiver that iterates its keys does not produce those.
+pub(crate) const KEY_ACCESSOR: &str = "keys";
+
 /// Empty-check method names.
 const EMPTY_GROUP: SynonymGroup = SynonymGroup {
     names: &["is_empty", "empty", "is_blank"],
