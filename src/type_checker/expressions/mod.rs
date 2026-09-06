@@ -82,7 +82,7 @@ impl TypeChecker {
     ) -> Type {
         match kind {
             ExpressionKind::Literal(lit) => {
-                self.check_integer_literal_range(lit, expr_id, span);
+                self.check_integer_literal_range(lit, expr_id, span, context);
                 self.check_regex_literal(lit, span, context);
                 self.infer_literal(lit, context)
             }
