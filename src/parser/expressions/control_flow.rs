@@ -292,23 +292,42 @@ impl<'source> Parser<'source> {
 
     fn match_branch_body(&mut self) -> Result<Statement, SyntaxError> {
         let body_error = self.error_unexpected_lookahead_token(
-            "a colon for an inline body or an indented block for a block body",
+            "a body after ':' on this line, or an indented block on the lines below",
         );
         match &self.lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
+                // A colon introduces the body on the same line, or an indented
+                // block on the lines below — the same two spellings `if`,
+                // `while` and a function signature accept, handled there by
+                // `statement_body`. Reading only the first would leave the
+                // match arm as the one construct where a reader has to
+                // remember which colon may end a line.
+                if self.lookahead_is_expression_end() {
+                    return self.indented_match_branch_body(body_error);
+                }
                 let expr = self.expression()?;
                 Ok(ast::expression_statement(expr))
             }
-            Some((Token::ExpressionStatementEnd, _)) => {
-                self.eat_expression_end()?;
-                if self.lookahead_is_indent() {
-                    self.block_statement()
-                } else {
-                    Err(body_error)
-                }
-            }
+            Some((Token::ExpressionStatementEnd, _)) => self.indented_match_branch_body(body_error),
             _ => Err(body_error),
+        }
+    }
+
+    /// The block that opens on the line after an arm's pattern.
+    ///
+    /// Reached from both spellings of the arm header, so `pattern:` and a bare
+    /// `pattern` produce the same body rather than two shapes a later pass
+    /// would have to tell apart.
+    fn indented_match_branch_body(
+        &mut self,
+        body_error: SyntaxError,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_expression_end()?;
+        if self.lookahead_is_indent() {
+            self.block_statement()
+        } else {
+            Err(body_error)
         }
     }
 }

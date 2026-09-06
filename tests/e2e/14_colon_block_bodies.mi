@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Both spellings of a block header, in one program.
+//
+// A match arm and an anonymous function may each end their header with a colon
+// or not, and either body may sit on the same line or indented below it. All
+// four combinations mean the same thing, which is what keeps a reader from
+// having to remember which colon may end a line.
+
+fn describe(n int) String
+    match n
+        0:
+            let prefix = "the"
+            f"{prefix} origin"
+        1 | 2:
+            "a small number"
+        _
+            "something else"
+
+fn parity(n int) String
+    match n % 2
+        0: "even"
+        _: "odd"
+
+fn weigh(n int) int
+    var weight = 0
+    match n
+        0:
+            weight = weight + 10
+            weight = weight + 5
+        _:
+            weight = weight + 1
+    weight
+
+fn lambdas() int
+    let inline = fn(x int) int: x + 1
+    let blocked = fn(x int) int:
+        let doubled = x * 2
+        doubled + 1
+    let bare = fn(x int) int
+        x + 100
+    inline(2) + blocked(2) + bare(2)
+
+fn main()
+    println(describe(0))
+    println(describe(2))
+    println(describe(9))
+    println(parity(4))
+    println(parity(7))
+    println(f"{weigh(0)}")
+    println(f"{weigh(3)}")
+    println(f"{lambdas()}")

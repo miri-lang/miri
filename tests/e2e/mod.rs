@@ -126,6 +126,25 @@ First > 10: -1",
 }
 
 #[test]
+fn example_14_colon_block_bodies() {
+    // Both spellings of a match arm and of an anonymous function, and both
+    // placements of each body, in one executed program. The same file sits in
+    // the grammar accept corpus, so the published grammar and the parser are
+    // held to it together.
+    assert_example_contains(
+        include_str!("./14_colon_block_bodies.mi"),
+        "the origin
+a small number
+something else
+even
+odd
+15
+1
+110",
+    );
+}
+
+#[test]
 fn example_13_employee_system() {
     assert_example_contains(
         include_str!("./13_employee_system.mi"),

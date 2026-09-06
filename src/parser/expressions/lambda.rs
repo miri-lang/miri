@@ -19,23 +19,22 @@ impl<'source> Parser<'source> {
         let return_type = self.return_type_expression()?;
 
         let body_parsing_error = self.error_unexpected_lookahead_token(
-            "a colon for an inline body or an indented block for a block body",
+            "a body after ':' on this line, or an indented block on the lines below",
         );
         let body = match &self.lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
-                let expr = self.expression()?;
-                ast::expression_statement(expr)
+                // A colon takes the body on this line or an indented block on
+                // the lines below, the same two spellings every other block
+                // header accepts.
+                if self.lookahead_is_expression_end() {
+                    self.indented_lambda_body(body_parsing_error)?
+                } else {
+                    ast::expression_statement(self.expression()?)
+                }
             }
             Some((Token::ExpressionStatementEnd, _)) => {
-                self.eat_expression_end()?;
-                if self.lookahead_is_indent() {
-                    self.block_statement()?
-                } else if self.lookahead_is_dedent() || self.lookahead.is_none() {
-                    ast::empty_statement() // No body, just an expression end
-                } else {
-                    return Err(body_parsing_error);
-                }
+                self.indented_lambda_body(body_parsing_error)?
             }
             _ => return Err(body_parsing_error),
         };
@@ -47,5 +46,21 @@ impl<'source> Parser<'source> {
             body,
             properties,
         ))
+    }
+
+    /// The block that opens on the line after an anonymous function's
+    /// signature, or the empty body of one that has none.
+    ///
+    /// Reached from both spellings of the signature, so `fn() int:` and a bare
+    /// `fn() int` produce the same body.
+    fn indented_lambda_body(&mut self, body_error: SyntaxError) -> Result<Statement, SyntaxError> {
+        self.eat_expression_end()?;
+        if self.lookahead_is_indent() {
+            self.block_statement()
+        } else if self.lookahead_is_dedent() || self.lookahead.is_none() {
+            Ok(ast::empty_statement())
+        } else {
+            Err(body_error)
+        }
     }
 }

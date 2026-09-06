@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{parser_error_test, parser_test};
+use super::utils::{parse_program, parser_error_test, parser_test};
 use miri::ast::factory::{
     binary, block, call, enum_statement, enum_value, expression_statement, identifier, int_literal,
     int_literal_expression, let_variable, match_expression, member, string_literal_expression,
@@ -252,7 +252,7 @@ match x
     1
 ",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "a colon for an inline body or an indented block for a block body"
+            expected: "a body after ':' on this line, or an indented block on the lines below"
                 .to_string(),
             found: "end of expression".to_string(),
         },
@@ -268,7 +268,7 @@ match x
     y if 1 2: 'invalid'
 ",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "a colon for an inline body or an indented block for a block body"
+            expected: "a body after ':' on this line, or an indented block on the lines below"
                 .to_string(),
             found: "int".to_string(),
         },
@@ -626,4 +626,72 @@ match c
             )),
         ],
     );
+}
+
+#[test]
+fn test_a_colon_takes_an_indented_arm_body_like_every_other_block_header() {
+    // `if x:`, `while x:` and `fn f() int:` all accept their body on the lines
+    // below. An arm that accepted only a same-line body would leave the match
+    // the one construct where a reader has to remember which colon may end a
+    // line, so the two spellings have to parse to the same tree.
+    let with_colon = parse_program(
+        "
+match x
+    1:
+        print('one')
+    default:
+        print('other')
+",
+    );
+    let without_colon = parse_program(
+        "
+match x
+    1
+        print('one')
+    default
+        print('other')
+",
+    );
+
+    assert_eq!(with_colon, without_colon);
+}
+
+#[test]
+fn test_an_indented_arm_body_may_hold_more_than_one_statement() {
+    let program = parse_program(
+        "
+match x
+    1:
+        print('one')
+        print('again')
+    default:
+        print('other')
+",
+    );
+
+    assert_eq!(program.body.len(), 1, "the match is one statement");
+}
+
+#[test]
+fn test_a_guard_may_precede_a_colon_that_opens_a_block() {
+    let with_colon = parse_program(
+        "
+match x
+    n if n > 0:
+        print('positive')
+    default:
+        print('other')
+",
+    );
+    let without_colon = parse_program(
+        "
+match x
+    n if n > 0
+        print('positive')
+    default
+        print('other')
+",
+    );
+
+    assert_eq!(with_colon, without_colon);
 }

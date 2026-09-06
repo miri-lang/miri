@@ -17,7 +17,7 @@ use self::parser::{PegExpr, PegGrammar, PegMatcher};
 
 /// Number of corpus files the accept gate must exercise. Pinned so a file that
 /// disappears from the walk fails the gate instead of quietly reducing coverage.
-const ACCEPT_CORPUS_SIZE: usize = 86;
+const ACCEPT_CORPUS_SIZE: usize = 87;
 
 /// Number of fixtures the reject gate must exercise, pinned for the same reason.
 const REJECT_CORPUS_SIZE: usize = 22;

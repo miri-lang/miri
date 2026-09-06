@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{parser_error_test, parser_test};
+use super::utils::{parse_program, parser_error_test, parser_test};
 use miri::ast::factory::{
     array, binary, block, boolean_literal, call, empty_statement, expression_statement, func,
     generic_type, guard, identifier, int_literal_expression, lambda, let_variable, parameter,
@@ -473,4 +473,27 @@ let f = fn ()
             MemberVisibility::Public,
         )],
     );
+}
+
+#[test]
+fn test_a_colon_takes_an_indented_function_body_like_every_other_block_header() {
+    // The anonymous function is the second construct whose colon read only a
+    // same-line body. Both spellings of the signature have to produce the same
+    // body, or a reader has to remember which colon may end a line.
+    let with_colon = parse_program(
+        "
+let f = fn(x int) int:
+    let doubled = x * 2
+    doubled + 1
+",
+    );
+    let without_colon = parse_program(
+        "
+let f = fn(x int) int
+    let doubled = x * 2
+    doubled + 1
+",
+    );
+
+    assert_eq!(with_colon, without_colon);
 }
