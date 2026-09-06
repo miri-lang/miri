@@ -6,6 +6,13 @@
 //! Every diagnostic and every repair carries one label describing the risk level
 //! of applying the repair. This allows the CLI to make intelligent decisions about
 //! whether a repair is safe to apply automatically or should be surfaced to a human.
+//!
+//! The label classifies the *shape* of the edit, not whether an edit exists. A
+//! code labelled `local-edit` is one whose repair, if it had one, would be
+//! confined to the current file — most codes carry that label and no repair at
+//! all. Availability is answered separately, by
+//! [`crate::diagnostics::repair::repairs_for`], and published per code by
+//! `explain --list`.
 
 use serde::{Deserialize, Serialize};
 

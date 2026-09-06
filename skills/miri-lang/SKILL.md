@@ -365,8 +365,11 @@ The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.
 - `arrow-return-type`: Drop the `->` before a return type.
 - `colon-annotation`: Drop the `:` before a type annotation.
+- `concat-to-formatted-string`: Rewrite a `+` chain joining text to values as one f-string.
 - `drop-extra-arguments`: Drop positional arguments a call does not declare.
+- `drop-iterator-accessor`: Drop a `keys` accessor on a keyed collection and iterate it directly.
 - `let-mut-to-var`: Rewrite a `let mut` binding as `var`.
 - `let-to-var`: Rebind an immutable declaration as mutable.
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
 - `println-bang`: Drop the `!` from a macro-style call.
+- `qualify-variant-pattern`: Prefix a bare variant pattern with the enum that declares it.

@@ -249,6 +249,7 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             area: "type".to_string(),
             retired: false,
             fix_safety: "local-edit".to_string(),
+            repairs: vec!["drop-extra-arguments".to_string()],
         }]),
     }
 }

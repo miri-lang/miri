@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::json::{JsonEdit, JsonRepair};
+use crate::diagnostics::DiagnosticCode;
 
 /// Stable identifier for a repair shape.
 ///
@@ -40,6 +41,12 @@ pub enum RepairId {
     NullToNone,
     /// Remove the `!` from a macro call.
     PrintlnBang,
+    /// Iterate a keyed collection instead of calling an accessor it does not have.
+    DropIteratorAccessor,
+    /// Rewrite a chain of `+` joining text and values as a formatted string.
+    ConcatToFormattedString,
+    /// Prefix a bare variant pattern with the enum that declares it.
+    QualifyVariantPattern,
 }
 
 impl RepairId {
@@ -54,6 +61,33 @@ impl RepairId {
             Self::LetMutToVar => "let-mut-to-var",
             Self::NullToNone => "null-to-none",
             Self::PrintlnBang => "println-bang",
+            Self::DropIteratorAccessor => "drop-iterator-accessor",
+            Self::ConcatToFormattedString => "concat-to-formatted-string",
+            Self::QualifyVariantPattern => "qualify-variant-pattern",
+        }
+    }
+
+    /// The diagnostic codes a caller can reach this repair from.
+    ///
+    /// A code appears here only once a test has driven a program that produces
+    /// it carrying this repair, so the listing `explain --list` publishes says
+    /// what is actually available rather than what was intended.
+    pub fn codes(&self) -> &'static [DiagnosticCode] {
+        match self {
+            Self::LetToVar => &[DiagnosticCode::TypImmutabilityViolation],
+            Self::AddImport => &[
+                DiagnosticCode::TypUndefinedName,
+                DiagnosticCode::TypTypeNotFound,
+            ],
+            Self::DropExtraArguments => &[DiagnosticCode::TypTypeMismatch],
+            Self::ColonAnnotation => &[DiagnosticCode::ParUnexpectedToken],
+            Self::ArrowReturnType => &[DiagnosticCode::ParUnexpectedToken],
+            Self::LetMutToVar => &[DiagnosticCode::ParUnexpectedToken],
+            Self::NullToNone => &[DiagnosticCode::TypUndefinedName],
+            Self::PrintlnBang => &[DiagnosticCode::LexInvalidToken],
+            Self::DropIteratorAccessor => &[DiagnosticCode::TypFieldNotFound],
+            Self::ConcatToFormattedString => &[DiagnosticCode::TypTypeMismatch],
+            Self::QualifyVariantPattern => &[DiagnosticCode::TypEnumVariant],
         }
     }
 
@@ -68,8 +102,25 @@ impl RepairId {
             Self::LetMutToVar,
             Self::NullToNone,
             Self::PrintlnBang,
+            Self::DropIteratorAccessor,
+            Self::ConcatToFormattedString,
+            Self::QualifyVariantPattern,
         ]
     }
+}
+
+/// The repairs reachable from `code`, in declaration order.
+///
+/// Availability is a separate question from risk: a code's `fix_safety` is the
+/// floor a repair of that condition would have to clear, and it is recorded
+/// whether or not a repair exists. This answers the other question — whether
+/// one exists at all, and which.
+pub fn repairs_for(code: DiagnosticCode) -> Vec<RepairId> {
+    RepairId::all()
+        .iter()
+        .filter(|repair| repair.codes().contains(&code))
+        .copied()
+        .collect()
 }
 
 /// A repair the compiler can perform exactly, recorded where the diagnostic was
@@ -131,6 +182,61 @@ pub enum RepairRequest {
     },
     /// Remove the `!` from a macro call.
     PrintlnBang { bang_start: usize },
+    /// Delete a member accessor so the receiver is iterated directly.
+    ///
+    /// `access_start..access_end` covers the whole member access, so the
+    /// projection can confirm the recorded accessor really terminates it before
+    /// deleting anything. Recorded only for a receiver whose own iteration
+    /// already yields what the accessor names, which is decided by the check
+    /// that raised the diagnostic.
+    DropIteratorAccessor {
+        access_start: usize,
+        access_end: usize,
+        accessor: String,
+    },
+    /// Rewrite `start..end` — a chain of `+` joining text to values — as one
+    /// formatted string.
+    ///
+    /// `parts` holds the leaves of that chain in source order. A text leaf
+    /// contributes its own characters; every other leaf becomes a hole. The
+    /// ranges are recorded rather than the text, so the projection reads the
+    /// operands out of the source it is given and never out of a message.
+    ConcatToFormattedString {
+        start: usize,
+        end: usize,
+        parts: Vec<ConcatPart>,
+    },
+    /// Prefix each bare variant pattern in `sites` with `enum_name`.
+    ///
+    /// Every site is one spelling of the same mistake, so they travel on one
+    /// request: repairing the first alone would leave the rest to be found on a
+    /// second run.
+    QualifyVariantPattern {
+        enum_name: String,
+        sites: Vec<VariantPatternSite>,
+    },
+}
+
+/// One leaf of a `+` chain being rewritten as a formatted string.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConcatPart {
+    /// First byte of the leaf in the source the diagnostic was raised against.
+    pub start: usize,
+    /// One past the last byte of the leaf.
+    pub end: usize,
+    /// Whether the leaf is a text literal, whose contents become literal
+    /// characters rather than a hole.
+    pub is_text: bool,
+}
+
+/// One bare variant pattern awaiting its enum prefix.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariantPatternSite {
+    /// First byte of the variant name.
+    pub start: usize,
+    /// The variant name as written, which the projection confirms is still
+    /// there before inserting anything ahead of it.
+    pub variant: String,
 }
 
 /// The `let` keyword, and the `var` that replaces it. Equal length is a
@@ -153,6 +259,9 @@ impl RepairRequest {
             Self::LetMutToVar { .. } => RepairId::LetMutToVar,
             Self::NullToNone { .. } => RepairId::NullToNone,
             Self::PrintlnBang { .. } => RepairId::PrintlnBang,
+            Self::DropIteratorAccessor { .. } => RepairId::DropIteratorAccessor,
+            Self::ConcatToFormattedString { .. } => RepairId::ConcatToFormattedString,
+            Self::QualifyVariantPattern { .. } => RepairId::QualifyVariantPattern,
         }
     }
 
@@ -193,6 +302,23 @@ impl RepairRequest {
             } => Self::project_null_to_none(path, source, *spelling_start, *spelling_end),
             Self::PrintlnBang { bang_start } => {
                 Self::project_println_bang(path, source, *bang_start)
+            }
+            Self::DropIteratorAccessor {
+                access_start,
+                access_end,
+                accessor,
+            } => Self::project_drop_iterator_accessor(
+                path,
+                source,
+                *access_start,
+                *access_end,
+                accessor,
+            ),
+            Self::ConcatToFormattedString { start, end, parts } => {
+                Self::project_concat_to_formatted_string(path, source, *start, *end, parts)
+            }
+            Self::QualifyVariantPattern { enum_name, sites } => {
+                Self::project_qualify_variant_pattern(path, source, enum_name, sites)
             }
         }
     }
@@ -353,6 +479,115 @@ impl RepairRequest {
         })
     }
 
+    fn project_drop_iterator_accessor(
+        path: &str,
+        source: &str,
+        access_start: usize,
+        access_end: usize,
+        accessor: &str,
+    ) -> Option<JsonRepair> {
+        let access = source.get(access_start..access_end)?;
+        let suffix = format!(".{}", accessor);
+        // The accessor must still terminate the member access. A drifted offset
+        // that lands mid-expression would otherwise delete a receiver.
+        if !access.ends_with(&suffix) {
+            return None;
+        }
+        let start = access_end.checked_sub(suffix.len())?;
+        let end = empty_call_end(source, access_end)?;
+        Some(JsonRepair {
+            id: RepairId::DropIteratorAccessor.as_str().to_string(),
+            summary: format!(
+                "Iterate the value itself instead of calling `{}`.",
+                accessor
+            ),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement: String::new(),
+            }],
+        })
+    }
+
+    fn project_concat_to_formatted_string(
+        path: &str,
+        source: &str,
+        start: usize,
+        end: usize,
+        parts: &[ConcatPart],
+    ) -> Option<JsonRepair> {
+        if parts.is_empty() || start >= end || end > source.len() {
+            return None;
+        }
+        let mut rendered = String::from("f\"");
+        let mut reach = start;
+        for part in parts {
+            // Parts tile the expression left to right. A part that overlaps the
+            // one before it, or that reaches outside the expression, is not a
+            // reading of this source, so nothing is written.
+            if part.start < reach || part.end > end || part.start >= part.end {
+                return None;
+            }
+            let text = source.get(part.start..part.end)?;
+            if part.is_text {
+                rendered.push_str(literal_body(text)?);
+            } else {
+                rendered.push('{');
+                rendered.push_str(hole_body(text)?);
+                rendered.push('}');
+            }
+            reach = part.end;
+        }
+        rendered.push('"');
+        Some(JsonRepair {
+            id: RepairId::ConcatToFormattedString.as_str().to_string(),
+            summary: "Build the text with a formatted string.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement: rendered,
+            }],
+        })
+    }
+
+    fn project_qualify_variant_pattern(
+        path: &str,
+        source: &str,
+        enum_name: &str,
+        sites: &[VariantPatternSite],
+    ) -> Option<JsonRepair> {
+        if sites.is_empty() {
+            return None;
+        }
+        let mut edits = Vec::with_capacity(sites.len());
+        let mut reach = 0;
+        for site in sites {
+            // Ascending, non-overlapping offsets keep the insertions
+            // independent of one another and of the order they are applied in.
+            if site.start < reach {
+                return None;
+            }
+            let end = site.start.checked_add(site.variant.len())?;
+            if source.get(site.start..end)? != site.variant {
+                return None;
+            }
+            edits.push(JsonEdit {
+                path: path.to_string(),
+                start: site.start,
+                end: site.start,
+                replacement: format!("{}.", enum_name),
+            });
+            reach = end;
+        }
+        Some(JsonRepair {
+            id: RepairId::QualifyVariantPattern.as_str().to_string(),
+            summary: format!("Name the enum the variant belongs to: `{}.`.", enum_name),
+            edits,
+        })
+    }
+
     fn project_println_bang(path: &str, source: &str, bang_start: usize) -> Option<JsonRepair> {
         if source.get(bang_start..bang_start + 1)? != "!" {
             return None;
@@ -368,6 +603,53 @@ impl RepairRequest {
             }],
         })
     }
+}
+
+/// Characters a formatted string cannot carry verbatim.
+///
+/// A brace would open or close a hole, a quote would close the string, and a
+/// backslash would start an escape whose meaning belongs to the original
+/// spelling rather than to the rewrite. Any of them means the rewrite is not
+/// determined, and an undetermined repair is not offered.
+const FORMATTED_STRING_HAZARDS: [char; 4] = ['{', '}', '"', '\\'];
+
+/// The characters between a text literal's quotes, or `None` when they cannot
+/// stand inside a formatted string unchanged.
+fn literal_body(text: &str) -> Option<&str> {
+    let body = text.strip_prefix('"')?.strip_suffix('"')?;
+    if body.contains(FORMATTED_STRING_HAZARDS) || body.contains('\n') {
+        return None;
+    }
+    Some(body)
+}
+
+/// The source of an operand that is to become a hole, or `None` when it cannot
+/// stand inside one.
+fn hole_body(text: &str) -> Option<&str> {
+    if text.contains(FORMATTED_STRING_HAZARDS) || text.contains('\n') {
+        return None;
+    }
+    Some(text)
+}
+
+/// One past the end of an empty argument list starting at `offset`, `offset`
+/// itself when no call follows, or `None` when the call carries arguments.
+///
+/// Deleting an accessor has to take the parentheses that called it with it. A
+/// call that passes something is not the shape this repair was recorded for, so
+/// it yields no edit rather than an edit that drops an argument.
+fn empty_call_end(source: &str, offset: usize) -> Option<usize> {
+    let rest = source.get(offset..)?;
+    let before_open = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    let open = rest.get(before_open..)?;
+    let Some(inside) = open.strip_prefix('(') else {
+        return Some(offset);
+    };
+    let closing = inside.trim_start_matches([' ', '\t']);
+    if !closing.starts_with(')') {
+        return None;
+    }
+    Some(offset + before_open + 1 + (inside.len() - closing.len()) + 1)
 }
 
 /// A byte range to be replaced, and what surrounds it.
@@ -512,6 +794,172 @@ mod tests {
         let request = RepairRequest::DropExtraArguments { start: 2, end: 99 };
 
         assert!(request.project("main.mi", "add(1)").is_none());
+    }
+
+    #[test]
+    fn test_dropping_an_accessor_takes_its_parentheses_with_it() {
+        let source = "for k in tags.keys()\n";
+        let request = RepairRequest::DropIteratorAccessor {
+            access_start: 9,
+            access_end: 18,
+            accessor: "keys".to_string(),
+        };
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("the accessor is where it was recorded");
+        let edit = &repair.edits[0];
+
+        assert_eq!(&source[edit.start..edit.end], ".keys()");
+        assert!(edit.replacement.is_empty());
+    }
+
+    #[test]
+    fn test_an_accessor_called_with_an_argument_is_not_dropped() {
+        // Deleting the accessor would delete the argument with it, which is a
+        // different program rather than the same one spelled directly.
+        let request = RepairRequest::DropIteratorAccessor {
+            access_start: 0,
+            access_end: 9,
+            accessor: "keys".to_string(),
+        };
+
+        assert!(request.project("main.mi", "tags.keys(1)\n").is_none());
+    }
+
+    #[test]
+    fn test_an_accessor_that_moved_is_not_dropped() {
+        let request = RepairRequest::DropIteratorAccessor {
+            access_start: 0,
+            access_end: 11,
+            accessor: "keys".to_string(),
+        };
+
+        assert!(request.project("main.mi", "tags.values()\n").is_none());
+    }
+
+    #[test]
+    fn test_a_join_becomes_one_formatted_string() {
+        let source = "let s = \"x\" + \" \" + qty\n";
+        let request = RepairRequest::ConcatToFormattedString {
+            start: 8,
+            end: 23,
+            parts: vec![
+                ConcatPart {
+                    start: 8,
+                    end: 11,
+                    is_text: true,
+                },
+                ConcatPart {
+                    start: 14,
+                    end: 17,
+                    is_text: true,
+                },
+                ConcatPart {
+                    start: 20,
+                    end: 23,
+                    is_text: false,
+                },
+            ],
+        };
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("every part is inside the expression");
+
+        assert_eq!(repair.edits[0].replacement, "f\"x {qty}\"");
+    }
+
+    #[test]
+    fn test_a_join_carrying_a_brace_is_not_rewritten() {
+        // A brace in the text would open a hole in the string it lands in, so
+        // the rewrite is not the same text and is not offered.
+        let source = "let s = \"{\" + qty\n";
+        let request = RepairRequest::ConcatToFormattedString {
+            start: 8,
+            end: 18,
+            parts: vec![
+                ConcatPart {
+                    start: 8,
+                    end: 11,
+                    is_text: true,
+                },
+                ConcatPart {
+                    start: 14,
+                    end: 17,
+                    is_text: false,
+                },
+            ],
+        };
+
+        assert!(request.project("main.mi", source).is_none());
+    }
+
+    #[test]
+    fn test_parts_that_overlap_yield_no_rewrite() {
+        let source = "let s = \"x\" + qty\n";
+        let request = RepairRequest::ConcatToFormattedString {
+            start: 8,
+            end: 18,
+            parts: vec![
+                ConcatPart {
+                    start: 8,
+                    end: 12,
+                    is_text: true,
+                },
+                ConcatPart {
+                    start: 10,
+                    end: 14,
+                    is_text: false,
+                },
+            ],
+        };
+
+        assert!(request.project("main.mi", source).is_none());
+    }
+
+    #[test]
+    fn test_every_bare_variant_is_prefixed_once() {
+        let source = "        Ok(n)\n        Err(e)\n";
+        let request = RepairRequest::QualifyVariantPattern {
+            enum_name: "Result".to_string(),
+            sites: vec![
+                VariantPatternSite {
+                    start: 8,
+                    variant: "Ok".to_string(),
+                },
+                VariantPatternSite {
+                    start: 22,
+                    variant: "Err".to_string(),
+                },
+            ],
+        };
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("both variants are where they were recorded");
+
+        assert_eq!(repair.edits.len(), 2);
+        for edit in &repair.edits {
+            assert_eq!(
+                edit.start, edit.end,
+                "a prefix inserts rather than replaces"
+            );
+            assert_eq!(edit.replacement, "Result.");
+        }
+    }
+
+    #[test]
+    fn test_a_variant_that_moved_is_not_prefixed() {
+        let request = RepairRequest::QualifyVariantPattern {
+            enum_name: "Result".to_string(),
+            sites: vec![VariantPatternSite {
+                start: 8,
+                variant: "Ok".to_string(),
+            }],
+        };
+
+        assert!(request.project("main.mi", "        None\n").is_none());
     }
 
     #[test]
