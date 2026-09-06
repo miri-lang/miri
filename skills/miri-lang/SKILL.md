@@ -137,6 +137,29 @@ fn main()
 
 The key difference: `Result` is a standalone type that requires its constructor name in patterns; `T?` is syntactic sugar for nullability where `Some`/`None` are bare constructors.
 
+### Match Arm Bodies: One Line or an Indented Block
+
+An arm header may end with a colon or not, and its body may sit on that line or
+indented below it. All four spellings mean the same thing. An indented body may
+hold several statements; a same-line body is one expression. Alternative
+patterns are separated by `|`, and an arm may carry an `if` guard:
+
+```miri
+fn weigh(n int) int
+    var weight = 0
+    match n
+        m if m > 10:
+            weight = weight + 10
+            weight = weight + 5
+        0 | 1: weight = weight + 1
+        _
+            weight = weight + 2
+    weight
+
+fn main()
+    println(f"{weigh(50)} {weigh(0)} {weigh(5)}")
+```
+
 ### Collection Constructor Forms
 
 The three forms are distinct and mean different things:

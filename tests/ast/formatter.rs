@@ -441,3 +441,92 @@ fn test_a_comment_below_the_last_statement_survives_a_render() {
         "the comment below the last statement survives: {rendered}"
     );
 }
+
+#[test]
+fn test_alternative_patterns_render_with_the_bar_the_parser_reads() {
+    // The parser separates a branch's alternative patterns with `|`. Rendering
+    // them with a comma produced text the parser rejected, so `miri fmt`
+    // refused every file holding such an arm.
+    let rendered = assert_render_is_a_fixed_point(
+        "
+fn describe(n int) String
+    match n
+        1 | 2: \"small\"
+        _: \"other\"
+",
+    );
+
+    assert!(
+        rendered.contains("1 | 2"),
+        "alternatives belong to one branch and keep the bar, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("1, 2"),
+        "a comma would read as two branches of an inline match, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn test_a_branch_with_alternatives_and_a_block_body_survives_a_render() {
+    assert_ast_survives(
+        "
+fn describe(n int) String
+    match n
+        1 | 2 | 3:
+            let label = \"small\"
+            label
+        _
+            \"other\"
+",
+    );
+}
+
+#[test]
+fn test_constructor_bindings_keep_their_commas() {
+    // The comma inside a constructor pattern separates bindings rather than
+    // alternatives, and must not follow the bar.
+    let rendered = assert_render_is_a_fixed_point(
+        "
+fn describe(p Pair) int
+    match p
+        Pair.Both(a, b): a + b
+        _: 0
+",
+    );
+
+    assert!(
+        rendered.contains("Both(a, b)"),
+        "bindings stay comma-separated, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn test_a_block_bodied_function_expression_keeps_its_block() {
+    // A block holding one expression and a bare expression body are different
+    // trees. Rendering the first as the second hands back a program that
+    // parses to something else, which the fixed-point contract forbids.
+    assert_ast_survives(
+        "
+fn main()
+    let bare = fn(x int) int
+        x + 100
+    println(f\"{bare(2)}\")
+",
+    );
+}
+
+#[test]
+fn test_an_inline_function_expression_body_stays_on_its_line() {
+    let rendered = assert_render_is_a_fixed_point(
+        "
+fn main()
+    let inline = fn(x int) int: x + 1
+    println(f\"{inline(2)}\")
+",
+    );
+
+    assert!(
+        rendered.contains("fn(x int) int: x + 1"),
+        "a body written on the header's line stays there, got:\n{rendered}"
+    );
+}

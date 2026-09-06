@@ -1,4 +1,4 @@
-# version: 1
+# version: 2
 
 # The Miri language grammar, over the token stream the lexer produces.
 #
@@ -28,7 +28,7 @@ program <- statement*
 statement <- declaration / compound_statement / simple_statement
 
 block <- STMT_END INDENT statement+ DEDENT
-body <- COLON statement / block
+body <- COLON (block / statement) / block
 
 declaration <- attribute* modifier* declaration_kind
 attribute <- AT attribute_name (L_PAREN argument_list? R_PAREN)? STMT_END?
@@ -78,8 +78,10 @@ forall_statement <- FORALL iteration_clause body
 iteration_clause <- loop_variables IN expression (COMMA expression)*
 loop_variables <- loop_variable (COMMA loop_variable)*
 loop_variable <- IDENT / L_PAREN loop_variables R_PAREN
-match_statement <- MATCH expression STMT_END INDENT match_branch+ DEDENT
-match_branch <- pattern (COMMA pattern)* body
+match_statement <- MATCH expression (inline_match_branches / STMT_END INDENT match_branch+ DEDENT)
+inline_match_branches <- COLON match_branch (COMMA match_branch)*
+match_branch <- pattern (PIPE pattern)* match_guard? body
+match_guard <- IF expression
 pattern <- ELSE / DEFAULT / expression
 
 gpu_statement <- GPU gpu_tail
@@ -89,7 +91,8 @@ frame_block <- FRAME body
 simple_statement <- shared_declaration / binding_statement / return_statement / break_statement / continue_statement / expression_statement
 binding_statement <- binding_head ASSIGN block_valued_expression / binding_head (ASSIGN expression)? guard? STMT_END
 binding_head <- attribute* modifier* (LET / VAR / CONST) binding_targets type_expression?
-block_valued_expression <- match_statement / if_statement
+block_valued_expression <- match_statement / if_statement / block_bodied_function
+block_bodied_function <- FN L_PAREN parameter_list? R_PAREN type_expression? (COLON block / block)
 binding_targets <- binding_target (COMMA binding_target)*
 binding_target <- IDENT / OUT / L_PAREN binding_targets R_PAREN
 return_statement <- RETURN expression? guard? STMT_END
@@ -130,7 +133,7 @@ map_entry <- expression (COLON expression)?
 argument_list <- argument (COMMA argument)* COMMA?
 argument <- OUT expression / (IDENT COLON)? expression
 lambda_expression <- L_PAREN parameter_list? R_PAREN ARROW expression / IDENT ARROW expression
-anonymous_function <- FN L_PAREN parameter_list? R_PAREN type_expression? (COLON expression / block)
+anonymous_function <- FN L_PAREN parameter_list? R_PAREN type_expression? (COLON (block / expression) / block)
 inline_if_expression <- IF expression COLON expression (ELSE COLON expression)?
 
 literal_expression <- INT / FLOAT / BINARY / HEX / OCTAL / STRING / REGEX / TRUE / FALSE / NONE / formatted_string

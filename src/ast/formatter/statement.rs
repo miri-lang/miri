@@ -248,17 +248,17 @@ pub fn lambda_body(sink: &mut Sink, node: &Statement, indent: usize) {
     body(sink, node, indent);
 }
 
-/// The single expression a body consists of, when it consists of exactly one.
+/// The expression a body consists of, when the body *is* that expression.
+///
+/// A block holding one expression is deliberately not unwrapped. The two are
+/// different trees, and rendering the block as `: expr` would hand back a
+/// program that parses to the other one — which is the same defect as dropping
+/// a statement, only quieter.
 fn single_expression(node: &Statement) -> Option<&Expression> {
-    if let StatementKind::Expression(value) = &node.node {
-        return Some(value);
+    match &node.node {
+        StatementKind::Expression(value) => Some(value),
+        _ => None,
     }
-    if let StatementKind::Block(statements) = &node.node {
-        if let [only] = statements.as_slice() {
-            return single_expression(only);
-        }
-    }
-    None
 }
 
 /// Render statements one per line at `indent`, the first at the cursor.
@@ -457,7 +457,11 @@ fn match_branch(sink: &mut Sink, branch: &MatchBranch, indent: usize) {
     }
     for (index, entry) in branch.patterns.iter().enumerate() {
         if index > 0 {
-            sink.emit(", ");
+            // A branch's alternatives are separated by a bar. A comma here
+            // would read as the branch separator of an inline match, which is
+            // text the parser rejects in a block match and reads as a
+            // different program in an inline one.
+            sink.emit(" | ");
         }
         format_pattern(sink, entry);
     }
