@@ -2062,7 +2062,57 @@ impl<'a> FunctionTranslator<'a> {
                 if is_unsigned {
                     builder.ins().udiv(lhs, rhs)
                 } else {
-                    builder.ins().sdiv(lhs, rhs)
+                    let (min_val_val, neg1_val) = if ty == cl_types::I128 {
+                        let min_lo = builder.ins().iconst(cl_types::I64, 0);
+                        let min_hi = builder.ins().iconst(cl_types::I64, i64::MIN);
+                        let min_v = builder.ins().iconcat(min_lo, min_hi);
+
+                        let neg1_lo = builder.ins().iconst(cl_types::I64, -1);
+                        let neg1_hi = builder.ins().iconst(cl_types::I64, -1);
+                        let neg1_v = builder.ins().iconcat(neg1_lo, neg1_hi);
+
+                        (min_v, neg1_v)
+                    } else {
+                        let min_val = match ty {
+                            cl_types::I8 => i8::MIN as i64,
+                            cl_types::I16 => i16::MIN as i64,
+                            cl_types::I32 => i32::MIN as i64,
+                            cl_types::I64 => i64::MIN,
+                            _ => 0,
+                        };
+                        let min_v = builder.ins().iconst(ty, min_val);
+                        let neg1_v = builder.ins().iconst(ty, -1);
+                        (min_v, neg1_v)
+                    };
+
+                    let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
+                    let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
+                    let is_overflow = builder.ins().band(lhs_min, rhs_neg1);
+
+                    let overflow_block = builder.create_block();
+                    let normal_block = builder.create_block();
+                    let merge_block = builder.create_block();
+                    let res_var = builder.declare_var(ty);
+
+                    builder
+                        .ins()
+                        .brif(is_overflow, overflow_block, &[], normal_block, &[]);
+
+                    builder.switch_to_block(overflow_block);
+                    builder.def_var(res_var, min_val_val);
+                    builder.ins().jump(merge_block, &[]);
+                    builder.seal_block(overflow_block);
+
+                    builder.switch_to_block(normal_block);
+                    let div_res = builder.ins().sdiv(lhs, rhs);
+                    builder.def_var(res_var, div_res);
+                    builder.ins().jump(merge_block, &[]);
+                    builder.seal_block(normal_block);
+
+                    builder.switch_to_block(merge_block);
+                    builder.seal_block(merge_block);
+
+                    builder.use_var(res_var)
                 }
             }
             BinOp::Rem if is_float => return Self::emit_float_rem(builder, ctx, ty, lhs, rhs),
@@ -2071,7 +2121,64 @@ impl<'a> FunctionTranslator<'a> {
                 if is_unsigned {
                     builder.ins().urem(lhs, rhs)
                 } else {
-                    builder.ins().srem(lhs, rhs)
+                    let (min_val_val, neg1_val) = if ty == cl_types::I128 {
+                        let min_lo = builder.ins().iconst(cl_types::I64, 0);
+                        let min_hi = builder.ins().iconst(cl_types::I64, i64::MIN);
+                        let min_v = builder.ins().iconcat(min_lo, min_hi);
+
+                        let neg1_lo = builder.ins().iconst(cl_types::I64, -1);
+                        let neg1_hi = builder.ins().iconst(cl_types::I64, -1);
+                        let neg1_v = builder.ins().iconcat(neg1_lo, neg1_hi);
+
+                        (min_v, neg1_v)
+                    } else {
+                        let min_val = match ty {
+                            cl_types::I8 => i8::MIN as i64,
+                            cl_types::I16 => i16::MIN as i64,
+                            cl_types::I32 => i32::MIN as i64,
+                            cl_types::I64 => i64::MIN,
+                            _ => 0,
+                        };
+                        let min_v = builder.ins().iconst(ty, min_val);
+                        let neg1_v = builder.ins().iconst(ty, -1);
+                        (min_v, neg1_v)
+                    };
+
+                    let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
+                    let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
+                    let is_overflow = builder.ins().band(lhs_min, rhs_neg1);
+
+                    let overflow_block = builder.create_block();
+                    let normal_block = builder.create_block();
+                    let merge_block = builder.create_block();
+                    let res_var = builder.declare_var(ty);
+
+                    builder
+                        .ins()
+                        .brif(is_overflow, overflow_block, &[], normal_block, &[]);
+
+                    builder.switch_to_block(overflow_block);
+                    let zero_val = if ty == cl_types::I128 {
+                        let zero_lo = builder.ins().iconst(cl_types::I64, 0);
+                        let zero_hi = builder.ins().iconst(cl_types::I64, 0);
+                        builder.ins().iconcat(zero_lo, zero_hi)
+                    } else {
+                        builder.ins().iconst(ty, 0)
+                    };
+                    builder.def_var(res_var, zero_val);
+                    builder.ins().jump(merge_block, &[]);
+                    builder.seal_block(overflow_block);
+
+                    builder.switch_to_block(normal_block);
+                    let rem_res = builder.ins().srem(lhs, rhs);
+                    builder.def_var(res_var, rem_res);
+                    builder.ins().jump(merge_block, &[]);
+                    builder.seal_block(normal_block);
+
+                    builder.switch_to_block(merge_block);
+                    builder.seal_block(merge_block);
+
+                    builder.use_var(res_var)
                 }
             }
             BinOp::BitAnd
