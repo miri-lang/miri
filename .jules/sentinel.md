@@ -25,3 +25,8 @@
 **Vulnerability:** Integer overflow causing undersized allocations and heap buffer overflows (OOM DoS) in MiriList.
 **Learning:** `capacity * elem_size` without bounds checks wrappers can lead to extremely large inputs wrapping around, producing a small layout that receives too much data during memory copies or inserts.
 **Prevention:** Always use safe arithmetic like `checked_mul` (e.g., `capacity.checked_mul(elem_size)`) and return gracefully or use safe aborts if the required size overflows before calling `Layout::from_size_align` in manual memory management code. Ensure fallback paths (like returning an empty struct) are maintained if the checked math fails.
+
+## 2026-05-28 - [Compiler DoS via UTF-8 Boundary Slicing in Lexer]
+**Vulnerability:** Slicing source strings with fixed 1-byte ranges (`&src[cursor..cursor + 1]`) in lexer lookahead routines panics when `cursor` points to a multi-byte UTF-8 character.
+**Learning:** `&str` slicing in Rust requires exact UTF-8 character boundaries. Lookahead logic operating on raw byte offsets must not slice `&str` directly without verifying character boundaries.
+**Prevention:** Inspect `src.as_bytes()` or use byte matching instead of `&str` slicing for single-ASCII-character lookahead checks.
