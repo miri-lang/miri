@@ -377,15 +377,15 @@ pub enum Commands {
         #[arg(long, value_name = "PATH|-")]
         new_file: Vec<String>,
 
-        /// Function to replace wholly: its name, or `Class.method`; pairs with --body-file
+        /// Function whose body is replaced: its name, or `Class.method`; its --body-file holds the body alone, without the `fn` line
         #[arg(long, value_name = "NAME")]
         replace_fn: Vec<String>,
 
-        /// Read function body from a file or stdin (-); pairs positionally with --replace-fn
+        /// Read the text from a file or stdin (-); pairs positionally with --replace-fn or --insert-fn, and holds what that flag says it holds
         #[arg(long, value_name = "PATH|-")]
         body_file: Vec<String>,
 
-        /// Function to insert: its name, or `Class.method`; pairs with --body-file
+        /// Declaration to insert: its name, or `Class.method`; its --body-file holds the whole declaration, `fn` line and body
         #[arg(long, value_name = "NAME")]
         insert_fn: Vec<String>,
 

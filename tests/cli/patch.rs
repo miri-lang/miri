@@ -3203,3 +3203,277 @@ fn test_a_re_applied_comment_edit_changes_nothing() {
         );
     });
 }
+
+/// A file whose function ends in a bare f-string.
+///
+/// The literal is the last thing the body holds, so a body replacement's range
+/// ends at it and an insertion after the function starts there.
+const FSTRING_TAIL: &str = "fn describe(a int) String
+    f\"v={a}\"
+
+fn main()
+    println(describe(3))
+";
+
+// A bare f-string is a literal like any other: the bytes it occupies belong to
+// it, so an edit that replaces the body around it neither starts nor ends
+// inside it.
+#[test]
+fn test_a_body_ending_in_an_f_string_is_replaced_whole() {
+    with_source(FSTRING_TAIL, |path| {
+        with_body("    \"plain\"", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--replace-fn",
+                "describe",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "a body ending in an f-string is replaceable: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn describe(a int) String\n    \"plain\"\n\nfn main()\n    println(describe(3))\n",
+                "the whole literal is replaced, leaving no fragment of it behind"
+            );
+        });
+    });
+}
+
+// An f-string keeps its place when the body around it is edited by anchor.
+#[test]
+fn test_an_f_string_survives_an_anchored_edit_beside_it() {
+    with_source(FSTRING_TAIL, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "describe",
+            "--old",
+            "f\"v={a}\"",
+            "--new",
+            "f\"value={a}\"",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+        assert!(ok, "an f-string is anchorable: {stdout}{stderr}");
+        assert_eq!(
+            read_file(path),
+            "fn describe(a int) String\n    f\"value={a}\"\n\nfn main()\n    println(describe(3))\n",
+            "the replacement covers the literal and nothing beyond it"
+        );
+    });
+}
+
+// A declaration ending in an f-string is a place another declaration can follow.
+#[test]
+fn test_an_insertion_follows_a_declaration_ending_in_an_f_string() {
+    with_source(FSTRING_TAIL, |path| {
+        with_body("fn extra() int\n    return 1", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "extra",
+                "--after",
+                "describe",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "an insertion after an f-string tail applies: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn describe(a int) String\n    f\"v={a}\"\n\nfn extra() int\n    return 1\n\nfn main()\n    println(describe(3))\n",
+                "the new declaration goes past the whole literal, not into it"
+            );
+        });
+    });
+}
+
+// A declaration whose canonical form the file does not match cannot be edited,
+// but it is still a landmark: an insertion after it only needs to know where it
+// ends, which the layout says.
+#[test]
+fn test_an_insertion_follows_a_declaration_the_canonical_form_cannot_anchor() {
+    let source = "fn label() String\n    'single'\n\nfn main()\n    println(label())\n";
+    with_source(source, |path| {
+        with_body("fn extra() int\n    return 1", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--insert-fn",
+                "extra",
+                "--after",
+                "label",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "an un-anchorable declaration still anchors an insertion: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "fn label() String\n    'single'\n\nfn extra() int\n    return 1\n\nfn main()\n    println(label())\n",
+                "the declaration it followed is left exactly as it was written"
+            );
+        });
+    });
+}
+
+// An alignment refusal says which declaration it was reading, so the caller
+// knows what to rewrite without matching a byte offset against the file.
+#[test]
+fn test_an_alignment_refusal_names_the_declaration_it_was_reading() {
+    let source = "fn label() String\n    'single'\n\nfn main()\n    println(label())\n";
+    with_source(source, |path| {
+        with_body("    \"double\"", |body| {
+            let (stdout, _, ok) = patch(&[
+                "--replace-fn",
+                "label",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                !ok,
+                "a source that does not match its canonical form refuses"
+            );
+            let env = envelope(&stdout);
+            assert_eq!(codes(&env), vec!["MER_BLD_010"]);
+            let message = &env.diagnostics[0].message;
+            assert!(
+                message.contains("`label`"),
+                "the refusal names the declaration it was reading: {message}"
+            );
+        });
+    });
+}
+
+// `--replace-fn` takes the body alone and `--insert-fn` takes the whole
+// declaration. Handing one the other's shape is a mistake about the flags, and
+// it is answered as one rather than as a type error at the top of the file.
+#[test]
+fn test_a_replacement_body_given_with_its_header_names_the_flag_that_takes_it() {
+    with_source(FSTRING_TAIL, |path| {
+        with_body("fn describe(a int) String\n    \"plain\"", |body| {
+            let (stdout, _, ok) = patch(&[
+                "--replace-fn",
+                "describe",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "a body carrying its own header is refused");
+            let env = envelope(&stdout);
+            assert_eq!(codes(&env), vec!["MER_BLD_012"]);
+            let message = &env.diagnostics[0].message;
+            assert!(
+                message.contains("--replace-fn") && message.contains("--insert-fn"),
+                "the refusal names both flags so the caller can tell them apart: {message}"
+            );
+        });
+    });
+}
+
+// The two flags that take a body file take different things, so the help says
+// so on each of them rather than describing both the same way.
+#[test]
+fn test_the_help_says_what_each_body_file_holds() {
+    let output = miri_cmd()
+        .args(["patch", "--help"])
+        .output()
+        .expect("the help runs");
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        help.contains("its --body-file holds the body alone, without the `fn` line"),
+        "the help says --replace-fn takes the body alone: {help}"
+    );
+    assert!(
+        help.contains("its --body-file holds the whole declaration, `fn` line and body"),
+        "the help says --insert-fn takes the declaration: {help}"
+    );
+}
+
+// An anchor that starts or stops partway through a token names bytes that do
+// not correspond to it. The pair the file gets back would be whatever the
+// selection happened to cover, so the anchor is refused instead.
+#[test]
+fn test_an_anchor_cutting_into_a_token_is_refused() {
+    for (source, function, old, new) in [
+        (FSTRING_TAIL, "describe", "v={a}", "val={a}"),
+        (FSTRING_TAIL, "describe", "v=", "val="),
+        (
+            "fn p() int\n    return 1234 + 5\n",
+            "p",
+            "234 + 5",
+            "999 + 5",
+        ),
+    ] {
+        with_source(source, |path| {
+            let before = read_file(path);
+            let (stdout, _, ok) = patch(&[
+                "--replace-in-fn",
+                function,
+                "--old",
+                old,
+                "--new",
+                new,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(!ok, "`{old}` names no bytes of its own: {stdout}");
+            assert_eq!(
+                envelope(&stdout)
+                    .diagnostics
+                    .first()
+                    .and_then(|d| d.code.as_deref()),
+                Some("MER_BLD_010"),
+                "got: {stdout}"
+            );
+            assert_eq!(read_file(path), before, "nothing is written");
+        });
+    }
+}
+
+// The same literal inside a container, where the replacement carries the depth
+// its members are written at.
+#[test]
+fn test_a_method_body_ending_in_an_f_string_is_replaced_whole() {
+    let source = "class Order\n    total int\n\n    fn show() String\n        f\"total={self.total}\"\n\nfn main()\n    println(\"ok\")\n";
+    with_source(source, |path| {
+        with_body("        f\"sum={self.total}\"", |body| {
+            let (stdout, stderr, ok) = patch(&[
+                "--replace-fn",
+                "Order.show",
+                "--body-file",
+                body,
+                "--format",
+                "json",
+                &path.display().to_string(),
+            ]);
+            assert!(
+                ok,
+                "a method body ending in an f-string is replaceable: {stdout}{stderr}"
+            );
+            assert_eq!(
+                read_file(path),
+                "class Order\n    total int\n\n    fn show() String\n        f\"sum={self.total}\"\n\nfn main()\n    println(\"ok\")\n",
+                "the literal is replaced whole, at the depth the container's members sit at"
+            );
+        });
+    });
+}

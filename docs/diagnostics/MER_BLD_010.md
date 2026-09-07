@@ -2,7 +2,9 @@
 
 `miri patch` failed to align the canonical (normalized) rendering of the function to the raw source. This happens when the source contains constructs whose canonical rendering differs from the source text, such as redundant parentheses (`((expr))` renders to `(expr)`) or non-canonical numeric literals (`1.50` renders to `1.5`). The file was left unchanged, and the patch was not applied.
 
-To fix this, reformat the source to match the canonical form: remove extra parentheses, and use canonical numeric literals (e.g., `1.5` instead of `1.50`).
+To fix this, reformat the source to match the canonical form: remove extra parentheses, and use canonical numeric literals (e.g., `1.5` instead of `1.50`). The refusal names the declaration it was reading, so a file with several of them says which one to rewrite.
+
+The same code reports an anchor that begins or ends partway through a token. `--old "v={a}"` inside `f"v={a}"` names part of a literal, and the tokens it covers whole are a different stretch of text than the one asked for; anchor on the whole literal instead. A declaration that cannot be anchored is still a landmark: `--insert-fn ... --after` places a new declaration beside it, because an insertion beside a declaration only has to know where it ends.
 
 ## Before
 

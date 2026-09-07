@@ -38,16 +38,19 @@ pub struct AlignmentDiverged {
 
 impl AlignmentDiverged {
     /// Describe the divergence to the caller that has to act on it.
-    pub fn to_diagnostic(&self) -> Diagnostic {
+    ///
+    /// The declaration is named because the byte offset alone leaves the caller
+    /// counting bytes to find out which one of them it is being told about.
+    pub fn to_diagnostic(&self, declaration: &str) -> Diagnostic {
         use crate::diagnostics::DiagnosticCode;
         DiagnosticBuilder::error(DiagnosticCode::BldSourceNotAnchorable.title().to_string())
             .code(DiagnosticCode::BldSourceNotAnchorable.as_str())
             .message(format!(
-                "the source and its canonical form part at token {}: canonical has {}, the file has {} at byte {}",
-                self.token_index, self.expected, self.actual, self.raw_byte_offset
+                "`{}` and its canonical form part at token {}: canonical has {}, the file has {} at byte {}",
+                crate::cli::sanitize_for_terminal(declaration), self.token_index, self.expected, self.actual, self.raw_byte_offset
             ))
             .help(
-                "this function contains something whose canonical form differs from what the file says, such as redundant parentheses around an expression or a literal written 1.50 rather than 1.5; run `miri fmt` to rewrite it in canonical form and the anchor will hold"
+                "this declaration contains something whose canonical form differs from what the file says, such as redundant parentheses around an expression or a literal written 1.50 rather than 1.5; run `miri fmt` to rewrite it in canonical form and the anchor will hold"
                     .to_string(),
             )
             .build()
@@ -120,10 +123,12 @@ impl Alignment {
 
     /// The raw bytes a canonical byte range names.
     ///
-    /// The range is carried by whole tokens: the first token that starts at or
-    /// after the range and the last that ends at or before it. An anchor that
-    /// covers no complete token names nothing, and says so rather than
-    /// resolving to an empty stretch of the file.
+    /// The range is carried by whole tokens. Whitespace either side of it is
+    /// ignored, because the canonical rendering and the file lay a declaration
+    /// out differently by construction, but a range that stops partway through
+    /// a token names nothing: the tokens it does cover whole are a different
+    /// stretch of text from the one asked for, and replacing those would write
+    /// the caller's text somewhere it does not belong.
     pub fn raw_range(
         &self,
         canonical_start: usize,
@@ -132,12 +137,17 @@ impl Alignment {
         let first = self
             .canonical
             .iter()
-            .position(|token| token.span.start >= canonical_start)?;
+            .position(|token| token.span.end > canonical_start)?;
         let last = self
             .canonical
             .iter()
-            .rposition(|token| token.span.end <= canonical_end)?;
+            .rposition(|token| token.span.start < canonical_end)?;
         if first > last {
+            return None;
+        }
+        if canonical_start > self.canonical.get(first)?.span.start
+            || canonical_end < self.canonical.get(last)?.span.end
+        {
             return None;
         }
         self.raw_span_of_tokens(first, last)

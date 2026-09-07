@@ -3,7 +3,7 @@
 
 use miri::{
     error::syntax::SyntaxErrorKind,
-    lexer::{RegexToken, Token},
+    lexer::{Lexer, RegexToken, Token},
 };
 
 use super::utils::{lexer_error_test, lexer_token_test, run_lexer_error_tests, run_lexer_tests};
@@ -444,4 +444,51 @@ fn test_string_and_identifier_boundaries() {
         (r#""hello"world"#, vec![Token::String, Token::Identifier]),
         (r#""value"if"#, vec![Token::String, Token::If]),
     ]);
+}
+
+/// The byte range an f-string's tokens cover, from the first to the last.
+///
+/// Only the tokens carrying text are measured. A layout token is written where
+/// the lexer needs a boundary and spans nothing, so counting one would let the
+/// range reach a byte no token actually holds — which is the very thing being
+/// asserted against.
+fn covered_range(source: &str) -> (usize, usize) {
+    let spans: Vec<_> = Lexer::new(source)
+        .map(|next| next.expect("the source lexes").1)
+        .filter(|span| span.end > span.start)
+        .collect();
+    let start = spans
+        .iter()
+        .map(|span| span.start)
+        .min()
+        .expect("the source holds at least one token");
+    let end = spans
+        .iter()
+        .map(|span| span.end)
+        .max()
+        .expect("the source holds at least one token");
+    (start, end)
+}
+
+#[test]
+fn test_an_f_strings_tokens_span_the_whole_literal() {
+    // A caller that maps a token range back onto the file — `miri patch` does —
+    // reads a range the tokens do not cover as bytes it may replace. Leaving
+    // the `f"` opening or the closing quote outside every span puts such a
+    // replacement inside the literal.
+    for literal in [
+        r#"f"v={a}""#,
+        r#"f"{a}""#,
+        r#"f"plain""#,
+        r#"f"{a}{b}""#,
+        r#"f'v={a}'"#,
+        r#"f"""#,
+    ] {
+        assert_eq!(
+            covered_range(literal),
+            (0, literal.len()),
+            "the tokens of {} do not span it",
+            literal
+        );
+    }
 }

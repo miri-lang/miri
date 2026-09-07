@@ -697,7 +697,7 @@ fn apply_in_place(
     let rendered = formatter::declaration(declaration);
     let alignment =
         token_align::build_alignment(source, &rendered.text, &data.name, data.name_span)
-            .map_err(|diverged| Box::new(diverged.to_diagnostic()))?;
+            .map_err(|diverged| Box::new(diverged.to_diagnostic(&operation.function)))?;
 
     let (range, replacement) = match edit {
         InPlace::Anchored { old, new } => {
@@ -708,6 +708,7 @@ fn apply_in_place(
             (range, reindented(source, range.0, new))
         }
         InPlace::Body { text } => {
+            refuse_whole_declaration(text, &operation.function)?;
             let header = formatter::signature(declaration)
                 .and_then(|signature| token_align::significant_token_count(&signature.text))
                 .ok_or_else(|| not_a_function(&operation.function))?;
@@ -745,6 +746,27 @@ fn apply_in_place(
             replacement,
         },
     ))
+}
+
+/// Refuse a replacement body that is a whole declaration.
+///
+/// `--replace-fn` takes what goes under a header the file already has, and
+/// `--insert-fn` takes a header and its body together. Handing the first the
+/// second's shape splices a nested declaration into the function, and what
+/// comes back is a type error at the top of the file naming neither the flag
+/// nor the mistake.
+fn refuse_whole_declaration(text: &str, name: &str) -> Result<(), Box<Diagnostic>> {
+    if confirm_text_declares_only(text, name).is_err() {
+        return Ok(());
+    }
+    Err(Box::new(coded(
+        DiagnosticCode::BldMalformedEditRequest,
+        format!(
+            "the body given for `{}` declares it again: --replace-fn takes what goes under the header the file already has, while --insert-fn takes the header and its body together",
+            sanitize_for_terminal(name)
+        ),
+        "drop the `fn` line from the body file to replace this function, or name the edit --insert-fn to add a declaration the file does not have",
+    )))
 }
 
 /// Whether the file already holds what this replacement would write.
@@ -1408,10 +1430,10 @@ fn anchor_covers_no_token(anchor: &str) -> Box<Diagnostic> {
     Box::new(coded(
         DiagnosticCode::BldSourceNotAnchorable,
         format!(
-            "`{}` covers no complete token, so it names no bytes to replace",
+            "`{}` does not begin and end on token boundaries, so it names no bytes to replace",
             sanitize_for_terminal(anchor)
         ),
-        "anchor on whole tokens rather than on part of one",
+        "anchor on whole tokens: extend the text to the start and the end of the ones it touches, as `miri view` renders them",
     ))
 }
 

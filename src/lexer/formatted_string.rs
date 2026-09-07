@@ -59,11 +59,30 @@ pub fn lex_formatted_string(
         is_first_part,
     );
 
+    cover_the_delimiters(&mut tokens, &lexer.span());
+
     for (token, span) in tokens.into_iter().rev() {
         pending_tokens_stack.push((token, span));
     }
 
     Ok(())
+}
+
+/// Widen the outermost tokens to the bytes the literal actually occupies.
+///
+/// The parts are cut out of the body, so between them they span everything
+/// between the quotes and nothing outside them. A caller mapping a token range
+/// back onto the file — `miri patch` anchors an edit that way — reads bytes no
+/// token covers as bytes that belong to whatever comes next, and would splice a
+/// replacement between the `f"` and the text it opens. The delimiters belong to
+/// the literal, so the first and last tokens carry them.
+fn cover_the_delimiters(tokens: &mut [TokenSpan], literal: &std::ops::Range<usize>) {
+    if let Some((_, span)) = tokens.first_mut() {
+        span.start = literal.start;
+    }
+    if let Some((_, span)) = tokens.last_mut() {
+        span.end = literal.end;
+    }
 }
 
 struct BodyOffsets {

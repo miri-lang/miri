@@ -14,7 +14,7 @@ Miri's Lexer is **indentation-sensitive**. It emits `Indent` and `Dedent` tokens
 -   **Token Stream (`TokenStream`)**: The core iterator that processes the source string and yields `(Token, Span)` pairs. It handles state transitions, particularly for tracking indentation levels.
 -   **Spans (`Span`)**: Every generated token is associated with a `Span` (start and end byte offsets) indicating exactly where it originated in the source file. This is crucial for precise error reporting.
 -   **Regex Integration**: Miri supports regular expression literals. The lexer contains specialized logic to correctly parse regex patterns without confusing `/` with the division operator.
--   **F-Strings**: The lexer natively processes formatted strings (`f"..."`), emitting interpolation tokens that the parser can assemble.
+-   **F-Strings**: The lexer natively processes formatted strings (`f"..."`), emitting interpolation tokens that the parser can assemble. Between them those tokens span the whole literal, delimiters included: the first carries the opening `f"` and the last the closing quote, so a caller mapping a token range back onto the file finds no byte of the literal outside it.
 
 ## Design Principles
 
