@@ -400,12 +400,15 @@ impl<'source> Lexer<'source> {
         let lookahead_cursor = self.inner.span().end;
 
         if lookahead_cursor < src.len() {
-            let ch = &src[lookahead_cursor..lookahead_cursor + 1];
-            if ch == "." {
+            // Security Invariant: Check lookahead bytes directly on src.as_bytes()
+            // rather than string slicing (&src[lookahead_cursor..lookahead_cursor + 1])
+            // to prevent UTF-8 boundary panics (compiler DoS) on non-ASCII lookahead input.
+            let next_byte = src.as_bytes()[lookahead_cursor];
+            if next_byte == b'.' {
                 self.split_range(lookahead_cursor);
                 return Ok(());
             }
-            if ch.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            if next_byte.is_ascii_alphabetic() {
                 self.split_int_dot();
                 return Ok(());
             }
