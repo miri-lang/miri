@@ -246,14 +246,15 @@ fn test_outline_is_a_fraction_of_the_module_it_summarizes() {
     let (stdout, _, ok) = view(&["--outline", &module.display().to_string()]);
     assert!(ok, "an outline of the module should succeed");
 
-    // The spec estimated 10%; the outline measures ~18% because it lists
-    // methods (the grammar counts a function inside a class as a declaration)
-    // and carries each declaration's doc line, both of which the same criterion
-    // asks for. The bound is set just above the measured value so a regression
-    // that inflates the outline fails here rather than passing quietly.
+    // The spec estimated 10%; the outline measures ~21% because it lists
+    // methods (the grammar counts a function inside a class as a declaration),
+    // fields and enum variants, and carries each declaration's doc line — all
+    // of which the same criterion asks for. `--public` on this module is 8.6%.
+    // The bound is set just above the measured value so a regression that
+    // inflates the outline fails here rather than passing quietly.
     let ratio = stdout.len() as f64 / source.len() as f64;
     assert!(
-        ratio < 0.20,
+        ratio < 0.22,
         "an outline should be a small fraction of its module, was {:.1}% ({} of {} bytes)",
         ratio * 100.0,
         stdout.len(),
@@ -742,12 +743,12 @@ fn test_help_opens_with_one_sentence() {
     let first = stdout.lines().next().unwrap_or_default();
     assert_eq!(
         first,
-        "Read part of a Miri source file or module: one function, an outline, or what can be \
-         called on a type",
+        "Read part of a Miri source file or module: one function, an outline, what can be \
+         called on a type, or the file's own bytes",
         "the summary is one sentence, not two run together"
     );
     assert!(
-        stdout.contains("<--fn <NAME>|--outline|--type <NAME>|--stdlib-root>"),
+        stdout.contains("<--fn <NAME>|--outline|--type <NAME>|--stdlib-root|--raw>"),
         "the usage line offers every shape, got: {stdout}"
     );
 }
@@ -1184,6 +1185,308 @@ fn test_type_json_carries_the_shape_and_the_text() {
             rendered.text.contains("x int"),
             "the members reach a machine consumer, got:\n{}",
             rendered.text
+        );
+    });
+}
+
+/// A file whose text is deliberately not canonical: a comment inside a body, a
+/// float written with a trailing zero, and a class field beside its methods.
+const LITERAL: &str = "\
+use system.io
+
+// What the shop holds.
+class Inventory
+    // Everything currently stocked.
+    private var count int
+
+    public fn init()
+        self.count = 0
+
+    // Total value of the stock.
+    public fn total_value() float
+        // A running sum.
+        var total = 1.50
+        return total
+
+enum Color
+    Red
+    Green
+
+struct Point
+    x int
+    y int
+
+fn main()
+    let inv = Inventory()
+    println(f\"{inv.total_value()}\")
+";
+
+#[test]
+fn test_outline_lists_the_fields_and_variants_a_type_declares() {
+    // A field never mentioned in a method body is invisible without this, and
+    // adding one is not expressible through the tooling at all.
+    with_source(LITERAL, |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--outline"]);
+
+        assert!(ok, "the outline should succeed: {stderr}");
+        assert!(
+            stdout.contains("var count int"),
+            "a class field is part of what the class declares, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("x int") && stdout.contains("y int"),
+            "a struct's fields are the whole of what it declares, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("Red") && stdout.contains("Green"),
+            "an enum's variants are the whole of what it declares, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_raw_returns_the_files_own_bytes_with_line_numbers() {
+    with_source(LITERAL, |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--raw"]);
+
+        assert!(ok, "a raw read should succeed: {stderr}");
+        assert!(
+            stdout.contains("// Everything currently stocked."),
+            "comments are visible in this shape, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("1.50"),
+            "the file's own spelling survives, got:\n{stdout}"
+        );
+
+        let stripped: String = stdout
+            .lines()
+            .map(|line| {
+                let (number, text) = line
+                    .split_once('\t')
+                    .expect("every line carries its number");
+                number
+                    .parse::<usize>()
+                    .expect("the prefix is a line number");
+                format!("{text}\n")
+            })
+            .collect();
+        assert_eq!(
+            stripped, LITERAL,
+            "stripping the numbers gives back the file byte for byte"
+        );
+    });
+}
+
+#[test]
+fn test_raw_narrows_to_one_declaration_and_numbers_it_from_the_file() {
+    with_source(LITERAL, |path| {
+        let (stdout, stderr, ok) = view(&[
+            &path.display().to_string(),
+            "--fn",
+            "Inventory.total_value",
+            "--raw",
+        ]);
+
+        assert!(ok, "a raw function read should succeed: {stderr}");
+        assert!(
+            stdout.contains("// A running sum."),
+            "a comment inside the body is part of the bytes, got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("class Inventory"),
+            "only the named declaration is returned, got:\n{stdout}"
+        );
+        let declared_at = LITERAL
+            .lines()
+            .position(|line| line.contains("fn total_value"))
+            .expect("the fixture declares it")
+            + 1;
+        let first = stdout.lines().next().expect("there is output");
+        let (number, text) = first.split_once('\t').expect("the line carries its number");
+        assert_eq!(
+            number.parse::<usize>().expect("a line number"),
+            declared_at,
+            "the numbers are the file's own, not the read's, got:\n{stdout}"
+        );
+        assert!(
+            text.starts_with("    public fn total_value()"),
+            "the declaration keeps the indentation it has in the file, got: {text:?}"
+        );
+    });
+}
+
+#[test]
+fn test_around_reports_when_it_could_not_narrow() {
+    with_source(LITERAL, |path| {
+        let target = path.display().to_string();
+
+        // An anchor that only the signature holds belongs to no block.
+        let (stdout, stderr, ok) = view(&[
+            &target,
+            "--fn",
+            "Inventory.total_value",
+            "--around",
+            "float",
+        ]);
+        assert!(ok, "the read still answers: {stderr}");
+        assert!(
+            stderr.contains("MER_BLD_023"),
+            "the read says it returned more than the anchor asked for, got:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("var total"),
+            "the text is still returned, got:\n{stdout}"
+        );
+
+        // An anchor at the top level of a body narrows to the whole body.
+        let (_, stderr, ok) = view(&[
+            &target,
+            "--fn",
+            "Inventory.total_value",
+            "--around",
+            "var total",
+        ]);
+        assert!(ok, "the read still answers: {stderr}");
+        assert!(
+            stderr.contains("MER_BLD_023"),
+            "the whole body is not a narrowing, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_around_that_does_narrow_says_nothing_extra() {
+    with_source(PROBE, |path| {
+        let (stdout, stderr, ok) = view(&[
+            &path.display().to_string(),
+            "--fn",
+            "total",
+            "--around",
+            "sum = sum + v",
+        ]);
+
+        assert!(ok, "the read succeeds: {stderr}");
+        assert!(
+            !stderr.contains("MER_BLD_023"),
+            "a real narrowing is not reported as a failure to narrow, got:\n{stderr}"
+        );
+        assert!(
+            stdout.trim() == "sum = sum + v",
+            "the innermost block is what came back, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_fn_asked_for_a_type_names_the_shape_that_answers() {
+    // `--fn Point` on a struct answered only that no function had that name,
+    // which is true and useless: the file does declare `Point`.
+    with_source(LITERAL, |path| {
+        let (_, stderr, ok) = view(&[&path.display().to_string(), "--fn", "Point"]);
+
+        assert!(!ok, "a struct is not a function");
+        assert!(
+            stderr.contains("--type Point"),
+            "the report routes to the shape that does answer, got:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("struct"),
+            "it says what kind of declaration the name is, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_raw_reads_a_file_the_parser_rejects() {
+    // A file that will not parse is when a reader most needs to see what it
+    // holds, so this shape answers before the parse rather than after it.
+    with_source("fn main(\n    println(\"unclosed\")\n", |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--raw"]);
+
+        assert!(ok, "a literal read needs no parse: {stderr}");
+        assert!(
+            stdout.contains("unclosed"),
+            "the bytes come back regardless, got:\n{stdout}"
+        );
+
+        let (_, stderr, ok) = view(&[&path.display().to_string(), "--outline"]);
+        assert!(!ok, "the canonical shapes still need a parse");
+        assert!(
+            stderr.contains("MER_PAR"),
+            "and still report why, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_json_says_whether_a_read_is_literal_or_canonical() {
+    // The two return different text for the same request. A consumer holding
+    // only the envelope has nothing but the shape to tell them apart.
+    with_source(LITERAL, |path| {
+        let target = path.display().to_string();
+
+        let (stdout, _, ok) = view(&[&target, "--raw", "--format", "json"]);
+        assert!(ok);
+        let whole = envelope(&stdout).view.expect("a raw read carries a view");
+        assert_eq!(whole.shape, "raw");
+        assert!(
+            whole.text.contains("// Everything currently stocked."),
+            "the literal read carries the comments, got:\n{}",
+            whole.text
+        );
+
+        let (stdout, _, ok) = view(&[
+            &target,
+            "--fn",
+            "Inventory.total_value",
+            "--raw",
+            "--format",
+            "json",
+        ]);
+        assert!(ok);
+        let one = envelope(&stdout).view.expect("a raw read carries a view");
+        assert_eq!(one.shape, "fn-raw");
+
+        let (stdout, _, ok) = view(&[&target, "--fn", "Inventory.total_value", "--format", "json"]);
+        assert!(ok);
+        let canonical = envelope(&stdout).view.expect("a read carries a view");
+        assert_eq!(canonical.shape, "fn");
+        assert!(
+            !canonical.text.contains("// A running sum."),
+            "the canonical read drops comments, which is why the shapes differ, got:\n{}",
+            canonical.text
+        );
+    });
+}
+
+#[test]
+fn test_a_failure_to_narrow_does_not_make_the_read_fail() {
+    with_source(LITERAL, |path| {
+        let (stdout, _, ok) = view(&[
+            &path.display().to_string(),
+            "--fn",
+            "Inventory.total_value",
+            "--around",
+            "float",
+            "--format",
+            "json",
+        ]);
+
+        assert!(ok, "a warning is not a failure");
+        let parsed = envelope(&stdout);
+        assert!(parsed.ok, "the read answered, so `ok` stays true");
+        assert_eq!(
+            parsed.diagnostics.len(),
+            1,
+            "the warning reaches a machine consumer"
+        );
+        assert_eq!(parsed.diagnostics[0].code.as_deref(), Some("MER_BLD_023"));
+        assert!(
+            parsed
+                .view
+                .is_some_and(|view| view.text.contains("var total")),
+            "and the text still came back"
         );
     });
 }

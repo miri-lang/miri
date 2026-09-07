@@ -1297,7 +1297,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::TargetChanging,
-    // BLD — Build and command-invocation (21 codes: 001-021)
+    // BLD — Build and command-invocation (23 codes: 001-023)
     "BLD",
     "001",
     BldUnknownDiagnosticCode,
@@ -1450,6 +1450,13 @@ diagnostics!(
     BldTypeNotInScope,
     "Type Not In Scope",
     Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "023",
+    BldViewCouldNotNarrow,
+    "Read Could Not Be Narrowed",
+    Severity::Warning,
     false,
     FixSafety::RequiresHumanReview,
 );

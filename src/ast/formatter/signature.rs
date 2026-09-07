@@ -63,15 +63,20 @@ pub fn signature(node: &Statement) -> Option<Signature> {
             Some(whole("type", name, node))
         }
         StatementKind::Use(path, _) => Some(whole("use", rendered_name(path), node)),
+        // A field is admitted by the grammar through `field_declaration`,
+        // beside `declaration` rather than within it, but a reader asking what
+        // a type holds is asking about its fields as much as its methods, and
+        // a field never named in a method body has nowhere else to appear.
+        StatementKind::Variable(declarations, _) => {
+            let name = declarations.first()?.name.clone();
+            Some(whole("field", name, node))
+        }
         // Not declarations: an outline has nothing to say about them.
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue
         | StatementKind::Expression(_)
         | StatementKind::Block(_)
-        // A field is a member but not a declaration: the grammar admits it
-        // through `field_declaration`, beside `declaration`, not within it.
-        | StatementKind::Variable(..)
         | StatementKind::If(..)
         | StatementKind::While(..)
         | StatementKind::For(..)

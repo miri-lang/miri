@@ -322,6 +322,13 @@ pub const METHODS: &[MethodSchema] = &[
                 requires: None,
                 description: "list only the public surface",
             },
+            Param {
+                name: "raw",
+                shape: Shape::Flag,
+                required: false,
+                requires: None,
+                description: "return the file's own bytes, each line behind its line number",
+            },
         ],
         constraint: None,
     },

@@ -3155,3 +3155,51 @@ fn test_dry_run_diff_header_escapes_a_control_character_in_the_path() {
         header[0]
     );
 }
+
+/// A body with a statement a comment can be written above.
+const COMMENTABLE: &str = "fn total(values [int]) int
+    var sum = 0
+    for v in values
+        sum = sum + v
+    return sum
+
+fn main()
+    println(f\"{total([1, 2])}\")
+";
+
+#[test]
+fn test_a_re_applied_comment_edit_changes_nothing() {
+    // A comment is invisible to the anchor, so an edit that adds one above a
+    // statement it keeps matches again on a re-run. Applying it twice used to
+    // write the comment twice, which is a retried patch corrupting the file.
+    with_source(COMMENTABLE, |path| {
+        let target = path.display().to_string();
+        let edit = ["--replace-in-fn", "total", "--old", "var sum = 0"];
+        let new = "// The running total.\nvar sum = 0";
+
+        let (_, stderr, ok) = patch(&[&target, edit[0], edit[1], edit[2], edit[3], "--new", new]);
+        assert!(ok, "the first apply lands: {stderr}");
+        let once = fs::read_to_string(path).expect("the file is readable");
+        assert_eq!(
+            once.matches("// The running total.").count(),
+            1,
+            "the comment is written once, got:\n{once}"
+        );
+
+        let (stdout, stderr, ok) =
+            patch(&[&target, edit[0], edit[1], edit[2], edit[3], "--new", new]);
+        assert!(
+            ok,
+            "re-applying an edit already in place is not an error: {stderr}"
+        );
+        let twice = fs::read_to_string(path).expect("the file is readable");
+        assert_eq!(
+            twice, once,
+            "re-applying the same edit changes nothing, got:\n{twice}"
+        );
+        assert!(
+            stdout.contains("already") || stderr.contains("already"),
+            "the run says why it wrote nothing, got:\n{stdout}{stderr}"
+        );
+    });
+}

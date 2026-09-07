@@ -264,26 +264,46 @@ pub enum Commands {
     #[command(subcommand)]
     Determinism(DeterminismCommand),
 
-    /// Read part of a Miri source file or module: one function, an outline, or
-    /// what can be called on a type
-    #[command(group = ArgGroup::new("view_mode").required(true).multiple(false))]
+    /// Read part of a Miri source file or module: one function, an outline,
+    /// what can be called on a type, or the file's own bytes
+    // Every mode is in one group so that asking for none of them is an error
+    // rather than a silent default. The group admits more than one member
+    // because `--raw` chooses how a read is rendered rather than what it
+    // reads, and pairs with `--fn`; the four that do choose what is read
+    // exclude one another directly.
+    #[command(group = ArgGroup::new("view_mode").required(true).multiple(true))]
     View {
         /// Path to the Miri source file, or a module name such as
         /// `system.string`. Not needed with `--type` or `--stdlib-root`
         path: Option<String>,
 
         /// Show one function: its name, or `Class.method` for a method
-        #[arg(long = "fn", value_name = "NAME", group = "view_mode")]
+        #[arg(
+            long = "fn",
+            value_name = "NAME",
+            group = "view_mode",
+            conflicts_with_all = ["outline", "type_name", "stdlib_root"]
+        )]
         fn_name: Option<String>,
 
         /// List every declaration's signature, with no bodies
-        #[arg(long, action = ArgAction::SetTrue, group = "view_mode")]
+        #[arg(
+            long,
+            action = ArgAction::SetTrue,
+            group = "view_mode",
+            conflicts_with_all = ["type_name", "stdlib_root"]
+        )]
         outline: bool,
 
         /// List what can be called on a type: its own members and those it
         /// inherits from a base class or a trait. Without a path, the type is
         /// looked up in the implicit prelude
-        #[arg(long = "type", value_name = "NAME", group = "view_mode")]
+        #[arg(
+            long = "type",
+            value_name = "NAME",
+            group = "view_mode",
+            conflicts_with_all = ["stdlib_root"]
+        )]
         type_name: Option<String>,
 
         /// Print the roots a module name is searched in, highest priority
@@ -299,6 +319,17 @@ pub enum Commands {
         /// Narrow `--fn` to the innermost block containing this text
         #[arg(long, value_name = "TEXT", requires = "fn_name")]
         around: Option<String>,
+
+        /// Return the file's own bytes rather than the canonical rendering,
+        /// each line behind its source line number and a tab. Alone it reads
+        /// the whole file; with `--fn` it reads that declaration
+        #[arg(
+            long,
+            action = ArgAction::SetTrue,
+            group = "view_mode",
+            conflicts_with_all = ["outline", "type_name", "stdlib_root", "public"]
+        )]
+        raw: bool,
 
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]

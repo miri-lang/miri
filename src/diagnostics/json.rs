@@ -172,9 +172,13 @@ impl DiagnosticsEnvelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JsonView {
-    /// Which shape was asked for: `fn`, `outline`, or `around`.
+    /// Which shape was asked for: `fn`, `around`, `outline`, `type`, or one of
+    /// the literal reads — `raw` for a whole file, `fn-raw` and `around-raw`
+    /// for one declaration. The literal shapes carry the file's own bytes and
+    /// the rest carry the canonical rendering, which is the only thing telling
+    /// a consumer which of the two it holds.
     pub shape: String,
-    /// The canonical source. Every span below indexes these bytes.
+    /// The text that was read. Every span below indexes these bytes.
     pub text: String,
     /// Where each declaration sits within `text`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

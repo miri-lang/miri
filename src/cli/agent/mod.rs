@@ -496,7 +496,8 @@ fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
 ///
 /// The shape follows the command line: a `fn` parameter reads one function,
 /// optionally narrowed by `around`, a `type` parameter reads what can be called
-/// on a type, and their absence reads the file's outline.
+/// on a type, and their absence reads the file's outline. A `raw` parameter
+/// returns the file's own bytes rather than the canonical rendering.
 fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let Some(path) = path_param(request) else {
         return missing_path(id, "view");
@@ -517,7 +518,11 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
                 invalid_params("view", "view reads a `fn` or a `type`, not both"),
             )
         }
-        (Some(name), None) => view::Shape::Function { name, around },
+        (Some(name), None) => view::Shape::Function {
+            name,
+            around,
+            literal: bool_param(request, "raw"),
+        },
         (None, Some(type_name)) => view::Shape::Members {
             type_name,
             public_only,
@@ -529,6 +534,8 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
                 invalid_params("view", "view needs a `fn` parameter for `around` to narrow"),
             )
         }
+        // A literal read with nothing to narrow it is the whole file.
+        (None, None) if bool_param(request, "raw") => view::Shape::File,
         (None, None) => view::Shape::Outline { public_only },
     };
 

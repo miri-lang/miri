@@ -297,6 +297,17 @@ trait, one per line, each inherited member naming where it came from). This
 reads the type table rather than the parse, so it answers only for a file the
 frontend accepts. `fn` and `type` cannot be combined.
 
+Or ask for the file's own bytes rather than the canonical rendering:
+
+Request: `{ "path": "main.mi", "raw": true }` (with `raw`, every line of `text`
+is its 1-based source line number, a tab, and the file's own bytes for that
+line; dropping each line up to and including its first tab gives the file back
+exactly). Adding `fn` narrows a literal read to one declaration, keeping the
+indentation and the comments it has in the file. The `shape` is `raw`, `fn-raw`
+or `around-raw`, which is the only thing distinguishing a literal read from the
+canonical one in a stored envelope. `raw` cannot be combined with `type` or
+`public`.
+
 ```json
 {
   "jsonrpc": "2.0",
