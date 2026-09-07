@@ -65,7 +65,7 @@ This core powers all Miri programs. The rest of this skill covers what the langu
 
 ## Anti-Hallucination: Syntax That Does Not Exist
 
-Miri deliberately leaves these off the surface to avoid ambiguity. Every example below is a compile error.
+Miri deliberately leaves these off the surface to avoid ambiguity. Every example below is a compile error. Before guessing a member name, ask: `miri view --type String --public` lists what can be called on a type, including what it inherits and what a trait supplies, and needs no path for a prelude type.
 
 ### Type Annotations on Bindings
 
@@ -236,7 +236,7 @@ fn main():
 
 ## Module Resolution
 
-Bare imports are searched in this order: stdlib (via `MIRI_STDLIB_PATH` env var), the entry file's directory, then the current working directory. Local imports (`use local.*`) resolve only against the entry file's directory. The stdlib cannot be shadowed; `system` is reserved. Set `MIRI_STDLIB_PATH` to override the stdlib location when the binary is not beside `stdlib/`.
+Bare imports are searched in this order: stdlib (via `MIRI_STDLIB_PATH` env var), the entry file's directory, then the current working directory. Local imports (`use local.*`) resolve only against the entry file's directory. The stdlib cannot be shadowed; `system` is reserved. Set `MIRI_STDLIB_PATH` to override the stdlib location when the binary is not beside `stdlib/`; `miri view --stdlib-root` prints the roots actually searched and whether each exists. `miri view` accepts a module name wherever it accepts a path, so `miri view system.io --outline --public` lists what a module offers without knowing where it lives on disk.
 
 ## Iteration and Control Flow
 
@@ -377,7 +377,7 @@ The workflow for writing correct Miri code:
 1. **miri check** — compile and collect diagnostics: `miri check myfile.mi --format json`
 2. **miri run** — execute and see real output: `miri run myfile.mi`
 3. **miri test** — run tests in a directory: `miri test --dir <DIR>`
-4. **miri view** — read scoped code: `miri view myfile.mi --outline` or `--fn name`
+4. **miri view** — read scoped code: `miri view myfile.mi --outline`, `--fn name`, `--type Name`, or a module name in place of the path
 5. **miri patch** — make scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`
 6. **miri fix** — repair errors: `miri explain CODE`, `miri fix --plan myfile.mi`, `miri fix --apply --yes myfile.mi`
 7. **miri agent** — tool integration (see `tools/agent_client.py` and `docs/agent-protocol.md`)

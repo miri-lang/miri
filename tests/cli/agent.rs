@@ -1163,48 +1163,40 @@ fn extract_parameter_reads(
         extracted.insert(method_name, HashSet::new());
     }
 
-    // Scan for string_param(request, "X")
-    for chunk in source.split("string_param(request, \"") {
-        if let Some(quote_pos) = chunk.find('"') {
-            let param_name = &chunk[..quote_pos];
-            if let Some(enclosing_fn) = find_enclosing_fn(source, chunk) {
-                if let Some(methods) = fn_to_methods.get(enclosing_fn) {
-                    for method in methods {
-                        extracted.get_mut(method).unwrap().insert(param_name);
-                    }
-                } else if enclosing_fn != "initialize" && enclosing_fn != "serialize" {
-                    // Panic on reads in unattributable handlers. "initialize" and "serialize"
-                    // are explicitly allowed because they do not carry request parameters.
-                    panic!(
-                        "found parameter read {} in unattributable function {}",
-                        param_name, enclosing_fn
-                    );
-                }
-            }
-        }
-    }
+    // Every shape a handler reads a parameter through. A reader the scan does
+    // not know about is a parameter the schema could claim, or omit, unnoticed.
+    const READERS: &[&str] = &[
+        "string_param(request, \"",
+        "bool_param(request, \"",
+        "params.get(\"",
+    ];
 
-    // Scan for params.get("X")
-    for chunk in source.split("params.get(\"") {
-        if let Some(quote_pos) = chunk.find('"') {
+    for reader in READERS {
+        for chunk in source.split(reader) {
+            let Some(quote_pos) = chunk.find('"') else {
+                continue;
+            };
             let param_name = &chunk[..quote_pos];
-            // Skip "id" which is from $/cancelRequest, not a method parameter
+            // "id" comes from $/cancelRequest rather than from a method.
             if param_name == "id" {
                 continue;
             }
-            if let Some(enclosing_fn) = find_enclosing_fn(source, chunk) {
-                if let Some(methods) = fn_to_methods.get(enclosing_fn) {
-                    for method in methods {
-                        extracted.get_mut(method).unwrap().insert(param_name);
-                    }
-                } else if enclosing_fn != "initialize" && enclosing_fn != "serialize" {
-                    // Panic on reads in unattributable handlers. "initialize" and "serialize"
-                    // are explicitly allowed because they do not carry request parameters.
-                    panic!(
-                        "found parameter read {} in unattributable function {}",
-                        param_name, enclosing_fn
-                    );
+            let Some(enclosing_fn) = find_enclosing_fn(source, chunk) else {
+                continue;
+            };
+            if let Some(methods) = fn_to_methods.get(enclosing_fn) {
+                for method in methods {
+                    extracted.get_mut(method).unwrap().insert(param_name);
                 }
+            } else if enclosing_fn != "initialize" && enclosing_fn != "serialize" {
+                // A read in a function the map does not attribute would be a
+                // parameter no method is credited with, so it fails loudly
+                // rather than going missing. "initialize" and "serialize" carry
+                // no request parameters.
+                panic!(
+                    "found parameter read {} in unattributable function {}",
+                    param_name, enclosing_fn
+                );
             }
         }
     }

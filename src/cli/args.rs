@@ -264,12 +264,13 @@ pub enum Commands {
     #[command(subcommand)]
     Determinism(DeterminismCommand),
 
-    /// Read part of a Miri source file: one function, or an outline of it
+    /// Read part of a Miri source file or module: one function, an outline, or
+    /// what can be called on a type
     #[command(group = ArgGroup::new("view_mode").required(true).multiple(false))]
     View {
-        /// Path to the Miri source file
-        #[arg(required = true)]
-        path: PathBuf,
+        /// Path to the Miri source file, or a module name such as
+        /// `system.string`. Not needed with `--type` or `--stdlib-root`
+        path: Option<String>,
 
         /// Show one function: its name, or `Class.method` for a method
         #[arg(long = "fn", value_name = "NAME", group = "view_mode")]
@@ -279,8 +280,19 @@ pub enum Commands {
         #[arg(long, action = ArgAction::SetTrue, group = "view_mode")]
         outline: bool,
 
-        /// With `--outline`, list only the public surface: no `runtime`
-        /// bindings and no `private` or `protected` members
+        /// List what can be called on a type: its own members and those it
+        /// inherits from a base class or a trait. Without a path, the type is
+        /// looked up in the implicit prelude
+        #[arg(long = "type", value_name = "NAME", group = "view_mode")]
+        type_name: Option<String>,
+
+        /// Print the roots a module name is searched in, highest priority
+        /// first, and whether each is present
+        #[arg(long, action = ArgAction::SetTrue, group = "view_mode")]
+        stdlib_root: bool,
+
+        /// With `--outline` or `--type`, list only the public surface: no
+        /// `runtime` bindings and no `private` or `protected` members
         #[arg(long, action = ArgAction::SetTrue, conflicts_with = "fn_name")]
         public: bool,
 

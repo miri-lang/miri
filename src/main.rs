@@ -80,10 +80,22 @@ fn run_command(cli: Cli) -> Result<()> {
                 path,
                 fn_name,
                 outline,
+                type_name,
+                stdlib_root,
                 public,
                 around,
                 format,
-            } => view_file(path, fn_name, outline, public, around, format, cli.color),
+            } => view_file(
+                path,
+                fn_name,
+                outline,
+                type_name,
+                stdlib_root,
+                public,
+                around,
+                format,
+                cli.color,
+            ),
             Commands::Fmt {
                 path,
                 check,
@@ -540,17 +552,43 @@ fn fix_file(
 }
 
 /// View a scoped section of source code.
+#[allow(clippy::too_many_arguments)]
 fn view_file(
-    path: PathBuf,
+    path: Option<String>,
     fn_name: Option<String>,
     outline: bool,
+    type_name: Option<String>,
+    stdlib_root: bool,
     public: bool,
     around: Option<String>,
     format: Format,
     color_mode: ColorMode,
 ) -> Result<()> {
-    // Clap guarantees exactly one of `--fn` and `--outline` is present, so a
-    // missing name here can only mean the outline was asked for.
+    if stdlib_root {
+        return match miri::cli::view::run_stdlib_roots(format) {
+            miri::cli::view::Outcome::Read => Ok(()),
+            miri::cli::view::Outcome::Failed => std::process::exit(1),
+        };
+    }
+
+    // A type is looked up in the program's own scope when a path is given, and
+    // in the implicit prelude when one is not, so this shape is the only one
+    // that answers without a file to read.
+    if let Some(name) = type_name {
+        return match miri::cli::view::run_members(
+            path.as_deref(),
+            &name,
+            public,
+            format,
+            color_mode,
+        ) {
+            miri::cli::view::Outcome::Read => Ok(()),
+            miri::cli::view::Outcome::Failed => std::process::exit(1),
+        };
+    }
+
+    // Clap guarantees exactly one of `--fn` and `--outline` is present here, so
+    // a missing name can only mean the outline was asked for.
     let shape = match fn_name {
         Some(name) => miri::cli::view::Shape::Function { name, around },
         None => {
@@ -560,7 +598,7 @@ fn view_file(
             }
         }
     };
-    match miri::cli::view::run(&path, &shape, format, color_mode) {
+    match miri::cli::view::run(path.as_deref(), &shape, format, color_mode) {
         miri::cli::view::Outcome::Read => Ok(()),
         miri::cli::view::Outcome::Failed => std::process::exit(1),
     }

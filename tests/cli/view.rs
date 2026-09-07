@@ -741,12 +741,14 @@ fn test_help_opens_with_one_sentence() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first = stdout.lines().next().unwrap_or_default();
     assert_eq!(
-        first, "Read part of a Miri source file: one function, or an outline of it",
+        first,
+        "Read part of a Miri source file or module: one function, an outline, or what can be \
+         called on a type",
         "the summary is one sentence, not two run together"
     );
     assert!(
-        stdout.contains("<--fn <NAME>|--outline>"),
-        "the usage line offers both shapes, got: {stdout}"
+        stdout.contains("<--fn <NAME>|--outline|--type <NAME>|--stdlib-root>"),
+        "the usage line offers every shape, got: {stdout}"
     );
 }
 
@@ -876,5 +878,312 @@ fn test_public_outline_keeps_a_container_whose_every_member_is_hidden() {
             "the container survives even when nothing inside it does"
         );
         assert_eq!(view.spans.len(), 1, "only the container is recorded");
+    });
+}
+
+/// A class hierarchy with an inherited member, a trait default, and a private
+/// field, so one fixture answers every question `--type` is asked.
+const HIERARCHY: &str = r#"trait Greeter
+    fn name() String
+
+    fn greet() String
+        f"hello {self.name()}"
+
+class Shape
+    public var label String
+
+    fn init(l String)
+        self.label = l
+
+    public fn area() int
+        0
+
+class Circle extends Shape implements Greeter
+    private var radius int
+
+    fn init(r int)
+        super.init("circle")
+        self.radius = r
+
+    public fn name() String
+        self.label
+
+fn main()
+    let c = Circle(2)
+    println(f"{c.area()}")
+"#;
+
+#[test]
+fn test_a_module_name_resolves_the_way_an_import_does() {
+    let (stdout, stderr, ok) = view(&["system.string", "--outline", "--public"]);
+
+    assert!(ok, "a module name should resolve: {stderr}");
+    assert!(
+        stdout.contains("class String"),
+        "the module's declarations should be listed, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fn to_lower() String"),
+        "a public method should carry its signature, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_an_argument_that_is_neither_a_file_nor_a_module_names_both_attempts() {
+    let (_, stderr, ok) = view(&["system.nonexistent", "--outline"]);
+
+    assert!(!ok, "an unresolvable argument should fail");
+    assert!(
+        stderr.contains("no such file, and no module of that name"),
+        "the report should say both readings were tried, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("MIRI_STDLIB_PATH"),
+        "the report should name the override that changes the search, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_a_file_wins_over_a_module_of_the_same_name() {
+    // Resolution tries the filesystem first, so an argument that names a file
+    // is never reinterpreted as a module.
+    with_source("fn only_here() int\n    1\n", |path| {
+        let (stdout, _, ok) = view(&[&path.display().to_string(), "--outline"]);
+        assert!(ok);
+        assert!(
+            stdout.contains("only_here"),
+            "the file should be read, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_type_lists_a_library_type_without_naming_its_module() {
+    // The point of the shape: a caller who does not know that `String` lives in
+    // `system.string` can still ask what it offers.
+    let (stdout, stderr, ok) = view(&["--type", "String", "--public"]);
+
+    assert!(ok, "a prelude type should resolve with no path: {stderr}");
+    assert!(
+        stdout.contains("fn length() int"),
+        "members carry their signatures, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_type_lists_inherited_and_trait_members_and_says_where_they_came_from() {
+    with_source(HIERARCHY, |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--type", "Circle"]);
+
+        assert!(ok, "the type should resolve: {stderr}");
+        assert!(
+            stdout.contains("fn name() String"),
+            "an own member is listed, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("fn area() int    // from Shape"),
+            "an inherited member names the class it came from, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("fn greet() String    // from Greeter"),
+            "a trait default names the trait it came from, got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("fn name() String    // from"),
+            "a member the type declares itself carries no origin note, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_type_public_hides_what_a_caller_cannot_reach() {
+    with_source(HIERARCHY, |path| {
+        let target = path.display().to_string();
+        let (all, _, _) = view(&[&target, "--type", "Circle"]);
+        let (public, _, _) = view(&[&target, "--type", "Circle", "--public"]);
+
+        assert!(
+            all.contains("radius int"),
+            "the private field is listed without the filter, got:\n{all}"
+        );
+        assert!(
+            !public.contains("radius int"),
+            "the private field is hidden with it, got:\n{public}"
+        );
+    });
+}
+
+#[test]
+fn test_type_renders_types_the_way_source_spells_them() {
+    // A member list tells a reader what to write. `List(String)` is the
+    // diagnostic rendering of the type and is not source Miri, so it must not
+    // reach this output.
+    let (stdout, _, ok) = view(&["--type", "String", "--public"]);
+
+    assert!(ok);
+    assert!(
+        stdout.contains("List<String>") || stdout.contains("[String]"),
+        "a list parameter is spelled the way source spells it, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("List(String)"),
+        "the diagnostic rendering must not be handed back as source, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_a_type_that_is_not_in_scope_reports_its_code_and_the_nearest_name() {
+    with_source(HIERARCHY, |path| {
+        let (_, stderr, ok) = view(&[&path.display().to_string(), "--type", "Circel"]);
+
+        assert!(!ok, "an unknown type should fail");
+        assert!(
+            stderr.contains("MER_BLD_022"),
+            "the failure carries its registry code, got:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Circle"),
+            "the nearest name in scope is offered, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_the_binary_reports_where_it_looks_for_a_module() {
+    let (stdout, stderr, ok) = view(&["--stdlib-root"]);
+
+    assert!(ok, "the roots are always reportable: {stderr}");
+    assert!(
+        stdout.contains("stdlib"),
+        "the roots name the stdlib directories, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("present") || stdout.contains("absent"),
+        "each root says whether it exists, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_a_shape_that_needs_a_file_says_so_when_given_none() {
+    let (_, stderr, ok) = view(&["--outline"]);
+
+    assert!(!ok, "an outline with nothing to read should fail");
+    assert!(
+        stderr.contains("needs a file or module to read"),
+        "the report should name what is missing, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_the_three_names_a_trial_guessed_are_each_answerable_in_one_invocation() {
+    // The control trial of the agent field test hallucinated `lower`, `len` and
+    // `exit`, and had no way to ask what the real names were. Each is now one
+    // invocation away, and this asserts the answer is actually in the output
+    // rather than that the command merely succeeded.
+    let (string_members, _, ok) = view(&["--type", "String", "--public"]);
+    assert!(ok, "String resolves from the prelude");
+    assert!(
+        string_members.contains("fn to_lower() String"),
+        "`lower` is answered by the real name, got:\n{string_members}"
+    );
+    assert!(
+        string_members.contains("fn length() int"),
+        "`len` is answered by the real name, got:\n{string_members}"
+    );
+
+    let (io_surface, _, ok) = view(&["system.io", "--outline", "--public"]);
+    assert!(ok, "the module resolves by name");
+    assert!(
+        io_surface.contains("fn panic(message String)"),
+        "`exit` is answered by the function that ends a program, got:\n{io_surface}"
+    );
+}
+
+/// One declaration of each kind a type query can be asked about.
+const KINDS: &str = r#"enum Color
+    Red
+    Blue
+
+struct Point
+    x int
+    y int
+
+trait Drawable
+    fn draw()
+
+    fn describe() String
+        "a shape"
+
+fn main()
+    let p = Point(1, 2)
+    println(f"{p.x}")
+"#;
+
+#[test]
+fn test_type_answers_for_an_enum_a_struct_and_a_trait() {
+    with_source(KINDS, |path| {
+        let target = path.display().to_string();
+
+        let (color, _, ok) = view(&[&target, "--type", "Color"]);
+        assert!(ok, "an enum resolves");
+        assert!(
+            color.contains("Color.Red") && color.contains("Color.Blue"),
+            "variants are listed with the enum that declares them, which is the \
+             spelling a pattern needs, got:\n{color}"
+        );
+
+        let (point, _, ok) = view(&[&target, "--type", "Point"]);
+        assert!(ok, "a struct resolves");
+        assert!(
+            point.contains("x int") && point.contains("y int"),
+            "fields carry their types, got:\n{point}"
+        );
+
+        let (drawable, _, ok) = view(&[&target, "--type", "Drawable"]);
+        assert!(ok, "a trait resolves");
+        assert!(
+            drawable.contains("fn draw()") && drawable.contains("fn describe() String"),
+            "both required and default methods are listed, got:\n{drawable}"
+        );
+    });
+}
+
+#[test]
+fn test_type_reports_the_errors_of_a_program_it_cannot_check() {
+    // The member list is read from the table the frontend builds, so a program
+    // the frontend rejected has no answer to give. Reporting why is more use
+    // than a list assembled from a half-built table.
+    with_source("fn main()\n    undefined_thing()\n", |path| {
+        let (_, stderr, ok) = view(&[&path.display().to_string(), "--type", "String"]);
+
+        assert!(!ok, "a program that does not check cannot be queried");
+        assert!(
+            stderr.contains("MER_TYP_034"),
+            "the report names why the program did not check, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_type_json_carries_the_shape_and_the_text() {
+    with_source(KINDS, |path| {
+        let (stdout, _, ok) = view(&[
+            &path.display().to_string(),
+            "--type",
+            "Point",
+            "--format",
+            "json",
+        ]);
+
+        assert!(ok);
+        let parsed = envelope(&stdout);
+        assert_eq!(parsed.command, JsonCommand::View);
+        let rendered = parsed.view.expect("a type query carries a view");
+        assert_eq!(rendered.shape, "type");
+        assert!(
+            rendered.text.contains("x int"),
+            "the members reach a machine consumer, got:\n{}",
+            rendered.text
+        );
     });
 }
