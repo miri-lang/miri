@@ -377,7 +377,7 @@ The workflow for writing correct Miri code:
 1. **miri check** — compile and collect diagnostics: `miri check myfile.mi --format json`
 2. **miri run** — execute and see real output: `miri run myfile.mi`
 3. **miri test** — run tests in a directory: `miri test --dir <DIR>`
-4. **miri view** — read scoped code: `miri view myfile.mi --outline`, `--fn name`, `--type Name`, or a module name in place of the path
+4. **miri view** — read scoped code: `miri view myfile.mi --outline`, `--fn name`, `--type Name`, or a module name in place of the path. Add `--raw` for the file's own bytes (comments and all) behind their line numbers, alone or with `--fn`; without it the output is canonical, not literal
 5. **miri patch** — make scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`
 6. **miri fix** — repair errors: `miri explain CODE`, `miri fix --plan myfile.mi`, `miri fix --apply --yes myfile.mi`
 7. **miri agent** — tool integration (see `tools/agent_client.py` and `docs/agent-protocol.md`)

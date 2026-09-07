@@ -36,10 +36,24 @@ pub fn resolve<'a>(program: &'a Program, name: &str) -> Result<&'a Statement, Bo
     };
 
     match matches.len() {
-        0 => Err(function_not_found(name)),
+        0 => Err(function_not_found(program, name)),
         1 => Ok(matches[0].statement),
         _ => Err(ambiguous_function(name, &matches)),
     }
+}
+
+/// The kind of declaration a name is, when the file declares it as a type.
+///
+/// A name that resolves to no function may still be one the file declares. The
+/// report is otherwise true and useless: it says there is no function called
+/// `Point` to a caller looking at a file that declares `struct Point`.
+fn declared_kind<'a>(program: &'a Program, name: &str) -> Option<&'a str> {
+    program
+        .body
+        .iter()
+        .find(|statement| container_name(statement).is_some_and(|found| found == name))
+        .and_then(formatter::signature)
+        .map(|signature| signature.kind)
 }
 
 /// Everything a bare name reaches: top-level functions and any method of that name.
@@ -156,15 +170,20 @@ pub fn children(node: &Statement) -> Vec<&Statement> {
 }
 
 /// Report a name that no declaration answers to.
-fn function_not_found(name: &str) -> Box<Diagnostic> {
+fn function_not_found(program: &Program, name: &str) -> Box<Diagnostic> {
+    let safe = sanitize_for_terminal(name);
+    let help = match declared_kind(program, name) {
+        Some(kind) => format!(
+            "`{}` is a {}, not a function; run `miri view --type {}` to list what it declares",
+            safe, kind, safe
+        ),
+        None => "a method is reached as `Class.method`; run `miri view --outline` to list what the file declares".to_string(),
+    };
     Box::new(
         DiagnosticBuilder::error(DiagnosticCode::BldFunctionNotFound.title().to_string())
             .code(DiagnosticCode::BldFunctionNotFound.as_str())
-            .message(format!(
-                "no function named `{}` in this file",
-                sanitize_for_terminal(name)
-            ))
-            .help("a method is reached as `Class.method`; run `miri view --outline` to list what the file declares".to_string())
+            .message(format!("no function named `{}` in this file", safe))
+            .help(help)
             .build(),
     )
 }

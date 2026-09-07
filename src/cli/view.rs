@@ -7,12 +7,19 @@
 //! and returns what it found without printing, so a long-lived server can call
 //! it, and [`run`] adds the writing for the command line.
 //!
-//! Everything is rendered from the parsed AST rather than sliced out of the
-//! file, so the text a tool reads here is the same text it reads next time and
-//! the spans that come with it index that text. The source is parsed exactly as
-//! written — no script-mode wrapping and no type normalization — so an outline
-//! never lists a `main` the author did not write, and a type written `[int]`
-//! reads back as `[int]`.
+//! Most shapes render from the parsed AST rather than slicing the file, so the
+//! text a tool reads here is the same text it reads next time and the spans
+//! that come with it index that text. The source is parsed exactly as written —
+//! no script-mode wrapping and no type normalization — so an outline never
+//! lists a `main` the author did not write, and a type written `[int]` reads
+//! back as `[int]`.
+//!
+//! That rendering is canonical, which is not the same as literal: a type the
+//! file spells `List<String>` reads back `[String]`, and comments are gone. A
+//! literal read answers with the file's own bytes instead, each line behind its
+//! source line number, for a caller that has to cite or anchor against what the
+//! file actually says. It is the one shape that runs before the parse, because
+//! a file that will not parse is when a reader most needs to see what it holds.
 
 use std::path::Path;
 
@@ -43,6 +50,8 @@ pub enum Shape {
         name: String,
         /// Text that narrows the read to the innermost block containing it.
         around: Option<String>,
+        /// Return the file's own bytes rather than the canonical rendering.
+        literal: bool,
     },
     /// Every declaration's signature, with no bodies.
     Outline { public_only: bool },
@@ -51,19 +60,68 @@ pub enum Shape {
         type_name: String,
         public_only: bool,
     },
+    /// The whole file, exactly as it is written.
+    File,
 }
 
 impl Shape {
     /// The name this shape carries in the JSON envelope.
+    ///
+    /// A literal read carries a different name from the canonical read of the
+    /// same region: the two return different text for the same request, and a
+    /// consumer holding only the envelope has nothing else to tell them apart.
     fn label(&self) -> &'static str {
         match self {
             Shape::Function {
-                around: Some(_), ..
+                around: Some(_),
+                literal: false,
+                ..
             } => "around",
-            Shape::Function { around: None, .. } => "fn",
+            Shape::Function {
+                around: Some(_),
+                literal: true,
+                ..
+            } => "around-raw",
+            Shape::Function {
+                around: None,
+                literal: false,
+                ..
+            } => "fn",
+            Shape::Function {
+                around: None,
+                literal: true,
+                ..
+            } => "fn-raw",
             Shape::Outline { .. } => "outline",
             Shape::Members { .. } => "type",
+            Shape::File => "raw",
         }
+    }
+}
+
+/// The shape a set of `miri view` flags asks for.
+///
+/// Clap admits at most one mode flag, so what arrived decides the shape. The
+/// choice lives here rather than at each call site so that a shape added later
+/// is decided once, in the module that owns the shapes.
+pub fn shape_for(
+    fn_name: Option<String>,
+    around: Option<String>,
+    public: bool,
+    literal: bool,
+) -> Shape {
+    match fn_name {
+        Some(name) => Shape::Function {
+            name,
+            around,
+            literal,
+        },
+        // A literal read with nothing to narrow it is the whole file, which is
+        // the one shape that needs no parse.
+        None if literal => Shape::File,
+        None => Shape::Outline {
+            public_only: public,
+        },
     }
 }
 
@@ -115,27 +173,66 @@ impl ViewReport {
 /// the command line and a request over a long-lived connection.
 pub fn view(path: &Path, source: &str, shape: &Shape) -> ViewReport {
     let source_path = Some(path.display().to_string());
+    // A whole-file read needs no parse, and must not want one: a file that
+    // will not parse is exactly when a reader needs to see what it says.
+    if matches!(shape, Shape::File) {
+        return success(shape, whole_file(source), vec![], source, source_path);
+    }
+
     let program = match parse(source) {
         Ok(program) => program,
         Err(diagnostic) => return failure(shape, vec![*diagnostic], source, source_path),
     };
 
-    let rendered = match shape {
-        Shape::Outline { public_only } => Ok(outline(&program, source, *public_only)),
-        Shape::Function { name, around } => {
-            function_view(&program, source, name, around.as_deref())
-        }
+    let read = match shape {
+        Shape::Outline { public_only } => Ok(Read::plain(outline(&program, source, *public_only))),
+        Shape::Function {
+            name,
+            around,
+            literal,
+        } => function_view(&program, source, name, around.as_deref(), *literal),
         // Members are read from the type table rather than from this parse,
         // because inheritance crosses declarations and modules.
         Shape::Members {
             type_name,
             public_only,
         } => return members(Some(path), source, type_name, *public_only),
+        Shape::File => unreachable_file_shape(),
     };
 
-    match rendered {
-        Ok(rendered) => success(shape, rendered, source, source_path),
+    match read {
+        Ok(read) => success(shape, read.render, read.notes, source, source_path),
         Err(diagnostic) => failure(shape, vec![*diagnostic], source, source_path),
+    }
+}
+
+/// A whole-file read is answered before the parse, so this arm cannot run.
+///
+/// The match stays exhaustive rather than closing over the remaining shapes
+/// with a wildcard, so that a shape added later is a compile error here.
+fn unreachable_file_shape() -> Result<Read, Box<Diagnostic>> {
+    Err(coded(
+        DiagnosticCode::BldInputNotReadable,
+        "a whole-file read reached the parsing path".to_string(),
+        "this is a defect in `miri view`; please report it",
+    ))
+}
+
+/// What a read produced, and anything the reader should know about it.
+struct Read {
+    /// The text, and where it came from.
+    render: LocatedRender,
+    /// Warnings that do not stop the read from answering.
+    notes: Vec<Diagnostic>,
+}
+
+impl Read {
+    /// A read that answered exactly what was asked for.
+    fn plain(render: LocatedRender) -> Self {
+        Read {
+            render,
+            notes: Vec::new(),
+        }
     }
 }
 
@@ -154,14 +251,146 @@ fn function_view(
     source: &str,
     name: &str,
     anchor: Option<&str>,
-) -> Result<LocatedRender, Box<Diagnostic>> {
+    literal: bool,
+) -> Result<Read, Box<Diagnostic>> {
     let declaration = resolve::resolve(program, name)?;
     let rendered = formatter::declaration(declaration);
     let Some(anchor) = anchor else {
-        return Ok(located_declaration(source, declaration, rendered));
+        let render = if literal {
+            literal_region(source, declaration, "function")?
+        } else {
+            located_declaration(source, declaration, rendered)
+        };
+        return Ok(Read::plain(render));
     };
-    let (narrowed, node) = narrow(declaration, &rendered, anchor)?;
-    Ok(located_block(source, node, narrowed))
+
+    let narrowed = narrow(declaration, &rendered, anchor)?;
+    // A read that did not narrow returned the declaration, so the span says so
+    // rather than calling the whole function a block.
+    let kind = if narrowed.reduced {
+        "block"
+    } else {
+        "function"
+    };
+    let render = if literal {
+        literal_region(source, narrowed.node, kind)?
+    } else {
+        located_block(source, narrowed.node, narrowed.rendered)
+    };
+    let notes = if narrowed.reduced {
+        Vec::new()
+    } else {
+        vec![*could_not_narrow(anchor, narrowed.reason)]
+    };
+    Ok(Read { render, notes })
+}
+
+/// The file's own bytes for the whole file, numbered from its first line.
+fn whole_file(source: &str) -> LocatedRender {
+    let text = numbered(source, 0, source.len());
+    let (_, end_line, _) = find_line_info(source, source.len());
+    LocatedRender {
+        spans: vec![LocatedSpan {
+            span: formatter::RecordedSpan {
+                start: 0,
+                end: text.len(),
+                kind: "file".to_string(),
+                name: None,
+            },
+            line: Some(1),
+            end_line: Some(end_line),
+        }],
+        text,
+    }
+}
+
+/// The file's own bytes over the region `node` occupies, numbered.
+///
+/// The region is widened to whole lines, so the indentation the node sits at
+/// in the file comes back with it and the text can be put back where it was.
+fn literal_region(
+    source: &str,
+    node: &Statement,
+    kind: &str,
+) -> Result<LocatedRender, Box<Diagnostic>> {
+    let Some(extent) = extent::source_extent(node) else {
+        return Err(no_recorded_extent(kind));
+    };
+    let text = numbered(source, extent.start, extent.end);
+    let (line, _, _) = find_line_info(source, extent.start);
+    let (end_line, _, _) = find_line_info(source, extent.end);
+    Ok(LocatedRender {
+        spans: vec![LocatedSpan {
+            span: formatter::RecordedSpan {
+                start: 0,
+                end: text.len(),
+                kind: kind.to_string(),
+                name: None,
+            },
+            line: Some(line),
+            end_line: Some(end_line),
+        }],
+        text,
+    })
+}
+
+/// The bytes of `source` from `start` to `end`, each line behind its number.
+///
+/// The region is widened to whole lines first, so what comes back is what the
+/// file holds and not a fragment starting mid-line. Each line is prefixed with
+/// its 1-based number in the file and a single tab, and nothing else changes:
+/// dropping everything up to and including the first tab of each line gives
+/// the file's bytes back exactly. A file whose last line has no line ending
+/// gains one, because a numbered line has to end somewhere.
+fn numbered(source: &str, start: usize, end: usize) -> String {
+    let start = source
+        .get(..start)
+        .and_then(|before| before.rfind('\n'))
+        .map_or(0, |at| at + 1);
+    let end = match source.get(end..).and_then(|after| after.find('\n')) {
+        Some(at) => end + at + 1,
+        None => source.len(),
+    };
+    let (first, _, _) = find_line_info(source, start);
+    source
+        .get(start..end)
+        .unwrap_or_default()
+        .split_inclusive('\n')
+        .enumerate()
+        .map(|(offset, line)| {
+            let body = line.strip_suffix('\n').unwrap_or(line);
+            format!("{}\t{}\n", first + offset, body)
+        })
+        .collect()
+}
+
+/// Report a node the parser recorded no source extent for.
+fn no_recorded_extent(kind: &str) -> Box<Diagnostic> {
+    coded(
+        DiagnosticCode::BldSourceNotAnchorable,
+        format!("this {} carries no recorded source extent", kind),
+        "read the whole file with `miri view <PATH> --raw`, or the canonical rendering by dropping `--raw`",
+    )
+}
+
+/// Report a read that returned more than the anchor asked to narrow to.
+fn could_not_narrow(anchor: &str, reason: &'static str) -> Box<Diagnostic> {
+    Box::new(
+        crate::error::diagnostic::DiagnosticBuilder::warning(
+            DiagnosticCode::BldViewCouldNotNarrow.title().to_string(),
+        )
+        .code(DiagnosticCode::BldViewCouldNotNarrow.as_str())
+        .message(format!(
+            "`{}` did not narrow the read: {}",
+            sanitize_for_terminal(anchor),
+            reason
+        ))
+        .help(
+            "anchor on text inside the block you want, such as a statement within a loop or a branch"
+                .to_string(),
+        )
+        .build(),
+    )
 }
 
 /// Locate a whole rendered declaration in the file it was read from.
@@ -224,15 +453,30 @@ fn source_lines(source: &str, node: &Statement) -> (Option<usize>, Option<usize>
     (Some(line), Some(end_line))
 }
 
+/// What narrowing a read to an anchor produced.
+struct Narrowed<'a> {
+    /// The rendering of the region the read returns.
+    rendered: Rendered,
+    /// The statement that region came from, so a caller can locate it.
+    node: &'a Statement,
+    /// Whether the region is smaller than the whole declaration.
+    reduced: bool,
+    /// Why it is not, when it is not.
+    reason: &'static str,
+}
+
 /// Narrow a rendered function to the innermost block holding `anchor`.
 ///
 /// Returns the rendering together with the statement it came from, so the
-/// caller can report where in the file that block lives.
+/// caller can report where in the file that block lives, and with whether the
+/// read was actually reduced. Handing back the whole function under the name
+/// of a narrowed read is the failure worth reporting: a caller that asked to
+/// see one branch and silently received all of `main` has no way to tell.
 fn narrow<'a>(
     declaration: &'a Statement,
     rendered: &Rendered,
     anchor: &str,
-) -> Result<(Rendered, &'a Statement), Box<Diagnostic>> {
+) -> Result<Narrowed<'a>, Box<Diagnostic>> {
     let occurrences = rendered.text.matches(anchor).count();
     if occurrences == 0 {
         return Err(anchor_not_found(anchor));
@@ -250,9 +494,51 @@ fn narrow<'a>(
         .map(|block| (formatter::declaration(block), block))
         .find(|(text, _)| text.text.contains(anchor));
 
+    Ok(classify(declaration, rendered, innermost))
+}
+
+/// Say what a search for the innermost block actually found.
+fn classify<'a>(
+    declaration: &'a Statement,
+    rendered: &Rendered,
+    innermost: Option<(Rendered, &'a Statement)>,
+) -> Narrowed<'a> {
     // An anchor that matches only the signature belongs to no block; the
-    // function itself is then the narrowest honest answer.
-    Ok(innermost.unwrap_or_else(|| (rendered.clone(), declaration)))
+    // function itself is then the narrowest honest answer, and saying so is
+    // what keeps it from reading as a narrowing.
+    let Some((narrowed, node)) = innermost else {
+        return Narrowed {
+            rendered: rendered.clone(),
+            node: declaration,
+            reduced: false,
+            reason: "no block holds it, so the whole declaration came back",
+        };
+    };
+
+    // The declaration's own body is every statement in it. Returning it is
+    // returning the function, whatever the anchor asked for.
+    if is_body_of(declaration, node) {
+        return Narrowed {
+            rendered: narrowed,
+            node,
+            reduced: false,
+            reason: "it sits at the top level of the body, so the whole body came back",
+        };
+    }
+
+    Narrowed {
+        rendered: narrowed,
+        node,
+        reduced: true,
+        reason: "",
+    }
+}
+
+/// Whether `block` is the declaration's own body rather than something in it.
+fn is_body_of(declaration: &Statement, block: &Statement) -> bool {
+    resolve::children(declaration)
+        .into_iter()
+        .any(|child| std::ptr::eq(child, block))
 }
 
 /// Every block statement inside a declaration, deepest first.
@@ -412,7 +698,22 @@ impl Outline<'_> {
             end_line,
         });
         self.text.push('\n');
+        self.write_expressions(statement, depth + 1);
         self.write_all(&container_members(statement), depth + 1);
+    }
+
+    /// Write the members a container declares as expressions.
+    ///
+    /// A struct's fields and an enum's variants have no signature of their own,
+    /// so they reach an outline through neither `signature` nor `children`.
+    /// They are also the whole of what those two declarations hold: an outline
+    /// that skips them says nothing at all about a struct.
+    fn write_expressions(&mut self, statement: &Statement, depth: usize) {
+        for member in member_expressions(statement) {
+            self.indent(depth);
+            self.text.push_str(&formatter::expression_text(member));
+            self.text.push('\n');
+        }
     }
 
     /// Indent to `depth`, matching the formatter's indentation unit.
@@ -461,14 +762,53 @@ fn container_members(node: &Statement) -> Vec<&Statement> {
     Vec::new()
 }
 
+/// The members a container declares as expressions rather than statements.
+///
+/// A class keeps its fields in its body as statements, so they arrive through
+/// `container_members`. A struct's fields and an enum's variants are parsed as
+/// expressions and sit beside the methods, so they have to be asked for.
+fn member_expressions(node: &Statement) -> &[crate::ast::expression::Expression] {
+    match &node.node {
+        StatementKind::Struct(_, _, fields, ..) => fields,
+        StatementKind::Enum(_, _, variants, ..) => variants,
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Expression(_)
+        | StatementKind::Block(_)
+        | StatementKind::Variable(..)
+        | StatementKind::If(..)
+        | StatementKind::While(..)
+        | StatementKind::For(..)
+        | StatementKind::Forall { .. }
+        | StatementKind::GpuFrame(..)
+        | StatementKind::GpuFrameBlock(_)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Return(_)
+        | StatementKind::Use(..)
+        | StatementKind::Type(..)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(..)
+        | StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => &[],
+    }
+}
+
 /// Build the report for a request that was answered.
 fn success(
     shape: &Shape,
     rendered: LocatedRender,
+    notes: Vec<Diagnostic>,
     source: &str,
     source_path: Option<String>,
 ) -> ViewReport {
-    let envelope = DiagnosticsEnvelope::new(JsonCommand::View, true, vec![]).with_view(JsonView {
+    // A note is a warning: the read answered, so `ok` stays true, and the
+    // warning rides along rather than being dropped for want of a place.
+    let json = notes
+        .iter()
+        .map(|note| to_json(note, source, source_path.as_deref()))
+        .collect::<Vec<JsonDiagnostic>>();
+    let envelope = DiagnosticsEnvelope::new(JsonCommand::View, true, json).with_view(JsonView {
         shape: shape.label().to_string(),
         text: rendered.text.clone(),
         spans: rendered
@@ -489,7 +829,7 @@ fn success(
         envelope,
         ok: true,
         text: rendered.text,
-        diagnostics: vec![],
+        diagnostics: notes,
         source: source.to_string(),
         source_path,
     }
@@ -607,7 +947,10 @@ pub fn run(target: Option<&str>, shape: &Shape, format: Format, color_mode: Colo
         Format::Pretty => {
             if report.ok {
                 print!("{}", report.text);
-            } else {
+            }
+            // A successful read can still carry a warning, and it goes to the
+            // stream a warning goes to rather than into the text that was read.
+            if !report.diagnostics.is_empty() {
                 eprint!("{}", report.to_pretty(color_mode));
             }
         }
@@ -880,6 +1223,7 @@ pub fn members(
             text,
             spans: Vec::new(),
         },
+        Vec::new(),
         source,
         source_path,
     )

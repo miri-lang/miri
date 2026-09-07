@@ -84,6 +84,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 stdlib_root,
                 public,
                 around,
+                raw,
                 format,
             } => view_file(
                 path,
@@ -93,6 +94,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 stdlib_root,
                 public,
                 around,
+                raw,
                 format,
                 cli.color,
             ),
@@ -561,6 +563,7 @@ fn view_file(
     stdlib_root: bool,
     public: bool,
     around: Option<String>,
+    raw: bool,
     format: Format,
     color_mode: ColorMode,
 ) -> Result<()> {
@@ -587,17 +590,8 @@ fn view_file(
         };
     }
 
-    // Clap guarantees exactly one of `--fn` and `--outline` is present here, so
-    // a missing name can only mean the outline was asked for.
-    let shape = match fn_name {
-        Some(name) => miri::cli::view::Shape::Function { name, around },
-        None => {
-            let _ = outline;
-            miri::cli::view::Shape::Outline {
-                public_only: public,
-            }
-        }
-    };
+    let _ = outline;
+    let shape = miri::cli::view::shape_for(fn_name, around, public, raw);
     match miri::cli::view::run(path.as_deref(), &shape, format, color_mode) {
         miri::cli::view::Outcome::Read => Ok(()),
         miri::cli::view::Outcome::Failed => std::process::exit(1),

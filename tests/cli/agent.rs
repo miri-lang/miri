@@ -2222,3 +2222,51 @@ fn test_patch_with_source_check_only_writes_nothing() {
 
     session.finish();
 }
+
+/// A function whose body carries a comment the canonical rendering drops.
+const COMMENTED: &str = "fn total(values [int]) int
+    // A running sum.
+    var sum = 0
+    return sum
+";
+
+#[test]
+fn test_view_over_the_protocol_reads_the_files_own_bytes() {
+    // The command line and the protocol are meant to answer the same question
+    // the same way; a shape only one of them offers is a surface that drifts.
+    let directory = project("raw-read", &[("main.mi", COMMENTED)]);
+    let path = directory.path().join("main.mi");
+    let path = path.to_str().expect("the path is text").to_string();
+    let mut session = Session::start(directory.path());
+
+    {
+        let read = session.call(1, "view", json!({ "path": path, "raw": true }));
+        let view = &read["result"]["view"];
+        assert_eq!(view["shape"], json!("raw"));
+        let text = view["text"].as_str().expect("the view carries its text");
+        assert!(
+            text.contains("// A running sum."),
+            "a literal read carries the comments, got:\n{text}"
+        );
+        let stripped: String = text
+            .lines()
+            .map(|line| {
+                let (_, body) = line
+                    .split_once('\t')
+                    .expect("every line carries its number");
+                format!("{body}\n")
+            })
+            .collect();
+        assert_eq!(stripped, COMMENTED, "the bytes come back exactly");
+    }
+
+    let canonical = session.call(2, "view", json!({ "path": path, "fn": "total" }));
+    let text = canonical["result"]["view"]["text"]
+        .as_str()
+        .expect("the view carries its text");
+    assert!(
+        !text.contains("// A running sum."),
+        "and the canonical read still does not, got:\n{text}"
+    );
+    session.finish();
+}

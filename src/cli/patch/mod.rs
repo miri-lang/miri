@@ -718,6 +718,18 @@ fn apply_in_place(
         }
     };
 
+    // An edit that keeps the text it matched and puts something in front of it
+    // — a comment above a statement is the usual one — matches again on a
+    // re-run, because what it added is invisible to the anchor. Applying it a
+    // second time writes the addition twice, which is a retried patch
+    // corrupting the file. When the bytes ending where the match ends already
+    // are the replacement, the file already holds the result.
+    let (range, replacement) = if already_applied(source, range, &replacement) {
+        ((range.1, range.1), String::new())
+    } else {
+        (range, replacement)
+    };
+
     let mut edited = String::with_capacity(source.len() + replacement.len());
     edited.push_str(source.get(..range.0).ok_or_else(split_failed)?);
     edited.push_str(&replacement);
@@ -733,6 +745,25 @@ fn apply_in_place(
             replacement,
         },
     ))
+}
+
+/// Whether the file already holds what this replacement would write.
+///
+/// The replacement is already in place when the bytes ending where the match
+/// ends are the replacement itself, and the matched text is its tail: applying
+/// it would then repeat everything the replacement adds ahead of the match,
+/// which is bytes the caller did not ask to be written twice.
+fn already_applied(source: &str, range: (usize, usize), replacement: &str) -> bool {
+    let Some(matched) = source.get(range.0..range.1) else {
+        return false;
+    };
+    if !replacement.ends_with(matched) {
+        return false;
+    }
+    let Some(from) = range.1.checked_sub(replacement.len()) else {
+        return false;
+    };
+    source.get(from..range.1) == Some(replacement)
 }
 
 /// Add a declaration the file does not have.
@@ -1569,12 +1600,30 @@ pub fn run(
 
 /// The closing line describing what the command did.
 fn summary(report: &PatchReport, mode: Mode) -> String {
-    let edits = report
+    let all = report
         .envelope
         .patch
         .as_ref()
-        .map_or(0, |patch| patch.edits.len());
+        .map_or::<&[_], _>(&[], |patch| patch.edits.as_slice());
+    // An edit the file already holds writes nothing, and counting it among the
+    // edits applied would tell a caller its second run changed something.
+    let already = all
+        .iter()
+        .filter(|edit| edit.start == edit.end && edit.replacement.is_empty())
+        .count();
+    let edits = all.len() - already;
+    if already > 0 {
+        return format!(
+            "{} edit(s) already in place; nothing was written for them. {}",
+            already,
+            applied_line(report, mode, edits)
+        );
+    }
+    applied_line(report, mode, edits)
+}
 
+/// The line describing the edits that did change something.
+fn applied_line(report: &PatchReport, mode: Mode, edits: usize) -> String {
     let has_preexisting = report
         .envelope
         .diagnostics

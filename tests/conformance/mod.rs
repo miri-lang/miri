@@ -540,6 +540,7 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_TYP_035", "Requires a second module to hold the non-visible symbol; the harness runs single-file fixtures only"),
     ("MER_BLD_021", "Command-invocation diagnostic (miri run/build on a program with no entry point); the corpus runs `miri check`, which accepts a module and does not raise it"),
     ("MER_BLD_022", "Command-invocation diagnostic (miri view --type asked about a name not in scope); reports what the view command was asked for rather than a property of the source"),
+    ("MER_BLD_023", "Command-invocation diagnostic (miri view --around narrowed nothing); reports how much of a declaration a read returned rather than a property of the source"),
     ("MER_BLD_001", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),
     ("MER_BLD_002", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),
     ("MER_BLD_003", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),
