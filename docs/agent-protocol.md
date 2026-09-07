@@ -289,6 +289,14 @@ Alternatively, request a specific function:
 
 Request: `{ "path": "main.mi", "fn": "double" }` (with `fn`, returns the function body)
 
+Or ask what can be called on a type:
+
+Request: `{ "path": "main.mi", "type": "Circle", "public": true }` (with `type`,
+returns the type's own members and those it inherits from a base class or a
+trait, one per line, each inherited member naming where it came from). This
+reads the type table rather than the parse, so it answers only for a file the
+frontend accepts. `fn` and `type` cannot be combined.
+
 ```json
 {
   "jsonrpc": "2.0",

@@ -46,6 +46,11 @@ pub enum Shape {
     },
     /// Every declaration's signature, with no bodies.
     Outline { public_only: bool },
+    /// Every member callable on one type, its own and those it inherits.
+    Members {
+        type_name: String,
+        public_only: bool,
+    },
 }
 
 impl Shape {
@@ -57,6 +62,7 @@ impl Shape {
             } => "around",
             Shape::Function { around: None, .. } => "fn",
             Shape::Outline { .. } => "outline",
+            Shape::Members { .. } => "type",
         }
     }
 }
@@ -119,6 +125,12 @@ pub fn view(path: &Path, source: &str, shape: &Shape) -> ViewReport {
         Shape::Function { name, around } => {
             function_view(&program, source, name, around.as_deref())
         }
+        // Members are read from the type table rather than from this parse,
+        // because inheritance crosses declarations and modules.
+        Shape::Members {
+            type_name,
+            public_only,
+        } => return members(Some(path), source, type_name, *public_only),
     };
 
     match rendered {
@@ -570,8 +582,20 @@ fn report_unreadable(
     Outcome::Failed
 }
 
-/// Read part of `path` and write the result.
-pub fn run(path: &Path, shape: &Shape, format: Format, color_mode: ColorMode) -> Outcome {
+/// Read part of `target` and write the result.
+///
+/// `target` is a file path or a module name; a missing one is a request that
+/// only the shapes needing no source can answer, and those are dispatched
+/// before this call.
+pub fn run(target: Option<&str>, shape: &Shape, format: Format, color_mode: ColorMode) -> Outcome {
+    let Some(target) = target else {
+        return report(missing_target(shape), format, color_mode);
+    };
+    let path = match resolve_target(target) {
+        Ok(path) => path,
+        Err(diagnostic) => return report(*diagnostic, format, color_mode),
+    };
+    let path = path.as_path();
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => return report_unreadable(path, &error, format, color_mode),
@@ -594,4 +618,436 @@ pub fn run(path: &Path, shape: &Shape, format: Format, color_mode: ColorMode) ->
     } else {
         Outcome::Failed
     }
+}
+
+/// The members callable on `type_name`, one per line, own members first.
+///
+/// A member reached through `extends` or supplied by a trait carries the type
+/// that declares it, so a reader can tell what is theirs to change from what
+/// they inherited.
+fn render_members(
+    type_name: &str,
+    definition: &crate::type_checker::context::TypeDefinition,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+    public_only: bool,
+) -> String {
+    let mut out = String::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    out.push_str(&member_header(type_name, definition));
+    out.push('\n');
+    collect_members(
+        type_name,
+        type_name,
+        definition,
+        definitions,
+        public_only,
+        &mut seen,
+        &mut out,
+    );
+    if seen.is_empty() {
+        out.push_str("    (no members)\n");
+    }
+    out
+}
+
+/// The declaration line a member list sits under.
+fn member_header(
+    type_name: &str,
+    definition: &crate::type_checker::context::TypeDefinition,
+) -> String {
+    use crate::type_checker::context::TypeDefinition;
+    match definition {
+        TypeDefinition::Class(class) => {
+            let mut header = format!("class {}", type_name);
+            if let Some(base) = &class.base_class {
+                header.push_str(&format!(" extends {}", base));
+            }
+            if !class.traits.is_empty() {
+                header.push_str(&format!(" implements {}", class.traits.join(", ")));
+            }
+            header
+        }
+        TypeDefinition::Struct(_) => format!("struct {}", type_name),
+        TypeDefinition::Enum(_) => format!("enum {}", type_name),
+        TypeDefinition::Trait(trait_definition) => {
+            let mut header = format!("trait {}", type_name);
+            if !trait_definition.parent_traits.is_empty() {
+                header.push_str(&format!(
+                    " extends {}",
+                    trait_definition.parent_traits.join(", ")
+                ));
+            }
+            header
+        }
+        TypeDefinition::Generic(_) => format!("type parameter {}", type_name),
+        TypeDefinition::Alias(_) => format!("type {}", type_name),
+    }
+}
+
+/// Append the members `definition` contributes, then those it inherits.
+///
+/// A name already written is not written again: an override is the member that
+/// runs, so the nearest declaration is the one a caller reaches.
+#[allow(clippy::too_many_arguments)]
+fn collect_members(
+    queried: &str,
+    owner: &str,
+    definition: &crate::type_checker::context::TypeDefinition,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+    public_only: bool,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut String,
+) {
+    use crate::type_checker::context::TypeDefinition;
+    match definition {
+        TypeDefinition::Class(class) => {
+            for (name, field) in &class.fields {
+                if public_only && !matches!(field.visibility, MemberVisibility::Public) {
+                    continue;
+                }
+                if seen.insert(name.clone()) {
+                    out.push_str(&field_line(name, &field.ty, queried, owner));
+                }
+            }
+            for (name, method) in &class.methods {
+                if public_only && !matches!(method.visibility, MemberVisibility::Public) {
+                    continue;
+                }
+                if seen.insert(name.clone()) {
+                    out.push_str(&method_line(name, method, queried, owner));
+                }
+            }
+            // Inherited members come after the type's own, and a trait's
+            // defaults after both: that is the order a call resolves in.
+            for source in class
+                .base_class
+                .iter()
+                .map(String::as_str)
+                .chain(class.traits.iter().map(String::as_str))
+            {
+                if let Some(next) = definitions.get(source) {
+                    collect_members(queried, source, next, definitions, public_only, seen, out);
+                }
+            }
+        }
+        TypeDefinition::Struct(structure) => {
+            for (name, ty, visibility) in &structure.fields {
+                if public_only && !matches!(visibility, MemberVisibility::Public) {
+                    continue;
+                }
+                if seen.insert(name.clone()) {
+                    out.push_str(&field_line(name, ty, queried, owner));
+                }
+            }
+        }
+        TypeDefinition::Trait(trait_definition) => {
+            for (name, method) in &trait_definition.methods {
+                if public_only && !matches!(method.visibility, MemberVisibility::Public) {
+                    continue;
+                }
+                if seen.insert(name.clone()) {
+                    out.push_str(&method_line(name, method, queried, owner));
+                }
+            }
+            for parent in &trait_definition.parent_traits {
+                if let Some(next) = definitions.get(parent) {
+                    collect_members(queried, parent, next, definitions, public_only, seen, out);
+                }
+            }
+        }
+        TypeDefinition::Enum(enumeration) => {
+            for variant in enumeration.variants.keys() {
+                if seen.insert(variant.clone()) {
+                    out.push_str(&format!("    {}.{}\n", owner, variant));
+                }
+            }
+        }
+        TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {}
+    }
+}
+
+/// One field, as a reader would write its type.
+fn field_line(name: &str, ty: &crate::ast::types::Type, queried: &str, owner: &str) -> String {
+    format!(
+        "    {} {}{}\n",
+        name,
+        type_text(ty),
+        declared_by(queried, owner)
+    )
+}
+
+/// A type as Miri source spells it.
+///
+/// A type's `Display` is the diagnostic rendering — it writes a list as
+/// `List(int)` so an error message reads well. This output is telling a reader
+/// what to type, so it has to be the source form, `[int]`.
+fn type_text(ty: &crate::ast::types::Type) -> String {
+    let mut sink = crate::ast::formatter::sink::Sink::new();
+    crate::ast::formatter::types::type_kind(&mut sink, &ty.kind);
+    sink.text().to_string()
+}
+
+/// One method, as a reader would write its signature.
+fn method_line(
+    name: &str,
+    method: &crate::type_checker::context::MethodInfo,
+    queried: &str,
+    owner: &str,
+) -> String {
+    let params = method
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, (param_name, param_type))| {
+            let out_marker = if method.is_param_out(index) {
+                "out "
+            } else {
+                ""
+            };
+            format!("{}{} {}", out_marker, param_name, type_text(param_type))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let returns = match &method.return_type.kind {
+        crate::ast::types::TypeKind::Void => String::new(),
+        _ => format!(" {}", type_text(&method.return_type)),
+    };
+    let prefix = if method.is_static { "static fn" } else { "fn" };
+    format!(
+        "    {} {}({}){}{}\n",
+        prefix,
+        name,
+        params,
+        returns,
+        declared_by(queried, owner)
+    )
+}
+
+/// The `from` note an inherited member carries.
+///
+/// A member the queried type declares itself needs no note: naming the type a
+/// reader already asked about would be noise on every line.
+fn declared_by(queried: &str, owner: &str) -> String {
+    if queried == owner {
+        return String::new();
+    }
+    format!("    // from {}", owner)
+}
+
+/// Every member callable on `type_name`, its own and those it inherits.
+///
+/// This runs the frontend rather than reading the file, because inheritance and
+/// trait membership are properties the parser does not know: a method reached
+/// through `extends`, or supplied by a trait, is declared somewhere else and
+/// often in another module. Only the type table has followed those links.
+///
+/// A `None` path answers from the prelude alone, which is what lets a caller ask
+/// about a library type without first knowing which module declares it.
+pub fn members(
+    path: Option<&Path>,
+    source: &str,
+    type_name: &str,
+    public_only: bool,
+) -> ViewReport {
+    let shape = Shape::Members {
+        type_name: type_name.to_string(),
+        public_only,
+    };
+    let source_path = path.map(|path| path.display().to_string());
+    let pipeline = crate::cli::anchor::pipeline_for(path);
+    let result = match pipeline.frontend(source) {
+        Ok(result) => result,
+        // The table is built by the pass that reports these, so a program the
+        // frontend rejected has no answer to give. Reporting the errors is more
+        // use than a list assembled from a half-built table.
+        Err(error) => return failure(&shape, error.to_diagnostics(), source, source_path),
+    };
+
+    let definitions = &result.type_checker.type_table.global_type_definitions;
+    let Some(definition) = definitions.get(type_name) else {
+        return failure(
+            &shape,
+            vec![*type_not_found(type_name, definitions)],
+            source,
+            source_path,
+        );
+    };
+
+    let text = render_members(type_name, definition, definitions, public_only);
+    success(
+        &shape,
+        LocatedRender {
+            text,
+            spans: Vec::new(),
+        },
+        source,
+        source_path,
+    )
+}
+
+/// Report a type the program does not have in scope, naming the nearest it has.
+fn type_not_found(
+    type_name: &str,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> Box<Diagnostic> {
+    let mut names: Vec<&str> = definitions.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    let help = match crate::error::format::find_best_match(type_name, &names) {
+        Some(nearest) => format!("did you mean '{}'?", nearest),
+        None => "run `miri view <MODULE> --outline --public` to list what a module declares."
+            .to_string(),
+    };
+    coded(
+        DiagnosticCode::BldTypeNotInScope,
+        format!(
+            "no type named '{}' is in scope",
+            sanitize_for_terminal(type_name)
+        ),
+        &help,
+    )
+}
+
+/// The file a `view` argument names: a path on disk, or a module resolved the
+/// way an `use` statement resolves it.
+///
+/// A file is tried first, so an argument that names one is never reinterpreted.
+/// Module resolution runs through the compiler's own search, so `view` and the
+/// type checker can never disagree about which file a module name refers to.
+pub fn resolve_target(argument: &str) -> Result<std::path::PathBuf, Box<Diagnostic>> {
+    let as_path = std::path::PathBuf::from(argument);
+    if as_path.is_file() {
+        return Ok(as_path);
+    }
+    if let Some(found) = crate::type_checker::statements::imports::locate_module(argument, None) {
+        return Ok(found);
+    }
+    Err(target_not_found(argument))
+}
+
+/// Report an argument that names neither a readable file nor a known module.
+fn target_not_found(argument: &str) -> Box<Diagnostic> {
+    let roots = crate::type_checker::statements::imports::stdlib_roots()
+        .iter()
+        .map(|root| format!("  - {}", root.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    coded(
+        DiagnosticCode::BldInputNotReadable,
+        format!(
+            "could not read {}: no such file, and no module of that name",
+            sanitize_for_terminal(argument)
+        ),
+        &format!(
+            "a module name is searched in these roots, highest priority first:\n{}\n\
+             set MIRI_STDLIB_PATH to search somewhere else.",
+            roots
+        ),
+    )
+}
+
+/// The stdlib search roots, in the order a module name is looked for, each
+/// marked with whether it is present on this machine.
+///
+/// The binary knows where it looked; until it says so, a caller whose module
+/// did not resolve has nothing to check.
+pub fn stdlib_roots_text() -> String {
+    crate::type_checker::statements::imports::stdlib_roots()
+        .iter()
+        .map(|root| {
+            let state = if root.is_dir() { "present" } else { "absent" };
+            format!("{}\t{}\n", state, root.display())
+        })
+        .collect()
+}
+
+/// Report a shape that needs a file when none was given.
+fn missing_target(shape: &Shape) -> Diagnostic {
+    *coded(
+        DiagnosticCode::BldInputNotReadable,
+        format!("`--{}` needs a file or module to read", shape.label()),
+        "give a path such as `main.mi`, or a module name such as `system.string`.",
+    )
+}
+
+/// Write one diagnostic in the requested form and report the command failed.
+fn report(diagnostic: Diagnostic, format: Format, color_mode: ColorMode) -> Outcome {
+    match format {
+        Format::Json => {
+            let envelope = DiagnosticsEnvelope::new(
+                JsonCommand::View,
+                false,
+                vec![to_json(&diagnostic, "", None)],
+            )
+            .with_exit_code(1);
+            println!("{}", serialize_envelope(&envelope));
+        }
+        Format::Pretty => eprint!(
+            "{}",
+            format_diagnostic_with_color("", &diagnostic, None, color_mode.into())
+        ),
+    }
+    Outcome::Failed
+}
+
+/// Answer `--type` for a program, or for the prelude when no path is given.
+pub fn run_members(
+    target: Option<&str>,
+    type_name: &str,
+    public_only: bool,
+    format: Format,
+    color_mode: ColorMode,
+) -> Outcome {
+    let resolved = match target {
+        Some(target) => match resolve_target(target) {
+            Ok(path) => Some(path),
+            Err(diagnostic) => return report(*diagnostic, format, color_mode),
+        },
+        None => None,
+    };
+    // With no file to read, the question is answered against an empty program,
+    // whose scope is the implicit prelude. That is what lets a caller ask about
+    // a library type before knowing which module declares it.
+    let source = match &resolved {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => return report_unreadable(path, &error, format, color_mode),
+        },
+        None => String::new(),
+    };
+
+    let report = members(resolved.as_deref(), &source, type_name, public_only);
+    match format {
+        Format::Json => println!("{}", serialize_envelope(&report.envelope)),
+        Format::Pretty => {
+            if report.ok {
+                print!("{}", report.text);
+            } else {
+                eprint!("{}", report.to_pretty(color_mode));
+            }
+        }
+    }
+
+    if report.ok {
+        Outcome::Read
+    } else {
+        Outcome::Failed
+    }
+}
+
+/// Print the roots a module name is searched in.
+pub fn run_stdlib_roots(format: Format) -> Outcome {
+    match format {
+        Format::Json => {
+            let envelope = DiagnosticsEnvelope::new(JsonCommand::View, true, vec![])
+                .with_exit_code(0)
+                .with_view(JsonView {
+                    shape: "stdlib-root".to_string(),
+                    text: stdlib_roots_text(),
+                    spans: Vec::new(),
+                });
+            println!("{}", serialize_envelope(&envelope));
+        }
+        Format::Pretty => print!("{}", stdlib_roots_text()),
+    }
+    Outcome::Read
 }

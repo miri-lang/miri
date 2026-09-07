@@ -1445,6 +1445,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "BLD",
+    "022",
+    BldTypeNotInScope,
+    "Type Not In Scope",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
 );
 
 #[cfg(test)]

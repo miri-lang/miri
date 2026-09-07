@@ -495,7 +495,8 @@ fn run_skills_get(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
 /// Read part of the file the request names.
 ///
 /// The shape follows the command line: a `fn` parameter reads one function,
-/// optionally narrowed by `around`, and its absence reads the file's outline.
+/// optionally narrowed by `around`, a `type` parameter reads what can be called
+/// on a type, and their absence reads the file's outline.
 fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
     let Some(path) = path_param(request) else {
         return missing_path(id, "view");
@@ -506,17 +507,29 @@ fn run_view(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         Err(error) => return unreadable(id, &path, &error),
     };
 
+    let public_only = bool_param(request, "public");
     let around = string_param(request, "around");
-    let shape = match string_param(request, "fn") {
-        Some(name) => view::Shape::Function { name, around },
-        None if around.is_some() => {
+    let shape = match (string_param(request, "fn"), string_param(request, "type")) {
+        (Some(_), Some(_)) => {
+            return RpcResponse::failure(
+                id,
+                INVALID_PARAMS,
+                invalid_params("view", "view reads a `fn` or a `type`, not both"),
+            )
+        }
+        (Some(name), None) => view::Shape::Function { name, around },
+        (None, Some(type_name)) => view::Shape::Members {
+            type_name,
+            public_only,
+        },
+        (None, None) if around.is_some() => {
             return RpcResponse::failure(
                 id,
                 INVALID_PARAMS,
                 invalid_params("view", "view needs a `fn` parameter for `around` to narrow"),
             )
         }
-        None => view::Shape::Outline { public_only: false },
+        (None, None) => view::Shape::Outline { public_only },
     };
 
     serialize(id, &view::view(&path, &source, &shape).envelope)
@@ -718,6 +731,16 @@ fn string_param(request: &RpcRequest, name: &str) -> Option<String> {
         .get(name)?
         .as_str()
         .map(str::to_string)
+}
+
+/// One boolean parameter of a request, false when absent or not a boolean.
+fn bool_param(request: &RpcRequest, name: &str) -> bool {
+    request
+        .params
+        .as_ref()
+        .and_then(|params| params.get(name))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Report a file the compiler was asked to read and could not.

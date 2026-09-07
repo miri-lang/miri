@@ -369,40 +369,10 @@ impl TypeChecker {
     }
 
     fn resolve_module_path(&mut self, path_str: &str, span: Span) -> Option<PathBuf> {
-        let current_dir = std::env::current_dir().unwrap_or_default();
-        let project_root = self
-            .modules
-            .source_dir
-            .clone()
-            .unwrap_or_else(|| current_dir.clone());
-
-        let possible_locations: Vec<(PathBuf, PathBuf)> =
-            if let Some(rest) = path_str.strip_prefix("local.") {
-                let relative_path = rest.replace('.', "/") + ".mi";
-                vec![(project_root.clone(), project_root.join(&relative_path))]
-            } else {
-                let relative_path = path_str.replace('.', "/") + ".mi";
-                let mut locations: Vec<(PathBuf, PathBuf)> = get_stdlib_search_roots()
-                    .into_iter()
-                    .map(|base| {
-                        let loc = base.join(&relative_path);
-                        (base, loc)
-                    })
-                    .collect();
-                // Add source_dir (the entry file's directory) as a candidate
-                locations.push((project_root.clone(), project_root.join(&relative_path)));
-                locations.push((current_dir.clone(), current_dir.join(&relative_path)));
-                locations
-            };
-
-        for (base, loc) in &possible_locations {
-            if loc.exists() {
-                if let (Ok(canon_loc), Ok(canon_base)) = (loc.canonicalize(), base.canonicalize()) {
-                    if canon_loc.starts_with(&canon_base) {
-                        return Some(loc.clone());
-                    }
-                }
-            }
+        let source_dir = self.modules.source_dir.clone();
+        let possible_locations = module_search_locations(path_str, source_dir.as_deref());
+        if let Some(found) = first_contained_location(&possible_locations) {
+            return Some(found);
         }
 
         // Generate help text listing all searched roots
@@ -961,7 +931,7 @@ impl TypeChecker {
     fn prelude_file_imports(
         file_name: &str,
     ) -> Option<Vec<(Box<Expression>, Option<Box<Expression>>)>> {
-        let stdlib_roots = get_stdlib_search_roots();
+        let stdlib_roots = stdlib_roots();
 
         // Try each stdlib root until we find the prelude file
         for stdlib_base in stdlib_roots {
@@ -1052,7 +1022,7 @@ impl TypeChecker {
 /// stdlib tree actually declares.
 fn modules_declaring(name: &str, declares: fn(&str, &str) -> bool) -> Vec<String> {
     let mut found = Vec::new();
-    for root in get_stdlib_search_roots() {
+    for root in stdlib_roots() {
         if root.is_dir() {
             collect_modules_declaring(&root, name, &root, declares, &mut found);
         }
@@ -1119,6 +1089,66 @@ fn declares_type(source: &str, name: &str) -> bool {
     })
 }
 
+/// The candidate locations a module path could occupy, in the order the
+/// compiler tries them, as `(search root, candidate file)` pairs.
+///
+/// `source_dir` is the directory of the file being compiled, when there is one.
+/// A `local.` path resolves only there, which is what keeps a program's own
+/// modules from being shadowed by anything the search roots hold.
+///
+/// This is the single description of where a module lives. A caller that wants
+/// to read a module the way the compiler would — the `view` command, say — asks
+/// here rather than rebuilding the order, so the two can never disagree about
+/// which file a name refers to.
+pub fn module_search_locations(
+    path_str: &str,
+    source_dir: Option<&Path>,
+) -> Vec<(PathBuf, PathBuf)> {
+    let current_dir = std::env::current_dir().unwrap_or_default();
+    let project_root = source_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| current_dir.clone());
+
+    if let Some(rest) = path_str.strip_prefix("local.") {
+        let relative_path = rest.replace('.', "/") + ".mi";
+        return vec![(project_root.clone(), project_root.join(&relative_path))];
+    }
+
+    let relative_path = path_str.replace('.', "/") + ".mi";
+    let mut locations: Vec<(PathBuf, PathBuf)> = stdlib_roots()
+        .into_iter()
+        .map(|base| {
+            let loc = base.join(&relative_path);
+            (base, loc)
+        })
+        .collect();
+    // The entry file's directory, then the working directory, so a program's
+    // own modules resolve after the library's.
+    locations.push((project_root.clone(), project_root.join(&relative_path)));
+    locations.push((current_dir.clone(), current_dir.join(&relative_path)));
+    locations
+}
+
+/// The first candidate that exists and lies inside the root that proposed it.
+///
+/// The containment check is what stops a path escaping its root with `..` from
+/// resolving to a file the root was never meant to offer.
+fn first_contained_location(locations: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
+    locations.iter().find_map(|(base, loc)| {
+        if !loc.exists() {
+            return None;
+        }
+        let canon_loc = loc.canonicalize().ok()?;
+        let canon_base = base.canonicalize().ok()?;
+        canon_loc.starts_with(&canon_base).then(|| loc.clone())
+    })
+}
+
+/// The file a module path names, or `None` when no search root holds it.
+pub fn locate_module(path_str: &str, source_dir: Option<&Path>) -> Option<PathBuf> {
+    first_contained_location(&module_search_locations(path_str, source_dir))
+}
+
 /// Ordered stdlib search roots, highest priority first, so the compiler
 /// locates `system.*` modules whether it runs from the repo root during
 /// development or as an installed binary invoked from an arbitrary directory.
@@ -1176,7 +1206,7 @@ fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) ->
 /// This helper encapsulates the pattern used throughout the type checker: reading
 /// `MIRI_STDLIB_PATH` and the executable's directory, then computing the search
 /// roots from those. Used by multiple modules to keep the lookup logic consistent.
-fn get_stdlib_search_roots() -> Vec<PathBuf> {
+pub fn stdlib_roots() -> Vec<PathBuf> {
     let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
     let exe_dir = std::env::current_exe()
         .ok()
