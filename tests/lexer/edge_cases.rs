@@ -208,3 +208,11 @@ fn test_null_byte_in_string() {
     lexer_token_test("\"\\0\"", vec![Token::String]);
     lexer_token_test("\"raw null \0 byte\"", vec![Token::String]);
 }
+
+#[test]
+fn test_multibyte_utf8_after_number_does_not_panic() {
+    // Non-ASCII UTF-8 character immediately following a dot or range operator
+    // must not slice across UTF-8 char boundaries and panic the lexer.
+    let _ = miri::lexer::Lexer::new("42.é").collect::<Vec<_>>();
+    let _ = miri::lexer::Lexer::new("0..=ä").collect::<Vec<_>>();
+}

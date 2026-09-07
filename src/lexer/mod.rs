@@ -399,6 +399,8 @@ impl<'source> Lexer<'source> {
         let src = self.inner.source();
         let lookahead_cursor = self.inner.span().end;
 
+        // Security invariant: inspect single bytes instead of slicing `&src[x..x+1]`,
+        // which panics when `lookahead_cursor` lands on a multi-byte UTF-8 character (Compiler DoS).
         if lookahead_cursor < src.len() {
             // Security Invariant: Check lookahead bytes directly on src.as_bytes()
             // rather than string slicing (&src[lookahead_cursor..lookahead_cursor + 1])
@@ -428,7 +430,8 @@ impl<'source> Lexer<'source> {
         let range_end = lookahead_cursor + 1;
 
         let int_span = Span::new(self.inner.span().start, range_start);
-        if range_end < src.len() && &src[range_end..range_end + 1] == "=" {
+        // Security invariant: inspect byte array to avoid slicing across non-ASCII UTF-8 boundaries.
+        if range_end < src.len() && src.as_bytes()[range_end] == b'=' {
             self.pending_tokens_stack
                 .push((Token::RangeInclusive, Span::new(range_start, range_end + 1)));
             self.inner.bump(2);
