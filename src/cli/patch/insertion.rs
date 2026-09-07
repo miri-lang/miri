@@ -76,7 +76,7 @@ fn beside(
             holder.as_deref(),
         ));
     }
-    let (_, end) = declaration_extent(source, declaration, anchor)?;
+    let end = declaration_end(source, declaration, anchor)?;
     Ok(Placement {
         at: end,
         indent: line_indent(source, name_offset(declaration).unwrap_or(end)),
@@ -117,30 +117,71 @@ fn appended(source: &str) -> Placement {
     }
 }
 
-/// The byte range a declaration occupies in the source it was parsed from.
+/// Where a declaration ends in the source it was parsed from.
 ///
-/// The range comes from the token correspondence rather than from the
-/// statement's span, because the parser records a span only for a declared
-/// name: a class or struct statement carries an empty one. Aligning the
-/// canonical rendering against the file also proves the declaration is
-/// anchorable at all, which is what makes the end offset trustworthy enough
-/// to splice at.
-fn declaration_extent(
+/// The token correspondence answers exactly, so it is asked first. It also
+/// proves the declaration is editable, which an insertion beside one does not
+/// need: a declaration whose canonical form parts from the file is still a
+/// landmark, and refusing on its account would let one un-anchorable
+/// declaration block every insertion around it. The layout answers for those,
+/// with the lexer asked whether the offset it produced falls inside a token.
+fn declaration_end(
     source: &str,
     declaration: &Statement,
     name: &str,
-) -> Result<(usize, usize), Box<Diagnostic>> {
-    let span = declared_name_span(declaration).ok_or_else(|| not_anchorable(name))?;
+) -> Result<usize, Box<Diagnostic>> {
+    if let Some(end) = anchored_end(source, declaration) {
+        return Ok(end);
+    }
+    let header = name_offset(declaration).ok_or_else(|| not_anchorable(name))?;
+    let end = block_end(source, header).ok_or_else(|| not_anchorable(name))?;
+    refuse_offset_inside_token(source, end, name)?;
+    Ok(end)
+}
+
+/// The last byte of a declaration, read off the token correspondence.
+///
+/// The range comes from the tokens rather than from the statement's span,
+/// because the parser records a span only for a declared name: a class or
+/// struct statement carries an empty one.
+fn anchored_end(source: &str, declaration: &Statement) -> Option<usize> {
+    let span = declared_name_span(declaration)?;
     // The name comes from the span the parser recorded rather than from the
     // AST, so it is one identifier token even where the declaration renders
     // its name with generic arguments beside it.
-    let declared = source
-        .get(span.start..span.end)
-        .ok_or_else(|| not_anchorable(name))?;
+    let declared = source.get(span.start..span.end)?;
     let rendered = formatter::declaration(declaration);
-    let alignment = token_align::build_alignment(source, &rendered.text, declared, span)
-        .map_err(|diverged| Box::new(diverged.to_diagnostic()))?;
-    alignment.raw_extent().ok_or_else(|| not_anchorable(name))
+    let alignment = token_align::build_alignment(source, &rendered.text, declared, span).ok()?;
+    alignment.raw_extent().map(|(_, end)| end)
+}
+
+/// Where the block a line opens stops, by indentation alone.
+///
+/// A declaration owns its header line and every line below it indented past
+/// that header, blank lines inside the run included. A body written after a
+/// colon has no such run, and the header line is the whole of it.
+fn block_end(source: &str, header_offset: usize) -> Option<usize> {
+    let header_line = source
+        .get(..header_offset)?
+        .rfind('\n')
+        .map_or(0, |at| at + 1);
+    let header = indent_width(source.get(header_line..)?);
+
+    let mut offset = header_line;
+    let mut end = None;
+    for line in source.get(header_line..)?.split('\n') {
+        let blank = line.trim().is_empty();
+        if offset != header_line && !blank && indent_width(line) <= header {
+            break;
+        }
+        if !blank {
+            end = Some(offset + line.trim_end().len());
+        }
+        // `split` took the newline out, so putting one byte back tracks the
+        // file. A `\r` before it is part of `line.len()` already.
+        offset += line.len() + 1;
+    }
+    end
 }
 
 /// The span the parser recorded for a declaration's own name.
