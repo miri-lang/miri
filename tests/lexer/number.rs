@@ -196,6 +196,14 @@ fn test_invalid_hex() {
 }
 
 #[test]
+fn test_float_followed_by_non_ascii() {
+    // Non-ASCII characters following `1.` do not match ASCII identifier rules,
+    // so `1.` is split into Int and Dot, and the non-ASCII char is reported as InvalidToken
+    // without panicking on UTF-8 boundaries.
+    lexer_error_test("1.日本語", &SyntaxErrorKind::InvalidToken);
+}
+
+#[test]
 fn test_number_followed_by_dot_method_call() {
     // This is a critical test to ensure `1.to_string()` is not confused with a float.
     // The `FloatOrRange` logic should correctly see the `t` and treat `1.` as member call of an integer,

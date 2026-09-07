@@ -26,7 +26,7 @@
 **Learning:** `capacity * elem_size` without bounds checks wrappers can lead to extremely large inputs wrapping around, producing a small layout that receives too much data during memory copies or inserts.
 **Prevention:** Always use safe arithmetic like `checked_mul` (e.g., `capacity.checked_mul(elem_size)`) and return gracefully or use safe aborts if the required size overflows before calling `Layout::from_size_align` in manual memory management code. Ensure fallback paths (like returning an empty struct) are maintained if the checked math fails.
 
-## 2026-05-28 - [Compiler DoS via UTF-8 Boundary Slicing in Lexer]
-**Vulnerability:** Slicing source strings with fixed 1-byte ranges (`&src[cursor..cursor + 1]`) in lexer lookahead routines panics when `cursor` points to a multi-byte UTF-8 character.
-**Learning:** `&str` slicing in Rust requires exact UTF-8 character boundaries. Lookahead logic operating on raw byte offsets must not slice `&str` directly without verifying character boundaries.
-**Prevention:** Inspect `src.as_bytes()` or use byte matching instead of `&str` slicing for single-ASCII-character lookahead checks.
+## 2025-05-18 - [Compiler DoS via UTF-8 Boundary Panic on Lookahead Slicing]
+**Vulnerability:** `Lexer::lex_float_or_range` sliced source strings using fixed 1-byte ranges (`&src[lookahead_cursor..lookahead_cursor + 1]`), panicking if `lookahead_cursor` landed on a multi-byte UTF-8 character boundary (e.g. `1.日本語`).
+**Learning:** Slicing Rust string references (`&str`) by byte offsets without verifying character boundaries panics when encountering non-ASCII UTF-8 sequences. Lookahead logic operating on single-byte characters/tokens must operate on raw byte slices (`src.as_bytes()`) or character iterators.
+**Prevention:** Inspect lookahead tokens using `src.as_bytes()[cursor]` directly or byte slice methods instead of string slice ranges (`&src[x..x+1]`).

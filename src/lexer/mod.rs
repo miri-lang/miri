@@ -402,12 +402,15 @@ impl<'source> Lexer<'source> {
         // Security invariant: inspect single bytes instead of slicing `&src[x..x+1]`,
         // which panics when `lookahead_cursor` lands on a multi-byte UTF-8 character (Compiler DoS).
         if lookahead_cursor < src.len() {
-            let byte = src.as_bytes()[lookahead_cursor];
-            if byte == b'.' {
+            // Security Invariant: Check lookahead bytes directly on src.as_bytes()
+            // rather than string slicing (&src[lookahead_cursor..lookahead_cursor + 1])
+            // to prevent UTF-8 boundary panics (compiler DoS) on non-ASCII lookahead input.
+            let next_byte = src.as_bytes()[lookahead_cursor];
+            if next_byte == b'.' {
                 self.split_range(lookahead_cursor);
                 return Ok(());
             }
-            if (byte as char).is_ascii_alphabetic() {
+            if next_byte.is_ascii_alphabetic() {
                 self.split_int_dot();
                 return Ok(());
             }
