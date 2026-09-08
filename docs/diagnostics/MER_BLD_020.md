@@ -6,7 +6,9 @@ decided — the check that raised a diagnostic records it — so a diagnostic
 without one is a report the compiler cannot act on for you.
 
 Reporting this as success would tell a caller the file was repaired when it was
-not, so the command exits non-zero and says which condition it hit.
+not, so the command exits non-zero and says which condition it hit. A `fixApply`
+over `miri agent` answers `ok: false` and carries this code for the same file:
+the verdict is decided once, in the code both transports call.
 
 A file carrying no errors is not this diagnostic. There was nothing to repair,
 the apply had nothing to do, and doing nothing is the correct answer: the

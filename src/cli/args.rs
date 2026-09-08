@@ -224,6 +224,35 @@ pub enum Commands {
     ///
     /// One compiler process answers many requests, so a tool driving the
     /// compiler pays the start-up cost once instead of once per invocation.
+    ///
+    /// FRAMING. Messages are framed the way a language server frames them: a
+    /// `Content-Length: N` header line, then `\r\n\r\n` — that is, a blank
+    /// line — then exactly N bytes of UTF-8 JSON. Any other header is skipped.
+    /// Line-delimited JSON is not read: a message arriving without a length
+    /// header ends the session, as does closing stdin.
+    ///
+    /// HANDSHAKE. Send `{"jsonrpc":"2.0","id":1,"method":"initialize"}` first.
+    /// Its reply is where the method list comes from: `capabilities.methods`
+    /// names what this build serves, `capabilities.methodSchemas` gives each
+    /// method's parameters, and `capabilities.reservedMethods` names what a
+    /// later build will serve. A client reads the surface off the session
+    /// rather than hard-coding it.
+    ///
+    /// RESULTS. Every method answers with the envelope its command-line
+    /// equivalent prints. A program that fails to compile is a `result`
+    /// carrying `ok: false`, not an `error`; the `error` member is for a
+    /// request that could not be acted on at all.
+    ///
+    /// STREAMS. stdout carries nothing but response frames. Everything written
+    /// for a person goes to stderr, so a client can read the stream unfiltered.
+    ///
+    /// EXECUTING A PROGRAM. This session type-checks, explains, repairs, reads
+    /// and edits source. It does not run, build or test a program, and no
+    /// method will: an integration that has to execute what it compiled shells
+    /// out to `miri run`, `miri build` or `miri test`.
+    ///
+    /// The whole protocol, with a worked example per method, is in
+    /// docs/agent-protocol.md.
     Agent {},
 
     /// Emit repair suggestions for compiler diagnostics

@@ -25,6 +25,11 @@
 //! queued request it names. The compile already running finishes and answers
 //! normally: the pipeline has no cancellation point to unwind from, and adding
 //! one would thread a token through every pass for a transport's benefit.
+//!
+//! **Every identifier a client sends comes back.** A cancellation is a
+//! notification and one sent as a request is a mistake, but a mistake this
+//! session answers rather than swallows — a client left waiting on a frame
+//! that will never arrive waits forever.
 
 pub mod schema;
 
@@ -52,8 +57,16 @@ fn served_methods() -> Vec<String> {
 ///
 /// Naming them is what lets a client tell a method that is coming from one it
 /// misspelled. Each is the surface of a task that has not landed; a method
-/// moves from here to [`SERVED_METHODS`] when its command exists.
+/// moves from here to [`served_methods`] when its command exists.
 const RESERVED_METHODS: &[&str] = &["tokens", "parse", "graph", "targets", "doctor"];
+
+/// The method a client sends to withdraw a request it has already sent.
+///
+/// A notification: it carries no identifier and is not answered. One arriving
+/// with an identifier is a client mistake this session answers rather than
+/// swallows, because a client waiting on a frame that never comes waits
+/// forever.
+const CANCEL_METHOD: &str = "$/cancelRequest";
 
 /// The largest message body this session will accept.
 ///
@@ -183,9 +196,14 @@ fn read_messages(
             }
         };
 
-        if message.method == "$/cancelRequest" {
+        if message.method == CANCEL_METHOD {
             record_cancellation(&message, &cancelled);
-            continue;
+            // Sent as a notification, which is how it is meant to be sent,
+            // there is nothing left to answer. Sent as a request, the
+            // withdrawal still stands and the identifier still needs a reply.
+            if message.id.is_none() {
+                continue;
+            }
         }
 
         if sender.send(Incoming::Request(Box::new(message))).is_err() {
@@ -322,6 +340,22 @@ fn answer(request: RpcRequest, cancelled: &Cancellations) -> Option<RpcResponse>
         return None;
     }
     let id = request.id.clone();
+
+    if request.method == CANCEL_METHOD {
+        // The reader has already recorded the withdrawal, so the client keeps
+        // the effect it asked for and learns how to ask for it next time. This
+        // stands ahead of the withdrawal check on purpose: a cancellation
+        // naming its own identifier would otherwise answer as the thing it
+        // withdrew.
+        return Some(RpcResponse::failure(
+            id,
+            INVALID_REQUEST,
+            format!(
+                "{} is a notification and carries no id; the request it named was still withdrawn",
+                CANCEL_METHOD
+            ),
+        ));
+    }
 
     if withdrawn(id.as_ref(), cancelled) {
         return Some(RpcResponse::failure(

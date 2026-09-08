@@ -42,6 +42,22 @@ the limit ends the session rather than being read, because the only thing
 saying where that body ends is the number just rejected. No real request comes
 near either bound.
 
+## Executing a program
+
+**This session cannot run a program.** It type-checks, explains, repairs, reads
+and edits source; the served methods are `initialize`, `check`, `explain`,
+`fixPlan`, `fixApply`, `view`, `patch` and `skillsGet`, and none of them
+produces an artifact or a program's output. There is no `run`, `build`, `test`,
+`fmt` or `determinism` method, and none is reserved for a later build.
+
+An integration that has to execute what it compiled shells out to `miri run`,
+`miri build` or `miri test`. Those commands accept `--format json` and print
+the same envelope this session returns, so a client parses one shape either
+way. What it costs is the process start-up this session exists to avoid —
+around 10ms per call — which is why the split falls where it does: the loop an
+agent runs many times a second is a check, and the thing it runs once is the
+program.
+
 ## Results and errors
 
 A request the compiler acted on answers with `result`. A request it could not
@@ -57,7 +73,7 @@ not serve, or omitted a parameter.
 | Code | Meaning |
 |---|---|
 | `-32700` | The message did not parse as JSON. |
-| `-32600` | The message parsed but is not a JSON-RPC request. |
+| `-32600` | The message parsed but is not a request this session can act on — an unsupported `jsonrpc` version, or a notification sent as a request. |
 | `-32601` | The method is not served by this build. |
 | `-32602` | A parameter is missing, or names a file that cannot be read. The `message` field names the accepted parameters. |
 | `-32603` | The compiler could not act on a request it understood. |
@@ -67,20 +83,24 @@ not serve, or omitted a parameter.
 
 **Governing invariant**: `ok` reports whether the compiler did what was asked. `exitCode` is the process status — which for `run` is the program's own.
 
-| Command | `ok: true` when | `exitCode` |
-|---|---|---|
-| `check` | the frontend reported no errors (warnings never make it false) | 0 / 1 |
-| `build` | the artifact was produced | 0 / 1 |
-| `run` | the program compiled **and** was not killed by a runtime trap | the program's own status; 1 when the compile failed |
-| `test` | nothing failed and no file was rejected | 0 green / 1 failure / 2 rejected file |
-| `fix --plan` | the plan was produced (**always true when the file was read**) | 0 |
-| `fix --apply` | every repair this run owned was written, or there was nothing to repair | 0 / 1 |
-| `fmt` | the file is canonical, or was rewritten; with `--check`, already canonical | 0 / 1 |
-| `view` | the requested source was read | 0 / 1 |
-| `patch` | the edits validated and were applied | 0 / 1 |
-| `explain` | the code is registered | 0 / 1 |
-| `determinism` | the artifacts are byte-identical | 0 / 1 |
-| `skill` | the operation completed | 0 / 1 |
+**A method's `ok` is the `ok` its command line reports, for the same file.** The two transports reach the same decision through the same code, and a test asserts every pair. The rightmost column says which door reaches each command; the rows marked *command line only* are reachable only by shelling out, as [Executing a program](#executing-a-program) describes.
+
+| Command | `ok: true` when | `exitCode` | Method |
+|---|---|---|---|
+| `check` | the frontend reported no errors (warnings never make it false) | 0 / 1 | `check` |
+| `build` | the artifact was produced | 0 / 1 | *command line only* |
+| `run` | the program compiled **and** was not killed by a runtime trap | the program's own status; 1 when the compile failed | *command line only* |
+| `test` | nothing failed and no file was rejected | 0 green / 1 failure / 2 rejected file | *command line only* |
+| `fix --plan` | the plan was produced (**always true when the file was read**) | 0 | `fixPlan` |
+| `fix --apply` | every repair this run owned was written, or there was nothing to repair | 0 / 1 | `fixApply` |
+| `fmt` | the file is canonical, or was rewritten; with `--check`, already canonical | 0 / 1 | *command line only* |
+| `view` | the requested source was read | 0 / 1 | `view` |
+| `patch` | the edits validated and were applied | 0 / 1 | `patch` |
+| `explain` | the code is registered | 0 / 1 | `explain` |
+| `determinism` | the artifacts are byte-identical | 0 / 1 | *command line only* |
+| `skill` | the operation completed | 0 / 1 | `skillsGet` |
+
+**An apply that wrote nothing over an error nothing can repair reports `ok: false`,** carrying `MER_BLD_020` alongside the errors that stood. A file whose only diagnostics are warnings had nothing to repair and reports the success it is.
 
 Every runtime trap arrives as a registered `MER_RT_*` diagnostic, so a run that died is never reported as one that succeeded. The sentence saying *which* index or *which* divisor is the program's own and reaches you as `stderrTail`; the diagnostic carries the code and the registry's name for it.
 
@@ -248,6 +268,12 @@ Response:
 
 `ok` says whether the apply succeeded, not whether the file now compiles. Those
 are different questions: send `check` afterwards to ask the second one.
+
+An apply that wrote nothing because the file's errors carry no repairs answers
+`ok: false` with `MER_BLD_020` beside the errors that stood — the signal to stop
+asking and read the diagnostics. A file whose only diagnostics are warnings had
+nothing to repair and answers `ok: true`. This is the verdict `miri fix --apply
+--yes` reports for the same file, decided by the same code.
 
 `allowRisky` defaults to false. There is no terminal to confirm at over a
 session, so the caller says outright whether a repair the compiler classes as
@@ -535,6 +561,11 @@ misspelled and say so to its user. An unknown method answers `-32601` with
 ### `$/cancelRequest`
 
 `{ "id": 3 }` — a notification, so it is not answered.
+
+Sent as a request — that is, carrying an `id` of its own — it answers `-32600`
+naming the mistake, and the withdrawal it asked for still stands. Every
+identifier a client sends comes back, so a client that gets this wrong learns
+rather than hangs.
 
 **Cancellation reaches a request that has not started.** A reader takes messages
 off stdin while the compiler works, so a cancellation sent during a long compile

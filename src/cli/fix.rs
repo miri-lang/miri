@@ -247,21 +247,47 @@ pub fn plan_envelope(diagnostics: &[JsonDiagnostic]) -> DiagnosticsEnvelope {
 ///
 /// A refusal is reported as one more diagnostic carrying the code that names
 /// it, so a consumer reads it the way it reads every other diagnostic instead
-/// of parsing text written for a person.
+/// of parsing text written for a person. An apply that wrote nothing over an
+/// error no repair answers is such a refusal — see [`left_unrepaired`].
 pub fn apply_envelope(report: &ApplyReport, diagnostics: &[JsonDiagnostic]) -> DiagnosticsEnvelope {
-    if report.ok() {
-        return DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec())
-            .with_exit_code(0);
+    if !report.ok() {
+        let mut reported = diagnostics.to_vec();
+        if !report.refused.is_empty() {
+            reported.push(refusal_diagnostic());
+        }
+        if let Some(failure) = &report.failure {
+            reported.push(failure_diagnostic(failure));
+        }
+        return DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
     }
 
-    let mut reported = diagnostics.to_vec();
-    if !report.refused.is_empty() {
-        reported.push(refusal_diagnostic());
+    if left_unrepaired(report, diagnostics) {
+        let mut reported = diagnostics.to_vec();
+        reported.push(no_repairs_diagnostic());
+        return DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
     }
-    if let Some(failure) = &report.failure {
-        reported.push(failure_diagnostic(failure));
-    }
-    DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1)
+
+    DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec()).with_exit_code(0)
+}
+
+/// Whether an apply that wrote nothing left an error no repair could mend.
+///
+/// Warnings never fail a command, so a file carrying nothing but warnings had
+/// nothing to repair and is the success it looks like. An error with no repair
+/// attached is the one case a caller must be told about: asking again will not
+/// change the answer, and the diagnostic itself is what to read next.
+///
+/// This lives beside the envelope rather than in the command that prints it,
+/// because the same question reaches the compiler over a long-lived connection
+/// and must be answered the same way.
+fn left_unrepaired(report: &ApplyReport, diagnostics: &[JsonDiagnostic]) -> bool {
+    report.applied.is_empty()
+        && diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error.as_str())
+        && !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.repair.is_some())
 }
 
 /// The diagnostic that stands for a withheld set of repairs.
@@ -307,29 +333,6 @@ fn no_repairs_diagnostic() -> JsonDiagnostic {
         related: vec![],
         preexisting: None,
     }
-}
-
-/// Report an apply that was asked to write repairs and found none to write.
-///
-/// The errors that prompted the run travel with it, so the caller sees what
-/// was left unrepaired rather than only that nothing happened.
-fn report_no_repairs(diagnostics: &[JsonDiagnostic], format: Format) -> Outcome {
-    let code = DiagnosticCode::BldNoRepairsApplied;
-    let mut reported = diagnostics.to_vec();
-    reported.push(no_repairs_diagnostic());
-
-    match format {
-        Format::Json => {
-            let envelope =
-                DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
-            println!("{}", serialize_envelope(&envelope));
-        }
-        Format::Pretty => {
-            eprintln!("error[{}]: {}", code, code.title());
-            eprintln!("note: {}", NO_REPAIRS_HELP);
-        }
-    }
-    Outcome::Refused
 }
 
 /// The diagnostic describing why an apply stopped part-way.
@@ -448,49 +451,88 @@ fn apply_repairs(
     let report = apply(target, planned_source, diagnostics, allow_risky);
 
     report_skipped_files(&report.skipped);
+    narrate_apply(&report, diagnostics, format);
 
-    if !report.refused.is_empty() {
-        report_refusal(&report.refused, diagnostics, format);
-        return Outcome::Refused;
+    // Every apply prints one envelope, whatever it did. A run that reported its
+    // outcome only as text on a stream would have no `ok` for a consumer to
+    // read, and no `ok` for the same request over a connection to agree with.
+    if format == Format::Json {
+        println!(
+            "{}",
+            serialize_envelope(&apply_envelope(&report, diagnostics))
+        );
     }
 
-    match report.failure {
-        Some(ApplyFailure::Validation(refusal)) => {
+    apply_outcome(&report, diagnostics)
+}
+
+/// Say what an apply did to whoever is watching the streams.
+///
+/// Only the lines written for a person: what happened is decided elsewhere and
+/// travels in the envelope, so this chooses no outcome. The messages naming a
+/// failure go to stderr in either format; the ones reporting an ordinary
+/// success would sit inside a consumer's parse, so they are written only when
+/// the caller asked for text.
+fn narrate_apply(report: &ApplyReport, diagnostics: &[JsonDiagnostic], format: Format) {
+    if !report.refused.is_empty() {
+        narrate_refusal(&report.refused);
+        return;
+    }
+
+    match &report.failure {
+        Some(ApplyFailure::Validation(refusal) | ApplyFailure::Write(refusal)) => {
             eprintln!("error: {}", refusal.describe());
-            return Outcome::Refused;
-        }
-        Some(ApplyFailure::Write(refusal)) => {
-            eprintln!("error: {}", refusal.describe());
-            return Outcome::Failed;
+            return;
         }
         None => {}
     }
 
+    if left_unrepaired(report, diagnostics) {
+        let code = DiagnosticCode::BldNoRepairsApplied;
+        eprintln!("error[{}]: {}", code, code.title());
+        eprintln!("note: {}", NO_REPAIRS_HELP);
+        return;
+    }
+
     if report.applied.is_empty() {
-        // Warnings never fail a command, so only an error left unrepaired makes
-        // an apply that wrote nothing a failure. A file carrying nothing but
-        // warnings had nothing to repair and is reported as the success it is.
-        let has_repairs = diagnostics.iter().any(|d| d.repair.is_some());
-        let has_errors = diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error.as_str());
-
-        if has_errors && !has_repairs {
-            return report_no_repairs(diagnostics, format);
-        }
-
-        if format == Format::Json {
-            let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec())
-                .with_exit_code(0);
-            println!("{}", serialize_envelope(&envelope));
-        } else {
-            println!("No repairs available.");
-        }
-        return Outcome::Succeeded;
+        say(format, "No repairs available.");
+        return;
     }
 
     for path in &report.applied {
-        println!("Applied repairs to {}", path.display());
+        say(format, &format!("Applied repairs to {}", path.display()));
+    }
+}
+
+/// Write a line meant for a person to the stream nothing will parse.
+///
+/// stdout carries the envelope when the caller asked for JSON, so a sentence
+/// there would sit inside a consumer's parse. It goes to stderr instead, which
+/// is where everything written for a person goes once stdout is spoken for.
+fn say(format: Format, line: &str) {
+    match format {
+        Format::Json => eprintln!("{}", line),
+        Format::Pretty => println!("{}", line),
+    }
+}
+
+/// The status an apply leaves the process to exit with.
+///
+/// Reads the same report the envelope is built from, so the exit status and the
+/// envelope's `ok` cannot disagree.
+fn apply_outcome(report: &ApplyReport, diagnostics: &[JsonDiagnostic]) -> Outcome {
+    if !report.refused.is_empty() {
+        return Outcome::Refused;
+    }
+
+    match report.failure {
+        Some(ApplyFailure::Validation(_)) => return Outcome::Refused,
+        Some(ApplyFailure::Write(_)) => return Outcome::Failed,
+        None => {}
+    }
+
+    if left_unrepaired(report, diagnostics) {
+        return Outcome::Refused;
     }
 
     Outcome::Succeeded
@@ -531,12 +573,12 @@ fn judge_repairs_to_be_written(
     )
 }
 
-/// Report repairs that were withheld, naming each one and why.
+/// Name each repair that was withheld, and why.
 ///
-/// In JSON the refusal joins the diagnostics as one more entry, carrying the
-/// code that names it, so a consumer reads it the same way it reads every other
-/// diagnostic rather than parsing the text written for a human.
-fn report_refusal(refused: &[RefusedRepair], diagnostics: &[JsonDiagnostic], format: Format) {
+/// This writes only the lines a person reads. The refusal reaches a consumer as
+/// one more diagnostic carrying the code that names it, in the envelope every
+/// apply prints, so nothing here is the only record of what happened.
+fn narrate_refusal(refused: &[RefusedRepair]) {
     for repair in refused {
         eprintln!(
             "error: [{}] repair classified as {} ({})",
@@ -552,16 +594,6 @@ fn report_refusal(refused: &[RefusedRepair], diagnostics: &[JsonDiagnostic], for
         refusal,
         refusal.title()
     );
-
-    if format != Format::Json {
-        return;
-    }
-
-    let mut reported = diagnostics.to_vec();
-    reported.push(refusal_diagnostic());
-
-    let envelope = DiagnosticsEnvelope::new(JsonCommand::Fix, false, reported).with_exit_code(1);
-    println!("{}", serialize_envelope(&envelope));
 }
 
 /// Whether this diagnostic's repair edits a file this run is going to write.
