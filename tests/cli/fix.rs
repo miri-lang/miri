@@ -1236,3 +1236,42 @@ fn test_an_optional_operand_is_told_to_unwrap_and_offered_no_rewrite() {
         diagnostic.repair
     );
 }
+
+/// Six uses of one unimported name raise six diagnostics, each carrying the
+/// same `add-import` repair inserting the same line at the same offset. The
+/// file needs that line once: an edit repeated is still one edit, and applying
+/// it as many times as it was reported writes a file no one asked for.
+#[test]
+fn test_one_import_repaired_once_however_many_diagnostics_asked_for_it() {
+    let fixture = Fixture::new(
+        "repeated-import-repair",
+        "fn main()\n    assert_eq(1, 1)\n    assert_eq(2, 2)\n    assert_eq(3, 3)\n    \
+         assert_eq(4, 4)\n    assert_eq(5, 5)\n    assert_eq(6, 6)\n",
+    );
+
+    let envelope = plan(fixture.path());
+    assert!(
+        envelope.diagnostics.len() > 1,
+        "the fixture must raise more than one diagnostic to be testing anything, got {}",
+        envelope.diagnostics.len()
+    );
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the repair should succeed");
+
+    let contents = fixture.contents();
+    let imports = contents
+        .lines()
+        .filter(|line| line.starts_with("use "))
+        .count();
+    assert_eq!(
+        imports, 1,
+        "the file should gain one import, got:\n{}",
+        contents
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean, got:\n{}",
+        contents
+    );
+}

@@ -1,0 +1,7 @@
+// expect: MER_IMP_004
+// summary: Triggers MER_IMP_004: Duplicate Import.
+use system.testing.{assert_eq}
+use system.testing.{assert_eq}
+
+fn main()
+    assert_eq(1, 1)

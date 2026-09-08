@@ -9,6 +9,10 @@ The module system resolves and loads external `.mi` files via `use` statements. 
 - Names not found in a module (selective import requests a non-existent export)
 - Missing or unreadable module files
 
+## What It Warns About
+
+- A repeated import: two `use` lines in one file naming the same module, selecting the same names, and binding the same alias. The second brings in nothing the first did not. Selecting different names from one module is not a repeat, and neither is importing two different modules.
+
 ## Module Search
 
 Modules are located via dot-notation paths (e.g., `system.io`), with dots converted to directory separators. Paths cannot contain `/`, `\`, or `..`.
