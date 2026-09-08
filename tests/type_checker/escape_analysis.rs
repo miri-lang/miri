@@ -197,6 +197,7 @@ use miri::type_checker::context::TypeDefinition;
 fn param(name: &str) -> Parameter {
     Parameter {
         name: name.to_string(),
+        name_span: Span::new(0, 0),
         typ: Box::new(expr_with_span(
             ExpressionKind::Type(Box::new(make_type(TypeKind::Int)), false),
             Span::new(0, 0),

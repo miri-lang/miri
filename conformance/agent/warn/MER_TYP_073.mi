@@ -1,0 +1,7 @@
+// expect: MER_TYP_073
+// summary: Triggers MER_TYP_073: Unused Private Declaration.
+private fn orphan() int
+    41
+
+fn main()
+    println("done")

@@ -13,6 +13,7 @@ The Type Checker traverses the Abstract Syntax Tree (AST), assigns types to ever
 -   **Type Inference**: For variable declarations without explicit types (`let x = 42`), the type checker infers the type from the right-hand-side expression.
 -   **Generics (`generics.rs`)**: Handles substitution and validation of type parameters for generic functions and collections.
 -   **Visibility Verification**: Enforces access control (`public`, `private`, `protected`) for class fields and methods across module boundaries.
+-   **Hygiene (`hygiene/`)**: Reports what a file declares and never uses — an unread local, a parameter no body reads, an unused import, an uncalled private declaration — and statements written after a `return`, `break` or `continue`. Every report is a warning, because each names something the program would mean exactly the same without. It runs over the file being compiled and nothing else: an imported module is somebody else's file, and its private helpers are called from inside it.
 
 ## Design Principles
 

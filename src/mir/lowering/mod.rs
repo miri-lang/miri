@@ -422,12 +422,8 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
                 .params
                 .iter()
                 .map(|p| AstParameter {
-                    name: p.name.clone(),
                     typ: Box::new(substitute_in_type_expr(&p.typ, subs)),
-                    guard: p.guard.clone(),
-                    default_value: p.default_value.clone(),
-                    is_out: p.is_out,
-                    residency: p.residency,
+                    ..p.clone()
                 })
                 .collect();
             let new_return_type = fdata

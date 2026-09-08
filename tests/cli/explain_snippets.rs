@@ -20,6 +20,7 @@ use std::process::Command;
 const VERIFIED: &[&str] = &[
     "MER_IMP_002",
     "MER_IMP_004",
+    "MER_IMP_005",
     "MER_LEX_001",
     "MER_LEX_002",
     "MER_LEX_003",
@@ -94,6 +95,10 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_068",
     "MER_TYP_069",
     "MER_TYP_070",
+    "MER_TYP_071",
+    "MER_TYP_072",
+    "MER_TYP_073",
+    "MER_TYP_074",
 ];
 
 /// Codes whose example cannot be verified this way, each with the reason.

@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_IMP_005: Unused Import does not fire.
+use system.math
+
+fn main()
+    println(f"{abs(-2)}")

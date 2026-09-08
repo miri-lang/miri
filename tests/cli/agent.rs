@@ -747,7 +747,7 @@ fn test_a_risky_repair_is_applied_when_the_caller_allows_it() {
 fn test_a_check_reporting_only_warnings_still_reports_ok() {
     // Warnings never fail a check. A client that treated them as failure would
     // refuse to proceed on a program the compiler accepts.
-    let source = "@deprecated(\"use current\")\nfn old() int:\n    return 1\n\nfn current() int:\n    return 2\n\nfn main():\n    let value = old()\n    println(\"{value}\")\n";
+    let source = "@deprecated(\"use current\")\nfn old() int:\n    return 1\n\nfn current() int:\n    return 2\n\nfn main():\n    let value = old()\n    println(f\"{value}\")\n";
     let directory = project("warnings-only", &[("main.mi", source)]);
     let path = directory.path().join("main.mi");
     let mut session = Session::start(directory.path());

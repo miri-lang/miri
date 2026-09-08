@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_TYP_072: Unused Parameter does not fire.
+fn greet(_name String) String
+    "hello"
+
+fn main()
+    println(greet("world"))

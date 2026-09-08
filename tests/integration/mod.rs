@@ -21,6 +21,7 @@ pub mod function_params;
 pub mod functions;
 pub mod generics;
 pub mod gpu;
+pub mod hygiene;
 pub mod implicit_imports;
 pub mod lambdas;
 pub mod linker;

@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TYP_074: Unreachable Statement does not fire.
+fn announce()
+    println("first")
+    return
+
+fn main()
+    announce()

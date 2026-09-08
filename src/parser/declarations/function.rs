@@ -296,6 +296,11 @@ impl<'source> Parser<'source> {
         if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
             return Err(self.error_unexpected_token("identifier", "out"));
         }
+        let name_span = self
+            .lookahead
+            .as_ref()
+            .map(|(_, span)| *span)
+            .unwrap_or_default();
         let name = self.simple_identifier()?;
 
         let is_out = if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
@@ -344,6 +349,7 @@ impl<'source> Parser<'source> {
 
         Ok(Parameter {
             name,
+            name_span,
             typ,
             guard,
             default_value,

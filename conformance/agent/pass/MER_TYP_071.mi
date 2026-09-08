@@ -1,0 +1,4 @@
+// summary: Accepted counterpart of MER_TYP_071: Unused Local does not fire.
+fn main()
+    let read = 41
+    println(f"{read}")

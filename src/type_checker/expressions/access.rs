@@ -1005,6 +1005,7 @@ impl TypeChecker {
             generics: None,
             params: vec![
                 Parameter {
+                    name_span: Default::default(),
                     name: "value".to_string(),
                     typ: Box::new(ast_factory::type_expr_non_null(int_type.clone())),
                     guard: None,
@@ -1013,6 +1014,7 @@ impl TypeChecker {
                     residency: None,
                 },
                 Parameter {
+                    name_span: Default::default(),
                     name: "offset".to_string(),
                     typ: Box::new(ast_factory::type_expr_non_null(int_type)),
                     guard: None,
@@ -1042,6 +1044,7 @@ impl TypeChecker {
             generics: None,
             params: vec![
                 Parameter {
+                    name_span: Default::default(),
                     name: "grid".to_string(),
                     typ: dim3_expr.clone(),
                     guard: None,
@@ -1050,6 +1053,7 @@ impl TypeChecker {
                     residency: None,
                 },
                 Parameter {
+                    name_span: Default::default(),
                     name: "block".to_string(),
                     typ: dim3_expr,
                     guard: None,
@@ -1446,6 +1450,7 @@ impl TypeChecker {
                     self.substitute_type(ty, mapping)
                 };
                 Parameter {
+                    name_span: Default::default(),
                     name: pname.clone(),
                     typ: Box::new(self.create_type_expression(substituted_ty)),
                     guard: None,
@@ -1606,6 +1611,7 @@ impl TypeChecker {
             .iter()
             .enumerate()
             .map(|(i, (pname, ty))| Parameter {
+                name_span: Default::default(),
                 name: pname.clone(),
                 typ: Box::new(self.create_type_expression(substitute(ty))),
                 guard: None,
@@ -1777,6 +1783,7 @@ impl TypeChecker {
                     self.substitute_type(ty, mapping)
                 };
                 Parameter {
+                    name_span: Default::default(),
                     name: pname.clone(),
                     typ: Box::new(self.create_type_expression(substituted_ty)),
                     guard: None,
@@ -1865,6 +1872,7 @@ impl TypeChecker {
                         .params
                         .iter()
                         .map(|(param_name, ty)| Parameter {
+                            name_span: Default::default(),
                             name: param_name.clone(),
                             typ: Box::new(self.create_type_expression(ty.clone())),
                             guard: None,
@@ -1925,6 +1933,7 @@ impl TypeChecker {
                         .params
                         .iter()
                         .map(|(param_name, ty)| Parameter {
+                            name_span: Default::default(),
                             name: param_name.clone(),
                             typ: Box::new(self.create_type_expression(ty.clone())),
                             guard: None,
@@ -2061,6 +2070,7 @@ impl TypeChecker {
             .iter()
             .enumerate()
             .map(|(i, t)| Parameter {
+                name_span: Default::default(),
                 name: format!("arg{}", i),
                 typ: Box::new(self.create_type_expression(t.clone())),
                 guard: None,

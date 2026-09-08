@@ -12,6 +12,7 @@ The module system resolves and loads external `.mi` files via `use` statements. 
 ## What It Warns About
 
 - A repeated import: two `use` lines in one file naming the same module, selecting the same names, and binding the same alias. The second brings in nothing the first did not. Selecting different names from one module is not a repeat, and neither is importing two different modules.
+- An import nothing uses: no name the `use` line brings in is read anywhere in the file. Deleting the line is always the fix — an import that is never used means the same as no import at all. Two cases are left alone: a wildcard import, whose names nothing in the file points at by construction, and a file that declares nothing at all, which is re-exporting what it imports.
 
 ## Module Search
 

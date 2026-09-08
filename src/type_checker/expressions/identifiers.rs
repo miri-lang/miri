@@ -152,6 +152,7 @@ impl TypeChecker {
         ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: Some(vec![t_expr.clone()]),
             params: vec![Parameter {
+                name_span: Default::default(),
                 name: "value".to_string(),
                 typ: Box::new(t_expr),
                 guard: None,
@@ -180,6 +181,7 @@ impl TypeChecker {
         ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: Some(vec![t_expr.clone()]),
             params: vec![Parameter {
+                name_span: Default::default(),
                 name: "value".to_string(),
                 typ: Box::new(t_expr),
                 guard: None,
@@ -208,6 +210,7 @@ impl TypeChecker {
         ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: Some(vec![e_expr.clone()]),
             params: vec![Parameter {
+                name_span: Default::default(),
                 name: "error".to_string(),
                 typ: Box::new(e_expr),
                 guard: None,

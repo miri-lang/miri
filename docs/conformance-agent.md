@@ -101,13 +101,14 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_069 | Triggers MER_TYP_069: a top-level statement beside a declared 'main'. |
 | MER_TYP_070 | Triggers MER_TYP_070: two top-level functions share a name. |
 
-## Warning fixtures (`warn/`) — 8
+## Warning fixtures (`warn/`) — 13
 
 Each program must emit the named code at warning severity and still compile (`ok: true`).
 
 | Code | Summary |
 |---|---|
 | MER_IMP_004 | Triggers MER_IMP_004: Duplicate Import. |
+| MER_IMP_005 | Triggers MER_IMP_005: Unused Import. |
 | MER_NAM_001 | Triggers MER_NAM_001: Deprecated Kernel Context Identifier. |
 | MER_OWN_001 | Triggers MER_OWN_001: Resource Not Consumed at Scope Exit. |
 | MER_TYP_023 | Triggers MER_TYP_023: Unnecessary Double Negation. |
@@ -115,8 +116,12 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_025 | Triggers MER_TYP_025: Unnecessary Optional Declaration. |
 | MER_TYP_026 | Triggers MER_TYP_026: Deprecated Attribute Spelling. |
 | MER_TYP_027 | Triggers MER_TYP_027: @deprecated Attribute. |
+| MER_TYP_071 | Triggers MER_TYP_071: Unused Local. |
+| MER_TYP_072 | Triggers MER_TYP_072: Unused Parameter. |
+| MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
+| MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 93
+## Accepted fixtures (`pass/`) — 98
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -124,6 +129,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 |---|---|
 | MER_IMP_002 | Accepted counterpart of MER_IMP_002: Imported Name Conflict does not fire. |
 | MER_IMP_004 | Accepted counterpart of MER_IMP_004: Duplicate Import does not fire. |
+| MER_IMP_005 | Accepted counterpart of MER_IMP_005: Unused Import does not fire. |
 | MER_LEX_002 | Accepted counterpart of MER_LEX_002: Unclosed Multiline Comment does not fire. |
 | MER_LEX_003 | Accepted counterpart of MER_LEX_003: Indentation Mismatch does not fire. |
 | MER_LEX_005 | Accepted counterpart of MER_LEX_005: Invalid Binary Literal does not fire. |
@@ -209,6 +215,10 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_068 | Small integer literal fits in range |
 | MER_TYP_069 | Accepted counterpart of MER_TYP_069: the statement moved into 'main'. |
 | MER_TYP_070 | Accepted counterpart of MER_TYP_070: the second function is renamed. |
+| MER_TYP_071 | Accepted counterpart of MER_TYP_071: Unused Local does not fire. |
+| MER_TYP_072 | Accepted counterpart of MER_TYP_072: Unused Parameter does not fire. |
+| MER_TYP_073 | Accepted counterpart of MER_TYP_073: Unused Private Declaration does not fire. |
+| MER_TYP_074 | Accepted counterpart of MER_TYP_074: Unreachable Statement does not fire. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

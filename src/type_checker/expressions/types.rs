@@ -388,6 +388,7 @@ impl TypeChecker {
                 .unwrap_or(make_type(TypeKind::Error));
             let new_p_type = self.substitute_type(&p_type, &mapping);
             new_params.push(Parameter {
+                name_span: Default::default(),
                 name: p.name.clone(),
                 typ: Box::new(self.create_type_expression(new_p_type)),
                 guard: p.guard.clone(),

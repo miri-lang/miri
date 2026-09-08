@@ -3,6 +3,7 @@
 
 use crate::ast::expression::Expression;
 use crate::ast::statement::BindingResidency;
+use crate::error::syntax::Span;
 
 /// Visibility level for class/struct members and declarations.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -24,14 +25,46 @@ pub struct FunctionProperties {
 }
 
 /// Represents a parameter in a function declaration
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct Parameter {
     pub name: String,
+    /// Source range of the declared name, so a diagnostic about the parameter
+    /// itself points at the parameter rather than at the function that takes
+    /// it. Empty for parameters built programmatically, which have no source
+    /// text to point at.
+    pub name_span: Span,
     pub typ: Box<Expression>,
     pub guard: Option<Box<Expression>>,
     pub default_value: Option<Box<Expression>>,
     pub is_out: bool,
     pub residency: Option<BindingResidency>,
+}
+
+/// Equality and hashing ignore `name_span`, matching
+/// [`crate::ast::statement::FunctionDeclarationData`], where a node's source
+/// location is metadata rather than part of its identity. This keeps a
+/// parameter built by the AST factory (which has no source text, so no span)
+/// equal to the same parameter produced by the parser.
+impl PartialEq for Parameter {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.typ == other.typ
+            && self.guard == other.guard
+            && self.default_value == other.default_value
+            && self.is_out == other.is_out
+            && self.residency == other.residency
+    }
+}
+
+impl std::hash::Hash for Parameter {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.typ.hash(state);
+        self.guard.hash(state);
+        self.default_value.hash(state);
+        self.is_out.hash(state);
+        self.residency.hash(state);
+    }
 }
 
 /// Known runtime targets for runtime function declarations.

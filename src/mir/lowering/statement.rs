@@ -520,17 +520,7 @@ fn lower_nested_function_decl(
     let func_ty = Type::new(
         TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
             generics: None,
-            params: params
-                .iter()
-                .map(|p| crate::ast::common::Parameter {
-                    name: p.name.clone(),
-                    typ: p.typ.clone(),
-                    guard: p.guard.clone(),
-                    default_value: p.default_value.clone(),
-                    is_out: p.is_out,
-                    residency: p.residency,
-                })
-                .collect(),
+            params: params.to_vec(),
             return_type: ret_type_expr.clone(),
         })),
         span,

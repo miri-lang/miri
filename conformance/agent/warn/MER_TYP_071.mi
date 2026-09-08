@@ -1,0 +1,5 @@
+// expect: MER_TYP_071
+// summary: Triggers MER_TYP_071: Unused Local.
+fn main()
+    let unread = 41
+    println("done")
