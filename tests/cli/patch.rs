@@ -3477,3 +3477,32 @@ fn test_a_method_body_ending_in_an_f_string_is_replaced_whole() {
         });
     });
 }
+
+/// A number written in hex, which `miri fmt` now leaves as the author wrote
+/// it. Aligning the canonical rendering against the file has to read the same
+/// spelling out of the source, or a declaration holding one could never be
+/// patched — and `miri fmt`, which used to rewrite it to decimal and so make
+/// the file alignable, no longer does.
+#[test]
+fn test_a_function_holding_a_hex_literal_can_still_be_patched() {
+    let source = "fn mask(value int) int\n    return value & 0xFF\n\nfn main()\n    println(f\"{mask(511)}\")\n";
+    with_source(source, |path| {
+        let (stdout, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "mask",
+            "--old",
+            "return value & 0xFF",
+            "--new",
+            "return value & 0x0F",
+            "--format",
+            "json",
+            &path.display().to_string(),
+        ]);
+        assert!(ok, "patch should succeed:\n{stdout}{stderr}");
+        assert!(
+            read_file(path).contains("0x0F"),
+            "the edit should have landed, got:\n{}",
+            read_file(path)
+        );
+    });
+}

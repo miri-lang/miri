@@ -14,10 +14,11 @@ use crate::ast::expression::{
 };
 use crate::ast::operator::BinaryOp;
 use crate::ast::statement::IfStatementType;
+use crate::error::syntax::Span;
 
 use super::helpers::{
-    assignment_operator, binary_operator, function_modifiers, guard_operator, is_postfix_unary,
-    literal, parameter_list, unary_operator,
+    assignment_operator, binary_operator, function_modifiers, guard_operator, literal,
+    parameter_list, unary_operator,
 };
 use super::sink::Sink;
 use super::statement::statement as format_statement;
@@ -58,7 +59,7 @@ fn render(sink: &mut Sink, expr: &Expression, indent: usize, minimum: u8) {
     if needs_parentheses {
         sink.emit("(");
     }
-    kind(sink, &expr.node, indent);
+    kind(sink, &expr.node, expr.span, indent);
     if needs_parentheses {
         sink.emit(")");
     }
@@ -74,13 +75,7 @@ fn precedence_of(kind: &ExpressionKind) -> u8 {
         }
         ExpressionKind::Range(..) => precedence::RANGE,
         ExpressionKind::Guard(..) => precedence::RELATIONAL,
-        ExpressionKind::Unary(operator, _) => {
-            if is_postfix_unary(*operator) {
-                precedence::POSTFIX
-            } else {
-                precedence::UNARY
-            }
-        }
+        ExpressionKind::Unary(..) => precedence::UNARY,
         ExpressionKind::Member(..)
         | ExpressionKind::Index(..)
         | ExpressionKind::Call(..)
@@ -134,9 +129,9 @@ fn binary_precedence(operator: BinaryOp) -> u8 {
 }
 
 /// Render one expression form.
-fn kind(sink: &mut Sink, node: &ExpressionKind, indent: usize) {
+fn kind(sink: &mut Sink, node: &ExpressionKind, span: Span, indent: usize) {
     match node {
-        ExpressionKind::Literal(value) => literal(sink, value),
+        ExpressionKind::Literal(value) => literal(sink, value, span),
         ExpressionKind::Identifier(name, qualifier) => identifier(sink, name, qualifier.as_deref()),
         ExpressionKind::Binary(left, operator, right)
         | ExpressionKind::Logical(left, operator, right) => {
@@ -311,19 +306,35 @@ fn binary(
 }
 
 /// A prefix or postfix unary operator applied to its operand.
+/// Every unary operator the grammar has is written in front of its operand.
+///
+/// A space follows the operator when the operand starts with the same symbol.
+/// `- - x` written without one is `--x`, which the lexer reads as a single
+/// decrement operator: a rewrite that joins them gives back a different
+/// program.
 fn unary(
     sink: &mut Sink,
     operator: crate::ast::operator::UnaryOp,
     operand: &Expression,
     indent: usize,
 ) {
-    if is_postfix_unary(operator) {
-        render(sink, operand, indent, precedence::POSTFIX);
-        sink.emit(unary_operator(operator));
-        return;
+    let symbol = unary_operator(operator);
+    sink.emit(symbol);
+    if would_join_into_one_operator(symbol, operand) {
+        sink.emit(" ");
     }
-    sink.emit(unary_operator(operator));
     render(sink, operand, indent, precedence::UNARY);
+}
+
+/// Whether writing `symbol` straight against `operand` spells a longer
+/// operator than the two of them.
+fn would_join_into_one_operator(symbol: &str, operand: &Expression) -> bool {
+    let ExpressionKind::Unary(inner, _) = &operand.node else {
+        return false;
+    };
+    let inner_symbol = unary_operator(*inner);
+    symbol.ends_with('-') && inner_symbol.starts_with('-')
+        || symbol.ends_with('+') && inner_symbol.starts_with('+')
 }
 
 /// The left-hand side of an assignment.

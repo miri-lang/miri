@@ -33,7 +33,9 @@ pub fn statement(sink: &mut Sink, node: &Statement, indent: usize) {
     if carries_comments {
         leading_comments(sink, node, indent);
     }
-    statement_code(sink, node, indent);
+    sink.with_written_modifiers(node.trivia.written_modifiers, |sink| {
+        statement_code(sink, node, indent)
+    });
     if carries_comments {
         trailing_comment(sink, node);
         trailing_lines(sink, node, indent);
@@ -472,10 +474,19 @@ fn match_branch(sink: &mut Sink, branch: &MatchBranch, indent: usize) {
     body(sink, &branch.body, indent);
 }
 
-/// Render the attributes that precede a declaration, one per line.
+/// Render the attributes that precede a declaration.
+///
+/// The `@name` form takes a line of its own. The deprecated keyword form —
+/// `must_use enum Status` — is written back where it was written, in front of
+/// the declaration keyword: the compiler already warns about the spelling, and
+/// changing it here would make a rewrite report a change the author did not
+/// ask for. What must not happen is the third option this used to take, which
+/// was to render neither and delete the attribute from the program.
 fn attributes(sink: &mut Sink, entries: &[Attribute], indent: usize) {
     for entry in entries {
         if entry.spelling == AttributeSpelling::DeprecatedKeyword {
+            sink.emit(&entry.name);
+            sink.emit(" ");
             continue;
         }
         sink.emit("@");

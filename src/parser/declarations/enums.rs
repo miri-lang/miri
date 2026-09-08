@@ -99,8 +99,9 @@ impl<'source> Parser<'source> {
                                 }
                                 Some((Token::Public, _)) => {
                                     self.eat_token(&Token::Public)?;
-                                    let stmt =
+                                    let mut stmt =
                                         self.function_declaration(MemberVisibility::Public)?;
+                                    stmt.trivia.written_modifiers.public = true;
                                     methods.push(stmt);
                                 }
                                 Some((Token::Private, _)) => {

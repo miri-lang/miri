@@ -11,6 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ast::statement::WrittenModifiers;
+use crate::error::syntax::Span;
+
 /// One indentation level of rendered output.
 const INDENT_UNIT: &str = "    ";
 
@@ -42,6 +45,8 @@ pub struct Sink {
     text: String,
     spans: Vec<RecordedSpan>,
     comments: bool,
+    modifiers: WrittenModifiers,
+    source: Option<String>,
 }
 
 impl Sink {
@@ -50,22 +55,81 @@ impl Sink {
         Self::default()
     }
 
-    /// An empty sink that also renders the comments a statement carries.
+    /// An empty sink that also renders the comments a statement carries, and
+    /// that can consult `source` for spellings the tree does not keep.
     ///
-    /// Only whole-program rendering asks for these. A single declaration is
-    /// rendered without them because that text is what an edit anchor is
+    /// Only whole-program rendering asks for either. A single declaration is
+    /// rendered without comments because that text is what an edit anchor is
     /// matched against, and an anchor that could match inside a comment would
     /// let an edit land there.
-    pub fn with_comments() -> Self {
+    pub fn with_comments(source: &str) -> Self {
         Self {
             comments: true,
+            source: Some(source.to_string()),
             ..Self::default()
         }
+    }
+
+    /// An empty sink that renders code only, and that can consult `source` for
+    /// spellings the tree does not keep.
+    ///
+    /// The alignment between a canonical rendering and the file it came from
+    /// is token by token, so the rendering has to spell a number the way the
+    /// file spells it: a declaration holding `0xFF` cannot be aligned against
+    /// a rendering that says `255`, and so could not be patched at all.
+    pub fn reading(source: &str) -> Self {
+        Self {
+            source: Some(source.to_string()),
+            ..Self::default()
+        }
+    }
+
+    /// The source text `span` covers, when this sink was given the text the
+    /// tree was parsed from and the span lies inside it.
+    ///
+    /// A tree built without source — by the AST factory, or by a pass that
+    /// rewrote it — has no spelling to give back, and every caller renders
+    /// from the tree instead.
+    pub fn source_text(&self, span: Span) -> Option<&str> {
+        let source = self.source.as_deref()?;
+        if span.start >= span.end || span.end > source.len() {
+            return None;
+        }
+        if !source.is_char_boundary(span.start) || !source.is_char_boundary(span.end) {
+            return None;
+        }
+        Some(&source[span.start..span.end])
     }
 
     /// Whether this sink renders comments.
     pub fn renders_comments(&self) -> bool {
         self.comments
+    }
+
+    /// The meaning-free modifiers the declaration being rendered was written
+    /// with.
+    ///
+    /// The renderer that writes a declaration's modifiers sits several calls
+    /// below the one holding this fact, so it travels here rather than through
+    /// every header in between.
+    pub fn written_modifiers(&self) -> WrittenModifiers {
+        self.modifiers
+    }
+
+    /// Render `body` with `modifiers` as the answer to
+    /// [`Sink::written_modifiers`].
+    ///
+    /// The previous answer is restored afterwards, so a nested declaration
+    /// cannot leave its own modifiers behind for the one that contains it.
+    pub fn with_written_modifiers<R>(
+        &mut self,
+        modifiers: WrittenModifiers,
+        render: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = std::mem::replace(&mut self.modifiers, modifiers);
+        let result = render(self);
+        self.modifiers = previous;
+        result
     }
 
     /// Whether the cursor sits at the start of a line, with only indentation

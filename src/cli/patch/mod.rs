@@ -694,7 +694,7 @@ fn apply_in_place(
         return Err(not_a_function(&operation.function));
     };
 
-    let rendered = formatter::declaration(declaration);
+    let rendered = formatter::declaration_from_source(declaration, source);
     let alignment =
         token_align::build_alignment(source, &rendered.text, &data.name, data.name_span)
             .map_err(|diverged| Box::new(diverged.to_diagnostic(&operation.function)))?;

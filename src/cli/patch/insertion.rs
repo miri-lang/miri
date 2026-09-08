@@ -150,7 +150,7 @@ fn anchored_end(source: &str, declaration: &Statement) -> Option<usize> {
     // AST, so it is one identifier token even where the declaration renders
     // its name with generic arguments beside it.
     let declared = source.get(span.start..span.end)?;
-    let rendered = formatter::declaration(declaration);
+    let rendered = formatter::declaration_from_source(declaration, source);
     let alignment = token_align::build_alignment(source, &rendered.text, declared, span).ok()?;
     alignment.raw_extent().map(|(_, end)| end)
 }

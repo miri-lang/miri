@@ -15,6 +15,7 @@
 use std::path::Path;
 
 use crate::ast::formatter;
+use crate::ast::types::BuiltinCollectionKind;
 use crate::cli::{serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand};
 use crate::error::diagnostic::{Diagnostic, DiagnosticBuilder, Reportable};
@@ -77,14 +78,14 @@ pub fn fmt(path: &Path, source: &str, mode: Mode) -> FmtReport {
         Err(error) => return refusal(vec![*error], source, source_path, mode),
     };
 
-    let canonical = formatter::program(&program).text;
+    let canonical = formatter::program(&program, source).text;
 
     // Rendering must be a fixed point: text that renders differently on a
     // second pass would churn the file on every run, so it is refused rather
     // than written.
     match parse(&canonical) {
         Ok(reparsed) => {
-            let again = formatter::program(&reparsed).text;
+            let again = formatter::program(&reparsed, &canonical).text;
             if canonical != again {
                 return refusal(vec![not_idempotent()], &canonical, source_path, mode);
             }
@@ -96,6 +97,15 @@ pub fn fmt(path: &Path, source: &str, mode: Mode) -> FmtReport {
     // comment the rewrite would delete. Refusing beats writing a file the
     // author has to notice is missing something.
     if let Some(lost) = comment_lost(source, &canonical) {
+        return refusal(vec![would_lose(&lost)], source, source_path, mode);
+    }
+
+    // The same rule for the code itself. A modifier the rendering does not
+    // write is a word the rewrite would delete, and `public` and `abstract`
+    // say nothing the rest of the declaration does not — so a file missing
+    // them still compiles, still means the same thing, and still is not the
+    // file the author wrote.
+    if let Some(lost) = word_lost(source, &canonical) {
         return refusal(vec![would_lose(&lost)], source, source_path, mode);
     }
 
@@ -141,6 +151,62 @@ fn comment_lost(source: &str, canonical: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The first word in `source` that `canonical` does not carry, if any.
+///
+/// Words are compared as a multiset rather than in order: a canonicalization
+/// may move one — an `if a: b else: c` is written back as `b if a else c` —
+/// without losing any. What this is looking for is a word that went missing.
+fn word_lost(source: &str, canonical: &str) -> Option<String> {
+    let mut rendered = words_in(canonical);
+    for word in words_in(source) {
+        match rendered.iter().position(|kept| *kept == word) {
+            Some(index) => {
+                rendered.remove(index);
+            }
+            None => return Some(word),
+        }
+    }
+    None
+}
+
+/// Every keyword, identifier and number `text` is written with.
+///
+/// Punctuation is left out because the formatter is entitled to move it: it
+/// drops a grouping parenthesis that changes nothing and writes a body as an
+/// indented block rather than after a colon. A word is different — there is no
+/// canonical form that needs one fewer of them.
+fn words_in(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for token in Lexer::new(text) {
+        let Ok((_, span)) = token else {
+            break;
+        };
+        let Some(lexeme) = text.get(span.start..span.end) else {
+            continue;
+        };
+        let starts_a_word = lexeme
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_alphanumeric() || first == '_');
+        let is_word = starts_a_word
+            && lexeme
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+        if is_word && !rendered_as_sugar(lexeme) {
+            words.push(lexeme.to_string());
+        }
+    }
+    words
+}
+
+/// Whether the rendering is allowed not to write this word, because it spells
+/// the type the word names in the sugar the language prefers: a built-in
+/// collection is written `[T]`, `[T; N]`, `{K: V}` or `{T}` rather than by the
+/// name of the class behind it.
+fn rendered_as_sugar(word: &str) -> bool {
+    BuiltinCollectionKind::from_name(word).is_some()
 }
 
 /// Every comment `text` holds, in the order the lexer meets them.
