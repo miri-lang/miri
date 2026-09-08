@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_RT_011: an index inside the array reads its element.
+// expect-stdout: 3
+fn at(a [int; 3], i int) int
+    a[i]
+
+fn main()
+    let values = [1, 2, 3]
+    println(f"{at(values, 2)}")

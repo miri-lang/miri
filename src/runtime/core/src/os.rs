@@ -186,16 +186,14 @@ pub mod ffi {
         let args = args_snapshot();
 
         if index < 0 || index as usize >= args.len() {
-            // `_exit` rather than `abort`, matching miri_rt_array_panic_oob: it
-            // avoids SIGABRT and skips the atexit leak observer.
-            eprintln!(
-                "Runtime error: args index out of bounds: index {} not in range [0, {})",
-                index,
-                args.len()
+            crate::trap::trap(
+                crate::trap::code::INDEX_OUT_OF_BOUNDS,
+                &format!(
+                    "args index out of bounds: index {} not in range [0, {})",
+                    index,
+                    args.len()
+                ),
             );
-            use std::io::Write;
-            let _ = std::io::stderr().flush();
-            unsafe { libc::_exit(1) };
         }
 
         into_raw_ptr(MiriString::from_str(&args[index as usize]))

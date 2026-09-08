@@ -82,6 +82,7 @@ pub use ffi::*;
 pub mod ffi {
     use super::*;
     use crate::string::MiriString;
+    use crate::trap::{code, trap};
 
     /// Prints a `MiriString` to stdout without a trailing newline.
     ///
@@ -167,12 +168,12 @@ pub mod ffi {
         crate::string::into_raw_ptr(MiriString::from_str(LINE_END))
     }
 
-    /// Prints a panic message to stderr and aborts the process.
+    /// Reports an explicit `panic` as MER_RT_012 and ends the process.
     ///
     /// If a `miri_rt_assert_panics` catch frame is active on the current
     /// thread, stores the message in `CAUGHT_PANIC_MSG` and `siglongjmp`s
-    /// back to the catch site instead of aborting. The catch site reads the
-    /// message and decides whether to treat the panic as a test pass.
+    /// back to the catch site instead. A caught panic is a test observing the
+    /// panic it asked for, so it reports no trap and the process lives on.
     ///
     /// # Safety
     /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
@@ -189,8 +190,7 @@ pub mod ffi {
             CAUGHT_PANIC_MSG.with(|m| *m.borrow_mut() = Some(msg));
             siglongjmp(catch_buf, 1);
         }
-        eprintln!("Runtime error: {}", msg);
-        die();
+        trap(code::EXPLICIT_PANIC, &msg);
     }
 
     /// Helper that formats prefix from separate location components.
@@ -208,21 +208,6 @@ pub mod ffi {
             String::new()
         } else {
             (*user_msg).as_str().to_string()
-        }
-    }
-
-    /// Records a runtime trap diagnostic code to a file (if the env var is set).
-    ///
-    /// The trap report path is passed via the `MIRI_TRAP_REPORT_PATH` env var.
-    /// On success, writes the diagnostic code (e.g., "MER_RT_001") and flushes.
-    /// Failures are silent — the report is best-effort, and the trap will exit
-    /// regardless of whether this succeeds.
-    fn write_trap_report(code: &str) {
-        use std::env;
-        use std::fs;
-
-        if let Ok(path) = env::var("MIRI_TRAP_REPORT_PATH") {
-            let _ = fs::write(&path, code);
         }
     }
 
@@ -270,24 +255,11 @@ pub mod ffi {
         writeln!(file, "{}:{}:{}", key, value.len(), value)
     }
 
-    /// Clean-exit termination for user-facing runtime errors.
+    /// Reports a failed `assert(cond)` as MER_RT_005 and ends the process.
     ///
-    /// Flushes stderr (so the preceding `eprintln!` is visible), then calls
-    /// `libc::_exit(1)`. Skips atexit handlers — so the `MIRI_LEAK_CHECK`
-    /// observer does not fire on intentional error exits, and on macOS the
-    /// kernel does not invoke `ReportCrash`. Compared with
-    /// `std::process::abort()` (which raises SIGABRT), this keeps test
-    /// processes out of `~/Library/Logs/DiagnosticReports` and avoids the
-    /// crash-daemon contention that slows parallel test runs.
-    fn die() -> ! {
-        let _ = io::stderr().flush();
-        unsafe { libc::_exit(1) }
-    }
-
-    /// Reports a failed `assert(cond)` and aborts.
-    ///
-    /// New signature: accepts expression text and individual location components.
-    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    /// Writes the structured sidecar report first when `MIRI_ASSERT_REPORT_PATH`
+    /// names a file, so the runner reading it has the expression and the
+    /// location the sentence only summarises.
     ///
     /// # Safety
     /// - `expr_text`, `user_msg`, `path` must be valid pointers to `MiriString`s or null.
@@ -324,9 +296,8 @@ pub mod ffi {
             format!(": {}", expr_s)
         };
 
-        eprintln!("Runtime error: {}{}{}", prefix, expr_suffix, suffix);
         write_assert_report(
-            "MER_RT_005",
+            code::ASSERTION_FAILED,
             "assert",
             &path_s,
             line,
@@ -336,14 +307,17 @@ pub mod ffi {
             "",
             &msg_s,
         );
-        write_trap_report("MER_RT_005");
-        die();
+        trap(
+            code::ASSERTION_FAILED,
+            &format!("{}{}{}", prefix, expr_suffix, suffix),
+        );
     }
 
-    /// Reports a failed `assert_eq(actual, expected)` and aborts.
+    /// Reports a failed `assert_eq(actual, expected)` as MER_RT_005 and ends
+    /// the process.
     ///
-    /// New signature: accepts individual location components.
-    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    /// Writes the structured sidecar report first when `MIRI_ASSERT_REPORT_PATH`
+    /// names a file, so the runner reading it has both values separately.
     ///
     /// # Safety
     /// - `expected_str`, `actual_str`, `user_msg`, `path` must be valid
@@ -382,12 +356,8 @@ pub mod ffi {
             format!(": {}", msg_s)
         };
 
-        eprintln!(
-            "Runtime error: {}: expected {}, got {}{}",
-            prefix, expected_s, actual_s, suffix
-        );
         write_assert_report(
-            "MER_RT_005",
+            code::ASSERTION_FAILED,
             "assert_eq",
             &path_s,
             line,
@@ -397,14 +367,19 @@ pub mod ffi {
             &actual_s,
             &msg_s,
         );
-        write_trap_report("MER_RT_005");
-        die();
+        trap(
+            code::ASSERTION_FAILED,
+            &format!(
+                "{}: expected {}, got {}{}",
+                prefix, expected_s, actual_s, suffix
+            ),
+        );
     }
 
-    /// Reports a failed `assert_ne(a, b)` and aborts.
+    /// Reports a failed `assert_ne(a, b)` as MER_RT_005 and ends the process.
     ///
-    /// New signature: accepts individual location components.
-    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    /// Writes the structured sidecar report first when `MIRI_ASSERT_REPORT_PATH`
+    /// names a file, so the runner reading it has the value both sides held.
     ///
     /// # Safety
     /// - `value_str`, `user_msg`, `path` must be valid `MiriString`
@@ -437,12 +412,8 @@ pub mod ffi {
             format!(": {}", msg_s)
         };
 
-        eprintln!(
-            "Runtime error: {}: values must differ, both were {}{}",
-            prefix, val_s, suffix
-        );
         write_assert_report(
-            "MER_RT_005",
+            code::ASSERTION_FAILED,
             "assert_ne",
             &path_s,
             line,
@@ -452,36 +423,35 @@ pub mod ffi {
             &val_s,
             &msg_s,
         );
-        write_trap_report("MER_RT_005");
-        die();
+        trap(
+            code::ASSERTION_FAILED,
+            &format!(
+                "{}: values must differ, both were {}{}",
+                prefix, val_s, suffix
+            ),
+        );
     }
 
-    /// Reports an integer divide-by-zero error and `_exit(1)`s.
+    /// Reports an integer divide-by-zero as MER_RT_001 and ends the process.
     ///
     /// Called from compiled Miri code in place of a Cranelift `trapz`
     /// hardware-trap instruction so the process terminates cleanly without
     /// raising SIGTRAP/SIGILL. Keeps macOS `ReportCrash` out of the picture.
-    /// Writes MER_RT_001 to the trap report file (if the env var is set).
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_div_by_zero_panic() {
-        eprintln!("Runtime error: division by zero");
-        write_trap_report("MER_RT_001");
-        die();
+        trap(code::DIVISION_BY_ZERO, "division by zero");
     }
 
-    /// Reports an integer remainder-by-zero error and `_exit(1)`s.
+    /// Reports an integer remainder-by-zero as MER_RT_002 and ends the process.
     ///
     /// Called from compiled Miri code in place of a Cranelift `trapz`
     /// hardware-trap instruction so the process terminates cleanly without
     /// raising SIGTRAP/SIGILL. Keeps macOS `ReportCrash` out of the picture.
-    /// Writes MER_RT_002 to the trap report file (if the env var is set).
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_rem_by_zero_panic() {
-        eprintln!("Runtime error: remainder by zero");
-        write_trap_report("MER_RT_002");
-        die();
+        trap(code::REMAINDER_BY_ZERO, "remainder by zero");
     }
 
     /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
@@ -491,12 +461,12 @@ pub mod ffi {
     /// environment pointer passed to the closure as its implicit first
     /// argument.
     ///
-    /// New signature: accepts individual location components.
-    /// Writes structured sidecar report if `MIRI_ASSERT_REPORT_PATH` env var is set.
+    /// Writes the structured sidecar report when `MIRI_ASSERT_REPORT_PATH`
+    /// names a file.
     ///
     /// Behavior:
-    /// - If the closure returns normally → emits an assertion-failed message
-    ///   at `location` and aborts.
+    /// - If the closure returns normally → reports MER_RT_005 at `location`
+    ///   and ends the process.
     /// - If the closure panics → captures the panic message string. If
     ///   `expected` is non-null and non-empty, additionally checks that the
     ///   captured message contains `expected` as a substring; aborts with a
@@ -522,8 +492,7 @@ pub mod ffi {
         column: i64,
     ) {
         if closure_ptr.is_null() {
-            eprintln!("Runtime error: assert_panics: null closure");
-            die();
+            trap(code::ASSERTION_FAILED, "assert_panics: null closure");
         }
 
         let path_s = if path.is_null() {
@@ -559,12 +528,8 @@ pub mod ffi {
             // Closure returned without panicking — restore catch slot and
             // report failure.
             PANIC_CATCH_BUF.with(|c| c.set(prev_buf));
-            eprintln!(
-                "Runtime error: {}: assertion failed: assert_panics: closure did not panic",
-                prefix
-            );
             write_assert_report(
-                "MER_RT_005",
+                code::ASSERTION_FAILED,
                 "assert_panics",
                 &path_s,
                 line,
@@ -574,8 +539,13 @@ pub mod ffi {
                 "",
                 "closure did not panic",
             );
-            write_trap_report("MER_RT_005");
-            die();
+            trap(
+                code::ASSERTION_FAILED,
+                &format!(
+                    "{}: assertion failed: assert_panics: closure did not panic",
+                    prefix
+                ),
+            );
         }
 
         // siglongjmp landed here. Restore the previous catch frame so nested
@@ -589,12 +559,8 @@ pub mod ffi {
         if !expected.is_null() {
             let exp = (*expected).as_str();
             if !exp.is_empty() && !captured.contains(exp) {
-                eprintln!(
-                    "Runtime error: {}: assertion failed: assert_panics: expected panic containing \"{}\", got \"{}\"",
-                    prefix, exp, captured
-                );
                 write_assert_report(
-                    "MER_RT_005",
+                    code::ASSERTION_FAILED,
                     "assert_panics",
                     &path_s,
                     line,
@@ -604,8 +570,13 @@ pub mod ffi {
                     &captured,
                     "",
                 );
-                write_trap_report("MER_RT_005");
-                die();
+                trap(
+                    code::ASSERTION_FAILED,
+                    &format!(
+                        "{}: assertion failed: assert_panics: expected panic containing \"{}\", got \"{}\"",
+                        prefix, exp, captured
+                    ),
+                );
             }
         }
     }

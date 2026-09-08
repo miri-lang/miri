@@ -540,29 +540,25 @@ pub mod ffi {
         list
     }
 
-    /// Panics with a clear out-of-bounds error message.
+    /// Reports an index outside the collection and ends the process.
     ///
-    /// This provides a better debugging experience than crashing silently on
-    /// a hardware trap.
-    ///
-    /// Uses `libc::_exit(1)` (not `std::process::abort()`) so the process
-    /// terminates cleanly without raising SIGABRT — important on macOS, where
-    /// SIGABRT spawns `ReportCrash` and serializes the test suite under load.
-    /// `_exit` also skips atexit handlers, so the `MIRI_LEAK_CHECK` observer
-    /// does not fire on intentional bounds-check exits.
+    /// Reporting the bounds is a better debugging experience than the hardware
+    /// trap the bounds check would otherwise fall into, and leaving through
+    /// `crate::trap` is what gives the death a diagnostic code a tool can read
+    /// rather than only a sentence on stderr.
     ///
     /// `index` is received as a signed `i64` — the width Miri indices are
     /// computed at — so a negative index prints as its actual value (e.g. `-1`)
     /// rather than the huge `usize` it becomes when reinterpreted as unsigned.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_array_panic_oob(index: i64, len: usize) {
-        use std::io::Write;
-        eprintln!(
-            "Runtime error: Array index out of bounds: the len is {} but the index is {}",
-            len, index
-        );
-        let _ = std::io::stderr().flush();
-        libc::_exit(1);
+    pub unsafe extern "C" fn miri_rt_array_panic_oob(index: i64, len: usize) -> ! {
+        crate::trap::trap(
+            crate::trap::code::INDEX_OUT_OF_BOUNDS,
+            &format!(
+                "Array index out of bounds: the len is {} but the index is {}",
+                len, index
+            ),
+        )
     }
 } // pub mod ffi

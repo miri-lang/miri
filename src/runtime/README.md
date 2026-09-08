@@ -19,3 +19,4 @@ Currently, this module sets up the scaffolding for interacting with standard ope
 1.  **Minimal Overhead**: The runtime must introduce as little overhead as possible, avoiding heavy garbage collectors in flavor of reference counting (Perceus RC).
 2.  **Interoperability**: The runtime functions expose a C ABI, allowing them to be linked effortlessly by Cranelift or LLVM backends.
 3.  **Safety**: The runtime provides safe wrappers around low-level operations (like bounding list accesses).
+4.  **One exit for a fault**: A program that dies of a runtime fault leaves through `core/src/trap.rs`, which takes the diagnostic code as an argument. Reporting the code is therefore part of dying, and a trap cannot reach a reader as a sentence on stderr beside an envelope that says the run succeeded.

@@ -56,6 +56,7 @@ pub mod rt {
     /// Compiler-internal: partial readback of `g.slice(range)`, not in stdlib.
     pub const ARRAY_SLICE: &str = "miri_rt_array_slice";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
+    /// Reports the bounds it was given as MER_RT_011 and ends the process.
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
     /// Compiler-internal: decrements the RC of an array element, not in stdlib.
     pub const ARRAY_DECREF_ELEMENT: &str = "miri_rt_array_decref_element";
@@ -158,13 +159,13 @@ pub mod rt {
     pub const ASSERT_EQ_FAIL: &str = "miri_rt_assert_eq_fail";
     /// Compiler-internal: formats and aborts on a failed `assert_ne(a, b)`.
     pub const ASSERT_NE_FAIL: &str = "miri_rt_assert_ne_fail";
-    /// Compiler-internal: prints "division by zero" and `_exit(1)`s.
+    /// Compiler-internal: reports MER_RT_001 and ends the process.
     /// Replaces the Cranelift `trapz` instruction so the process terminates
     /// cleanly without raising SIGTRAP/SIGILL (which on macOS would spawn the
     /// `ReportCrash` daemon and serialize parallel test runs).
     pub const DIV_BY_ZERO_PANIC: &str = "miri_rt_div_by_zero_panic";
-    /// Compiler-internal: prints "remainder by zero" and `_exit(1)`s.
-    /// Separate from division to distinguish MER_RT_001 from MER_RT_002.
+    /// Compiler-internal: reports MER_RT_002 and ends the process.
+    /// Separate from division so the two are distinguishable in the envelope.
     pub const REM_BY_ZERO_PANIC: &str = "miri_rt_rem_by_zero_panic";
 
     // ── String ────────────────────────────────────────────────────────────────

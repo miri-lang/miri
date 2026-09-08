@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_RT_012: the guarded case never reaches the panic.
+// expect-stdout: 3
+fn half(n int) int
+    if n % 2 != 0
+        panic("odd number")
+    return n / 2
+
+fn main()
+    println(f"{half(6)}")
