@@ -2782,14 +2782,43 @@ fn native_binary_path(bundle_dir: &Path) -> PathBuf {
     bundle_dir.join(name)
 }
 
+/// Resolves a candidate binary string (from `MIRI_CC` or `CC`) safely.
+/// Returns an absolute path if provided, or resolves a bare command name via system `PATH`.
+/// Relative paths with directory separators are rejected to prevent CWD hijacking.
+fn resolve_binary_path(val: &str) -> Result<PathBuf, CompilerError> {
+    let path = PathBuf::from(val);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+
+    if path.components().count() == 1 {
+        if let Ok(path_env) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_env) {
+                let candidate = dir.join(&path);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+        // If not found in PATH, return the path object as-is so command execution
+        // fails gracefully with a standard command lookup error instead of hard erroring here.
+        return Ok(path);
+    }
+
+    Err(CompilerError::Codegen(format!(
+        "Invalid linker path '{}': relative paths containing directory separators are not allowed",
+        val
+    )))
+}
+
 /// Resolve the path to the linker (cc) using absolute paths or environment variables.
 /// This prevents unqualified command execution vulnerabilities.
 fn resolve_linker() -> Result<PathBuf, CompilerError> {
     if let Ok(cc) = std::env::var("MIRI_CC") {
-        return Ok(PathBuf::from(cc));
+        return resolve_binary_path(&cc);
     }
     if let Ok(cc) = std::env::var("CC") {
-        return Ok(PathBuf::from(cc));
+        return resolve_binary_path(&cc);
     }
 
     // Default to common absolute paths for 'cc'
