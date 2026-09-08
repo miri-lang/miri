@@ -13,6 +13,7 @@ pub mod constant;
 pub mod control_flow;
 pub mod diagnostics;
 pub mod docs;
+pub mod duplicate_imports;
 pub mod enums;
 pub mod fs;
 pub mod fstring;

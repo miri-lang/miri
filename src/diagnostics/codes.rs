@@ -457,7 +457,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // IMP — Imports and module loading (3 codes: 001-003)
+    // IMP — Imports and module loading (4 codes: 001-004)
     "IMP",
     "001",
     ImpCircularImport,
@@ -477,6 +477,13 @@ diagnostics!(
     ImpNameNotFoundInModule,
     "Name Not Found in Module",
     Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "IMP",
+    "004",
+    ImpDuplicateImport,
+    "Duplicate Import",
+    Severity::Warning,
     false,
     FixSafety::LocalEdit,
     // TYP — Type checker (70 codes: 001-070)

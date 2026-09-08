@@ -101,12 +101,13 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_069 | Triggers MER_TYP_069: a top-level statement beside a declared 'main'. |
 | MER_TYP_070 | Triggers MER_TYP_070: two top-level functions share a name. |
 
-## Warning fixtures (`warn/`) — 7
+## Warning fixtures (`warn/`) — 8
 
 Each program must emit the named code at warning severity and still compile (`ok: true`).
 
 | Code | Summary |
 |---|---|
+| MER_IMP_004 | Triggers MER_IMP_004: Duplicate Import. |
 | MER_NAM_001 | Triggers MER_NAM_001: Deprecated Kernel Context Identifier. |
 | MER_OWN_001 | Triggers MER_OWN_001: Resource Not Consumed at Scope Exit. |
 | MER_TYP_023 | Triggers MER_TYP_023: Unnecessary Double Negation. |
@@ -115,13 +116,14 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_026 | Triggers MER_TYP_026: Deprecated Attribute Spelling. |
 | MER_TYP_027 | Triggers MER_TYP_027: @deprecated Attribute. |
 
-## Accepted fixtures (`pass/`) — 92
+## Accepted fixtures (`pass/`) — 93
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
 | Fixture | Summary |
 |---|---|
 | MER_IMP_002 | Accepted counterpart of MER_IMP_002: Imported Name Conflict does not fire. |
+| MER_IMP_004 | Accepted counterpart of MER_IMP_004: Duplicate Import does not fire. |
 | MER_LEX_002 | Accepted counterpart of MER_LEX_002: Unclosed Multiline Comment does not fire. |
 | MER_LEX_003 | Accepted counterpart of MER_LEX_003: Indentation Mismatch does not fire. |
 | MER_LEX_005 | Accepted counterpart of MER_LEX_005: Invalid Binary Literal does not fire. |

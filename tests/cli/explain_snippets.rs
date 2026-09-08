@@ -19,6 +19,7 @@ use std::process::Command;
 /// Codes whose `Before` example is verified to emit that code.
 const VERIFIED: &[&str] = &[
     "MER_IMP_002",
+    "MER_IMP_004",
     "MER_LEX_001",
     "MER_LEX_002",
     "MER_LEX_003",

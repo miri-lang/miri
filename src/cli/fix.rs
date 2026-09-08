@@ -584,6 +584,14 @@ fn edits_land_in_target(
 ///
 /// The map is ordered by path so a run over several files does the same work in
 /// the same order every time.
+///
+/// An edit that matches one already collected for the same file — same range,
+/// same replacement — is dropped. One missing import is reported once per use
+/// of the name it would have supplied, and every one of those diagnostics
+/// carries the identical insertion at the head of the file; writing it as often
+/// as it was reported produces a file with the import repeated. Two edits that
+/// share an offset but differ in text are different edits and both survive, so
+/// two missing imports still both arrive.
 fn group_edits_by_file(diagnostics: &[JsonDiagnostic]) -> BTreeMap<String, Vec<JsonEdit>> {
     let mut grouped: BTreeMap<String, Vec<JsonEdit>> = BTreeMap::new();
     for diagnostic in diagnostics {
@@ -591,10 +599,10 @@ fn group_edits_by_file(diagnostics: &[JsonDiagnostic]) -> BTreeMap<String, Vec<J
             continue;
         };
         for edit in &repair.edits {
-            grouped
-                .entry(edit.path.clone())
-                .or_default()
-                .push(edit.clone());
+            let group = grouped.entry(edit.path.clone()).or_default();
+            if !group.contains(edit) {
+                group.push(edit.clone());
+            }
         }
     }
     grouped
@@ -823,6 +831,44 @@ mod tests {
             edits_land_in_target(&target, &retained),
             "a repair for the named file is judged"
         );
+    }
+
+    #[test]
+    fn test_an_edit_reported_by_several_diagnostics_is_collected_once() {
+        // Every use of an unimported name raises its own diagnostic, and each
+        // one carries the same repair: insert the same import at the same
+        // offset. The file needs it once.
+        let diagnostics = vec![
+            diagnostic_repairing("main.mi", "local-edit"),
+            diagnostic_repairing("main.mi", "local-edit"),
+            diagnostic_repairing("main.mi", "local-edit"),
+        ];
+
+        let grouped = group_edits_by_file(&diagnostics);
+
+        assert_eq!(
+            grouped["main.mi"],
+            vec![edit(0, 3, "var")],
+            "an edit indistinguishable from one already collected is the same edit"
+        );
+    }
+
+    #[test]
+    fn test_two_insertions_at_one_offset_are_both_collected() {
+        // Two different imports are both inserted at the head of the file. They
+        // share an offset and differ in text, so neither replaces the other.
+        let mut first = diagnostic_repairing("main.mi", "local-edit");
+        let mut second = diagnostic_repairing("main.mi", "local-edit");
+        if let Some(repair) = first.repair.as_mut() {
+            repair.edits = vec![edit(0, 0, "use system.io\n")];
+        }
+        if let Some(repair) = second.repair.as_mut() {
+            repair.edits = vec![edit(0, 0, "use system.math\n")];
+        }
+
+        let grouped = group_edits_by_file(&[first, second]);
+
+        assert_eq!(grouped["main.mi"].len(), 2);
     }
 
     #[test]
