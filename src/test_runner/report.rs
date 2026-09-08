@@ -73,7 +73,12 @@ fn rejection_details(rejected: &[RejectedFile]) -> String {
 
     let mut output = String::from("\nnot run:\n\n");
     for file in rejected {
-        output.push_str(&format!("---- {} ----\n{}\n\n", file.path, file.reason));
+        output.push_str(&format!("---- {} ----\n{}\n", file.path, file.reason));
+        if let Some(rendered) = &file.rendered {
+            output.push_str(rendered.trim_end());
+            output.push('\n');
+        }
+        output.push('\n');
     }
     output
 }
@@ -185,13 +190,31 @@ mod tests {
     }
 
     #[test]
-    fn a_rejected_file_is_listed_and_turns_the_run_red() {
+    fn a_file_that_did_not_compile_shows_its_errors_once() {
+        // The errors belong to the file, so they are printed where the file is
+        // named rather than once against each test that never ran.
         let rendered = format_pretty(&summary_of(
             Vec::new(),
             vec![RejectedFile {
-                path: "bad.mi".to_string(),
-                reason: RejectionReason::DeclaresMain,
+                path: "broken.mi".to_string(),
+                reason: RejectionReason::DoesNotCompile,
+                rendered: Some("error[MER_TYP_034]: Undefined Name\n".to_string()),
+                diagnostics: Vec::new(),
             }],
+        ));
+        assert!(rendered.contains("---- broken.mi ----"));
+        assert_eq!(rendered.matches("error[MER_TYP_034]").count(), 1);
+        assert!(rendered.contains("test result: FAILED."));
+    }
+
+    #[test]
+    fn a_rejected_file_is_listed_and_turns_the_run_red() {
+        let rendered = format_pretty(&summary_of(
+            Vec::new(),
+            vec![RejectedFile::shaped(
+                "bad.mi".to_string(),
+                RejectionReason::DeclaresMain,
+            )],
         ));
         assert!(rendered.contains("not run:"));
         assert!(rendered.contains("---- bad.mi ----"));

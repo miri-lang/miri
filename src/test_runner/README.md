@@ -79,13 +79,22 @@ A refusal outranks a failure because it means tests never ran at all, so the run
 
 ## Files a test file may not be
 
-Three shapes are refused outright rather than run, because each would otherwise fail silently:
+Four shapes are refused rather than run, because each would otherwise fail silently or report a verdict about a test that never executed:
 
 - **Declares its own `main`.** It would collide with the dispatcher's, and codegen would emit a duplicate-symbol dump.
 - **Has executable statements outside a function.** Script-mode wrapping is skipped once a `main` exists, so those statements would be dropped without a word.
 - **Mentions `@test` but does not parse.** Its tests cannot be collected, and skipping it in silence would report a typo'd test file as "0 tests, ok".
+- **Does not compile.** The first three are read off the file's shape before anything is built; this one is what the compile itself says.
 
 A refused file fails the run and is listed under `not run:` with the reason. A file that neither parses nor mentions `@test` is simply not a test file and is passed over quietly.
+
+### A compile failure belongs to the file, not to its tests
+
+Reporting it against each test says every test ran and disagreed with its assertions, and prints the file's errors once per test — twenty times over for a file with twenty tests. None of them was built. So the file is refused, its errors are shown once under its name, and no test in it reports a verdict.
+
+The errors travel twice, because two readers need different things from them. The rendering under `not run:` is the one the compiler's own formatter produces, so it reads the way `miri check` reads. The same errors reach a consumer as data in the envelope's `diagnostics` array — the array `check` fills — carrying the `help` and the `repair` that say one `miri fix --apply` clears the file. A runner whose failures carry no repair is the one command an agent cannot act on.
+
+The two name the file differently, on purpose. The rendering uses the short path the rest of the report uses, relative to whatever was searched. The diagnostics carry the absolute path, because a repair's edits name a file a tool has to find from wherever it is running, and that is the path a `check` of the same file reports.
 
 ## Layout
 
