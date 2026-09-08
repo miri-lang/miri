@@ -254,7 +254,9 @@ fn function_view(
     literal: bool,
 ) -> Result<Read, Box<Diagnostic>> {
     let declaration = resolve::resolve(program, name)?;
-    let rendered = formatter::declaration(declaration);
+    // The same rendering `miri patch` aligns against, so an anchor copied
+    // out of a read is the text a patch will look for.
+    let rendered = formatter::declaration_from_source(declaration, source);
     let Some(anchor) = anchor else {
         let render = if literal {
             literal_region(source, declaration, "function")?
@@ -264,7 +266,7 @@ fn function_view(
         return Ok(Read::plain(render));
     };
 
-    let narrowed = narrow(declaration, &rendered, anchor)?;
+    let narrowed = narrow(declaration, source, &rendered, anchor)?;
     // A read that did not narrow returned the declaration, so the span says so
     // rather than calling the whole function a block.
     let kind = if narrowed.reduced {
@@ -474,6 +476,7 @@ struct Narrowed<'a> {
 /// see one branch and silently received all of `main` has no way to tell.
 fn narrow<'a>(
     declaration: &'a Statement,
+    source: &str,
     rendered: &Rendered,
     anchor: &str,
 ) -> Result<Narrowed<'a>, Box<Diagnostic>> {
@@ -491,7 +494,7 @@ fn narrow<'a>(
     // rendering every block in the function to compare their lengths.
     let innermost = blocks(declaration)
         .into_iter()
-        .map(|block| (formatter::declaration(block), block))
+        .map(|block| (formatter::declaration_from_source(block, source), block))
         .find(|(text, _)| text.text.contains(anchor));
 
     Ok(classify(declaration, rendered, innermost))

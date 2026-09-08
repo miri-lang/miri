@@ -5,9 +5,12 @@
 //! operators, literals, parameter lists, and declaration modifiers.
 
 use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter};
+use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, Literal};
 use crate::ast::operator::{AssignmentOp, BinaryOp, GuardOp, UnaryOp};
 use crate::ast::statement::BindingResidency;
+use crate::ast::types::TypeKind;
+use crate::error::syntax::Span;
 use crate::lexer::RegexToken;
 
 use super::expression::expression as format_expression;
@@ -65,16 +68,6 @@ pub fn assignment_operator(operator: AssignmentOp) -> &'static str {
     }
 }
 
-/// Whether a unary operator is written after its operand.
-pub fn is_postfix_unary(operator: UnaryOp) -> bool {
-    match operator {
-        UnaryOp::Increment | UnaryOp::Decrement => true,
-        UnaryOp::Negate | UnaryOp::Not | UnaryOp::Plus | UnaryOp::BitwiseNot | UnaryOp::Await => {
-            false
-        }
-    }
-}
-
 /// The source spelling of a unary operator.
 ///
 /// `await` and `not` carry a trailing space because they are words rather
@@ -93,10 +86,16 @@ pub fn unary_operator(operator: UnaryOp) -> &'static str {
 }
 
 /// Render a literal in source syntax.
-pub fn literal(sink: &mut Sink, value: &Literal) {
+pub fn literal(sink: &mut Sink, value: &Literal, span: Span) {
     match value {
-        Literal::Integer(integer) => sink.emit(&integer.to_string()),
-        Literal::Float(float) => sink.emit(&float_text(float)),
+        Literal::Integer(integer) => match numeric_spelling(sink, value, span) {
+            Some(text) => sink.emit(&text),
+            None => sink.emit(&integer.to_string()),
+        },
+        Literal::Float(float) => match numeric_spelling(sink, value, span) {
+            Some(text) => sink.emit(&text),
+            None => sink.emit(&float_text(float)),
+        },
         Literal::String(text) => {
             sink.emit("\"");
             sink.emit(&escape_string(text));
@@ -107,6 +106,61 @@ pub fn literal(sink: &mut Sink, value: &Literal) {
         Literal::Identifier(name) => sink.emit(name),
         Literal::Regex(regex) => regex_literal(sink, regex),
         Literal::None => sink.emit("None"),
+    }
+}
+
+/// The spelling the source gave this number, when the span holds one and it
+/// means the same number.
+///
+/// A number can be written many ways — `0xFF`, `255`, `1_000`, `2e5` — and the
+/// tree keeps only the value, so rendering from the tree alone silently picks
+/// one of them and discards the author's. The source is consulted instead.
+///
+/// The answer is used only when reading the text back gives this very value,
+/// so a span that does not cover exactly this number cannot be pasted into the
+/// output: the check fails and the tree's own rendering is used, which is what
+/// rendering did before the source was consulted at all.
+fn numeric_spelling(sink: &Sink, value: &Literal, span: Span) -> Option<String> {
+    let text = sink.source_text(span)?;
+    if !text.starts_with(|first: char| first.is_ascii_digit()) {
+        return None;
+    }
+    if !text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '+' || c == '-')
+    {
+        return None;
+    }
+    let means_the_same = match value {
+        Literal::Integer(integer) => written_integer(text) == Some(integer.to_i128()),
+        Literal::Float(float) => written_float(text, float),
+        Literal::String(_)
+        | Literal::Boolean(_)
+        | Literal::Identifier(_)
+        | Literal::Regex(_)
+        | Literal::None => false,
+    };
+    means_the_same.then(|| text.to_string())
+}
+
+/// The value `text` denotes when it is an integer literal.
+fn written_integer(text: &str) -> Option<i128> {
+    let digits: String = text.chars().filter(|c| *c != '_').collect();
+    let (body, radix) = match digits.get(..2) {
+        Some("0b") | Some("0B") => (&digits[2..], 2),
+        Some("0o") | Some("0O") => (&digits[2..], 8),
+        Some("0x") | Some("0X") => (&digits[2..], 16),
+        _ => (digits.as_str(), 10),
+    };
+    i128::from_str_radix(body, radix).ok()
+}
+
+/// Whether `text` is a float literal denoting exactly `value`.
+fn written_float(text: &str, value: &FloatLiteral) -> bool {
+    let digits: String = text.chars().filter(|c| *c != '_').collect();
+    match value {
+        FloatLiteral::F32(bits) => digits.parse::<f32>() == Ok(f32::from_bits(*bits)),
+        FloatLiteral::F64(bits) => digits.parse::<f64>() == Ok(f64::from_bits(*bits)),
     }
 }
 
@@ -211,18 +265,39 @@ pub fn parameter_list(sink: &mut Sink, parameters: &[Parameter]) {
 }
 
 /// Render one parameter: `name [out] [residency] Type [guard] [= default]`.
+///
+/// Everything before the type is optional: a parameter in a function type is
+/// written as its type alone (`fn(int) int`), so the space that separates a
+/// name from a type is written only where there is a name to separate.
+///
+/// `self` is the other case with nothing before its type — it names the
+/// enclosing type by being `self`, and the parser supplies `Self` for it — so
+/// it is written back the way it is written by hand, without one.
 fn parameter_declaration(sink: &mut Sink, parameter: &Parameter) {
-    sink.emit(&parameter.name);
+    let mut prefix: Vec<&str> = Vec::new();
+    if !parameter.name.is_empty() {
+        prefix.push(&parameter.name);
+    }
     if parameter.is_out {
-        sink.emit(" out");
+        prefix.push("out");
     }
     match parameter.residency {
-        Some(BindingResidency::Gpu) => sink.emit(" gpu"),
-        Some(BindingResidency::Host) => sink.emit(" host"),
+        Some(BindingResidency::Gpu) => prefix.push("gpu"),
+        Some(BindingResidency::Host) => prefix.push("host"),
         None => {}
     }
-    sink.emit(" ");
-    format_expression(sink, &parameter.typ, 0);
+    for (index, part) in prefix.iter().enumerate() {
+        if index > 0 {
+            sink.emit(" ");
+        }
+        sink.emit(part);
+    }
+    if !names_its_own_type(parameter) {
+        if !prefix.is_empty() {
+            sink.emit(" ");
+        }
+        format_expression(sink, &parameter.typ, 0);
+    }
     if let Some(guard) = &parameter.guard {
         sink.emit(" ");
         format_expression(sink, guard, 0);
@@ -233,10 +308,33 @@ fn parameter_declaration(sink: &mut Sink, parameter: &Parameter) {
     }
 }
 
+/// Whether `parameter` is the `self` receiver, whose type the parser supplies.
+///
+/// `fn drop(self)` is the only way to write it: `self` names the enclosing type
+/// by being `self`, and the parser fills in `Self` behind it. Writing that
+/// `Self` back would add a word to a declaration that never had one.
+fn names_its_own_type(parameter: &Parameter) -> bool {
+    if parameter.name != "self" {
+        return false;
+    }
+    let ExpressionKind::Type(declared, false) = &parameter.typ.node else {
+        return false;
+    };
+    matches!(&declared.kind, TypeKind::Custom(name, None) if name == "Self")
+}
+
 /// Render a visibility modifier and its trailing space, if it is not the default.
 pub fn visibility(sink: &mut Sink, level: &MemberVisibility) {
     match level {
-        MemberVisibility::Public => {}
+        // Public is the default, so the keyword is written back only where the
+        // source wrote it. Emitting it always would add a modifier to every
+        // declaration in every file the formatter touches; emitting it never
+        // deletes one from every declaration that had it.
+        MemberVisibility::Public => {
+            if sink.written_modifiers().public {
+                sink.emit("public ");
+            }
+        }
         MemberVisibility::Protected => sink.emit("protected "),
         MemberVisibility::Private => sink.emit("private "),
     }
@@ -245,6 +343,12 @@ pub fn visibility(sink: &mut Sink, level: &MemberVisibility) {
 /// Render the modifiers that precede `fn` on a function declaration.
 pub fn function_modifiers(sink: &mut Sink, properties: &FunctionProperties) {
     visibility(sink, &properties.visibility);
+    // A method with no body is abstract whether or not the keyword is there,
+    // so this is written back only where the source wrote it — the same rule
+    // `public` follows, and for the same reason.
+    if sink.written_modifiers().is_abstract {
+        sink.emit("abstract ");
+    }
     if properties.is_static {
         sink.emit("static ");
     }

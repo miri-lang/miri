@@ -229,3 +229,84 @@ fn test_fmt_accepts_an_empty_file() {
         );
     });
 }
+
+/// Collect `.mi` files under `directory`, depth first.
+fn collect_sources(directory: &Path, found: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_sources(&path, found);
+        } else if path.extension().is_some_and(|extension| extension == "mi") {
+            found.push(path);
+        }
+    }
+}
+
+/// Every Miri source the repository holds.
+fn repository_sources() -> Vec<std::path::PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    for directory in ["src", "examples", "tests", "conformance", "evals", "docs"] {
+        collect_sources(&root.join(directory), &mut found);
+    }
+    found.sort();
+    found
+}
+
+/// `miri fmt` must be able to rewrite every file in the repository without
+/// losing anything the author wrote.
+///
+/// The command refuses rather than writing a file that lost a comment or a
+/// word, so a formatter that starts dropping a modifier turns this from a
+/// silent rewrite into a refusal — and this is where the refusal is seen. It
+/// runs against the whole corpus because that is where the shapes are: the
+/// stdlib is the only body of Miri large enough to write every declaration
+/// form, and the conformance fixtures are the only ones written to be strange.
+#[test]
+fn test_fmt_writes_back_every_file_in_the_repository() {
+    fn scan() {
+        let mut checked = 0;
+        let mut refused = Vec::new();
+
+        for path in repository_sources() {
+            let source = std::fs::read_to_string(&path).expect("a listed source file is readable");
+            let report = miri::cli::fmt::fmt(&path, &source, miri::cli::fmt::Mode::Check);
+            let content_loss: Vec<String> = report
+                .envelope
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.code.as_deref()
+                        == Some(
+                            miri::diagnostics::DiagnosticCode::BldFormatWouldLoseContent.as_str(),
+                        )
+                })
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect();
+            checked += 1;
+            if !content_loss.is_empty() {
+                refused.push(format!("{}: {}", path.display(), content_loss.join("; ")));
+            }
+        }
+
+        assert!(checked > 0, "the corpus scan found no sources");
+        assert!(
+            refused.is_empty(),
+            "{} of {checked} files could not be rewritten without losing something:\n{}",
+            refused.len(),
+            refused.join("\n")
+        );
+    }
+
+    // The corpus includes fixtures written to push the parser to its nesting
+    // limit, and reaching that limit costs more stack than a test thread has.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(scan)
+        .expect("the scan thread starts")
+        .join()
+        .expect("the scan thread finishes");
+}

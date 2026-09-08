@@ -110,6 +110,24 @@ pub struct StatementTrivia {
     /// Comments written on their own lines after the statement, which no
     /// later statement claimed because none follows it in its block.
     pub trailing_lines: Vec<BufferedComment>,
+    /// The modifiers the source wrote that say nothing the rest of the
+    /// declaration does not already say.
+    pub written_modifiers: WrittenModifiers,
+}
+
+/// Keywords a declaration may be written with that carry no meaning of their
+/// own.
+///
+/// `public` is the default visibility, and `abstract` on a method says what
+/// its missing body already says. No pass but the formatter reads either one —
+/// and the formatter can only write back what the tree remembers, so a keyword
+/// nothing records is a keyword every rewrite deletes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WrittenModifiers {
+    /// The declaration was written `public`.
+    pub public: bool,
+    /// The declaration was written `abstract`.
+    pub is_abstract: bool,
 }
 
 /// Where a binding's value physically lives. Residency is a binding

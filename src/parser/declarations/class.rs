@@ -221,44 +221,34 @@ impl<'source> Parser<'source> {
     }
 
     fn class_member_declaration(&mut self, mode: BodyMode) -> Result<Statement, SyntaxError> {
-        let visibility = self.member_visibility()?;
+        let (visibility, wrote_public) = self.member_visibility()?;
         let is_abstract_method = self.try_eat_abstract_modifier()?;
+        let mut member = self.class_member_after_modifiers(visibility, mode, is_abstract_method)?;
+        member.trivia.written_modifiers.public = wrote_public;
+        member.trivia.written_modifiers.is_abstract = is_abstract_method;
+        Ok(member)
+    }
+
+    fn class_member_after_modifiers(
+        &mut self,
+        visibility: MemberVisibility,
+        mode: BodyMode,
+        is_abstract_method: bool,
+    ) -> Result<Statement, SyntaxError> {
         let effective_mode = if is_abstract_method {
             BodyMode::Optional
         } else {
             mode
         };
 
-        // Check for contextual `static fn` pattern
         if self.is_static_fn_pattern() {
-            if is_abstract_method {
-                return Err(self.error_unexpected_token(
-                    "method declaration",
-                    "static method cannot be abstract",
-                ));
-            }
-            self.eat_token(&Token::Identifier)?; // consume "static"
-
-            // Parse the remaining modifiers (async, parallel, gpu) without the static check
-            let mut properties = crate::ast::common::FunctionProperties {
-                is_async: false,
-                is_parallel: false,
-                is_gpu: false,
-                is_static: true,
-                visibility,
-            };
-            self.continue_function_modifiers(&mut properties)?;
-            return self.function_declaration_after_modifiers(effective_mode, properties);
+            self.reject_abstract(is_abstract_method, "static method cannot be abstract")?;
+            return self.static_method_declaration(visibility, effective_mode);
         }
 
         match &self.lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
-                if is_abstract_method {
-                    return Err(self.error_unexpected_token(
-                        "method declaration",
-                        "variable declaration after 'abstract'",
-                    ));
-                }
+                self.reject_abstract(is_abstract_method, "variable declaration after 'abstract'")?;
                 self.variable_statement(visibility)
             }
             Some((Token::Async, _))
@@ -268,30 +258,15 @@ impl<'source> Parser<'source> {
                 self.function_declaration_with_mode(visibility, effective_mode)
             }
             Some((Token::Type, _)) => {
-                if is_abstract_method {
-                    return Err(self.error_unexpected_token(
-                        "method declaration",
-                        "type declaration after 'abstract'",
-                    ));
-                }
+                self.reject_abstract(is_abstract_method, "type declaration after 'abstract'")?;
                 self.type_statement(visibility)
             }
             Some((Token::Runtime, _)) => {
-                if is_abstract_method {
-                    return Err(self.error_unexpected_token(
-                        "method declaration",
-                        "runtime function after 'abstract'",
-                    ));
-                }
+                self.reject_abstract(is_abstract_method, "runtime function after 'abstract'")?;
                 self.runtime_function_declaration()
             }
             Some((Token::Identifier, _)) => {
-                if is_abstract_method {
-                    return Err(self.error_unexpected_token(
-                        "method declaration",
-                        "field declaration after 'abstract'",
-                    ));
-                }
+                self.reject_abstract(is_abstract_method, "field declaration after 'abstract'")?;
                 self.typed_field_declaration(visibility)
             }
             _ => Err(self.error_unexpected_lookahead_token(
@@ -300,23 +275,59 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn member_visibility(&mut self) -> Result<MemberVisibility, SyntaxError> {
-        let visibility = match &self.lookahead {
+    /// Refuse `abstract` in front of a member that cannot be one.
+    ///
+    /// `abstract` says a method has no body here and is supplied elsewhere.
+    /// Nothing else a class declares can be supplied elsewhere, so the keyword
+    /// in front of one is a mistake rather than a shorthand.
+    fn reject_abstract(&self, is_abstract_method: bool, found: &str) -> Result<(), SyntaxError> {
+        if is_abstract_method {
+            return Err(self.error_unexpected_token("method declaration", found));
+        }
+        Ok(())
+    }
+
+    /// `static fn name(...)`, whose `static` is a contextual keyword rather
+    /// than a token, so the modifiers are collected here instead.
+    fn static_method_declaration(
+        &mut self,
+        visibility: MemberVisibility,
+        mode: BodyMode,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Identifier)?;
+
+        let mut properties = crate::ast::common::FunctionProperties {
+            is_async: false,
+            is_parallel: false,
+            is_gpu: false,
+            is_static: true,
+            visibility,
+        };
+        self.continue_function_modifiers(&mut properties)?;
+        self.function_declaration_after_modifiers(mode, properties)
+    }
+
+    /// The visibility a member declares, and whether it wrote `public`.
+    ///
+    /// The two are not the same question: `public` is the default, so a member
+    /// that wrote it and a member that wrote nothing are equally public. Only
+    /// the formatter cares which, and only so it can give the keyword back.
+    fn member_visibility(&mut self) -> Result<(MemberVisibility, bool), SyntaxError> {
+        match &self.lookahead {
             Some((Token::Public, _)) => {
                 self.eat_token(&Token::Public)?;
-                MemberVisibility::Public
+                Ok((MemberVisibility::Public, true))
             }
             Some((Token::Protected, _)) => {
                 self.eat_token(&Token::Protected)?;
-                MemberVisibility::Protected
+                Ok((MemberVisibility::Protected, false))
             }
             Some((Token::Private, _)) => {
                 self.eat_token(&Token::Private)?;
-                MemberVisibility::Private
+                Ok((MemberVisibility::Private, false))
             }
-            _ => MemberVisibility::Public,
-        };
-        Ok(visibility)
+            _ => Ok((MemberVisibility::Public, false)),
+        }
     }
 
     fn try_eat_abstract_modifier(&mut self) -> Result<bool, SyntaxError> {

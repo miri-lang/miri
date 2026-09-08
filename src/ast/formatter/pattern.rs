@@ -4,6 +4,7 @@
 //! Renders match patterns back to Miri source syntax.
 
 use crate::ast::pattern::Pattern;
+use crate::error::syntax::Span;
 
 use super::helpers::literal;
 use super::sink::Sink;
@@ -11,7 +12,7 @@ use super::sink::Sink;
 /// Render one pattern.
 pub fn pattern(sink: &mut Sink, node: &Pattern) {
     match node {
-        Pattern::Literal(value) => literal(sink, value),
+        Pattern::Literal(value) => literal(sink, value, Span::new(0, 0)),
         Pattern::Identifier(name) => sink.emit(name),
         Pattern::Default => sink.emit("default"),
         Pattern::Tuple(members) => {
@@ -19,7 +20,11 @@ pub fn pattern(sink: &mut Sink, node: &Pattern) {
             comma_separated(sink, members);
             sink.emit(")");
         }
-        Pattern::Regex(regex) => literal(sink, &crate::ast::literal::Literal::Regex(regex.clone())),
+        Pattern::Regex(regex) => literal(
+            sink,
+            &crate::ast::literal::Literal::Regex(regex.clone()),
+            Span::new(0, 0),
+        ),
         Pattern::Member(base, member) => {
             pattern(sink, base);
             sink.emit(".");

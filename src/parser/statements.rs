@@ -228,7 +228,9 @@ impl<'source> Parser<'source> {
         let statement = match &self.lookahead {
             Some((Token::Public, _)) => {
                 self.eat_token(&Token::Public)?;
-                self.class_member_statement(MemberVisibility::Public)?
+                let mut declaration = self.class_member_statement(MemberVisibility::Public)?;
+                declaration.trivia.written_modifiers.public = true;
+                declaration
             }
             Some((Token::Protected, span)) => {
                 let span = *span;

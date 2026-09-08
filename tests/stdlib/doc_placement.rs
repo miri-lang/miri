@@ -157,7 +157,14 @@ fn find_undocumented_declarations(
 
 /// Check if a line is a type declaration (`class`, `enum`, `struct`, or `trait`).
 fn is_declaration_line(line: &str) -> bool {
-    let trimmed = line.trim();
+    // The outline writes back the visibility keyword the source wrote, so a
+    // declaration line may open with one before the keyword that names it.
+    let trimmed = line
+        .trim()
+        .trim_start_matches("public ")
+        .trim_start_matches("private ")
+        .trim_start_matches("protected ")
+        .trim_start_matches("abstract ");
     trimmed.starts_with("class ")
         || trimmed.starts_with("enum ")
         || trimmed.starts_with("struct ")

@@ -25,30 +25,39 @@ pub struct Signature {
 
 /// The header of `node`, or `None` when `node` declares nothing.
 pub fn signature(node: &Statement) -> Option<Signature> {
+    let modifiers = node.trivia.written_modifiers;
     match &node.node {
         StatementKind::FunctionDeclaration(declaration) => {
             let mut sink = Sink::new();
-            full::function_header(&mut sink, declaration, 0);
+            sink.with_written_modifiers(modifiers, |sink| {
+                full::function_header(sink, declaration, 0)
+            });
             Some(built("function", declaration.name.clone(), sink))
         }
         StatementKind::Class(data) => {
             let mut sink = Sink::new();
-            full::class_header(&mut sink, data, 0);
+            sink.with_written_modifiers(modifiers, |sink| full::class_header(sink, data, 0));
             Some(built("class", rendered_name(&data.name), sink))
         }
         StatementKind::Enum(name, generics, _, _, level, attributes) => {
             let mut sink = Sink::new();
-            full::enum_header(&mut sink, name, generics.as_deref(), level, attributes, 0);
+            sink.with_written_modifiers(modifiers, |sink| {
+                full::enum_header(sink, name, generics.as_deref(), level, attributes, 0)
+            });
             Some(built("enum", rendered_name(name), sink))
         }
         StatementKind::Struct(name, generics, _, _, level, traits) => {
             let mut sink = Sink::new();
-            full::struct_header(&mut sink, name, generics.as_deref(), level, traits, 0);
+            sink.with_written_modifiers(modifiers, |sink| {
+                full::struct_header(sink, name, generics.as_deref(), level, traits, 0)
+            });
             Some(built("struct", rendered_name(name), sink))
         }
         StatementKind::Trait(name, generics, parents, _, level) => {
             let mut sink = Sink::new();
-            full::trait_header(&mut sink, name, generics.as_deref(), parents, level, 0);
+            sink.with_written_modifiers(modifiers, |sink| {
+                full::trait_header(sink, name, generics.as_deref(), parents, level, 0)
+            });
             Some(built("trait", rendered_name(name), sink))
         }
         // These declare no body, so the whole statement already is the header.
