@@ -2270,3 +2270,517 @@ fn test_view_over_the_protocol_reads_the_files_own_bytes() {
     );
     session.finish();
 }
+
+/// The `--help` text a client is expected to be able to write a client from.
+fn agent_help() -> String {
+    let output = Command::new(assert_cmd::cargo_bin!("miri"))
+        .args(["agent", "--help"])
+        .output()
+        .expect("the compiler binary should start");
+    assert!(output.status.success(), "`agent --help` should succeed");
+    String::from_utf8(output.stdout).expect("help text is UTF-8")
+}
+
+#[test]
+fn test_the_help_text_carries_what_a_client_needs_to_write_a_client() {
+    // A protocol whose framing and handshake are only in a document a client
+    // author has not been told about is a protocol found by guessing. Every
+    // fact below is one a client cannot work without, and the session test
+    // that follows proves the set is sufficient rather than only present.
+    let help = agent_help();
+    for fact in [
+        "Content-Length",
+        "\\r\\n",
+        "blank line",
+        "UTF-8",
+        "jsonrpc",
+        "2.0",
+        "initialize",
+        "capabilities.methods",
+        "stdout",
+        "stderr",
+    ] {
+        assert!(
+            help.contains(fact),
+            "`agent --help` should mention {fact:?}, got:\n{help}"
+        );
+    }
+}
+
+#[test]
+fn test_a_program_cannot_be_run_over_the_protocol_and_the_help_text_says_so() {
+    // The session is asked what it serves, rather than the assertion trusting a
+    // list written down somewhere: a method added later would fail this test
+    // rather than quietly contradict the sentence below it.
+    let directory = project("no-execution", &[]);
+    let mut session = Session::start(directory.path());
+    let handshake = session.call(1, "initialize", json!({}));
+    session.finish();
+
+    let capabilities = &handshake["result"]["capabilities"];
+    let named: Vec<&str> = capabilities["methods"]
+        .as_array()
+        .expect("the handshake names the methods it serves")
+        .iter()
+        .chain(
+            capabilities["reservedMethods"]
+                .as_array()
+                .expect("and the ones it reserves"),
+        )
+        .filter_map(Value::as_str)
+        .collect();
+
+    for command in ["run", "build", "test", "fmt", "determinism"] {
+        assert!(
+            !named.contains(&command),
+            "`{command}` is not served and not reserved, got {named:?}"
+        );
+    }
+
+    // An integrator has to learn that before writing a client, not after.
+    let help = agent_help();
+    assert!(
+        help.contains("does not run, build or test a program"),
+        "`agent --help` should say outright that a program cannot be run here, got:\n{help}"
+    );
+    assert!(
+        help.contains("shells out"),
+        "and should say what to do instead, got:\n{help}"
+    );
+}
+
+#[test]
+fn test_a_client_written_only_from_the_help_text_completes_a_check() {
+    // The framing this test uses is spelled out character by character rather
+    // than reusing `Session`, because what is under test is whether the help
+    // text describes a wire format precisely enough to reproduce by hand.
+    let help = agent_help();
+    assert!(help.contains("Content-Length"), "the framing is described");
+
+    let directory = project(
+        "help-only-client",
+        &[("main.mi", "fn main():\n    println(\"hi\")\n")],
+    );
+    let mut process = Command::new(assert_cmd::cargo_bin!("miri"))
+        .arg("agent")
+        .current_dir(directory.path())
+        .env(
+            "MIRI_STDLIB_PATH",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/stdlib"),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the compiler binary should start");
+
+    let mut input = process.stdin.take().expect("stdin was piped");
+    let mut output = BufReader::new(process.stdout.take().expect("stdout was piped"));
+
+    let handshake = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+    write!(input, "Content-Length: {}\r\n\r\n", handshake.len()).expect("the header writes");
+    input.write_all(handshake).expect("the body writes");
+    input.flush().expect("the message is sent");
+
+    let served = read_one_frame(&mut output);
+    let methods = served["result"]["capabilities"]["methods"]
+        .as_array()
+        .expect("the handshake names the methods it serves");
+    assert!(
+        methods.iter().any(|m| m == "check"),
+        "the handshake is where a client learns the method list: {served}"
+    );
+
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"check","params":{{"path":"{}"}}}}"#,
+        directory.path().join("main.mi").display()
+    );
+    write!(input, "Content-Length: {}\r\n\r\n", request.len()).expect("the header writes");
+    input
+        .write_all(request.as_bytes())
+        .expect("the body writes");
+    input.flush().expect("the message is sent");
+
+    let checked = read_one_frame(&mut output);
+    assert_eq!(
+        checked["result"]["ok"],
+        json!(true),
+        "a client built from the help text alone completes a check: {checked}"
+    );
+
+    drop(input);
+    process.wait().expect("the session ends");
+}
+
+/// Read one `Content-Length`-framed message the way the help text describes.
+fn read_one_frame(output: &mut BufReader<ChildStdout>) -> Value {
+    let mut length = None;
+    loop {
+        let mut line = String::new();
+        let read = output.read_line(&mut line).expect("the session answers");
+        assert!(read > 0, "the session ended before answering");
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            break;
+        }
+        if let Some(value) = line.strip_prefix("Content-Length:") {
+            length = value.trim().parse::<usize>().ok();
+        }
+    }
+    let length = length.expect("every frame declares its length");
+    let mut body = vec![0u8; length];
+    output.read_exact(&mut body).expect("the frame is complete");
+    serde_json::from_slice(&body).expect("a response is JSON")
+}
+
+/// Run `work` on its own thread, failing rather than hanging when it stalls.
+///
+/// A response the protocol never sends would otherwise stop the suite instead
+/// of reporting, which is the very failure these tests are about.
+fn within<T: Send + 'static>(seconds: u64, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("the session should have answered by now")
+}
+
+#[test]
+fn test_a_cancellation_sent_as_a_request_is_answered() {
+    // A `$/cancelRequest` carrying an identifier is a client mistake, but an
+    // identifier a client sent and never hears about again is a client that
+    // waits forever. Every other `$/`-prefixed name already answers.
+    let answered = within(60, || {
+        let directory = project("cancel-as-request", &[]);
+        let mut session = Session::start(directory.path());
+        let answered = session.call(7, "$/cancelRequest", json!({ "id": 99 }));
+        session.finish();
+        answered
+    });
+
+    assert_eq!(
+        answered["id"],
+        json!(7),
+        "the answer belongs to the identifier that was sent: {answered}"
+    );
+    assert!(
+        !answered["error"].is_null(),
+        "a notification sent as a request is an invalid request: {answered}"
+    );
+}
+
+#[test]
+fn test_a_cancellation_sent_as_a_request_still_withdraws_what_it_named() {
+    // Answering the mistake must not cost the client the cancellation: the
+    // request it named is still withdrawn.
+    let (answered, withdrawn) = within(60, || {
+        let directory = project(
+            "cancel-as-request-effect",
+            &[("main.mi", "fn main():\n    println(\"hi\")\n")],
+        );
+        let path = directory.path().join("main.mi");
+        let mut session = Session::start(directory.path());
+
+        session.send(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "$/cancelRequest",
+            "params": { "id": 2 },
+        }));
+        session.send(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "check",
+            "params": { "path": path.to_str().expect("the path is text") },
+        }));
+
+        let answered = session.receive();
+        let withdrawn = session.receive();
+        session.finish();
+        (answered, withdrawn)
+    });
+
+    assert_eq!(answered["id"], json!(1));
+    assert_eq!(withdrawn["id"], json!(2));
+    assert_eq!(
+        withdrawn["error"]["code"],
+        json!(-32800),
+        "the withdrawal it named still took effect: {withdrawn}"
+    );
+}
+
+/// Run a command line and return the envelope it printed.
+///
+/// `on_stderr` is for `skill show` alone: it writes the skill's own text to
+/// stdout so the output can be redirected into place, which leaves stderr as
+/// the only stream a failure can be reported on without being mistaken for
+/// content. Every other command puts its envelope on stdout.
+fn cli_envelope(directory: &Path, arguments: &[String], on_stderr: bool) -> Value {
+    let output = Command::new(assert_cmd::cargo_bin!("miri"))
+        .args(arguments)
+        .current_dir(directory)
+        .env(
+            "MIRI_STDLIB_PATH",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/stdlib"),
+        )
+        .output()
+        .expect("the compiler binary should start");
+    let stream = if on_stderr {
+        output.stderr
+    } else {
+        output.stdout
+    };
+    let text = String::from_utf8(stream).expect("the envelope is UTF-8");
+    serde_json::from_str(&text).unwrap_or_else(|error| {
+        panic!(
+            "`miri {}` should print an envelope: {error}\n{text}",
+            arguments.join(" ")
+        )
+    })
+}
+
+/// One question asked of both transports.
+struct Pair {
+    /// What the case is called when it fails.
+    name: &'static str,
+    /// The file the question is asked about, when it needs one.
+    file: Option<&'static str>,
+    /// The command line, with `{path}` standing for the file.
+    command: &'static [&'static str],
+    /// The method the same question reaches over the protocol.
+    method: &'static str,
+    /// The parameters that method takes, with `{path}` standing for the file.
+    params: fn(&str) -> Value,
+    /// Whether the command line puts this envelope on stderr.
+    on_stderr: bool,
+}
+
+/// A program with an error no repair can mend.
+const UNREPAIRABLE: &str = "fn main():\n    let x int = \"text\"\n    println(\"{x}\")\n";
+
+/// A program whose only fault carries a repair.
+const REPAIRABLE: &str = "fn main():\n    assert_eq(1, 1)\n";
+
+#[test]
+fn test_every_ok_agrees_with_the_command_line() {
+    // A tool that reaches the compiler over a socket and a tool that reaches it
+    // through a process must get the same verdict, or the answer depends on the
+    // door the tool knocked on.
+    let cases: &[Pair] = &[
+        Pair {
+            name: "check, clean",
+            file: Some("fn main():\n    println(\"hi\")\n"),
+            command: &["check", "{path}", "--format", "json"],
+            method: "check",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "check, broken",
+            file: Some(UNREPAIRABLE),
+            command: &["check", "{path}", "--format", "json"],
+            method: "check",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "explain, registered",
+            file: None,
+            command: &["explain", "MER_TYP_002", "--format", "json"],
+            method: "explain",
+            params: |_| json!({ "code": "MER_TYP_002" }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "explain, unregistered",
+            file: None,
+            command: &["explain", "MER_XYZ_999", "--format", "json"],
+            method: "explain",
+            params: |_| json!({ "code": "MER_XYZ_999" }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "fixPlan, unrepairable",
+            file: Some(UNREPAIRABLE),
+            command: &["fix", "{path}", "--format", "json"],
+            method: "fixPlan",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "fixApply, unrepairable",
+            file: Some(UNREPAIRABLE),
+            command: &["fix", "{path}", "--apply", "--yes", "--format", "json"],
+            method: "fixApply",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "fixApply, repairable",
+            file: Some(REPAIRABLE),
+            command: &["fix", "{path}", "--apply", "--yes", "--format", "json"],
+            method: "fixApply",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "fixApply, clean",
+            file: Some("fn main():\n    println(\"hi\")\n"),
+            command: &["fix", "{path}", "--apply", "--yes", "--format", "json"],
+            method: "fixApply",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "view, outline",
+            file: Some(PATCHABLE),
+            command: &["view", "{path}", "--outline", "--format", "json"],
+            method: "view",
+            params: |path| json!({ "path": path }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "view, unknown function",
+            file: Some(PATCHABLE),
+            command: &["view", "{path}", "--fn", "absent", "--format", "json"],
+            method: "view",
+            params: |path| json!({ "path": path, "fn": "absent" }),
+            on_stderr: false,
+        },
+        Pair {
+            name: "patch, anchor found",
+            file: Some(PATCHABLE),
+            command: &[
+                "patch",
+                "{path}",
+                "--replace-in-fn",
+                "total",
+                "--old",
+                "a + b",
+                "--new",
+                "a * b",
+                "--check-only",
+                "--format",
+                "json",
+            ],
+            method: "patch",
+            params: |path| {
+                json!({
+                    "path": path,
+                    "mode": "checkOnly",
+                    "operations": [{ "function": "total", "old": "a + b", "new": "a * b" }]
+                })
+            },
+            on_stderr: false,
+        },
+        Pair {
+            name: "patch, anchor absent",
+            file: Some(PATCHABLE),
+            command: &[
+                "patch",
+                "{path}",
+                "--replace-in-fn",
+                "total",
+                "--old",
+                "nowhere",
+                "--new",
+                "x",
+                "--check-only",
+                "--format",
+                "json",
+            ],
+            method: "patch",
+            params: |path| {
+                json!({
+                    "path": path,
+                    "mode": "checkOnly",
+                    "operations": [{ "function": "total", "old": "nowhere", "new": "x" }]
+                })
+            },
+            on_stderr: false,
+        },
+        Pair {
+            name: "skillsGet, whole catalogue",
+            file: None,
+            command: &["skill", "list", "--format", "json"],
+            method: "skillsGet",
+            params: |_| json!({}),
+            on_stderr: false,
+        },
+        Pair {
+            name: "skillsGet, unknown skill",
+            file: None,
+            command: &["skill", "show", "no-such-skill", "--format", "json"],
+            method: "skillsGet",
+            params: |_| json!({ "name": "no-such-skill" }),
+            on_stderr: true,
+        },
+    ];
+
+    for (index, case) in cases.iter().enumerate() {
+        let files: Vec<(&str, &str)> = case
+            .file
+            .map(|contents| vec![("main.mi", contents)])
+            .unwrap_or_default();
+        let over_cli = project("pairwise-cli", &files);
+        let over_rpc = project("pairwise-rpc", &files);
+
+        let cli_path = over_cli.path().join("main.mi").display().to_string();
+        let arguments: Vec<String> = case
+            .command
+            .iter()
+            .map(|argument| argument.replace("{path}", &cli_path))
+            .collect();
+        let from_cli = cli_envelope(over_cli.path(), &arguments, case.on_stderr);
+
+        let rpc_path = over_rpc.path().join("main.mi").display().to_string();
+        let mut session = Session::start(over_rpc.path());
+        let answered = session.call(index as i64 + 1, case.method, (case.params)(&rpc_path));
+        session.finish();
+
+        assert!(
+            answered["error"].is_null(),
+            "{}: the protocol should answer with a result: {answered}",
+            case.name
+        );
+        assert_eq!(
+            answered["result"]["ok"], from_cli["ok"],
+            "{}: `ok` must not depend on the transport\ncommand line: {from_cli}\nprotocol:     {}",
+            case.name, answered["result"]
+        );
+    }
+}
+
+#[test]
+fn test_fix_apply_reports_the_code_the_command_line_reports() {
+    // An apply that wrote nothing over an error nothing can repair is a
+    // refusal, and the code naming it is what tells a caller to stop asking.
+    let directory = project("apply-nothing", &[("main.mi", UNREPAIRABLE)]);
+    let path = directory.path().join("main.mi");
+    let mut session = Session::start(directory.path());
+
+    let answered = session.call(
+        1,
+        "fixApply",
+        json!({ "path": path.to_str().expect("the path is text") }),
+    );
+    session.finish();
+
+    assert_eq!(
+        answered["result"]["ok"],
+        json!(false),
+        "nothing was repaired and the error stands: {answered}"
+    );
+    let codes: Vec<&str> = answered["result"]["diagnostics"]
+        .as_array()
+        .expect("the envelope carries diagnostics")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"MER_BLD_020"),
+        "the refusal carries its code, got {codes:?}"
+    );
+}
