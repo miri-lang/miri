@@ -75,32 +75,20 @@ The colon form does not exist. Use space-separated type annotations instead:
 let x: int = 5
 ```
 
-Use space-separated type annotations:
+Write the type after the name, and cast when it cannot be inferred:
 
 ```miri
 let x int = 5
-let y int = 10
-```
-
-If the type cannot be inferred, annotate with a cast:
-
-```miri
-let z = 5 as i64  // explicit cast when needed
+let z = 5 as i64
 ```
 
 ### Literal Type Suffixes
 
-No suffix syntax like `1i32` or `3.14f64`:
+No suffix syntax like `1i32` or `3.14f64`. Miri infers numeric width from
+context; cast when you need a particular one.
 
 ```miri,fails=MER_TYP_034,expects-message=Undefined variable: i32
 let x = 42i32
-```
-
-Miri infers numeric width from context. Annotate with an explicit cast when needed:
-
-```miri
-let x = 42
-let y = 42 as i64
 ```
 
 ### Result and Option Match Arms: The Asymmetry
@@ -360,7 +348,15 @@ fn main()
         None: println("not a number")
 ```
 
-**Exit codes from main:**
+**Exiting non-zero.** Two ways, and they do not mix: declare `main() int` and
+return the status, or call `panic(message)` from a void function to stop with
+that message on stderr and status 1. `panic` is `void`, so it cannot be the tail
+expression of a `main() int`. There is no `exit`:
+
+```miri,fails=MER_TYP_034,expects-message=Undefined variable: exit
+fn main()
+    exit(3)
+```
 
 ```miri
 fn main() int
@@ -370,19 +366,25 @@ fn main() int
     return 3
 ```
 
+```miri
+fn main()
+    let ok = false
+    if ok
+        println("done")
+    else
+        panic("nothing to do")
+```
+
 ## Verification Loop
 
-The workflow for writing correct Miri code:
+**Loop:** `check --format json` → `fix --apply --yes` → re-check → `run` or `test`. Iterate until clean.
 
-1. **miri check** — compile and collect diagnostics: `miri check myfile.mi --format json`
-2. **miri run** — execute and see real output: `miri run myfile.mi`
-3. **miri test** — run tests in a directory: `miri test --dir <DIR>`
-4. **miri view** — read scoped code: `miri view myfile.mi --outline`, `--fn name`, `--type Name`, or a module name in place of the path. Add `--raw` for the file's own bytes (comments and all) behind their line numbers, alone or with `--fn`; without it the output is canonical, not literal
-5. **miri patch** — make scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`
-6. **miri fix** — repair errors: `miri explain CODE`, `miri fix --plan myfile.mi`, `miri fix --apply --yes myfile.mi`
-7. **miri agent** — tool integration (see `tools/agent_client.py` and `docs/agent-protocol.md`)
-
-**Loop:** check → (if errors) explain + fix --plan → fix --apply → run/test → re-check. Iterate until clean.
+1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair`. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text.
+2. **miri fix** — `miri fix myfile.mi --apply --yes` writes every repair the check recorded, in one call. `miri explain CODE` describes the rule behind one. `miri fix myfile.mi --plan --format json` previews the edits without writing them; it is a preview, not a step — the check already said which diagnostics carry a repair, so `--plan` adds a round trip and no information.
+3. **miri run** / **miri test** — `miri run myfile.mi`, `miri test --dir <DIR>`; both take `--format json`. Only a run finds a fault the frontend cannot see.
+4. **miri view** — read part of a file instead of all of it. `miri view myfile.mi --outline --public` gives the surface a caller can reach and is much smaller than the outline alone; `miri view myfile.mi --fn name` reads one function and `miri view myfile.mi --fn name --around text` narrows to the innermost block holding that text; `miri view --type Name --public` lists what can be called on a type; `miri view myfile.mi --raw --format json` returns the file's own bytes, comments and all, behind their line numbers. Without `--raw` the output is canonical, not literal, and a module name works wherever a path does.
+5. **miri patch** — scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`. The edited program is re-checked before anything reaches disk.
+6. **miri agent** — tool integration over JSON-RPC; `miri agent --help` carries the framing, the handshake and the method list. It does not run, build or test a program.
 
 The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.

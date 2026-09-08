@@ -568,3 +568,184 @@ fn test_directive_duplicate_fails() {
         err
     );
 }
+
+/// The heading the generated repair list sits under in the language pack.
+const REPAIR_LIST_HEADING: &str = "The auto-applicable repairs are:";
+
+/// Render the repair list the pack must carry, from the registry.
+///
+/// Sorted by identifier, which is the order a reader scans for one. The
+/// registry's own order is declaration order, which says nothing to a reader.
+fn rendered_repair_list() -> String {
+    let mut lines: Vec<String> = miri::diagnostics::repair::RepairId::all()
+        .iter()
+        .map(|repair| format!("- `{}`: {}", repair.as_str(), repair.summary()))
+        .collect();
+    lines.sort();
+    format!("{}\n{}\n", REPAIR_LIST_HEADING, lines.join("\n"))
+}
+
+#[test]
+fn test_the_packs_repair_list_is_the_registrys() {
+    // The pack tells an agent which faults one `fix --apply` clears. Typed by
+    // hand, that list goes stale the first time a repair is added or its
+    // wording changes, and the pack starts promising an edit the binary will
+    // not make. The block below is generated here and matched verbatim.
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("skills")
+        .join("miri-lang")
+        .join("SKILL.md");
+    let content = fs::read_to_string(&pack).expect("the language pack must be readable");
+    let expected = rendered_repair_list();
+
+    assert!(
+        content.contains(&expected),
+        "skills/miri-lang/SKILL.md's repair list has drifted from the registry.\n\
+         Replace the block under \"{}\" with:\n\n{}",
+        REPAIR_LIST_HEADING,
+        expected
+    );
+}
+
+#[test]
+fn test_the_pack_lists_no_repair_the_registry_does_not_have() {
+    // The verbatim match above proves every registered repair is listed. It
+    // does not prove the reverse: a line for a repair that was removed would
+    // sit below the generated block and still match.
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("skills")
+        .join("miri-lang")
+        .join("SKILL.md");
+    let content = fs::read_to_string(&pack).expect("the language pack must be readable");
+    let listed = content
+        .lines()
+        .skip_while(|line| !line.starts_with(REPAIR_LIST_HEADING))
+        .skip(1)
+        .take_while(|line| line.starts_with("- `"))
+        .count();
+
+    assert_eq!(
+        listed,
+        miri::diagnostics::repair::RepairId::all().len(),
+        "the pack lists {} repairs and the registry has {}",
+        listed,
+        miri::diagnostics::repair::RepairId::all().len()
+    );
+}
+
+/// Every `miri <subcommand> ... --flag` a skill body names, as (subcommand, flag).
+///
+/// Read out of backticked spans and fenced shell blocks, which is where the
+/// packs put a command a reader is meant to type.
+fn commands_named_in(body: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for span in backticked_spans(body) {
+        let mut words = span.split_whitespace();
+        if words.next() != Some("miri") {
+            continue;
+        }
+        let Some(subcommand) = words.next().filter(|word| !word.starts_with('-')) else {
+            continue;
+        };
+        for word in words {
+            let flag = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
+            if flag.starts_with("--") && flag.len() > 2 {
+                found.push((subcommand.to_string(), flag.to_string()));
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// The text inside single backticks, plus every line of a fenced `sh` block.
+fn backticked_spans(body: &str) -> Vec<String> {
+    let mut spans = Vec::new();
+    let mut in_shell_block = false;
+    for line in body.lines() {
+        if line.starts_with("```") {
+            in_shell_block = matches!(line[3..].trim(), "sh" | "bash" | "shell");
+            continue;
+        }
+        if in_shell_block {
+            spans.push(line.to_string());
+            continue;
+        }
+        // A line's backticked spans are every odd-indexed piece of its split.
+        for (index, piece) in line.split('`').enumerate() {
+            if index % 2 == 1 {
+                spans.push(piece.to_string());
+            }
+        }
+    }
+    spans
+}
+
+/// The long flags `miri <subcommand> --help` says it accepts.
+fn flags_accepted_by(subcommand: &str) -> Vec<String> {
+    let output = miri_cmd()
+        .arg(subcommand)
+        .arg("--help")
+        .output()
+        .expect("the compiler binary should start");
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+    help.split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .to_string()
+        })
+        .filter(|word| word.starts_with("--") && word.len() > 2)
+        .collect()
+}
+
+#[test]
+fn test_every_flag_a_pack_names_is_one_the_binary_accepts() {
+    // A pack telling an agent to pass a flag the binary does not have costs it
+    // an invocation and its trust in the rest of the page. The `miri` code
+    // blocks are compiled; the commands beside them were not checked at all
+    // until here.
+    let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+    let mut checked = 0;
+    let mut problems = Vec::new();
+
+    let mut entries: Vec<_> = fs::read_dir(&skills_dir)
+        .expect("the skills directory must be readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    entries.sort();
+
+    for skill_dir in entries {
+        let content = fs::read_to_string(skill_dir.join("SKILL.md"))
+            .expect("every skill must have a readable SKILL.md");
+        let (_, body) = parse_yaml_frontmatter(&content);
+        for (subcommand, flag) in commands_named_in(&body) {
+            let accepted = flags_accepted_by(&subcommand);
+            if accepted.is_empty() {
+                problems.push(format!(
+                    "{}: `miri {}` is not a command",
+                    skill_dir.display(),
+                    subcommand
+                ));
+                continue;
+            }
+            if !accepted.contains(&flag) {
+                problems.push(format!(
+                    "{}: `miri {} {}` — that flag is not in its --help",
+                    skill_dir.display(),
+                    subcommand,
+                    flag
+                ));
+            }
+            checked += 1;
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(
+        checked >= 10,
+        "expected the packs to name a good many flags, found {}",
+        checked
+    );
+}
