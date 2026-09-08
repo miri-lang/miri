@@ -48,6 +48,11 @@ pub struct ModuleLoader {
     /// When set, errors are tagged with this (file_path, source_text) so that
     /// the formatter can display the correct source context for imported files.
     pub current_source_override: Option<(String, String)>,
+    /// For each module path that has been loaded, the names its top-level
+    /// declarations put in reach of a file that imports it. Read by the
+    /// unused-import check, which cannot ask what a plain `use module` brought
+    /// in without knowing what the module declares.
+    pub module_declared_names: HashMap<String, HashSet<String>>,
     /// Names of classes/traits inserted by the cross-module pre-pass as
     /// partial placeholders so forward references resolve during recursive
     /// module loading. `check_class` / `check_trait` recognize members of
@@ -74,6 +79,7 @@ impl ModuleLoader {
             module_aliases: HashMap::new(),
             source_dir: None,
             current_source_override: None,
+            module_declared_names: HashMap::new(),
             pre_registered_types: HashSet::new(),
         }
     }

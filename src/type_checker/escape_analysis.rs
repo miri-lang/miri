@@ -876,6 +876,7 @@ fn synthetic_self_param() -> Parameter {
     use crate::ast::factory::{expr_with_span, make_type};
     use crate::error::syntax::Span;
     Parameter {
+        name_span: Default::default(),
         name: "self".to_string(),
         typ: Box::new(expr_with_span(
             ExpressionKind::Type(Box::new(make_type(TypeKind::Void)), false),

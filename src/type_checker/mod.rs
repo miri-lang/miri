@@ -43,6 +43,7 @@ pub(crate) mod float_literals;
 mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;
+pub(crate) mod hygiene;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
@@ -359,6 +360,7 @@ impl TypeChecker {
         self.run_pass_check_bodies(program, &mut context);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
+        self.check_hygiene(program);
 
         if self.diagnostics.is_empty() {
             self.collect_gpu_buffer_initializers(program);

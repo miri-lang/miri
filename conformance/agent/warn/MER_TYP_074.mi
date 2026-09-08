@@ -1,0 +1,9 @@
+// expect: MER_TYP_074
+// summary: Triggers MER_TYP_074: Unreachable Statement.
+fn announce()
+    println("first")
+    return
+    println("never")
+
+fn main()
+    announce()

@@ -1,0 +1,6 @@
+// expect: MER_IMP_005
+// summary: Triggers MER_IMP_005: Unused Import.
+use system.math
+
+fn main()
+    println("done")

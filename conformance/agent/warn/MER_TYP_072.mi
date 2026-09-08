@@ -1,0 +1,7 @@
+// expect: MER_TYP_072
+// summary: Triggers MER_TYP_072: Unused Parameter.
+fn greet(name String) String
+    "hello"
+
+fn main()
+    println(greet("world"))

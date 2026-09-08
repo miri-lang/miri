@@ -1,0 +1,6 @@
+// summary: Accepted counterpart of MER_TYP_073: Unused Private Declaration does not fire.
+private fn helper() int
+    41
+
+fn main()
+    println(f"{helper()}")

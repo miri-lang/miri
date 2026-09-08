@@ -17,6 +17,7 @@ pub fn parameter(
     default_value: Option<Box<Expression>>,
 ) -> Parameter {
     Parameter {
+        name_span: Default::default(),
         name,
         typ: Box::new(typ),
         guard,
@@ -34,6 +35,7 @@ pub fn out_parameter(
     default_value: Option<Box<Expression>>,
 ) -> Parameter {
     Parameter {
+        name_span: Default::default(),
         name,
         typ: Box::new(typ),
         guard,

@@ -432,9 +432,26 @@ impl TypeChecker {
         }
 
         self.modules.current_source_override = old_source_override;
+        self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
         self.imported_statements.extend(module_ast.body.clone());
         self.modules.current_module = old_module;
+    }
+
+    /// Remembers what this module puts in reach of a file that imports it.
+    ///
+    /// A `use module` line binds no name of its own, so the only way to ask
+    /// whether it is used is to ask whether any of these names is. Private
+    /// declarations are left out: an import cannot reach them.
+    fn record_module_declared_names(&mut self, path_str: &str, module_ast: &Program) {
+        let mut names: HashSet<String> =
+            crate::type_checker::hygiene::exported_names_of(&module_ast.body);
+        if let Some(last_segment) = path_str.rsplit('.').next() {
+            names.insert(last_segment.to_string());
+        }
+        self.modules
+            .module_declared_names
+            .insert(path_str.to_string(), names);
     }
 
     fn module_collect_shells(&mut self, module_ast: &Program) {

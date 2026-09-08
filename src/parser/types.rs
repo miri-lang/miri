@@ -167,6 +167,7 @@ impl<'source> Parser<'source> {
             .ok_or_else(|| self.error_missing_type_expression())?;
 
         Ok(Parameter {
+            name_span: Default::default(),
             name: param_name,
             typ: Box::new(typ),
             guard: None,
@@ -453,6 +454,7 @@ impl<'source> Parser<'source> {
 
 fn unnamed_param(typ: Expression) -> Parameter {
     Parameter {
+        name_span: Default::default(),
         name: String::new(),
         typ: Box::new(typ),
         guard: None,
