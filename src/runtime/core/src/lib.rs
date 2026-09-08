@@ -34,6 +34,7 @@ pub mod regex;
 pub mod set;
 pub mod string;
 pub mod time;
+pub(crate) mod trap;
 pub mod tuple;
 
 // Internal RC helpers (used by other runtime modules)

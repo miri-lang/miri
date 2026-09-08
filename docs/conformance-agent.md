@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 69
+## Error fixtures (`fail/`) — 87
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -55,6 +55,8 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_RT_002 | Triggers MER_RT_002: an integer remainder whose divisor is zero at run time. |
 | MER_RT_005 | Triggers MER_RT_005: an assertion failed at run time. |
 | MER_RT_006 | Triggers MER_RT_006: a stack overflow from unbounded recursion causes a segmentation fault. |
+| MER_RT_011 | Triggers MER_RT_011: an index past the end of a fixed-size array at run time. |
+| MER_RT_012 | Triggers MER_RT_012: the program calls panic and stops where it stands. |
 | MER_TAR_002 | Triggers MER_TAR_002: Unsupported Operation in GPU Code. |
 | MER_TAR_005 | Triggers MER_TAR_005: Invalid GPU Parallel Construct. |
 | MER_TAR_006 | Triggers MER_TAR_006: GPU Residency Violation. |
@@ -113,7 +115,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_026 | Triggers MER_TYP_026: Deprecated Attribute Spelling. |
 | MER_TYP_027 | Triggers MER_TYP_027: @deprecated Attribute. |
 
-## Accepted fixtures (`pass/`) — 82
+## Accepted fixtures (`pass/`) — 92
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -161,6 +163,8 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_RT_002 | Accepted counterpart of MER_RT_002: a non-zero divisor yields a remainder. |
 | MER_RT_005 | Accepted counterpart of MER_RT_005: an assertion passes at run time. |
 | MER_RT_006 | Accepted counterpart of MER_RT_006: bounded recursion completes without stack overflow. |
+| MER_RT_011 | Accepted counterpart of MER_RT_011: an index inside the array reads its element. |
+| MER_RT_012 | Accepted counterpart of MER_RT_012: the guarded case never reaches the panic. |
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |

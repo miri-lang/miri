@@ -404,7 +404,9 @@ fn test_run_format_json_division_by_zero_trap() {
         trap_diag["code"], "MER_RT_001",
         "code should be MER_RT_001 for division by zero"
     );
-    assert_eq!(trap_diag["message"], "division by zero");
+    // The sentence comes from the registry entry the code names; the program's
+    // own account of what it hit is `stderrTail`.
+    assert_eq!(trap_diag["message"], "Division by Zero");
 
     assert_eq!(output.status.code(), Some(1), "process should exit with 1");
 }
@@ -454,7 +456,7 @@ fn test_run_format_json_remainder_by_zero_trap() {
         trap_diag["code"], "MER_RT_002",
         "code should be MER_RT_002 for remainder by zero"
     );
-    assert_eq!(trap_diag["message"], "remainder by zero");
+    assert_eq!(trap_diag["message"], "Remainder by Zero");
 
     assert_eq!(output.status.code(), Some(1), "process should exit with 1");
 }

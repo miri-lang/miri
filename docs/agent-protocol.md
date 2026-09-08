@@ -82,6 +82,8 @@ not serve, or omitted a parameter.
 | `determinism` | the artifacts are byte-identical | 0 / 1 |
 | `skill` | the operation completed | 0 / 1 |
 
+Every runtime trap arrives as a registered `MER_RT_*` diagnostic, so a run that died is never reported as one that succeeded. The sentence saying *which* index or *which* divisor is the program's own and reaches you as `stderrTail`; the diagnostic carries the code and the registry's name for it.
+
 ## Methods
 
 ### `initialize`

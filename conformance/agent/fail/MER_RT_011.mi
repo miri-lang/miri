@@ -1,0 +1,9 @@
+// expect: MER_RT_011
+// command: run
+// summary: Triggers MER_RT_011: an index past the end of a fixed-size array at run time.
+fn at(a [int; 3], i int) int
+    a[i]
+
+fn main()
+    let values = [1, 2, 3]
+    println(f"{at(values, 7)}")

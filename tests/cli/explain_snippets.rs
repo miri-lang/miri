@@ -162,6 +162,8 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_RT_008", "kills the program with a signal at run time, which a static check cannot observe"),
     ("MER_RT_009", "kills the program with a signal at run time, which a static check cannot observe"),
     ("MER_RT_010", "kills the program with a signal at run time, which a static check cannot observe"),
+    ("MER_RT_011", "traps while the program runs, which a static check cannot observe"),
+    ("MER_RT_012", "traps while the program runs, which a static check cannot observe"),
     ("MER_TAR_001", "shadowed: MER_TYP_034 is reported first"),
     ("MER_TAR_003", "needs GPU lowering, which a host check does not perform"),
     ("MER_TAR_004", "shadowed: MER_TYP_034 is reported first"),

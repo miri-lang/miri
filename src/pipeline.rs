@@ -41,8 +41,8 @@ pub struct RunCaptureResult {
     pub stdout: Vec<u8>,
     /// Standard error bytes.
     pub stderr: Vec<u8>,
-    /// Optional trap code from the runtime.
-    pub trap_code: Option<String>,
+    /// The diagnostic code a runtime trap reported, if one did.
+    pub trap_code: Option<DiagnosticCode>,
 }
 
 fn has_main_function(program: &Program) -> bool {
@@ -675,9 +675,8 @@ impl Pipeline {
 
     /// Compile and execute the source, capturing and returning output.
     ///
-    /// Returns a tuple of (exit_code, stdout_bytes, stderr_bytes, trap_code).
-    /// trap_code is None if no trap occurred, or Some(code) with the diagnostic code
-    /// (e.g., "MER_RT_001") if a runtime trap was reported.
+    /// The result carries the exit status, the captured output, and the
+    /// diagnostic code of a runtime trap when the program raised one.
     ///
     /// `program_args` become the spawned program's `argv[1..]`; the program path
     /// itself is `argv[0]`, as for any executable. They are an input to this one
@@ -2959,7 +2958,7 @@ const MAX_TRAP_REPORT_LEN: u64 = 32;
 /// code, and names a code the runtime is actually able to raise. Anything else is
 /// discarded and the run is reported exactly as it would be with no report at
 /// all, so a program can never invent a diagnostic it did not trigger.
-fn read_trap_report(path: &std::path::Path) -> Option<String> {
+fn read_trap_report(path: &std::path::Path) -> Option<DiagnosticCode> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_TRAP_REPORT_LEN {
         return None;
@@ -2970,5 +2969,5 @@ fn read_trap_report(path: &std::path::Path) -> Option<String> {
     if code.area() != "RT" {
         return None;
     }
-    Some(code.as_str().to_string())
+    Some(code)
 }

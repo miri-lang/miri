@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use miri::cli::skill;
 use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillCommand};
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
+use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
 use miri::pipeline::{BuildOptions, Pipeline};
 
@@ -289,7 +290,7 @@ fn report_run(
     signal: Option<i32>,
     stdout_bytes: &[u8],
     stderr_bytes: &[u8],
-    trap_code: Option<String>,
+    trap_code: Option<DiagnosticCode>,
     elapsed_ms: u64,
 ) -> i32 {
     let (stdout_tail, stdout_truncated) = tail_output(stdout_bytes, 8192);
@@ -362,15 +363,18 @@ fn error_diagnostic(code: String, message: String) -> JsonDiagnostic {
 
 /// The diagnostic a runtime trap is reported as.
 ///
-/// The trap channel carries only the code, so the sentence a reader sees is
-/// looked up from it here rather than travelling with it.
-fn trap_diagnostic(code: String) -> JsonDiagnostic {
-    let message = match code.as_str() {
-        "MER_RT_001" => "division by zero",
-        "MER_RT_002" => "remainder by zero",
-        _ => "runtime trap",
-    };
-    error_diagnostic(code, message.to_string())
+/// The trap channel carries the code alone, and the sentence comes from the
+/// registry entry that code names. The program that died also wrote a line to
+/// its own stderr saying which index or which divisor, and a reader wanting
+/// that reads `stderrTail` — it is the program's text, and keeping it out of
+/// the diagnostic is what stops a program dressing its own output up as the
+/// compiler's account of what happened.
+///
+/// Reading the sentence out of the registry rather than a table here is what
+/// makes a trap added to the runtime tomorrow arrive named rather than as
+/// something generic.
+fn trap_diagnostic(code: DiagnosticCode) -> JsonDiagnostic {
+    error_diagnostic(code.as_str().to_string(), code.title().to_string())
 }
 
 /// The status stood in for a program that finished without one of its own.

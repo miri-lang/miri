@@ -1,0 +1,5 @@
+// expect: MER_RT_012
+// command: run
+// summary: Triggers MER_RT_012: the program calls panic and stops where it stands.
+fn main()
+    panic("boom")
