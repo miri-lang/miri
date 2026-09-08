@@ -1,0 +1,43 @@
+# Recover from a runtime trap.
+#
+# The program type-checks: nothing a frontend can see is wrong with it. The
+# fault is an off-by-one that only the run finds, which is the case a loop
+# driven by `check` alone never reaches. What makes the recovery possible is
+# that the trap answers with a code and a sentence naming the index, rather
+# than with a bare non-zero status.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+format_json = true
+must_succeed = false
+assert_diagnostic_code = "MER_RT_011"
+assert_output_contains = ["the len is 3 but the index is 3"]
+
+[[step]]
+type = "ViewFn"
+file = "program.mi"
+name = "main"
+format_json = false
+must_succeed = true
+assert_output_contains = ["index <= amounts.length()"]
+
+[[step]]
+type = "Patch"
+file = "program.mi"
+fn_name = "main"
+old_text = "index <= amounts.length()"
+new_text = "index < amounts.length()"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["20"]

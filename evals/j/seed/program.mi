@@ -1,0 +1,10 @@
+use system.collections.list.{List}
+
+fn main()
+    let amounts = List([4, 6, 10])
+    var index = 0
+    var sum = 0
+    while index <= amounts.length()
+        sum = sum + amounts[index]
+        index = index + 1
+    println(f"{sum}")

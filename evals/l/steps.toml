@@ -1,0 +1,73 @@
+# Repair a file with four unrelated faults, three of which carry a repair.
+#
+# The corpus's other repair task -- b -- has one fault and costs six
+# invocations, which is not what a repair job costs when a file has several.
+# This is that job: a String joined to an int, a function that returns on one
+# branch only, a binding reassigned after `let`, and a type used without its
+# import.
+#
+# Three of the four carry a repair, so one `fix --apply` clears them together.
+# The fourth does not, and the difference is the whole shape of the loop: what
+# `check` says about a repair is what tells the agent which faults it still has
+# to write an edit for. That one costs an `explain`, a scoped read and a body
+# replacement -- four invocations for one fault against one for three.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_043"
+assert_output_contains = [
+  "MER_TYP_002",
+  "MER_TYP_042",
+  "MER_TYP_054",
+  "\"id\": \"concat-to-formatted-string\"",
+  "\"id\": \"let-to-var\"",
+  "\"id\": \"add-import\"",
+]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_054"
+
+[[step]]
+type = "Explain"
+code = "MER_TYP_054"
+format_json = false
+must_succeed = true
+assert_output_contains = ["MER_TYP_054"]
+
+[[step]]
+type = "ViewFn"
+file = "program.mi"
+name = "bucket"
+format_json = false
+must_succeed = true
+assert_output_contains = ["return Size.Large"]
+
+[[step]]
+type = "ReplaceFn"
+file = "program.mi"
+fn_name = "bucket"
+body = "if item.qty > 5\n    return Size.Large\nreturn Size.Small\n"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["bolt 4 single", "nut 6 bulk", "10"]

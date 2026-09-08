@@ -1,0 +1,10 @@
+use system.testing.{assert_eq}
+
+fn double(x int) int
+    return x * 2
+
+@test
+fn test_double()
+    let expected = 10
+    let leftover = 99
+    assert_eq(double(5), expected)

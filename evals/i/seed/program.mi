@@ -1,0 +1,5 @@
+fn banner(word String) String
+    return word
+
+fn main()
+    println(banner("ready"))
