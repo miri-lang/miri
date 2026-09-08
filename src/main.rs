@@ -681,6 +681,7 @@ fn rejection_reason_to_string(reason: miri::test_runner::RejectionReason) -> Str
         miri::test_runner::RejectionReason::TopLevelStatements => {
             "top_level_statements".to_string()
         }
+        miri::test_runner::RejectionReason::DoesNotCompile => "does_not_compile".to_string(),
     }
 }
 
@@ -738,6 +739,15 @@ fn build_test_envelope(
         })
         .collect();
 
+    // A file that would not compile carries the compiler's own diagnostics, so
+    // they travel where a consumer already reads them: the same `diagnostics`
+    // array `check` fills, with the same `help` and the same `repair`.
+    let diagnostics = summary
+        .rejected_files
+        .iter()
+        .flat_map(|rf| rf.diagnostics.iter().cloned())
+        .collect();
+
     let json_summary = miri::diagnostics::json::JsonTestSummary {
         total: summary.total,
         passed: summary.passed,
@@ -747,7 +757,7 @@ fn build_test_envelope(
         rejected_files: json_rejected,
     };
 
-    DiagnosticsEnvelope::new(JsonCommand::Test, summary.is_green(), vec![])
+    DiagnosticsEnvelope::new(JsonCommand::Test, summary.is_green(), diagnostics)
         .with_duration_ms(elapsed_ms)
         .with_tests(json_summary)
         .with_exit_code(exit_code)

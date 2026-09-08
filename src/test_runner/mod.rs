@@ -158,6 +158,7 @@ pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSum
     let discovered = discovery::discover(target)?;
     let root = discovery::root_of(target);
     let mut results = Vec::new();
+    let mut rejected = discovered.rejected;
 
     for file in discovered.files {
         let display = display_path(&file.path, &root);
@@ -165,11 +166,22 @@ pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSum
         if selected.is_empty() {
             continue;
         }
-        results.extend(run_file(&file, &display, &selected));
+        match run_file(&file, &display, &selected) {
+            FileOutcome::Ran(file_results) => results.extend(file_results),
+            FileOutcome::NotRun(refusal) => rejected.push(refusal),
+        }
     }
 
-    let summary = TestSummary::from_results(results, discovered.rejected);
+    let summary = TestSummary::from_results(results, rejected);
     Ok(summary)
+}
+
+/// What asking one file for its tests produced.
+enum FileOutcome {
+    /// The file compiled, and these are its tests' verdicts.
+    Ran(Vec<TestResult>),
+    /// The file did not compile, so none of its tests was built.
+    NotRun(RejectedFile),
 }
 
 /// The tests in one file that survive the filter, in declaration order.
@@ -188,11 +200,7 @@ fn select_tests<'a>(
 }
 
 /// Compile one file and run its selected tests, preserving declaration order.
-fn run_file(
-    file: &discovery::TestFile,
-    display: &str,
-    selected: &[&TestMarker],
-) -> Vec<TestResult> {
+fn run_file(file: &discovery::TestFile, display: &str, selected: &[&TestMarker]) -> FileOutcome {
     use tempfile::TempDir;
 
     let to_run: Vec<TestMarker> = selected
@@ -203,26 +211,28 @@ fn run_file(
 
     // Every selected test is ignored, so nothing needs compiling.
     if to_run.is_empty() {
-        return selected
-            .iter()
-            .map(|test| ignored_result(test, display))
-            .collect();
+        return FileOutcome::Ran(
+            selected
+                .iter()
+                .map(|test| ignored_result(test, display))
+                .collect(),
+        );
     }
 
-    let artifact = match runner::compile_with_harness(&file.path, &file.source, &to_run) {
+    let artifact = match runner::compile_with_harness(&file.path, display, &file.source, &to_run) {
         Ok(artifact) => artifact,
-        Err(error) => {
-            return selected
-                .iter()
-                .map(|test| compile_failure_result(test, display, &error))
-                .collect()
-        }
+        Err(failure) => return FileOutcome::NotRun(did_not_compile(display, failure)),
     };
 
     // Create a temporary directory for sidecar files (or None if creation fails)
     let temp_dir = TempDir::new().ok();
 
-    run_selected_tests(selected, display, artifact.executable(), temp_dir.as_ref())
+    FileOutcome::Ran(run_selected_tests(
+        selected,
+        display,
+        artifact.executable(),
+        temp_dir.as_ref(),
+    ))
 }
 
 /// Run selected tests with or without sidecar support.
@@ -258,17 +268,19 @@ fn ignored_result(test: &TestMarker, display: &str) -> TestResult {
     }
 }
 
-/// A file that will not compile fails every test it declares, including the
-/// ignored ones: the failure is the file's, and hiding it behind `ignored`
-/// would report a broken file as a clean run.
-fn compile_failure_result(test: &TestMarker, display: &str, error: &str) -> TestResult {
-    TestResult {
+/// A file that will not compile is reported once, and none of its tests runs.
+///
+/// The failure is the file's. Reporting it against each test would say every
+/// test ran and disagreed with its assertions, and would print the file's
+/// errors once per test — twenty times over for a file with twenty tests. A
+/// rejected file already means "these tests never executed", turns the run red
+/// and sets the incomplete-run exit code, so a compile failure is that.
+fn did_not_compile(display: &str, failure: runner::CompileFailure) -> RejectedFile {
+    RejectedFile {
         path: display.to_string(),
-        name: test.name.clone(),
-        outcome: Outcome::Failed,
-        detail: Some(error.to_string()),
-        failure: None,
-        code: None,
+        reason: RejectionReason::DoesNotCompile,
+        rendered: Some(failure.rendered),
+        diagnostics: failure.diagnostics,
     }
 }
 
@@ -343,10 +355,10 @@ mod tests {
     fn a_rejected_file_keeps_the_run_red() {
         let summary = TestSummary::from_results(
             vec![result("a", Outcome::Passed)],
-            vec![RejectedFile {
-                path: "bad.mi".to_string(),
-                reason: RejectionReason::DeclaresMain,
-            }],
+            vec![RejectedFile::shaped(
+                "bad.mi".to_string(),
+                RejectionReason::DeclaresMain,
+            )],
         );
         assert_eq!(summary.failed, 0);
         assert!(!summary.is_green());

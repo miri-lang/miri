@@ -502,10 +502,10 @@ fn test_tests_are_discovered_in_nested_directories() {
         .stdout(predicates::str::contains("test result: ok. 2 passed"));
 }
 
-/// A file that will not compile fails every test it declares, not just the
-/// first one — otherwise a broken file would report a partial pass.
+/// A file that will not compile runs none of the tests it declares, and the run
+/// says so — otherwise a broken file would report a partial pass.
 #[test]
-fn test_compile_error_fails_every_test_in_the_file() {
+fn test_a_file_that_will_not_compile_runs_none_of_its_tests() {
     // No `use system.testing`, so `assert` is undefined for both tests.
     let dir = test_dir_with(
         "broken.mi",
@@ -520,7 +520,7 @@ fn test_compile_error_fails_every_test_in_the_file() {
         .failure()
         .stdout(predicates::str::contains("error[MER_TYP_034]"))
         .stdout(predicates::str::contains(
-            "test result: FAILED. 0 passed; 2 failed; 0 ignored",
+            "test result: FAILED. 0 passed; 0 failed; 0 ignored; 1 file(s) not run",
         ));
 }
 
@@ -1106,4 +1106,197 @@ fn test_signal_killed_test_carries_the_signal_diagnostic_code() {
     assert_eq!(result["outcome"], "crashed");
     assert_eq!(result["code"], "MER_RT_006");
     assert_eq!(result["detail"], "terminated by signal 11 (SIGSEGV)");
+}
+
+/// A file with one fault and two tests: the fault belongs to the file, not to
+/// either test.
+const ONE_FAULT_TWO_TESTS: &str =
+    "@test\nfn test_a()\n    assert_eq(1, 1)\n\n@test\nfn test_b()\n    let x = 1\n";
+
+/// Run a command in `dir` and return its parsed JSON envelope.
+fn envelope_of(dir: &Path, arguments: &[&str]) -> serde_json::Value {
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .args(arguments)
+        .current_dir(dir)
+        .output()
+        .expect("the compiler binary should start");
+    let text = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&text).unwrap_or_else(|error| {
+        panic!(
+            "`miri {}` should print an envelope: {error}\n{text}",
+            arguments.join(" ")
+        )
+    })
+}
+
+#[test]
+fn test_a_compile_failure_carries_the_diagnostics_check_would_have_given() {
+    // An agent driving the runner learns from the same envelope it reads after
+    // a `check`: one `fix --apply` clears this file, and the repair is what
+    // says so.
+    let dir = test_dir_with("noimport.mi", ONE_FAULT_TWO_TESTS);
+
+    let checked = envelope_of(dir.path(), &["check", "noimport.mi", "--format", "json"]);
+    let tested = envelope_of(dir.path(), &["test", "noimport.mi", "--format", "json"]);
+
+    assert_eq!(
+        tested["diagnostics"], checked["diagnostics"],
+        "the runner should surface the diagnostics a check of the same file reports\ncheck: {}\ntest:  {}",
+        checked["diagnostics"], tested["diagnostics"]
+    );
+
+    let first = &tested["diagnostics"][0];
+    assert_eq!(first["code"], "MER_TYP_034");
+    assert_eq!(
+        first["repair"]["id"], "add-import",
+        "the repair must survive the runner: {first}"
+    );
+}
+
+#[test]
+fn test_a_compile_failure_is_reported_once_not_once_per_test() {
+    // Two tests over a file with one error produced two copies of it; twenty
+    // tests would have produced twenty. The file failed to compile once.
+    let dir = test_dir_with("noimport.mi", ONE_FAULT_TWO_TESTS);
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .arg("test")
+        .arg("noimport.mi")
+        .current_dir(dir.path())
+        .output()
+        .expect("the compiler binary should start");
+    let rendered = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(
+        rendered.matches("Undefined variable: assert_eq").count(),
+        1,
+        "the file's one error belongs in the report once, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn test_the_tests_in_a_file_that_does_not_compile_are_not_run() {
+    // Reporting them as failures says two tests ran and disagreed with their
+    // assertions. Neither was ever built.
+    let dir = test_dir_with("noimport.mi", ONE_FAULT_TWO_TESTS);
+    let tested = envelope_of(dir.path(), &["test", "noimport.mi", "--format", "json"]);
+
+    assert_eq!(
+        tested["tests"]["results"].as_array().map(Vec::len),
+        Some(0),
+        "no test ran: {}",
+        tested["tests"]
+    );
+    assert_eq!(tested["tests"]["failed"], 0);
+
+    let rejected = tested["tests"]["rejectedFiles"]
+        .as_array()
+        .expect("the envelope lists the files that were not run");
+    assert_eq!(rejected.len(), 1, "one file was not run: {rejected:?}");
+    assert_eq!(rejected[0]["path"], "noimport.mi");
+    assert_eq!(rejected[0]["reason"], "does_not_compile");
+    assert_eq!(
+        tested["exitCode"], 2,
+        "a file that never ran is an incomplete run, not a failing one"
+    );
+}
+
+#[test]
+fn test_a_file_that_does_not_compile_is_listed_under_not_run() {
+    let dir = test_dir_with("noimport.mi", ONE_FAULT_TWO_TESTS);
+
+    let mut cmd = miri_cmd();
+    cmd.arg("test")
+        .arg("noimport.mi")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("not run:"))
+        .stdout(predicates::str::contains("---- noimport.mi ----"))
+        .stdout(predicates::str::contains("error[MER_TYP_034]"))
+        // No test line claims a verdict about a test that was never built.
+        .stdout(predicates::str::contains("test noimport.mi::test_a").not())
+        .stdout(predicates::str::contains("failures:").not());
+}
+
+#[test]
+fn test_the_rendered_compile_error_reads_the_way_check_renders_it() {
+    // The two commands run the same frontend over the same file, so a person
+    // reading one and then the other should not have to translate.
+    let dir = test_dir_with("noimport.mi", ONE_FAULT_TWO_TESTS);
+
+    let mut check = miri_cmd();
+    let checked = check
+        .arg("check")
+        .arg("noimport.mi")
+        .current_dir(dir.path())
+        .output()
+        .expect("the compiler binary should start");
+
+    let mut test = miri_cmd();
+    let tested = test
+        .arg("test")
+        .arg("noimport.mi")
+        .current_dir(dir.path())
+        .output()
+        .expect("the compiler binary should start");
+
+    // The location line is the one difference on purpose: the runner names the
+    // file the way the rest of its report names it, relative to what was
+    // searched, while `check` answers about the path it was handed.
+    let body = |text: &str| -> String {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with("-->"))
+            .map(|line| format!("{line}\n"))
+            .collect()
+    };
+
+    let expected = body(&String::from_utf8_lossy(&checked.stderr));
+    let rendered = String::from_utf8_lossy(&tested.stdout);
+    assert!(
+        !expected.trim().is_empty(),
+        "the check should have reported something"
+    );
+    for line in expected.lines().filter(|line| !line.trim().is_empty()) {
+        assert!(
+            rendered.contains(line),
+            "the runner should render the line `{line}` the way check does, got:\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn test_a_file_that_does_not_compile_does_not_stop_the_files_that_do() {
+    // One file's compile failure is one file's. The rest of the run still has
+    // to happen, or a single broken file hides every result beside it.
+    let dir = TempDir::new().expect("a temporary directory");
+    write_file(dir.path(), "broken.mi", ONE_FAULT_TWO_TESTS);
+    write_file(
+        dir.path(),
+        "good.mi",
+        &format!(
+            "{}@test\nfn test_ok()\n    assert_eq(1, 1)\n",
+            TESTING_IMPORT
+        ),
+    );
+
+    let tested = envelope_of(dir.path(), &["test", "--dir", ".", "--format", "json"]);
+
+    assert_eq!(
+        tested["tests"]["passed"], 1,
+        "the file that compiles still runs: {}",
+        tested["tests"]
+    );
+    assert_eq!(tested["tests"]["failed"], 0);
+    assert_eq!(
+        tested["tests"]["rejectedFiles"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        tested["exitCode"], 2,
+        "a run missing a file's tests is incomplete, whatever the rest reported"
+    );
+    assert_eq!(tested["ok"], false);
 }

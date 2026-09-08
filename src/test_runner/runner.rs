@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::codegen::{BuildTarget, CpuBackend};
+use crate::diagnostics::json::JsonDiagnostic;
+use crate::error::diagnostic::to_json;
 use crate::pipeline::{BuildOptions, Pipeline};
 use crate::test_runner::{harness, Outcome, TestMarker, TestResult};
 
@@ -25,6 +27,18 @@ pub enum Execution {
     Killed(i32),
     /// The dispatcher rejected its arguments, so no test ran.
     Fault(String),
+}
+
+/// Why a test file could not be compiled.
+///
+/// The two halves are the same errors twice: one rendering for a person, and
+/// the same diagnostics as data for a tool. Keeping them together is what stops
+/// the runner from being the one command whose failures carry no repair.
+pub struct CompileFailure {
+    /// The compiler's report, ready to print.
+    pub rendered: String,
+    /// The same errors as data, carrying their `help` and `repair`.
+    pub diagnostics: Vec<JsonDiagnostic>,
 }
 
 /// A compiled test binary and the directory holding it.
@@ -46,15 +60,23 @@ impl Artifact {
 ///
 /// The dispatcher is appended, never spliced, so every span in the user's own
 /// source keeps pointing where it did and compile errors stay truthful.
+///
+/// `display` is how the report names the file to a person — short, and relative
+/// to whatever was searched. The diagnostics carry the absolute path instead,
+/// because a repair's edits name a file a tool has to find from wherever it is
+/// running, which is the same path a `check` of that file reports.
 pub fn compile_with_harness(
     file_path: &Path,
+    display: &str,
     source: &str,
     tests: &[TestMarker],
-) -> Result<Artifact, String> {
+) -> Result<Artifact, CompileFailure> {
     let combined = format!("{}\n{}", source, harness::synthesize(tests));
 
-    let directory = tempfile::tempdir()
-        .map_err(|error| format!("could not create a temporary directory: {}", error))?;
+    let directory = tempfile::tempdir().map_err(|error| CompileFailure {
+        rendered: format!("could not create a temporary directory: {}", error),
+        diagnostics: Vec::new(),
+    })?;
     let executable = directory.path().join("test_binary");
 
     let options = BuildOptions {
@@ -66,18 +88,37 @@ pub fn compile_with_harness(
         emit_native_host: false,
     };
 
+    let absolute = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf());
+
     let mut pipeline = Pipeline::new();
-    if let Some(parent) = file_path.parent() {
+    if let Some(parent) = absolute.parent() {
         pipeline = pipeline.with_source_dir(parent.to_path_buf());
     }
-    pipeline = pipeline.with_source_path(file_path.display().to_string());
+    pipeline = pipeline.with_source_path(absolute.display().to_string());
 
-    pipeline
-        .build(&combined, &options)
-        // Render through the compiler's own diagnostic formatter against the
-        // combined source, so the report shows the same message `miri build`
-        // would rather than a debug dump of the error value.
-        .map_err(|error| error.report_with_path(&combined, pipeline.source_path()))?;
+    pipeline.build(&combined, &options).map_err(|error| {
+        // Rendered through the compiler's own formatter against the combined
+        // source, so the report reads the way `miri build` reads rather than as
+        // a debug dump of the error value — and kept as data beside it, so a
+        // consumer gets the `help` and the `repair` a check of the same file
+        // would have handed it.
+        //
+        // Both are computed against the combined source. The dispatcher is
+        // appended rather than spliced, so every line number and every byte
+        // offset in the user's own source is the one the file itself has.
+        let rendered = error.report_with_path(&combined, Some(display));
+        let diagnostics = error
+            .to_diagnostics()
+            .iter()
+            .map(|diagnostic| to_json(diagnostic, &combined, pipeline.source_path()))
+            .collect();
+        CompileFailure {
+            rendered,
+            diagnostics,
+        }
+    })?;
 
     Ok(Artifact {
         _directory: directory,

@@ -39,6 +39,10 @@ pub enum RejectionReason {
     /// is skipped once the appended dispatcher declares `main`, so those
     /// statements would be dropped without a word.
     TopLevelStatements,
+    /// Parses and declares tests, but does not compile. The fault is the
+    /// file's, so it is reported once and none of its tests is run — a test
+    /// that was never built has no verdict to report.
+    DoesNotCompile,
 }
 
 impl std::fmt::Display for RejectionReason {
@@ -53,6 +57,9 @@ impl std::fmt::Display for RejectionReason {
             RejectionReason::TopLevelStatements => {
                 "has executable statements outside a function; move them into a `@test` function, where they would otherwise be silently skipped"
             }
+            RejectionReason::DoesNotCompile => {
+                "does not compile, so none of its tests was built; the errors follow, and `miri check` on the file reports the same ones"
+            }
         };
         write!(f, "{}", explanation)
     }
@@ -63,6 +70,28 @@ impl std::fmt::Display for RejectionReason {
 pub struct RejectedFile {
     pub path: String,
     pub reason: RejectionReason,
+    /// The compiler's own report, when the reason is one the compiler produced.
+    ///
+    /// A parse failure, a declared `main` and a top-level statement are read
+    /// off the file's shape and are fully described by the reason; only a
+    /// compile failure has errors to show.
+    pub rendered: Option<String>,
+    /// Those errors as data, carrying the `help` and the `repair` a check of
+    /// the same file would have handed a consumer.
+    #[serde(skip)]
+    pub diagnostics: Vec<crate::diagnostics::json::JsonDiagnostic>,
+}
+
+impl RejectedFile {
+    /// A file refused for a reason the file's own shape explains.
+    pub fn shaped(path: String, reason: RejectionReason) -> Self {
+        Self {
+            path,
+            reason,
+            rendered: None,
+            diagnostics: Vec::new(),
+        }
+    }
 }
 
 /// Everything a directory walk turned up.
@@ -127,10 +156,9 @@ fn classify(path: &Path, source: String, dir: &Path, discovered: &mut Discovered
 
     let Some(program_body) = parse_body(&source) else {
         if mentions_test_attribute(&source) {
-            discovered.rejected.push(RejectedFile {
-                path: display,
-                reason: RejectionReason::Unparseable,
-            });
+            discovered
+                .rejected
+                .push(RejectedFile::shaped(display, RejectionReason::Unparseable));
         }
         return;
     };
@@ -141,10 +169,9 @@ fn classify(path: &Path, source: String, dir: &Path, discovered: &mut Discovered
     }
 
     if let Some(reason) = rejection_reason(&program_body) {
-        discovered.rejected.push(RejectedFile {
-            path: display,
-            reason,
-        });
+        discovered
+            .rejected
+            .push(RejectedFile::shaped(display, reason));
         return;
     }
 

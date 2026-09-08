@@ -99,6 +99,14 @@ declares `@test` but does not parse; run `miri check` on it for the syntax error
 ```
 A test file must be valid Miri syntax; files with syntax errors are rejected without running any tests.
 
+**A file that does not compile is rejected too, and its errors are printed once:**
+
+The runner says:
+```
+does not compile, so none of its tests was built; the errors follow, and `miri check` on the file reports the same ones
+```
+The errors belong to the file, not to any one test, so none of its tests reports a verdict. With `--format json` they arrive in the envelope's `diagnostics` array carrying the same `help` and `repair` a `check` of that file gives, so a missing `use system.testing` is one `miri fix --apply --yes` away.
+
 **Why these rules have no `fails=` blocks:**
 
 Files with `fn main`, top-level statements, or parse errors type-check cleanly (or fail to parse entirely), so the compiler-driven gate cannot express them as `fails=` blocks. Only the `miri test` runner enforces these rejection rules at runtime.
