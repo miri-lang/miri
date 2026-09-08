@@ -84,6 +84,15 @@ The compiler gates every skill:
 2. At least one block must demonstrate anti-hallucination (`fails=` directive).
 3. Skill body stays under 400 lines (token economy for agent context).
 4. Name in frontmatter matches the directory name.
+5. Every `miri <command> --flag` a body names is a flag that command's `--help`
+   accepts. The code blocks are compiled; the commands beside them were not
+   checked at all until this, and a flag the binary does not have costs a reader
+   an invocation and its trust in the rest of the page. Naming a flag inside a
+   full command rather than on its own is what puts it under the gate.
+6. The language pack's auto-applicable repair list is generated from
+   `RepairId::all()` and matched verbatim, so a repair added, removed or
+   reworded in the registry fails the gate until the pack says the same thing.
+   The failure prints the block to paste in.
 
 Run locally:
 

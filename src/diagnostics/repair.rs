@@ -91,6 +91,33 @@ impl RepairId {
         }
     }
 
+    /// One sentence saying what applying this repair does.
+    ///
+    /// Published text, not a note to a Rust reader: the skill pack lists these
+    /// verbatim and a gate fails when the two disagree, so a repair added here
+    /// without a sentence a user can act on will be noticed.
+    pub fn summary(&self) -> &'static str {
+        match self {
+            Self::LetToVar => "Rebind an immutable declaration as mutable.",
+            Self::AddImport => "Import a name that resolves in exactly one module.",
+            Self::DropExtraArguments => "Drop positional arguments a call does not declare.",
+            Self::ColonAnnotation => "Drop the `:` before a type annotation.",
+            Self::ArrowReturnType => "Drop the `->` before a return type.",
+            Self::LetMutToVar => "Rewrite a `let mut` binding as `var`.",
+            Self::NullToNone => "Rewrite `null`, `nil` or `nullptr` as `None`.",
+            Self::PrintlnBang => "Drop the `!` from a macro-style call.",
+            Self::DropIteratorAccessor => {
+                "Drop a `keys` accessor on a keyed collection and iterate it directly."
+            }
+            Self::ConcatToFormattedString => {
+                "Rewrite a `+` chain joining text to values as one f-string."
+            }
+            Self::QualifyVariantPattern => {
+                "Prefix a bare variant pattern with the enum that declares it."
+            }
+        }
+    }
+
     /// Every repair identifier, in declaration order.
     pub fn all() -> &'static [RepairId] {
         &[
