@@ -1,0 +1,34 @@
+# Repair a cascade with one root cause.
+#
+# One missing import raises two errors: the unknown type, and a `while`
+# condition that cannot be a boolean because the value it reads has no type
+# left. The second is not a second fault -- it is the first one's shadow. What
+# the loop has to learn from the diagnostics is which of the two to act on, and
+# `check` answers that by attaching a repair to the root and none to the shadow.
+#
+# One `fix --apply` therefore clears both, and the re-check proves it rather
+# than the transcript claiming it.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_043"
+assert_output_contains = ["MER_TYP_002", "\"id\": \"add-import\""]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["20"]

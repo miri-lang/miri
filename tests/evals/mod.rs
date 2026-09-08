@@ -37,17 +37,90 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tempfile::TempDir;
 
+/// One task in the replay set.
+struct Task {
+    /// Directory under `evals/`, and the name the results table lists.
+    id: &'static str,
+    /// What the transcript does, as the table's second column.
+    description: &'static str,
+    /// What the loop cannot do today, when it cannot finish this task.
+    ///
+    /// A task pinned this way is replayed until a step fails, and recorded as
+    /// failing at that step. It is not omitted, because a corpus that holds
+    /// only the jobs that already work reports green through every gap it does
+    /// not contain. Closing the gap makes the task finish, which moves
+    /// `success` and fails the gate — so the fix and this table are updated in
+    /// the same change.
+    blocked_by: Option<&'static str>,
+}
+
 /// The tasks in the replay set, in the order the results table lists them.
 ///
 /// The list is explicit rather than discovered by reading the directory: a
 /// fixture that goes missing must fail the run, not silently shrink the corpus.
-const TASKS: &[(&str, &str)] = &[
-    ("a", "build hello world from an empty directory"),
-    ("b", "repair a broken program using check, explain and fix"),
-    ("c", "add a function and its test"),
-    ("d", "extend a program with a stdlib module"),
-    ("e", "recover from a capability rejection"),
-    ("f", "make a failing test pass"),
+const TASKS: &[Task] = &[
+    Task {
+        id: "a",
+        description: "build hello world from an empty directory",
+        blocked_by: None,
+    },
+    Task {
+        id: "b",
+        description: "repair a broken program using check, explain and fix",
+        blocked_by: None,
+    },
+    Task {
+        id: "c",
+        description: "add a function and its test",
+        blocked_by: None,
+    },
+    Task {
+        id: "d",
+        description: "extend a program with a stdlib module",
+        blocked_by: None,
+    },
+    Task {
+        id: "e",
+        description: "recover from a capability rejection",
+        blocked_by: None,
+    },
+    Task {
+        id: "f",
+        description: "make a failing test pass",
+        blocked_by: None,
+    },
+    Task {
+        id: "g",
+        description: "author a struct, a class and a match over an enum from an empty directory",
+        blocked_by: None,
+    },
+    Task {
+        id: "h",
+        description: "repair a cascade with one root cause",
+        blocked_by: None,
+    },
+    Task {
+        id: "i",
+        description: "look up an API and edit through view and patch only",
+        blocked_by: None,
+    },
+    Task {
+        id: "j",
+        description: "recover from a runtime trap",
+        blocked_by: None,
+    },
+    Task {
+        id: "l",
+        description: "repair a file with four faults, three of which carry a repair",
+        blocked_by: None,
+    },
+    Task {
+        id: "k",
+        description: "read the warnings a green test run left behind",
+        blocked_by: Some(
+            "`miri test` renders warnings to stderr as text and omits them from the envelope",
+        ),
+    },
 ];
 
 /// One recorded step, as written in `steps.toml`.
@@ -117,6 +190,8 @@ struct TranscriptFile {
 pub struct Transcript {
     pub id: String,
     pub description: String,
+    /// What stops this task finishing today, when something does.
+    pub blocked_by: Option<String>,
     steps: Vec<StepSpec>,
 }
 
@@ -138,6 +213,13 @@ pub struct TaskMetrics {
     /// Bytes of `.mi` source the loop caused to be written, whether the writer
     /// was the agent or the compiler.
     pub bytes_written: usize,
+    /// The 1-based step a pinned task stopped at, when it did not finish.
+    ///
+    /// Gated like the rest. A pinned task that starts failing somewhere else is
+    /// failing for a new reason, and a corpus that could not tell those apart
+    /// would hold a fixture pinned to a gap that had already moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_step: Option<usize>,
 }
 
 /// Replace the parts of the compiler's output that differ between identical
@@ -157,7 +239,7 @@ fn normalize_output(output: &str, work_dir: &Path) -> String {
         regex::Regex::new(r#""durationMs":\s*\d+"#).expect("the durationMs pattern must compile")
     });
 
-    let mut result = DURATION
+    let result = DURATION
         .replace_all(output, r#""durationMs":0"#)
         .into_owned();
 
@@ -244,6 +326,12 @@ fn require<'a>(value: &'a Option<String>, field: &str, kind: &str) -> Result<&'a
 struct StepOutcome {
     succeeded: bool,
     output: String,
+    /// Standard output alone.
+    ///
+    /// An envelope lives on stdout by definition, and a command may write a
+    /// sentence for a person to stderr beside it. Parsing the two together
+    /// would report "this is not JSON" about a command that answered correctly.
+    stdout: String,
     /// Bytes of normalized output, counted only for compiler invocations.
     bytes_read: usize,
     /// Whether this step invoked the compiler.
@@ -265,6 +353,7 @@ fn run_step(
         return Ok(StepOutcome {
             succeeded: true,
             output: String::new(),
+            stdout: String::new(),
             bytes_read: 0,
             invoked_compiler: false,
         });
@@ -377,11 +466,26 @@ fn run_step(
         }
         "Run" => {
             cmd.arg("run").arg(require(&spec.file, "file", &spec.kind)?);
+            if spec.format_json {
+                cmd.arg("--format").arg("json");
+            }
         }
         "TestDir" => {
             cmd.arg("test")
                 .arg("--dir")
                 .arg(require(&spec.dir, "dir", &spec.kind)?);
+            if spec.format_json {
+                cmd.arg("--format").arg("json");
+            }
+        }
+        "ViewType" => {
+            cmd.arg("view")
+                .arg("--type")
+                .arg(require(&spec.name, "name", &spec.kind)?)
+                .arg("--public");
+            if spec.format_json {
+                cmd.arg("--format").arg("json");
+            }
         }
         "Build" => {
             cmd.arg("build")
@@ -393,16 +497,14 @@ fn run_step(
     }
 
     let output = cmd.output().map_err(|e| e.to_string())?;
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let combined = format!("{}{}", stdout, String::from_utf8_lossy(&output.stderr));
     let bytes_read = normalize_output(&combined, work_dir).len();
 
     Ok(StepOutcome {
         succeeded: output.status.success(),
         output: combined,
+        stdout,
         bytes_read,
         invoked_compiler: true,
     })
@@ -445,7 +547,7 @@ fn verify_step(
     if let Some(code) = &spec.assert_diagnostic_code {
         // A step asserting a code must produce an envelope carrying it. Failing
         // to parse is a failure, never a reason to skip the check.
-        let envelope: serde_json::Value = serde_json::from_str(&outcome.output).map_err(|e| {
+        let envelope: serde_json::Value = serde_json::from_str(&outcome.stdout).map_err(|e| {
             format!(
                 "expected diagnostic {} in a JSON envelope, but the output did not parse ({}). Output:\n{}",
                 code, e, outcome.output
@@ -499,6 +601,7 @@ pub fn replay(
         invocations: 0,
         bytes_read: 0,
         bytes_written: 0,
+        failed_step: None,
     };
     let started = Instant::now();
 
@@ -514,16 +617,32 @@ pub fn replay(
         }
         metrics.bytes_written += bytes_written_between(&before, &after);
 
-        verify_step(spec, &outcome, &before, &after).map_err(|e| {
-            format!(
-                "task {} ({}) step {} [{}]: {}",
-                transcript.id,
-                transcript.description,
-                index + 1,
-                spec.kind,
-                e
-            )
-        })?;
+        let Err(problem) = verify_step(spec, &outcome, &before, &after) else {
+            continue;
+        };
+        let failure = format!(
+            "task {} ({}) step {} [{}]: {}",
+            transcript.id,
+            transcript.description,
+            index + 1,
+            spec.kind,
+            problem
+        );
+
+        // A pinned task is one the loop cannot finish today. Recording where it
+        // stops, and what it cost to get there, is the whole point of keeping
+        // it: an unpinned task that fails is a regression and still stops the
+        // run.
+        let Some(reason) = &transcript.blocked_by else {
+            return Err(failure);
+        };
+        println!(
+            "eval {} is pinned on: {}\n  {}",
+            transcript.id, reason, failure
+        );
+        metrics.success = false;
+        metrics.failed_step = Some(index + 1);
+        break;
     }
 
     Ok((metrics, started.elapsed().as_millis() as u64))
@@ -537,8 +656,8 @@ fn evals_dir() -> PathBuf {
 pub fn load_transcripts() -> Result<Vec<Transcript>, String> {
     TASKS
         .iter()
-        .map(|(id, description)| {
-            let path = evals_dir().join(id).join("steps.toml");
+        .map(|task| {
+            let path = evals_dir().join(task.id).join("steps.toml");
             let text = fs::read_to_string(&path)
                 .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
             let parsed: TranscriptFile = toml::from_str(&text)
@@ -547,8 +666,9 @@ pub fn load_transcripts() -> Result<Vec<Transcript>, String> {
                 return Err(format!("{} declares no steps", path.display()));
             }
             Ok(Transcript {
-                id: (*id).to_string(),
-                description: (*description).to_string(),
+                id: task.id.to_string(),
+                description: task.description.to_string(),
+                blocked_by: task.blocked_by.map(str::to_string),
                 steps: parsed.step,
             })
         })
@@ -596,6 +716,13 @@ pub fn preflight(transcripts: &[Transcript]) -> Result<(), String> {
                 "task {} ({}) asserts nothing about the compiler's output",
                 transcript.id, transcript.description
             ));
+        }
+
+        // A pinned task stops before it can finish, so it need not have edited
+        // anything by then. What it must still do is say what it was asking
+        // for, which the content assertion above already requires.
+        if transcript.blocked_by.is_some() {
+            continue;
         }
 
         let mutates = transcript
@@ -711,8 +838,8 @@ fn render_table(results: &[TaskMetrics]) -> String {
     for result in results {
         let description = TASKS
             .iter()
-            .find(|(id, _)| *id == result.task)
-            .map(|(_, d)| *d)
+            .find(|task| task.id == result.task)
+            .map(|task| task.description)
             .unwrap_or("");
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} |\n",
@@ -724,7 +851,49 @@ fn render_table(results: &[TaskMetrics]) -> String {
             result.bytes_written
         ));
     }
+    out.push_str(&pinned_note(results));
     out
+}
+
+/// The note under the table naming every task the loop cannot finish, and why.
+///
+/// A `no` in the success column with no reason beside it reads as a broken
+/// fixture. It is not: it is a gap the corpus is deliberately carrying, and
+/// closing that gap turns the cell to `yes` and fails the gate.
+fn pinned_note(results: &[TaskMetrics]) -> String {
+    let pinned: Vec<&Task> = TASKS
+        .iter()
+        .filter(|task| {
+            task.blocked_by.is_some() && results.iter().any(|result| result.task == task.id)
+        })
+        .collect();
+    if pinned.is_empty() {
+        return String::new();
+    }
+
+    let mut note = String::from(concat!(
+        "\nTasks recorded as not succeeding are pinned on a gap the loop still has.\n",
+        "They are replayed to the step that fails and cost what they cost getting\n",
+        "there. Closing one makes it finish, which moves `success` and fails the\n",
+        "gate — so the fix and this table land together.\n\n",
+    ));
+    for task in pinned {
+        let step = results
+            .iter()
+            .find(|result| result.task == task.id)
+            .and_then(|result| result.failed_step);
+        let at = match step {
+            Some(step) => format!(" (stops at step {})", step),
+            None => String::new(),
+        };
+        note.push_str(&format!(
+            "- **{}**{}: {}\n",
+            task.id,
+            at,
+            task.blocked_by.unwrap_or("")
+        ));
+    }
+    note
 }
 
 fn baseline_json_path() -> PathBuf {
@@ -794,6 +963,14 @@ fn test_replay_matches_the_committed_baseline() {
 
 #[test]
 fn test_committed_table_matches_the_committed_metrics() {
+    // A bless rewrites both files from another test in this same run, so
+    // reading them here would compare whichever halves had landed by then.
+    // The bless writes the table from the metrics it just wrote, which is what
+    // this test asserts, so there is nothing left for it to check.
+    if std::env::var("MIRI_EVALS_BLESS").is_ok() {
+        return;
+    }
+
     let committed = fs::read_to_string(baseline_json_path()).expect("the baseline must exist");
     let baseline: Vec<TaskMetrics> =
         serde_json::from_str(&committed).expect("the baseline must parse");
@@ -832,6 +1009,7 @@ mod tests {
             invocations,
             bytes_read: 100,
             bytes_written: 10,
+            failed_step: None,
         }
     }
 
@@ -842,6 +1020,7 @@ mod tests {
             invocations: 5,
             bytes_read,
             bytes_written,
+            failed_step: None,
         }
     }
 
@@ -1015,6 +1194,7 @@ mod tests {
         let transcript = Transcript {
             id: "x".to_string(),
             description: "asserts nothing".to_string(),
+            blocked_by: None,
             steps: vec![spec("Check")],
         };
         let report = preflight(&[transcript]).expect_err("the guard must fire");
@@ -1028,6 +1208,7 @@ mod tests {
         let transcript = Transcript {
             id: "y".to_string(),
             description: "only reads".to_string(),
+            blocked_by: None,
             steps: vec![step],
         };
         let report = preflight(&[transcript]).expect_err("the guard must fire");
@@ -1047,6 +1228,7 @@ mod tests {
         let transcript = Transcript {
             id: "z".to_string(),
             description: "degrades".to_string(),
+            blocked_by: None,
             steps: vec![passing, failing],
         };
         let report = preflight(&[transcript]).expect_err("the guard must fire");
@@ -1098,10 +1280,18 @@ mod tests {
                 fs::write(&path, "not miri source @@@\n").expect("the seed copy must be writable");
             }
 
+            // A task pinned on a gap never fails the replay outright -- it is
+            // recorded as stopping where it stops -- so what proves its seed is
+            // load-bearing is that garbage stops it at the very first step
+            // rather than at the one it is pinned on.
             let outcome = replay(transcript, work.path(), &stdlib_path, scratch.path());
+            let broke_immediately = outcome
+                .as_ref()
+                .map(|(metrics, _)| metrics.failed_step == Some(1))
+                .unwrap_or(true);
             assert!(
-                outcome.is_err(),
-                "task {} replayed successfully against a corrupted seed, so its seed is not load-bearing",
+                broke_immediately,
+                "task {} replayed past its first step against a corrupted seed, so its seed is not load-bearing",
                 transcript.id
             );
             checked += 1;

@@ -1,0 +1,35 @@
+# Look up an API and edit through the read and edit surfaces only.
+#
+# Nothing here writes a file directly: the outline says what the file holds,
+# `view --type` says what a String can do -- the question an author otherwise
+# answers by guessing a method name -- and the anchored edit puts the answer in
+# place and re-checks it before anything reaches disk.
+
+[[step]]
+type = "ViewOutline"
+file = "program.mi"
+format_json = false
+must_succeed = true
+assert_output_contains = ["fn banner(word String) String"]
+
+[[step]]
+type = "ViewType"
+name = "String"
+format_json = false
+must_succeed = true
+assert_output_contains = ["fn to_upper() String"]
+
+[[step]]
+type = "Patch"
+file = "program.mi"
+fn_name = "banner"
+old_text = "return word"
+new_text = "return word.to_upper()"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["READY"]

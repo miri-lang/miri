@@ -1,0 +1,107 @@
+# Author a program with a struct, a class holding state, and a match over an
+# enum, from an empty directory. There is no seed/: the job starts from nothing.
+#
+# The first attempt spells the constructor `init()`, which is what the skill
+# pack's only class -- `class Shape` with one single-line method and no state --
+# leaves an author to guess. Miri spells it `fn init()`. The wasted check is
+# recorded rather than edited out: it is what the loop costs today, and a pack
+# that shows a class with fields and a constructor is what would remove it.
+
+[[step]]
+type = "WriteFile"
+path = "program.mi"
+content = """
+struct Reading
+    label String
+    value int
+
+enum Grade
+    Low
+    High
+
+class Ledger
+    private var total int
+
+    init()
+        self.total = 0
+
+    public fn record(reading Reading)
+        self.total = self.total + reading.value
+
+    public fn grade() Grade
+        if self.total > 10
+            return Grade.High
+        return Grade.Low
+
+fn report(grade Grade) String
+    match grade
+        Grade.High
+            let prefix = "over"
+            return f"{prefix} budget"
+        Grade.Low: "within budget"
+
+fn main()
+    let ledger = Ledger()
+    ledger.record(Reading("rent", 7))
+    ledger.record(Reading("food", 5))
+    println(report(ledger.grade()))
+"""
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_PAR_001"
+
+[[step]]
+type = "WriteFile"
+path = "program.mi"
+content = """
+struct Reading
+    label String
+    value int
+
+enum Grade
+    Low
+    High
+
+class Ledger
+    private var total int
+
+    fn init()
+        self.total = 0
+
+    public fn record(reading Reading)
+        self.total = self.total + reading.value
+
+    public fn grade() Grade
+        if self.total > 10
+            return Grade.High
+        return Grade.Low
+
+fn report(grade Grade) String
+    match grade
+        Grade.High
+            let prefix = "over"
+            return f"{prefix} budget"
+        Grade.Low: "within budget"
+
+fn main()
+    let ledger = Ledger()
+    ledger.record(Reading("rent", 7))
+    ledger.record(Reading("food", 5))
+    println(report(ledger.grade()))
+"""
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["over budget"]

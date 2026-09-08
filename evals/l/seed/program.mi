@@ -1,0 +1,31 @@
+struct Item
+    name String
+    qty int
+
+enum Size
+    Small
+    Large
+
+fn label(item Item) String
+    return item.name + " " + item.qty
+
+fn bucket(item Item) Size
+    if item.qty > 5
+        return Size.Large
+
+fn describe(item Item) String
+    match bucket(item)
+        Size.Large: "bulk"
+        Size.Small: "single"
+
+fn total(items [Item]) int
+    let sum = 0
+    for item in items
+        sum = sum + item.qty
+    return sum
+
+fn main()
+    let items = List([Item("bolt", 4), Item("nut", 6)])
+    for item in items
+        println(f"{label(item)} {describe(item)}")
+    println(f"{total(items)}")

@@ -126,6 +126,17 @@ fn finish_index_read(
         Ok(Operand::Copy(Place::new(elem_temp)))
     } else {
         // obj accessed via Move — no IncRef, no drop. Return the projected place.
+        //
+        // TODO: a struct read this way and passed straight to a function is
+        // freed in place, and the collection is left holding a zeroed element.
+        // `List([Item("bolt", 4)])` then `takes_item(items[0])` leaves
+        // `items[0].qty` reading 0; binding it first (`let it = items[0]`) or
+        // iterating with `for` is unaffected, and an `int` or `String` element
+        // is unaffected. The place handed back here is a borrow by design, so
+        // either this path must raise the count when the element is managed, or
+        // the call lowering must stop releasing an argument that is one. Which
+        // of the two is wrong has not been established; do not fix one on the
+        // guess.
         Ok(Operand::Copy(indexed_place))
     }
 }

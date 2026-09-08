@@ -1,0 +1,21 @@
+# Read the warnings a green test run left behind.
+#
+# `check` reports the unused binding as MER_TYP_071 and hands back a repair for
+# it. `miri test` compiles the same file, renders the same warning to stderr as
+# text for a person, and omits it from the envelope -- so a loop that runs its
+# tests and reads the answer sees a clean run and never learns what the edit
+# left behind. This task is pinned there: it stops at the step that asks the
+# runner for the warning it already printed.
+
+[[step]]
+type = "Check"
+file = "suite.mi"
+must_succeed = true
+assert_diagnostic_code = "MER_TYP_071"
+
+[[step]]
+type = "TestDir"
+dir = "."
+format_json = true
+must_succeed = true
+assert_diagnostic_code = "MER_TYP_071"

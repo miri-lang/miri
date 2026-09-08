@@ -65,12 +65,43 @@ today, not a ceiling it must stay under: a change that makes the loop cheaper
 should show up as a deliberate edit to that record, in the diff that earned it.
 Re-record with `make evals-bless` and commit the updated table.
 
+## What the corpus covers, and why that matters more than the numbers
+
+A corpus of jobs that already work reports green through every gap it does not
+contain. The tasks are therefore chosen for the *shapes* a real job has, not for
+the paths known to be smooth: a struct, a class holding state, a match over an
+enum with a multi-line arm, a cascade whose second error is the first one's
+shadow, an API looked up rather than guessed, a fault only the run finds, and a
+file with several unrelated faults rather than one.
+
+The last is the answer to an easy misreading of this table. Task `b` repairs one
+fault in six invocations; a trial repairing a file with six planted faults cost
+twenty-nine, and comparing those two numbers says nothing. Task `l` is the job
+of that size — four faults, three carrying a repair and one not — and its eight
+invocations are what the difference actually costs: one call clears the three,
+and the fourth costs four on its own.
+
+## Tasks the loop cannot finish
+
+A task may be pinned on a gap by giving it a `blocked_by` reason in `TASKS`. It
+is replayed to the step that fails, recorded as `success: no` with what it cost
+getting there, and the results table names the gap under it.
+
+This is how the corpus carries the shape of something missing rather than
+omitting it. `success` is gated like every other column, so closing the gap
+makes the task finish, moves the cell to `yes` and fails the gate — the fix and
+this record are updated together, or neither is. `failed_step` is gated too: a
+pinned task that starts failing somewhere else is failing for a new reason, and
+a corpus that could not tell those apart would hold a fixture pinned to a gap
+that had already moved.
+
 ## Adding a task
 
-Add a directory with a `steps.toml` and a `seed/`, then add its id and one-line
-description to `TASKS` in `tests/evals/mod.rs`. The list is explicit rather than
-discovered by reading this directory, so a fixture that goes missing fails the
-run instead of silently shrinking the corpus.
+Add a directory with a `steps.toml` and a `seed/`, then add a `Task` entry —
+its id, a one-line description, and `blocked_by: None` unless it is pinned — to
+`TASKS` in `tests/evals/mod.rs`. The list is explicit rather than discovered by
+reading this directory, so a fixture that goes missing fails the run instead of
+silently shrinking the corpus.
 
 Two guards constrain what a transcript may look like, and both exist because a
 measuring device that passes while measuring nothing is worse than none:
@@ -95,11 +126,22 @@ would otherwise leave a fixture that asserts nothing and still reports success.
 | `ViewFn` / `ViewOutline` | `miri view <file> --fn <name>` / `--outline` |
 | `Patch` | `miri patch <file> --replace-in-fn <fn> --old <t> --new <t>` |
 | `ReplaceFn` | `miri patch <file> --replace-fn <fn> --body-file …` |
+| `ViewType` | `miri view --type <name> --public` |
 | `Run` / `Build` / `TestDir` | `miri run` / `build` / `test --dir` |
+
+`format_json` adds `--format json` to the steps that take it — `Explain`,
+`ViewFn`, `ViewOutline`, `ViewType`, `Run` and `TestDir`. The rest always ask
+for JSON, because the envelope is the whole point of the step.
 
 Assertions available on any step: `must_succeed` (default true, enforced in both
 directions), `assert_diagnostic_code`, `assert_output_contains`,
 `assert_file_changed`.
+
+`assert_diagnostic_code` parses standard output alone, because an envelope lives
+there by definition and a command may write a sentence for a person to standard
+error beside it. `assert_output_contains` reads both, so it can assert on what
+either stream said. Byte counts cover both: a loop pays for everything it has to
+read.
 
 ## A caveat about where the baseline was recorded
 

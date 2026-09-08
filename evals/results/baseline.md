@@ -22,3 +22,16 @@ this file on every run. The harness prints it to stdout instead.
 | d | extend a program with a stdlib module | yes | 4 | 2013 | 85 |
 | e | recover from a capability rejection | yes | 5 | 3489 | 118 |
 | f | make a failing test pass | yes | 4 | 631 | 128 |
+| g | author a struct, a class and a match over an enum from an empty directory | yes | 3 | 588 | 1339 |
+| h | repair a cascade with one root cause | yes | 4 | 2185 | 232 |
+| i | look up an API and edit through view and patch only | yes | 4 | 1188 | 97 |
+| j | recover from a runtime trap | yes | 5 | 1030 | 233 |
+| l | repair a file with four faults, three of which carry a repair | yes | 8 | 6403 | 1292 |
+| k | read the warnings a green test run left behind | no | 2 | 1084 | 0 |
+
+Tasks recorded as not succeeding are pinned on a gap the loop still has.
+They are replayed to the step that fails and cost what they cost getting
+there. Closing one makes it finish, which moves `success` and fails the
+gate — so the fix and this table land together.
+
+- **k** (stops at step 2): `miri test` renders warnings to stderr as text and omits them from the envelope
