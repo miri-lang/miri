@@ -81,13 +81,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "Sub-word list elements past index 0 read back as zero: the element \
-stride the list is built at does not match the stride its reads address it by. \
-The source array literal inside List<u8>([...]) is typed as a bare Array with no \
-element type, so it is built at the pointer width while every read of the list \
-steps by one byte, and each element after the first lands between slots. Affects \
-every element narrower than a word (u8/i8/u16/i16/i32/u32/f32), not just \
-unsigned ones. Index 0 is correct because both strides start there."]
 fn test_u8_list_literal_element_reads_back_whole() {
     assert_runs_with_output(
         r#"
@@ -166,9 +159,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "Sub-word list elements past index 0 read back as zero — see \
-test_u8_list_literal_element_reads_back_whole for the stride mismatch. Recorded \
-at i32 as well to show the defect is about element width, not signedness."]
 fn test_i32_list_second_element_reads_back_whole() {
     assert_runs_with_output(
         r#"
@@ -185,9 +175,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "Sub-word list elements past index 0 read back as zero — see \
-test_u8_list_literal_element_reads_back_whole. Pushing rather than building from \
-a literal reaches the same mismatch."]
 fn test_u8_list_second_pushed_element_reads_back_whole() {
     assert_runs_with_output(
         r#"

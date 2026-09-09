@@ -328,23 +328,30 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_list_new_from_raw(
         array: *mut crate::array::MiriArray,
         _len: usize,
-        _elem_size: usize,
+        elem_size: usize,
     ) -> *mut MiriList {
+        let arr_elem_size = if !array.is_null() {
+            (*array).elem_size()
+        } else {
+            8
+        };
+        let target_elem_size = if elem_size > 0 {
+            elem_size
+        } else {
+            arr_elem_size
+        };
         if array.is_null() {
-            // Fallback: use _elem_size if provided, otherwise default to 8
-            let es = if _elem_size > 0 { _elem_size } else { 8 };
-            return miri_rt_list_new(es);
+            return miri_rt_list_new(target_elem_size);
         }
         let arr = &*array;
         let data = arr.data_ptr();
         let len = arr.len();
-        let elem_size = arr.elem_size();
         if data.is_null() || len == 0 {
-            return miri_rt_list_new(elem_size);
+            return miri_rt_list_new(target_elem_size);
         }
-        let list = miri_rt_list_new(elem_size);
+        let list = miri_rt_list_new(target_elem_size);
         for i in 0..len {
-            (*list).push(data.add(i * elem_size));
+            (*list).push(data.add(i * arr_elem_size));
         }
         list
     }
