@@ -390,7 +390,7 @@ impl TypeChecker {
         args: &Option<Vec<Expression>>,
         index: &Expression,
         index_type: &Type,
-        _span: Span,
+        span: Span,
         context: &mut Context,
     ) -> Type {
         if !matches!(index_type.kind, TypeKind::Int) {
@@ -408,7 +408,7 @@ impl TypeChecker {
             }
         }
 
-        self.resolve_collection_element_type(args, context)
+        self.resolve_collection_element_type(args, span, context)
     }
 
     /// Shared validator for compile-time index bounds checking.
@@ -474,14 +474,19 @@ impl TypeChecker {
 
     /// Resolves the element type of a collection.
     /// If the element type is Atomic<T>, unwraps it to T.
+    ///
+    /// `use_site` is the expression asking for the element: the element type of
+    /// a collection a callee returned is an expression the compiler built, so a
+    /// report about it has no source range of its own to render at.
     fn resolve_collection_element_type(
         &mut self,
         args: &Option<Vec<Expression>>,
+        use_site: Span,
         context: &mut Context,
     ) -> Type {
         let elem_type = if let Some(args) = args {
             if let Some(inner_type_expr) = args.first() {
-                self.resolve_type_expression(inner_type_expr, context)
+                self.resolve_type_expression_at(inner_type_expr, use_site, context)
             } else {
                 if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
                     make_type(TypeKind::Generic(

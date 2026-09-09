@@ -29,7 +29,7 @@ use crate::ast::types::{
 use std::collections::HashSet;
 
 /// The names referred to by a run of statements.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct References {
     names: HashSet<String>,
 }
@@ -71,6 +71,20 @@ impl References {
     /// True when `name` is read somewhere in the statements this was built from.
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// Every name collected so far, in no particular order.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(String::as_str)
+    }
+
+    /// Adds the names a declared type mentions.
+    ///
+    /// A signature is read on behalf of whoever calls it: a file that calls a
+    /// function refers to every type that function's declaration names, whether
+    /// or not the file spells any of them.
+    pub(crate) fn add_declared_type(&mut self, declared: &Type) {
+        self.typ(declared);
     }
 
     fn record(&mut self, name: &str) {

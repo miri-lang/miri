@@ -1796,6 +1796,25 @@ impl TypeChecker {
         }
     }
 
+    /// Resolves a type expression the compiler built from another module's
+    /// declaration, reporting whatever it cannot resolve at `use_site`.
+    ///
+    /// The nodes of such an expression carry no source range of their own, so
+    /// every report about one would otherwise render at the file's first byte.
+    /// `use_site` is the expression the reader actually wrote — the one that
+    /// needed the declared type read here.
+    pub(crate) fn resolve_type_expression_at(
+        &mut self,
+        expr: &Expression,
+        use_site: Span,
+        context: &Context,
+    ) -> Type {
+        let previous = self.synthesized_type_use_site.replace(use_site);
+        let resolved = self.resolve_type_expression(expr, context);
+        self.synthesized_type_use_site = previous;
+        resolved
+    }
+
     /// Resolves a Type based on its kind.
     fn resolve_type_kind(&mut self, t: Type, expr: &Expression, context: &Context) -> Type {
         match t.kind {
@@ -2263,8 +2282,9 @@ impl TypeChecker {
 
     /// Reports an unknown type error with suggestions.
     fn report_unknown_type(&mut self, name: &str, expr: &Expression, context: &Context) {
+        let span = self.unknown_type_span(expr);
         if name.starts_with(|c: char| c.is_uppercase())
-            && self.report_hidden_type_import_hint(name, expr.span)
+            && self.report_hidden_type_import_hint(name, span)
         {
             return;
         }
@@ -2292,15 +2312,28 @@ impl TypeChecker {
             self.report_error_with_help(
                 DiagnosticCode::TypTypeNotFound,
                 format!("Unknown type: {}", name),
-                expr.span,
+                span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
             self.report_error(
                 DiagnosticCode::TypTypeNotFound,
                 format!("Unknown type: {}", name),
-                expr.span,
+                span,
             );
+        }
+    }
+
+    /// Where to report a type that did not resolve.
+    ///
+    /// A node the compiler synthesized from another module's declaration
+    /// carries no source range, and a report against one renders at the file's
+    /// first byte. The expression that needed the type is what the reader can
+    /// act on, so it stands in.
+    fn unknown_type_span(&self, expr: &Expression) -> Span {
+        match self.synthesized_type_use_site {
+            Some(use_site) if expr.span.is_empty() => use_site,
+            Some(_) | None => expr.span,
         }
     }
 

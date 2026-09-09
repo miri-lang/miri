@@ -172,6 +172,15 @@ pub struct TypeChecker {
     /// not during sub-expression inference (preventing leakage from nested calls).
     /// Diagnostic-only: does not affect what resolves or compiles.
     pub(crate) call_site_arity: Option<usize>,
+    /// Where to report a type the compiler resolved on the reader's behalf.
+    ///
+    /// A callee's declared type reaches the caller as an expression the
+    /// compiler built, not one anybody wrote, so it carries no source range.
+    /// A diagnostic left to speak for such a node renders at the file's first
+    /// byte — pointing at whatever happens to sit on line 1 instead of at the
+    /// expression that needed the type. Set for the length of one such
+    /// resolution by `resolve_type_expression_at`.
+    pub(crate) synthesized_type_use_site: Option<Span>,
 }
 
 impl Default for TypeChecker {
@@ -206,6 +215,7 @@ impl TypeChecker {
             resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,
+            synthesized_type_use_site: None,
         }
     }
 

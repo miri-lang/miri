@@ -46,11 +46,53 @@ impl TypeChecker {
         // Two of the checks ask the same question of the same statements —
         // which names does this file read anywhere — so they are answered once.
         let file_references = names::References::of_statements(&program.body);
+        let import_references = self.references_reached_through_signatures(&file_references);
         self.report_unused_locals(&contents);
         self.report_unused_parameters(&contents);
-        self.report_unused_imports(program, &file_references);
+        self.report_unused_imports(program, &import_references);
         self.report_unused_private_declarations(&contents, &file_references);
         self.report_unreachable_statements(&contents);
+    }
+
+    /// `file_references`, plus every type the declarations it names mention.
+    ///
+    /// An import is used when the file cannot compile without it, and a file
+    /// that calls `rows()` and reads a field off an element needs the element's
+    /// type in scope while never writing it down. The names a declaration
+    /// mentions are read on behalf of whoever refers to that declaration, so
+    /// they count as read here too.
+    ///
+    /// A name is looked up everywhere it could name a callee, and every match
+    /// counts. Which method a `.rows()` resolves to is a question the hygiene
+    /// pass has no receiver type to answer, and answering it wrong in the
+    /// direction of silence costs a warning nobody sees, while answering it
+    /// wrong the other way tells a reader to delete something their program
+    /// needs.
+    fn references_reached_through_signatures(
+        &self,
+        file_references: &names::References,
+    ) -> names::References {
+        let mut reached = file_references.clone();
+        for name in file_references.names() {
+            if let Some(symbol) = self.type_table.global_scope.get(name) {
+                reached.add_declared_type(&symbol.ty);
+            }
+        }
+        for definition in self.type_table.global_type_definitions.values() {
+            let Some(methods) = definition.methods() else {
+                continue;
+            };
+            for (name, method) in methods {
+                if !file_references.contains(name) {
+                    continue;
+                }
+                reached.add_declared_type(&method.return_type);
+                for (_, parameter) in &method.params {
+                    reached.add_declared_type(parameter);
+                }
+            }
+        }
+        reached
     }
 }
 

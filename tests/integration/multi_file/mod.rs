@@ -9,4 +9,5 @@ pub mod collisions;
 pub mod cwd_independent;
 pub mod errors;
 pub mod import_validation;
+pub mod imports_through_signatures;
 pub mod project_root;
