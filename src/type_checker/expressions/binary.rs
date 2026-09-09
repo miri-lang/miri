@@ -63,6 +63,22 @@ fn is_arithmetic_op(op: &BinaryOp) -> bool {
     )
 }
 
+/// True for a member a caller outside the type can read.
+fn is_readable_member(visibility: &MemberVisibility) -> bool {
+    match visibility {
+        MemberVisibility::Public => true,
+        MemberVisibility::Protected | MemberVisibility::Private => false,
+    }
+}
+
+/// The name an operand is written under, when it is written as a plain name.
+fn identifier_name(expr: &Expression) -> Option<&str> {
+    let ExpressionKind::Identifier(name, _) = &expr.node else {
+        return None;
+    };
+    Some(name.as_str())
+}
+
 /// True for an optional operand, in either of the two forms an optional takes:
 /// the dedicated kind, and the generic instantiation a declaration produces.
 fn is_optional_type(ty: &Type) -> bool {
@@ -128,6 +144,17 @@ impl TypeChecker {
             }
         }
 
+        if let Some(message) = self.missing_ordering(&left_ty, op, &right_ty, context) {
+            let help = self.ordering_help(&left_ty, left, right, op);
+            self.report_error_with_help(
+                DiagnosticCode::TypOrderingNotSupported,
+                message,
+                span,
+                help,
+            );
+            return ast_factory::make_type(TypeKind::Error);
+        }
+
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {
@@ -161,6 +188,89 @@ impl TypeChecker {
                 }
                 ast_factory::make_type(TypeKind::Error)
             }
+        }
+    }
+
+    /// The way out of an ordering operator applied to a type that has none.
+    ///
+    /// Where the type has a member that does order, the help spells the
+    /// comparison the author most likely meant, using the operands' own names
+    /// so the suggestion can be typed as shown. Otherwise it names the method
+    /// the type has to define.
+    fn ordering_help(
+        &self,
+        left_ty: &Type,
+        left: &Expression,
+        right: &Expression,
+        op: &BinaryOp,
+    ) -> String {
+        let implement = format!(
+            "Implement Comparable on '{}' with `public fn compare(other Self) int` \
+             (negative sorts self first, zero ties, positive sorts self last)",
+            left_ty
+        );
+        match self.orderable_member_comparison(left_ty, left, right, op) {
+            Some(comparison) => format!(
+                "{}, or compare a member that does order: `{}`.",
+                implement, comparison
+            ),
+            None => format!("{}.", implement),
+        }
+    }
+
+    /// The spelling of the same operation over the first member of `left_ty`
+    /// that does order, when both operands are named and such a member exists.
+    fn orderable_member_comparison(
+        &self,
+        left_ty: &Type,
+        left: &Expression,
+        right: &Expression,
+        op: &BinaryOp,
+    ) -> Option<String> {
+        let (Some(left_name), Some(right_name)) = (identifier_name(left), identifier_name(right))
+        else {
+            return None;
+        };
+        let member = self.first_orderable_member(left_ty)?;
+        Some(format!(
+            "{}.{} {} {}.{}",
+            left_name,
+            member,
+            crate::ast::formatter::helpers::binary_operator(*op),
+            right_name,
+            member
+        ))
+    }
+
+    /// The name of the first field of `left_ty` that a caller can read and
+    /// whose own type orders, in declaration order.
+    ///
+    /// A private field is skipped: the help spells a comparison the author is
+    /// meant to be able to type, and one that would not compile is worse than
+    /// none.
+    fn first_orderable_member(&self, left_ty: &Type) -> Option<String> {
+        let TypeKind::Custom(name, _) = &left_ty.kind else {
+            return None;
+        };
+        match self.type_table.global_type_definitions.get(name.as_str())? {
+            crate::type_checker::context::TypeDefinition::Struct(def) => def
+                .fields
+                .iter()
+                .find(|(_, ty, visibility)| {
+                    is_readable_member(visibility) && self.orders_its_values(ty)
+                })
+                .map(|(field, _, _)| field.clone()),
+            crate::type_checker::context::TypeDefinition::Class(def) => def
+                .fields
+                .iter()
+                .find(|(_, info)| {
+                    is_readable_member(&info.visibility) && self.orders_its_values(&info.ty)
+                })
+                .map(|(field, _)| field.clone()),
+            crate::type_checker::context::TypeDefinition::Enum(_)
+            | crate::type_checker::context::TypeDefinition::Generic(_)
+            | crate::type_checker::context::TypeDefinition::Alias(_)
+            | crate::type_checker::context::TypeDefinition::Trait(_) => None,
         }
     }
 

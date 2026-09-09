@@ -71,8 +71,8 @@ A corpus of jobs that already work reports green through every gap it does not
 contain. The tasks are therefore chosen for the *shapes* a real job has, not for
 the paths known to be smooth: a struct, a class holding state, a match over an
 enum with a multi-line arm, a cascade whose second error is the first one's
-shadow, an API looked up rather than guessed, a fault only the run finds, and a
-file with several unrelated faults rather than one.
+shadow, an API looked up rather than guessed, a fault only the run finds, a
+sort, and a file with several unrelated faults rather than one.
 
 The last is the answer to an easy misreading of this table. Task `b` repairs one
 fault in six invocations; a trial repairing a file with six planted faults cost
@@ -151,6 +151,24 @@ normalized — including the `/private` form macOS resolves temporary directorie
 through — so the counts should carry across. They are not yet *proven* to. If
 the gate fails on a first CI run with small byte deltas and no other change, the
 fix is to widen the normalizer, never to widen the gate.
+
+## What task `m` shows about a diagnostic that writes its own fix
+
+Task `m` sorts, which nothing else in the corpus does, and it costs three
+invocations: a `check`, a `patch`, a `run`. The middle one is the point. The
+rejection names the missing capability *and* spells the comparison the author
+meant — `a.word < b.word` — so the loop reads the edit out of the diagnostic
+rather than deriving it, and the fault costs no `explain` and no scoped read.
+Task `l`'s fourth fault, whose diagnostic names no edit, costs four invocations
+on its own. That gap is what a help line is worth.
+
+Its `run` step is also the corpus's only value check on ordering: the three
+words are built at runtime, so the printed order cannot come from the order the
+string pool lays literals out in.
+
+Task `i` grew by 45 bytes read in the same change and nothing about that task
+moved: it reads `view --type String`, and `String` gained the `compare` method
+that answers the ordering operators.
 
 ## What task `c` shows about the insert operation
 

@@ -13,18 +13,18 @@ fn test_multiple_constrained_generics() {
 trait Printable
     fn print() String
 
-trait Comparable
+trait Rankable
     fn compare(other int) int
 
 class Document implements Printable
     fn print() String
         \"doc\"
 
-class Number implements Comparable
+class Number implements Rankable
     fn compare(other int) int
         0
 
-class Processor<P implements Printable, C implements Comparable>
+class Processor<P implements Printable, C implements Rankable>
     var printer P
     var comparer C
 ";
@@ -37,18 +37,18 @@ fn test_multiple_constrained_generics_instantiation() {
 trait Printable
     fn print() String
 
-trait Comparable
+trait Rankable
     fn compare(other int) int
 
 class Document implements Printable
     fn print() String
         \"doc\"
 
-class Number implements Comparable
+class Number implements Rankable
     fn compare(other int) int
         0
 
-class Processor<P implements Printable, C implements Comparable>
+class Processor<P implements Printable, C implements Rankable>
     var printer P
     var comparer C
 
@@ -63,17 +63,17 @@ fn test_multiple_constrained_generics_fail_first() {
 trait Printable
     fn print() String
 
-trait Comparable
+trait Rankable
     fn compare(other int) int
 
 class Plain
     var x int
 
-class Number implements Comparable
+class Number implements Rankable
     fn compare(other int) int
         0
 
-class Processor<P implements Printable, C implements Comparable>
+class Processor<P implements Printable, C implements Rankable>
     var printer P
     var comparer C
 
@@ -88,7 +88,7 @@ fn test_multiple_constrained_generics_fail_second() {
 trait Printable
     fn print() String
 
-trait Comparable
+trait Rankable
     fn compare(other int) int
 
 class Document implements Printable
@@ -98,7 +98,7 @@ class Document implements Printable
 class Plain
     var x int
 
-class Processor<P implements Printable, C implements Comparable>
+class Processor<P implements Printable, C implements Rankable>
     var printer P
     var comparer C
 

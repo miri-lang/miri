@@ -712,9 +712,12 @@ The `system.ops` module defines built-in traits used by the language:
 | Trait | Used for |
 |-------|----------|
 | `Equatable` | `==` and `!=` operators |
+| `Comparable` | `<`, `<=`, `>` and `>=` operators |
 | `Addable` | `+` operator |
 | `Multiplicable` | `*` operator (repetition) |
 | `Iterable` | `for x in collection` loops |
+
+`Comparable` requires one method, `compare(other Self) int`, returning a negative number when `self` sorts first, zero when neither does, and a positive number when `self` sorts last. Each of the four ordering operators is derived from it by comparing that result against zero. The numeric types and `bool` order by value without it, and `String` implements it, so strings order by content. A named type that implements nothing is refused under an ordering operator (`MER_TYP_075`) rather than compared some other way. A generic parameter is accepted inside the body that declares it, the way arithmetic on a parameter is.
 
 *Note: Trait objects (polymorphic variables typed as a trait, e.g. `let x Greetable = Person()`) require vtable support and are not yet implemented. Dynamic dispatch is available through class-typed variables.*
 

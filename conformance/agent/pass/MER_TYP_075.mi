@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_TYP_075: the ordered member is compared.
+struct Point
+    x int
+    y int
+
+fn main()
+    let a = Point(1, 2)
+    let b = Point(3, 4)
+    println(f"{a.x < b.x}")

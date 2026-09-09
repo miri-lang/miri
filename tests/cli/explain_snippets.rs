@@ -99,6 +99,7 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_072",
     "MER_TYP_073",
     "MER_TYP_074",
+    "MER_TYP_075",
 ];
 
 /// Codes whose example cannot be verified this way, each with the reason.

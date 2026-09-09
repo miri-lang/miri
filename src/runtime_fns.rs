@@ -179,6 +179,7 @@ pub mod rt {
     pub const STRING_CONCAT: &str = "miri_rt_string_concat";
     pub const STRING_CLONE: &str = "miri_rt_string_clone";
     pub const STRING_EQUALS: &str = "miri_rt_string_equals";
+    pub const STRING_COMPARE: &str = "miri_rt_string_compare";
     pub const STRING_CONTAINS: &str = "miri_rt_string_contains";
     pub const STRING_STARTS_WITH: &str = "miri_rt_string_starts_with";
     pub const STRING_ENDS_WITH: &str = "miri_rt_string_ends_with";
@@ -389,6 +390,7 @@ pub mod rt {
         STRING_CONCAT,
         STRING_CLONE,
         STRING_EQUALS,
+        STRING_COMPARE,
         STRING_CONTAINS,
         STRING_STARTS_WITH,
         STRING_ENDS_WITH,

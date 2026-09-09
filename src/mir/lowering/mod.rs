@@ -1237,25 +1237,100 @@ fn emit_param_guard(
         return Ok(());
     };
 
+    let arg_watermark = ctx.body.local_decls.len();
     let guard_val = lower_expression(ctx, guard_value, None)?;
     let Some(bin_op) = guard_op_to_binop(guard_op) else {
         return Ok(());
     };
 
     let check_result = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(check_result),
-            Rvalue::BinaryOp(
-                bin_op,
-                Box::new(Operand::Copy(Place::new(param_local))),
-                Box::new(guard_val),
+    let lowered_through_trait = emit_guard_trait_comparison(
+        ctx,
+        GuardComparison {
+            param_local,
+            guard_val: guard_val.clone(),
+            check_result,
+            arg_watermark,
+        },
+        guard_op,
+        guard,
+    )?;
+    if !lowered_through_trait {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(check_result),
+                Rvalue::BinaryOp(
+                    bin_op,
+                    Box::new(Operand::Copy(Place::new(param_local))),
+                    Box::new(guard_val),
+                ),
             ),
-        ),
-        span: guard.span,
-    });
+            span: guard.span,
+        });
+    }
     emit_guard_fail_branch(ctx, check_result, guard.span);
     Ok(())
+}
+
+/// The pieces a guard comparison is built from.
+struct GuardComparison {
+    param_local: crate::mir::Local,
+    guard_val: Operand,
+    check_result: crate::mir::Local,
+    arg_watermark: usize,
+}
+
+/// Emit the guard's comparison as a call to the operator trait method the
+/// parameter's type defines, returning whether it did.
+///
+/// A guard is the same operator the author could have written in the body, so
+/// it has to answer the same way. Without this a `String` parameter guard would
+/// compare the two operands' addresses.
+fn emit_guard_trait_comparison(
+    ctx: &mut LoweringContext,
+    comparison: GuardComparison,
+    guard_op: &crate::ast::operator::GuardOp,
+    guard: &Expression,
+) -> Result<bool, LoweringError> {
+    let Some(binary_op) = guard_op_to_binary_op(guard_op) else {
+        return Ok(false);
+    };
+    let param_ty = ctx.body.local_decls[comparison.param_local.0].ty.clone();
+    let Some(class_name) =
+        crate::mir::lowering::expression::binary_expr::operator_trait_class_name(&param_ty.kind)
+    else {
+        return Ok(false);
+    };
+    let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
+        lhs_op: Operand::Copy(Place::new(comparison.param_local)),
+        rhs_op: comparison.guard_val,
+    };
+    let lowered = crate::mir::lowering::expression::binary_expr::try_lower_operator_trait_call(
+        ctx,
+        &class_name,
+        &binary_op,
+        operands,
+        guard,
+        Some(Place::new(comparison.check_result)),
+        comparison.arg_watermark,
+    )?;
+    Ok(lowered.is_some())
+}
+
+/// Map a guard operator to the binary operator it spells (None if the guard is
+/// not a comparison between two values).
+fn guard_op_to_binary_op(
+    op: &crate::ast::operator::GuardOp,
+) -> Option<crate::ast::operator::BinaryOp> {
+    use crate::ast::operator::{BinaryOp, GuardOp};
+    match op {
+        GuardOp::GreaterThan => Some(BinaryOp::GreaterThan),
+        GuardOp::GreaterThanEqual => Some(BinaryOp::GreaterThanEqual),
+        GuardOp::LessThan => Some(BinaryOp::LessThan),
+        GuardOp::LessThanEqual => Some(BinaryOp::LessThanEqual),
+        GuardOp::NotEqual => Some(BinaryOp::NotEqual),
+        GuardOp::Not | GuardOp::In | GuardOp::NotIn => None,
+    }
 }
 
 /// Map a guard operator to its MIR comparison op (None if unsupported).

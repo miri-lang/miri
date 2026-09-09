@@ -6,5 +6,6 @@ pub use crate::integration::utils;
 pub mod float;
 pub mod integer;
 pub mod logical;
+pub mod ordering;
 pub mod string;
 pub mod structural_equality;

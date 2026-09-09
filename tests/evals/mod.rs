@@ -115,6 +115,11 @@ const TASKS: &[Task] = &[
         blocked_by: None,
     },
     Task {
+        id: "m",
+        description: "sort a list whose element type has no ordering",
+        blocked_by: None,
+    },
+    Task {
         id: "k",
         description: "read the warnings a green test run left behind",
         blocked_by: Some(

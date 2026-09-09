@@ -1,0 +1,32 @@
+# Sort words alphabetically, and find out that the element type has no ordering.
+#
+# No other task in this corpus sorts anything, and sorting is where the ordering
+# operators are reached for. The strings are built at runtime, so the printed
+# order cannot come from the order the string pool happens to lay literals out
+# in. The seed also compares two whole `Entry` structs, which is what an author
+# writes when they mean to compare the field they are sorting on: the compiler
+# names the missing capability, and its help spells the comparison the patch
+# then makes -- one invocation for a fault whose fix the diagnostic already
+# wrote.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_075"
+assert_output_contains = ["a.word < b.word"]
+
+[[step]]
+type = "Patch"
+file = "program.mi"
+fn_name = "ranks_before"
+old_text = "return a < b"
+new_text = "return a.word < b.word"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["apple,fig,pear", "true"]

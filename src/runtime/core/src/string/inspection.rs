@@ -129,6 +129,29 @@ pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const M
     bool_to_ffi(a_str == b_str)
 }
 
+/// Orders two strings by content, returning -1, 0 or 1.
+///
+/// The comparison is over the UTF-8 bytes, which for Unicode text orders by
+/// code point. A null pointer is treated as the empty string, so two nulls
+/// compare equal and a null sorts before any non-empty string.
+///
+/// # Safety
+/// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_compare(
+    a: *const MiriString,
+    b: *const MiriString,
+) -> isize {
+    guard::guard_check(a as *mut u8);
+    guard::guard_check(b as *mut u8);
+    match deref_as_str(a).cmp(deref_as_str(b)) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
 /// Returns the raw data pointer for a string, or null if `ptr` is null.
 ///
 /// The returned pointer is valid only as long as the `MiriString` is alive.
