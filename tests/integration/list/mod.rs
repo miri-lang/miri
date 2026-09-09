@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod chained_transforms;
 pub mod construction;
 pub mod cow;
 pub mod edge_cases;

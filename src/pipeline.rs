@@ -1281,6 +1281,33 @@ impl Pipeline {
         }
     }
 
+    /// The `{Collection}_{method}` symbols a built-in collection declares itself.
+    ///
+    /// Those bodies settle element ownership by calling the runtime rather than
+    /// by any RC operation MIR can see, so the shared generic one is correct at
+    /// every element type and [`mir::verify::verify_collection_element_ownership`]
+    /// exempts them. A method the collection inherits from a trait has no
+    /// intrinsic to lean on, and needs the concrete element type instead.
+    fn collection_methods_backed_by_intrinsics(
+        result: &PipelineResult,
+    ) -> std::collections::HashSet<String> {
+        use crate::type_checker::context::TypeDefinition;
+        let definitions = result.type_checker.type_definitions();
+        let mut symbols = std::collections::HashSet::new();
+        for (class_name, definition) in definitions {
+            if BuiltinCollectionKind::from_name(class_name.as_str()).is_none() {
+                continue;
+            }
+            let TypeDefinition::Class(class_def) = definition else {
+                continue;
+            };
+            for method_name in class_def.methods.keys() {
+                symbols.insert(Self::mangle_method_name(class_name, method_name));
+            }
+        }
+        symbols
+    }
+
     /// Default-method statements of every trait a class implements, including
     /// inherited traits, excluding those the class defines itself.
     fn trait_default_methods_for_class<'a>(
@@ -1430,33 +1457,49 @@ impl Pipeline {
             .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok());
 
         if let Some(mode) = verify_mode {
-            let mut all_violations = Vec::new();
-            let mut functions_with_violations = 0;
-            for (name, body) in &bodies {
-                let violations = mir::verify::verify_body(body);
-                if !violations.is_empty() {
-                    functions_with_violations += 1;
-                }
-                for v in violations {
-                    all_violations.push(format!("  fn {}: {}", name, v));
-                }
-            }
-            if !all_violations.is_empty() {
-                let message = format!(
-                    "{} RC invariant violation(s) in {} function(s):\n{}",
-                    all_violations.len(),
-                    functions_with_violations,
-                    all_violations.join("\n")
-                );
-                if mode == "warn" {
-                    eprintln!("{}", message);
-                } else {
-                    return Err(CompilerError::MirVerification(message));
-                }
-            }
+            Self::report_rc_violations(result, &bodies, &mode)?;
         }
 
         Ok(bodies)
+    }
+
+    /// Run both RC verification passes over every body and turn what they find
+    /// into one report — printed under `warn`, fatal otherwise.
+    fn report_rc_violations(
+        result: &PipelineResult,
+        bodies: &[(String, mir::Body)],
+        mode: &str,
+    ) -> Result<(), CompilerError> {
+        let intrinsic_backed = Self::collection_methods_backed_by_intrinsics(result);
+        let mut all_violations = Vec::new();
+        let mut functions_with_violations = 0;
+        for (name, body) in bodies {
+            let mut violations = mir::verify::verify_body(body);
+            violations.extend(mir::verify::verify_collection_element_ownership(
+                body,
+                &intrinsic_backed,
+            ));
+            if !violations.is_empty() {
+                functions_with_violations += 1;
+            }
+            for v in violations {
+                all_violations.push(format!("  fn {}: {}", name, v));
+            }
+        }
+        if all_violations.is_empty() {
+            return Ok(());
+        }
+        let message = format!(
+            "{} RC invariant violation(s) in {} function(s):\n{}",
+            all_violations.len(),
+            functions_with_violations,
+            all_violations.join("\n")
+        );
+        if mode == "warn" {
+            eprintln!("{}", message);
+            return Ok(());
+        }
+        Err(CompilerError::MirVerification(message))
     }
 
     /// Lower top-level functions and the methods of every class/trait/struct/enum

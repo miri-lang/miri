@@ -120,6 +120,11 @@ const TASKS: &[Task] = &[
         blocked_by: None,
     },
     Task {
+        id: "n",
+        description: "chain a list transform onto another transform's result",
+        blocked_by: None,
+    },
+    Task {
         id: "k",
         description: "read the warnings a green test run left behind",
         blocked_by: Some(

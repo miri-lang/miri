@@ -644,7 +644,9 @@ fn call_result_type(
 /// A narrower or wider integer changes the operand width, and a float changes
 /// the register class outright, so either makes the shared body's signature
 /// disagree with the call site. `int` matches the fallback exactly, and every
-/// managed type is passed as a pointer, so both are already correct.
+/// managed type is passed as a pointer, so both agree on layout — a managed
+/// argument needs its own body for a different reason, spelled out in
+/// [`inherited_body_would_borrow_a_managed_element`].
 fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
     matches!(
         kind,
@@ -662,6 +664,54 @@ fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
             | TypeKind::F64
             | TypeKind::Boolean
     )
+}
+
+/// Whether `method_name` is inherited from a trait and would read `elem_kind` as
+/// a borrow the resulting value does not own.
+///
+/// A trait default is ordinary Miri code: it reaches an element only through
+/// `element_at`, and stores it in a new collection or returns it. Lowered once
+/// per receiver class, its element type stays the trait's own parameter, so
+/// Perceus reads it as unmanaged and takes no reference — while the call site,
+/// which knows the concrete element, releases every element of the collection it
+/// gets back. Giving the body the concrete element makes both sides agree.
+///
+/// A method the collection declares itself keeps the shared body. Those pair
+/// each element read with the runtime call that hands the container's own
+/// reference over (`pop` and `remove_at` do), and only a body that can name the
+/// intrinsic can pair with it; re-lowering one against an owning read would
+/// leave that donated reference with no one to release it.
+fn inherited_body_would_borrow_a_managed_element(
+    class_def: &crate::type_checker::context::ClassDefinition,
+    method_name: &str,
+    elem_kind: &TypeKind,
+) -> bool {
+    !class_def.methods.contains_key(method_name) && crate::mir::rc::is_field_managed(elem_kind)
+}
+
+/// Whether a built-in collection instantiated at `resolved` needs a
+/// per-instantiation body for `method_name`, rather than the shared generic one.
+///
+/// Two things ask for one. The shared body types every type-parameter position
+/// at the pointer-width integer fallback, so a differently-laid-out argument
+/// makes its signature disagree with the call site. And an inherited body that
+/// reads a managed element takes no reference to it, while the call site
+/// releases every element of the collection it gets back.
+///
+/// Every other class always needs one, so it passes straight through.
+fn builtin_collection_needs_its_own_body(
+    class_name: &str,
+    class_def: &crate::type_checker::context::ClassDefinition,
+    method_name: &str,
+    resolved: &[Type],
+) -> bool {
+    if BuiltinCollectionKind::from_name(class_name).is_none() {
+        return true;
+    }
+    resolved.iter().any(|arg| {
+        differs_from_pointer_width_fallback(&arg.kind)
+            || inherited_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
+    })
 }
 
 /// Resolve a generic-class method call to its per-instantiation monomorphized
@@ -692,27 +742,7 @@ fn resolve_generic_class_monomorph(
     {
         return None;
     }
-    // A builtin collection only needs a per-instantiation body where the shared
-    // generic one is ABI-wrong. That body types every type-parameter position at
-    // the pointer-width integer fallback, which is already correct for `int` and
-    // for any managed element (a pointer), so monomorphizing those would copy
-    // dozens of methods per element type for no change in generated code.
-    if BuiltinCollectionKind::from_name(name.as_str()).is_some()
-        && !resolved
-            .iter()
-            .any(|arg| differs_from_pointer_width_fallback(&arg.kind))
-    {
-        return None;
-    }
-    // A method taking a function parameter keeps the shared generic body:
-    // lowering a lambda argument inside a per-instantiation copy is not
-    // supported, and mangling here without an emitted body would leave the call
-    // referencing a symbol nothing defines.
-    if method_info
-        .params
-        .iter()
-        .any(|(_, param_ty)| matches!(param_ty.kind, TypeKind::Function(_)))
-    {
+    if !builtin_collection_needs_its_own_body(name, class_def, method_name, &resolved) {
         return None;
     }
     let recorded = ctx

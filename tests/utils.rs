@@ -405,3 +405,56 @@ pub fn check_error_output(source: &str, expected_parts: &[&str]) {
         );
     }
 }
+
+/// Build `input` once and run the resulting executable `runs` times, returning
+/// one [`CompilerResult`] per run.
+///
+/// A defect that leaves a freed object reachable does not fail every time: the
+/// allocator hands the block back to a later allocation on some runs and leaves
+/// its contents readable on others, so the same binary prints the right answer,
+/// prints zeroes, or dies with a signal from one run to the next. Compiling once
+/// and running repeatedly is what separates that from a program that is simply
+/// correct.
+pub fn miri_build_and_run_repeatedly(input: &str, runs: usize) -> Vec<CompilerResult> {
+    let dir = tempfile::tempdir().expect("temporary build directory");
+    let source_path = dir.path().join("program.mi");
+    std::fs::write(&source_path, input).expect("write program source");
+    let artifact_path = dir.path().join("program");
+
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+
+    let build = miri_cmd()
+        .env("RUST_BACKTRACE", "1")
+        .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .arg("build")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&artifact_path)
+        .output()
+        .expect("run miri build");
+    assert!(
+        build.status.success(),
+        "Expected program to build, but it failed:\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    (0..runs)
+        .map(|_| {
+            let output = Command::new(&artifact_path)
+                .env("MIRI_LEAK_CHECK", "1")
+                .output()
+                .expect("run built program");
+            CompilerResult {
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+        })
+        .collect()
+}
