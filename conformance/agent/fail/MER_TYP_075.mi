@@ -1,0 +1,10 @@
+// expect: MER_TYP_075
+// summary: Triggers MER_TYP_075: a struct with no ordering is compared with `<`.
+struct Point
+    x int
+    y int
+
+fn main()
+    let a = Point(1, 2)
+    let b = Point(3, 4)
+    println(f"{a < b}")

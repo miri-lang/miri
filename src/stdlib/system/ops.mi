@@ -5,6 +5,7 @@
 ///
 /// These traits define the protocols for operator overloading:
 /// - `Equatable`: enables `==` and `!=` operators
+/// - `Comparable`: enables `<`, `<=`, `>` and `>=` operators
 /// - `Addable`: enables `+` operator (concatenation, combination, etc.)
 
 /// Enables equality comparison (`==` and `!=`) for types that implement it.
@@ -19,6 +20,24 @@
 ///             return self.x == other.x and self.y == other.y
 public trait Equatable
     public fn equals(other Self) bool
+
+/// Enables ordering comparison (`<`, `<=`, `>`, `>=`) for types that implement it.
+///
+/// `compare` returns a negative number when `self` sorts before `other`, zero
+/// when neither sorts before the other, and a positive number when `self` sorts
+/// after `other`. Each operator is derived by comparing that result against
+/// zero, so a type that orders its values defines one method rather than four.
+///
+/// Ordering is deliberately separate from equality: a type may know when two of
+/// its values are the same without knowing which of them comes first.
+///
+/// Example:
+///     class Weight implements Comparable
+///         grams int
+///         public fn compare(other Self) int
+///             return self.grams - other.grams
+public trait Comparable
+    public fn compare(other Self) int
 
 /// Enables the `+` operator for types that implement it.
 ///

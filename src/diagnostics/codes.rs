@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (74 codes: 001-074)
+    // TYP — Type checker (75 codes: 001-075)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1010,6 +1010,13 @@ diagnostics!(
     TypUnreachableStatement,
     "Unreachable Statement",
     Severity::Warning,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "075",
+    TypOrderingNotSupported,
+    "Type Has No Ordering",
+    Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
     // OWN — Ownership and resource management (4 codes: 001-004)

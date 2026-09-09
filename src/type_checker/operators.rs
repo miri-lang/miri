@@ -19,6 +19,32 @@ use crate::ast::UnaryOp;
 /// exhaust the compiler's stack on user input.
 const MAX_STRUCTURAL_EQUALITY_DEPTH: usize = 64;
 
+/// The trait a type implements to say how its values sort.
+pub(crate) const ORDERING_TRAIT_NAME: &str = "Comparable";
+
+/// True for the operators that ask which operand sorts first, as opposed to
+/// whether the two operands are the same.
+pub(crate) fn is_ordering_op(op: &BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::LessThan
+            | BinaryOp::LessThanEqual
+            | BinaryOp::GreaterThan
+            | BinaryOp::GreaterThanEqual
+    )
+}
+
+/// The message reported when an ordering operator is applied to a type that
+/// defines no ordering.
+pub(crate) fn missing_ordering_message(ty: &Type, op: &BinaryOp) -> String {
+    format!(
+        "Type '{}' has no ordering: '{}' requires the {} trait",
+        ty,
+        crate::ast::formatter::helpers::binary_operator(*op),
+        ORDERING_TRAIT_NAME
+    )
+}
+
 impl TypeChecker {
     /// Checks that binary operation operands have compatible types.
     ///
@@ -35,12 +61,11 @@ impl TypeChecker {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                 self.check_arithmetic_op(left, op, right, context)
             }
-            BinaryOp::Equal
-            | BinaryOp::NotEqual
-            | BinaryOp::LessThan
+            BinaryOp::Equal | BinaryOp::NotEqual => self.check_equality_op(left, right, context),
+            BinaryOp::LessThan
             | BinaryOp::LessThanEqual
             | BinaryOp::GreaterThan
-            | BinaryOp::GreaterThanEqual => self.check_comparison_op(left, right, context),
+            | BinaryOp::GreaterThanEqual => self.check_ordering_op(left, op, right, context),
             BinaryOp::And | BinaryOp::Or => self.check_logical_op(left, right),
             BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
                 self.check_bitwise_op(left, right, context)
@@ -162,8 +187,12 @@ impl TypeChecker {
         ))
     }
 
-    /// Checks comparison operations (==, !=, <, <=, >, >=).
-    fn check_comparison_op(
+    /// Checks equality operations (==, !=).
+    ///
+    /// Equality asks whether two values are the same, which every type can
+    /// answer: numerically, structurally, or through an `Equatable`
+    /// implementation of its own.
+    fn check_equality_op(
         &mut self,
         left: &Type,
         right: &Type,
@@ -200,6 +229,83 @@ impl TypeChecker {
             "Type mismatch: cannot compare {} and {}",
             left, right
         ))
+    }
+
+    /// Checks ordering operations (<, <=, >, >=).
+    ///
+    /// Ordering asks which of two values sorts first, which is a capability a
+    /// type has to define. Without one there is no answer to fall back on:
+    /// comparing two objects by address answers from allocation order, so the
+    /// same two values would compare differently depending on which was built
+    /// first. A type that defines no ordering is therefore refused.
+    fn check_ordering_op(
+        &mut self,
+        left: &Type,
+        op: &BinaryOp,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        let bool_type = || crate::ast::factory::make_type(TypeKind::Boolean);
+
+        if let Some(message) = self.missing_ordering(left, op, right, context) {
+            return Err(message);
+        }
+
+        // Numbers order by value, across widths and across signedness.
+        if self.is_integer(left) && self.is_integer(right) {
+            return Ok(bool_type());
+        }
+        if matches!(left.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64)
+            && matches!(right.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64)
+        {
+            return Ok(bool_type());
+        }
+
+        if !self.are_compatible(left, right, context) {
+            return Err(format!(
+                "Type mismatch: cannot compare {} and {}",
+                left, right
+            ));
+        }
+
+        Ok(bool_type())
+    }
+
+    /// The message for an ordering operator applied to two operands that agree
+    /// on type but whose type defines no ordering, or None when that is not
+    /// what is wrong.
+    ///
+    /// The check that refuses the operation and the diagnosis that explains it
+    /// both ask this, so the two cannot come to disagree about when the
+    /// capability is missing.
+    pub(crate) fn missing_ordering(
+        &self,
+        left: &Type,
+        op: &BinaryOp,
+        right: &Type,
+        context: &Context,
+    ) -> Option<String> {
+        if !is_ordering_op(op) || self.orders_its_values(left) {
+            return None;
+        }
+        if !self.are_compatible(left, right, context) {
+            return None;
+        }
+        Some(missing_ordering_message(left, op))
+    }
+
+    /// True when values of `ty` can be asked which of them sorts first.
+    ///
+    /// The numeric types and `bool` order by value: `false` sorts before
+    /// `true`, and the comparison the machine performs is over the value the
+    /// operand holds rather than over where it lives. A generic parameter is
+    /// accepted the way it is for arithmetic: the body of a generic function is
+    /// checked once, and the capability is decided where the parameter is
+    /// pinned to a concrete type.
+    pub(crate) fn orders_its_values(&self, ty: &Type) -> bool {
+        self.is_numeric(ty)
+            || matches!(ty.kind, TypeKind::Boolean | TypeKind::Generic(..))
+            || self.type_implements_trait(ty, ORDERING_TRAIT_NAME)
     }
 
     /// Checks logical operations (&&, ||).

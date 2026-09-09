@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 87
+## Error fixtures (`fail/`) — 88
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -100,6 +100,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_068 | Triggers MER_TYP_068: Integer Literal Out of Range. |
 | MER_TYP_069 | Triggers MER_TYP_069: a top-level statement beside a declared 'main'. |
 | MER_TYP_070 | Triggers MER_TYP_070: two top-level functions share a name. |
+| MER_TYP_075 | Triggers MER_TYP_075: a struct with no ordering is compared with `<`. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -121,7 +122,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 98
+## Accepted fixtures (`pass/`) — 99
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -219,6 +220,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_072 | Accepted counterpart of MER_TYP_072: Unused Parameter does not fire. |
 | MER_TYP_073 | Accepted counterpart of MER_TYP_073: Unused Private Declaration does not fire. |
 | MER_TYP_074 | Accepted counterpart of MER_TYP_074: Unreachable Statement does not fire. |
+| MER_TYP_075 | Accepted counterpart of MER_TYP_075: the ordered member is compared. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

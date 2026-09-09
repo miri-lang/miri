@@ -1,0 +1,28 @@
+use system.collections.list
+
+struct Entry
+    word String
+    count int
+
+fn ranks_before(a Entry, b Entry) bool
+    return a < b
+
+fn main()
+    var words = List<String>()
+    words.push("PEAR".to_lower())
+    words.push("APPLE".to_lower())
+    words.push("FIG".to_lower())
+    var i = 1
+    while i < words.length()
+        let key = words[i]
+        var j = i
+        while j > 0 and key < words[j - 1]
+            words.set(j, words[j - 1])
+            j -= 1
+        words.set(j, key)
+        i += 1
+    println(",".join(words))
+    let first = Entry("apple", 5)
+    let second = Entry("fig", 1)
+    let before = ranks_before(first, second)
+    println(f"{before}")

@@ -12,6 +12,7 @@ The type checker validates that all types in the program are well-formed and con
 - Immutable variable assignments
 - Field or method access on incompatible types
 - Invalid type casts or conversions
+- An ordering operator (`<`, `<=`, `>`, `>=`) applied to a type that defines no ordering. The numeric types and `bool` order by value; every other type orders by implementing `Comparable` from `system.ops`. Equality is a separate capability and stays available either way.
 
 ## What It Warns About
 

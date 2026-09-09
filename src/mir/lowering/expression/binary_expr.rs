@@ -16,6 +16,9 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
 
+/// The method a type defines to say how its values sort.
+const ORDERING_METHOD_NAME: &str = "compare";
+
 #[allow(clippy::too_many_arguments)]
 fn try_lower_binary_trait_method(
     ctx: &mut LoweringContext,
@@ -30,40 +33,105 @@ fn try_lower_binary_trait_method(
     let Some(class_name) = binary_trait_class_name(ctx, lhs) else {
         return Ok(None);
     };
-    let Some((method_name, negate)) = binary_op_trait_method(op) else {
+    try_lower_operator_trait_call(
+        ctx,
+        &class_name,
+        op,
+        OperatorOperands { lhs_op, rhs_op },
+        expr,
+        dest,
+        arg_watermark,
+    )
+}
+
+/// The two values an operator is applied to.
+pub(crate) struct OperatorOperands {
+    pub lhs_op: Operand,
+    pub rhs_op: Operand,
+}
+
+/// Lower `op` as a call to the trait method `class_name` defines for it, or
+/// None when the operator has no trait method or the class does not define it.
+///
+/// Both spellings of an operator reach this: the binary expression an author
+/// writes, and the comparison a parameter guard emits against the parameter.
+/// Routing them through one function is what keeps a guard on a `String` from
+/// comparing addresses while the same comparison in the body compares content.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_lower_operator_trait_call(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    op: &crate::ast::operator::BinaryOp,
+    operands: OperatorOperands,
+    expr: &Expression,
+    dest: Option<Place>,
+    arg_watermark: usize,
+) -> Result<Option<Operand>, LoweringError> {
+    let Some((method_name, result)) = binary_op_trait_method(op) else {
         return Ok(None);
     };
-    if !class_has_trait_method(ctx, &class_name, method_name) {
+    if !class_has_trait_method(ctx, class_name, method_name) {
         return Ok(None);
     }
 
     let call = BinTraitCall {
-        lhs_op,
-        rhs_op,
+        lhs_op: operands.lhs_op,
+        rhs_op: operands.rhs_op,
         dest,
         arg_watermark,
     };
-    emit_binary_trait_call(ctx, &class_name, method_name, negate, call, expr).map(Some)
+    emit_binary_trait_call(ctx, class_name, method_name, result, call, expr).map(Some)
 }
 
 /// The class name implementing a binary operator trait for the lhs type
 /// (`String` or a user `Custom` type), else None.
 fn binary_trait_class_name(ctx: &LoweringContext, lhs: &Expression) -> Option<String> {
-    match &ctx.type_checker.get_type(lhs.id)?.kind {
+    operator_trait_class_name(&ctx.type_checker.get_type(lhs.id)?.kind)
+}
+
+/// The class name whose operator-trait methods apply to values of `kind`.
+pub(crate) fn operator_trait_class_name(kind: &TypeKind) -> Option<String> {
+    match kind {
         TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
         _ => None,
     }
 }
 
-/// Map a binary operator to its trait method name and whether to negate the
-/// result (`Add→concat`, `Mul→repeat`, `Equal→equals`, `NotEqual→!equals`).
-fn binary_op_trait_method(op: &crate::ast::operator::BinaryOp) -> Option<(&'static str, bool)> {
+/// How the operator reads the value its trait method returned.
+enum TraitResult {
+    /// The method's result is the operator's result (`+`, `*`, `==`).
+    AsReturned,
+    /// The operator is the negation of the method's boolean result (`!=`).
+    Negated,
+    /// The operator compares the method's `int` result against zero, which is
+    /// how one `compare` answers all four ordering operators.
+    AgainstZero(BinOp),
+}
+
+/// Map a binary operator to its trait method name and how the operator reads
+/// that method's result (`Add→concat`, `Mul→repeat`, `Equal→equals`,
+/// `NotEqual→!equals`, ordering→`compare` against zero).
+fn binary_op_trait_method(
+    op: &crate::ast::operator::BinaryOp,
+) -> Option<(&'static str, TraitResult)> {
     match op {
-        crate::ast::operator::BinaryOp::Add => Some(("concat", false)),
-        crate::ast::operator::BinaryOp::Mul => Some(("repeat", false)),
-        crate::ast::operator::BinaryOp::Equal => Some(("equals", false)),
-        crate::ast::operator::BinaryOp::NotEqual => Some(("equals", true)),
+        crate::ast::operator::BinaryOp::Add => Some(("concat", TraitResult::AsReturned)),
+        crate::ast::operator::BinaryOp::Mul => Some(("repeat", TraitResult::AsReturned)),
+        crate::ast::operator::BinaryOp::Equal => Some(("equals", TraitResult::AsReturned)),
+        crate::ast::operator::BinaryOp::NotEqual => Some(("equals", TraitResult::Negated)),
+        crate::ast::operator::BinaryOp::LessThan => {
+            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Lt)))
+        }
+        crate::ast::operator::BinaryOp::LessThanEqual => {
+            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Le)))
+        }
+        crate::ast::operator::BinaryOp::GreaterThan => {
+            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Gt)))
+        }
+        crate::ast::operator::BinaryOp::GreaterThanEqual => {
+            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Ge)))
+        }
         _ => None,
     }
 }
@@ -94,7 +162,7 @@ fn emit_binary_trait_call(
     ctx: &mut LoweringContext,
     class_name: &str,
     method_name: &str,
-    negate: bool,
+    result: TraitResult,
     call: BinTraitCall,
     expr: &Expression,
 ) -> Result<Operand, LoweringError> {
@@ -121,29 +189,36 @@ fn emit_binary_trait_call(
         literal: crate::ast::literal::Literal::Identifier(mangled_name),
     }));
 
-    if negate {
-        return_negated_method_call(
-            ctx,
-            func_op,
-            call_args,
-            arg_locals,
+    let adapt = match result {
+        TraitResult::AsReturned => {
+            return return_method_call(
+                ctx,
+                func_op,
+                call_args,
+                arg_locals,
+                return_ty,
+                expr,
+                call.dest,
+                call.arg_watermark,
+            )
+        }
+        TraitResult::Negated => ResultAdaptation::Negate,
+        TraitResult::AgainstZero(bin_op) => ResultAdaptation::CompareToZero(bin_op),
+    };
+
+    return_adapted_method_call(
+        ctx,
+        func_op,
+        call_args,
+        arg_locals,
+        AdaptedCall {
             return_ty,
-            expr,
-            call.dest,
-            call.arg_watermark,
-        )
-    } else {
-        return_method_call(
-            ctx,
-            func_op,
-            call_args,
-            arg_locals,
-            return_ty,
-            expr,
-            call.dest,
-            call.arg_watermark,
-        )
-    }
+            adapt,
+            dest: call.dest,
+            arg_watermark: call.arg_watermark,
+        },
+        expr,
+    )
 }
 
 /// Build `[lhs, rhs, alloc?]` and the list of arg locals (for temp cleanup).
@@ -168,52 +243,90 @@ fn operand_local(op: &Operand) -> Option<Local> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn return_negated_method_call(
+/// How the operator's result is computed from the value the trait method
+/// returned, for the operators that do not return it unchanged.
+enum ResultAdaptation {
+    /// Logical negation of a boolean result.
+    Negate,
+    /// Comparison of an `int` result against zero.
+    CompareToZero(BinOp),
+}
+
+/// The result handling for a trait call whose value the operator adapts.
+struct AdaptedCall {
+    return_ty: Type,
+    adapt: ResultAdaptation,
+    dest: Option<Place>,
+    arg_watermark: usize,
+}
+
+/// Emit the trait call into a temp, then assign the operator's own result from
+/// it: `not equals(...)` for `!=`, `compare(...) <op> 0` for the ordering
+/// operators.
+fn return_adapted_method_call(
     ctx: &mut LoweringContext,
     func_op: Operand,
     call_args: Vec<Operand>,
     arg_locals: Vec<crate::mir::place::Local>,
-    return_ty: Type,
+    call: AdaptedCall,
     expr: &Expression,
-    dest: Option<Place>,
-    arg_watermark: usize,
 ) -> Result<Operand, LoweringError> {
-    let eq_temp = ctx.push_temp(return_ty.clone(), expr.span);
-    let after_eq_bb = ctx.new_basic_block();
+    let method_temp = ctx.push_temp(call.return_ty.clone(), expr.span);
+    let after_call_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
             args: call_args,
             out_args: Vec::new(),
             arg_handles: Vec::new(),
-            destination: Place::new(eq_temp),
-            target: Some(after_eq_bb),
+            destination: Place::new(method_temp),
+            target: Some(after_call_bb),
         },
         expr.span,
     ));
-    ctx.set_current_block(after_eq_bb);
+    ctx.set_current_block(after_call_bb);
 
     for &local in &arg_locals {
-        if local != eq_temp {
-            ctx.emit_temp_drop(local, arg_watermark, expr.span);
+        if local != method_temp {
+            ctx.emit_temp_drop(local, call.arg_watermark, expr.span);
         }
     }
 
-    let (target, ret_op) = if let Some(d) = dest {
+    // The adapted result is a boolean whatever the method returned, so the
+    // holding temp is typed from the operator rather than from the method.
+    let result_ty = match call.adapt {
+        ResultAdaptation::Negate => call.return_ty,
+        ResultAdaptation::CompareToZero(_) => Type::new(TypeKind::Boolean, expr.span),
+    };
+    let (target, ret_op) = if let Some(d) = call.dest {
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(return_ty, expr.span);
+        let temp = ctx.push_temp(result_ty, expr.span);
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            target,
-            Rvalue::UnaryOp(UnOp::Not, Box::new(Operand::Copy(Place::new(eq_temp)))),
+    let method_result = Operand::Copy(Place::new(method_temp));
+    let rvalue = match call.adapt {
+        ResultAdaptation::Negate => Rvalue::UnaryOp(UnOp::Not, Box::new(method_result)),
+        ResultAdaptation::CompareToZero(bin_op) => Rvalue::BinaryOp(
+            bin_op,
+            Box::new(method_result),
+            Box::new(zero_operand(expr)),
         ),
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(target, rvalue),
         span: expr.span,
     });
     Ok(ret_op)
+}
+
+/// The integer zero an ordering result is compared against.
+fn zero_operand(expr: &Expression) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Int, expr.span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(0)),
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
