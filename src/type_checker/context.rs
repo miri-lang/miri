@@ -261,6 +261,24 @@ pub enum TypeDefinition {
     Trait(TraitDefinition),
 }
 
+impl TypeDefinition {
+    /// The methods this definition declares, keyed by name.
+    ///
+    /// Empty for the kinds that declare none: a struct is data, a generic
+    /// parameter stands for a type rather than being one, and an alias spells
+    /// another type whose own methods answer for it.
+    pub fn methods(&self) -> Option<&BTreeMap<String, MethodInfo>> {
+        match self {
+            TypeDefinition::Enum(definition) => Some(&definition.methods),
+            TypeDefinition::Class(definition) => Some(&definition.methods),
+            TypeDefinition::Trait(definition) => Some(&definition.methods),
+            TypeDefinition::Struct(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {
+                None
+            }
+        }
+    }
+}
+
 /// Collect all fields for a class by walking the inheritance chain from root to leaf.
 ///
 /// Returns fields in declaration order: ancestor fields come before descendant fields.

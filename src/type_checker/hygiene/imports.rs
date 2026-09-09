@@ -43,60 +43,98 @@ impl TypeChecker {
         path: &Expression,
         alias: Option<&Expression>,
         references: &References,
-    ) -> Option<String> {
+    ) -> Option<UnusedImport> {
         let (module, kind) = TypeChecker::extract_import_path_with_kind(path)?;
         if let Some(alias) = alias {
             let name = identifier(alias)?;
-            return unread(vec![name], references);
+            return unread(vec![name], references).map(UnusedImport::WholeLine);
         }
         match kind {
             // What a wildcard brings in is whatever the module happens to
             // declare, so no name in the file points at the line itself.
             ImportPathKind::Wildcard => None,
-            ImportPathKind::Multi(items) => {
-                let selected = self.selected_names(&items, references)?;
-                Some(selected)
-            }
+            ImportPathKind::Multi(items) => self.unused_selection(&items, references),
             ImportPathKind::Simple => {
                 let names = self.modules.module_declared_names.get(&module)?;
-                unread(names.iter().cloned().collect(), references).map(|_| module)
+                unread(names.iter().cloned().collect(), references)
+                    .map(|_| UnusedImport::WholeLine(module))
             }
         }
     }
 
-    /// The first name a selective import brings in that nothing reads.
+    /// The first name a selective import brings in that nothing reads, and
+    /// whether the line has anything left on it worth keeping.
     ///
     /// Each selected name is asked about on its own, because selecting four
     /// names and using three of them leaves one line to edit and a specific
     /// name to remove from it.
-    fn selected_names(
+    fn unused_selection(
         &self,
         items: &[(Expression, Option<Box<Expression>>)],
         references: &References,
-    ) -> Option<String> {
+    ) -> Option<UnusedImport> {
+        let mut unread_name = None;
+        let mut any_read = false;
         for (name, item_alias) in items {
             let bound = match item_alias {
                 Some(item_alias) => identifier(item_alias)?,
                 None => identifier(name)?,
             };
-            if !references.contains(&bound) {
-                return Some(bound);
+            if references.contains(&bound) {
+                any_read = true;
+            } else if unread_name.is_none() {
+                unread_name = Some(bound);
             }
         }
-        None
+        let unread_name = unread_name?;
+        Some(match any_read {
+            true => UnusedImport::SelectedName(unread_name),
+            false => UnusedImport::WholeLine(unread_name),
+        })
     }
 
-    fn report_unused_import(&mut self, name: &str, statement: &Statement) {
+    fn report_unused_import(&mut self, unused: &UnusedImport, statement: &Statement) {
         self.report_warning(
             DiagnosticCode::ImpUnusedImport,
             DiagnosticCode::ImpUnusedImport.title().to_string(),
-            format!("Unused import: '{}' is never used in this file", name),
-            statement.span,
-            Some(
-                "nothing in this file reads what the import brings in; remove the line."
-                    .to_string(),
+            format!(
+                "Unused import: '{}' is never used in this file",
+                unused.name()
             ),
+            statement.span,
+            Some(unused.help()),
         );
+    }
+}
+
+/// An import nothing reads, and how much of the line goes with it.
+enum UnusedImport {
+    /// Nothing the line brings in is read, so the line itself is the edit.
+    WholeLine(String),
+    /// One name in a selection whose other names are read. Deleting the line
+    /// would take those with it, so the edit is the name alone.
+    SelectedName(String),
+}
+
+impl UnusedImport {
+    /// The name to report.
+    fn name(&self) -> &str {
+        match self {
+            UnusedImport::WholeLine(name) | UnusedImport::SelectedName(name) => name,
+        }
+    }
+
+    /// What to do about it.
+    fn help(&self) -> String {
+        match self {
+            UnusedImport::WholeLine(_) => {
+                "nothing in this file reads what the import brings in; remove the line.".to_string()
+            }
+            UnusedImport::SelectedName(name) => format!(
+                "the rest of the line is read; drop '{}' from the selection.",
+                name
+            ),
+        }
     }
 }
 

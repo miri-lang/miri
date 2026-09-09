@@ -420,6 +420,43 @@ pub fn assert_project_runs_with_output(files: &[(&str, &str)], expected_output: 
     }
 }
 
+/// The type checker's report on a multi-file project, whatever it says.
+pub fn check_project_report(files: &[(&str, &str)]) -> String {
+    use crate::utils::miri_check_project;
+
+    miri_check_project(files).output()
+}
+
+/// The type checker's report on a multi-file project that must type-check.
+///
+/// A warning read off a file the checker has already given up on says nothing:
+/// the hygiene pass does not run once anything else has been reported.
+pub fn check_project(files: &[(&str, &str)]) -> String {
+    use crate::utils::miri_check_project;
+
+    let result = miri_check_project(files);
+    let output = result.output();
+    if !result.success {
+        panic!(
+            "the fixture must type-check for its warnings to mean anything:\n{}",
+            output
+        );
+    }
+    output
+}
+
+/// Assert that a multi-file project type-checks and says nothing carrying
+/// `code`.
+pub fn assert_project_no_warning(files: &[(&str, &str)], code: &str) {
+    let output = check_project(files);
+    assert!(
+        !output.contains(code),
+        "expected no {} for this project:\n{}",
+        code,
+        output
+    );
+}
+
 /// Assert that a multi-file project fails during compilation with a message
 /// containing `expected_error`.
 pub fn assert_project_compiler_error(files: &[(&str, &str)], expected_error: &str) {

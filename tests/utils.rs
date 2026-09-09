@@ -211,12 +211,25 @@ pub fn miri_run_with_env_multiple(input: &str, env_vars: &[(&str, &str)]) -> Com
 /// as the working directory. `MIRI_STDLIB_PATH` is set to the project's own
 /// stdlib so it remains accessible even when CWD changes.
 pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
+    miri_project(files, "run")
+}
+
+/// Type-check a multi-file Miri project, without building or running it.
+///
+/// The warnings a file earns are decided by the type checker, so a test about
+/// one need not pay for a link and a process launch to read it.
+pub fn miri_check_project(files: &[(&str, &str)]) -> CompilerResult {
+    miri_project(files, "check")
+}
+
+/// Runs `command` over a multi-file project written into a temporary directory.
+fn miri_project(files: &[(&str, &str)], command: &str) -> CompilerResult {
     use std::fs;
     use tempfile::tempdir;
 
     assert!(
         !files.is_empty(),
-        "miri_run_project: files list must not be empty"
+        "miri_project: files list must not be empty"
     );
 
     let temp_dir = tempdir().unwrap();
@@ -244,7 +257,7 @@ pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
         .env_remove("MIRI_CC")
         .env_remove("CC")
         .current_dir(temp_dir.path())
-        .arg("run")
+        .arg(command)
         .arg(entry_file)
         .output()
         .unwrap();

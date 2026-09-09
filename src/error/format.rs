@@ -323,12 +323,21 @@ pub fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 
 /// Finds the closest match to `target` among `candidates` using edit distance.
 /// Returns `None` if no candidate is within a reasonable threshold.
+///
+/// A candidate spelled exactly like `target` is passed over. The report that
+/// asks for a suggestion has just said this name does not resolve here, and
+/// offering it back tells the reader to write what they already wrote — a name
+/// can be declared somewhere the reader cannot see it, which is how a candidate
+/// list comes to hold the very name that was rejected.
 pub fn find_best_match<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<String> {
     let mut best_candidate = None;
     let mut min_distance = usize::MAX;
 
     for candidate in candidates {
         let candidate_str = candidate.as_ref();
+        if candidate_str == target {
+            continue;
+        }
         let distance = levenshtein_distance(target, candidate_str);
         if distance < min_distance {
             min_distance = distance;

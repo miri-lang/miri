@@ -68,12 +68,23 @@ fn test_levenshtein_distance() {
     assert_eq!(levenshtein_distance("rust", "rustacean"), 5);
 }
 
+/// A candidate spelled exactly like the name that was rejected is no
+/// correction. The report has just said the name does not resolve; offering it
+/// back tells the reader to write what they already wrote.
 #[test]
-fn test_find_best_match_exact() {
+fn test_a_candidate_equal_to_the_name_is_not_a_suggestion() {
     use miri::error::format::find_best_match;
     let candidates = vec!["apple", "banana", "cherry"];
+    assert_eq!(find_best_match("apple", &candidates), None);
+}
+
+/// Ruling out the name itself does not rule out its neighbours.
+#[test]
+fn test_a_near_miss_survives_the_name_being_among_the_candidates() {
+    use miri::error::format::find_best_match;
+    let candidates = vec!["apple", "apples"];
     assert_eq!(
-        find_best_match("apple", &candidates),
+        find_best_match("apples", &candidates),
         Some("apple".to_string())
     );
 }
@@ -151,10 +162,6 @@ fn test_find_best_match_best_of_multiple() {
 fn test_find_best_match_unicode() {
     use miri::error::format::find_best_match;
     let candidates = vec!["🦀rust", "🚀fast"];
-    assert_eq!(
-        find_best_match("🦀rust", &candidates),
-        Some("🦀rust".to_string())
-    );
     assert_eq!(
         find_best_match("🦀rus", &candidates),
         Some("🦀rust".to_string())
