@@ -515,10 +515,43 @@ pub(crate) const COLLECTION_CTORS: &[(BuiltinCollectionKind, CollectionCtorFn)] 
     (BuiltinCollectionKind::Array, lower_array_constructor),
 ];
 
+/// Extracts the element size in bytes for a `List<T>` from its type definition.
+fn extract_list_elem_size(ctx: &LoweringContext, list_ty: &Type) -> i64 {
+    let elem_kind = match &list_ty.kind {
+        TypeKind::List(inner_expr) => {
+            if let Some(ty) = ctx.type_checker.get_type(inner_expr.id) {
+                Some(ty.kind.clone())
+            } else if let Some(inferred) = infer_type_from_generic_arg(inner_expr, ctx) {
+                Some(inferred.kind)
+            } else {
+                None
+            }
+        }
+        TypeKind::Custom(name, Some(args))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List)
+                && !args.is_empty() =>
+        {
+            if let Some(ty) = ctx.type_checker.get_type(args[0].id) {
+                Some(ty.kind.clone())
+            } else if let Some(inferred) = infer_type_from_generic_arg(&args[0], ctx) {
+                Some(inferred.kind)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(ref kind) = elem_kind {
+        compute_elem_size_from_type(kind)
+    } else {
+        8
+    }
+}
+
 /// Lowers a `List(args)` constructor call.
 ///
 /// Two forms are supported:
-/// - `List()` — allocates an empty list with a default element stride of 8 bytes.
+/// - `List()` — allocates an empty list with the element stride determined by `T`.
 /// - `List([...])` — converts an array literal into a list, choosing the
 ///   managed-array variant when elements are heap-allocated so RC is correct.
 pub(crate) fn lower_list_constructor(
@@ -543,26 +576,20 @@ pub(crate) fn lower_list_constructor(
     };
 
     let target_bb = ctx.new_basic_block();
+    let elem_size = extract_list_elem_size(ctx, &list_ty);
 
     if args.len() == 1 {
         let array_op = lower_expression(ctx, &args[0], None)?;
 
         // Track the temp array local so we can emit StorageDead after the call.
-        let temp_array_local = match &array_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
-            _ => None,
-        };
-
-        // Determine array length, element size, and whether elements are
+        // Determine array length and whether elements are
         // RC-managed (Option, List, Array, etc.) from the array literal.
         let mut len_val = 0i64;
-        let mut elem_size = 8i64;
         let mut elems_are_managed = false;
         if let ExpressionKind::Array(elements, _) = &args[0].node {
             len_val = elements.len() as i64;
             if !elements.is_empty() {
                 if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
-                    elem_size = compute_elem_size_from_type(&ty.kind);
                     elems_are_managed = ctx.is_perceus_managed(&ty.kind);
                 }
             }
@@ -598,6 +625,11 @@ pub(crate) fn lower_list_constructor(
             literal: crate::ast::literal::Literal::Identifier(rt_fn_name.to_string()),
         }));
 
+        let temp_array_local = match &array_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
+            _ => None,
+        };
+
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
                 func: func_op,
@@ -629,13 +661,12 @@ pub(crate) fn lower_list_constructor(
         ctx.set_current_block(final_bb);
         return Ok(result_op);
     } else {
-        // List() with no arguments: allocate an empty list.
-        // Use a default element stride of 8 bytes (pointer-sized).
+        // List() with no arguments: allocate an empty list with element stride elem_size.
         let size_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Int, *span),
             literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I64(8),
+                crate::ast::literal::IntegerLiteral::I64(elem_size),
             ),
         }));
         let func_op = Operand::Constant(Box::new(Constant {
