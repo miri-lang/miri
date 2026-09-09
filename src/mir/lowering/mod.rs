@@ -1307,7 +1307,7 @@ fn emit_guard_trait_comparison(
     };
     let lowered = crate::mir::lowering::expression::binary_expr::try_lower_operator_trait_call(
         ctx,
-        &class_name,
+        class_name,
         &binary_op,
         operands,
         guard,
