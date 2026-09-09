@@ -35,7 +35,7 @@ fn try_lower_binary_trait_method(
     };
     try_lower_operator_trait_call(
         ctx,
-        &class_name,
+        class_name,
         op,
         OperatorOperands { lhs_op, rhs_op },
         expr,
@@ -85,15 +85,16 @@ pub(crate) fn try_lower_operator_trait_call(
 
 /// The class name implementing a binary operator trait for the lhs type
 /// (`String` or a user `Custom` type), else None.
-fn binary_trait_class_name(ctx: &LoweringContext, lhs: &Expression) -> Option<String> {
+fn binary_trait_class_name<'tc>(ctx: &LoweringContext<'tc>, lhs: &Expression) -> Option<&'tc str> {
     operator_trait_class_name(&ctx.type_checker.get_type(lhs.id)?.kind)
 }
 
 /// The class name whose operator-trait methods apply to values of `kind`.
-pub(crate) fn operator_trait_class_name(kind: &TypeKind) -> Option<String> {
+/// Returning `Option<&str>` avoids heap allocations during binary operator trait resolution.
+pub(crate) fn operator_trait_class_name(kind: &TypeKind) -> Option<&str> {
     match kind {
-        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
-        TypeKind::Custom(name, _) => Some(name.clone()),
+        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME),
+        TypeKind::Custom(name, _) => Some(name.as_str()),
         _ => None,
     }
 }
@@ -166,7 +167,11 @@ fn emit_binary_trait_call(
     call: BinTraitCall,
     expr: &Expression,
 ) -> Result<Operand, LoweringError> {
-    let mangled_name = format!("{}_{}", class_name, method_name);
+    // Optimization: avoid format! overhead by allocating exact capacity.
+    let mut mangled_name = String::with_capacity(class_name.len() + 1 + method_name.len());
+    mangled_name.push_str(class_name);
+    mangled_name.push('_');
+    mangled_name.push_str(method_name);
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
 
     let return_ty = match ctx
