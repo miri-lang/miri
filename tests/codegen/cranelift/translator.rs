@@ -2,9 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::{BuiltinCollectionKind, TypeKind};
-use miri::codegen::cranelift::translator::{
-    is_capture_managed, is_field_managed, needs_out_pointer, ElementShape,
-};
+use miri::codegen::cranelift::translator::{is_capture_managed, needs_out_pointer, ElementShape};
 use miri::codegen::cranelift::FunctionTranslator;
 
 use miri::ast::expression::{Expression, ExpressionKind};
@@ -124,19 +122,6 @@ fn classify_element_shape_primitives_are_other() {
             ElementShape::Other
         ));
     }
-}
-
-#[test]
-fn is_field_managed_classifies_heap_types() {
-    let int_expr = Box::new(expr_ty(TypeKind::Int));
-    assert!(is_field_managed(&TypeKind::String));
-    assert!(is_field_managed(&TypeKind::List(int_expr.clone())));
-    assert!(is_field_managed(&TypeKind::Custom(
-        "MyClass".to_string(),
-        None
-    )));
-    assert!(!is_field_managed(&TypeKind::Int));
-    assert!(!is_field_managed(&TypeKind::Boolean));
 }
 
 #[test]

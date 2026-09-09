@@ -1,0 +1,17 @@
+use system.collections.list
+
+struct Entry
+    word String
+    count int
+
+fn main()
+    var rows = List<Entry>()
+    rows.push(Entry("the", 3))
+    rows.push(Entry("fox", 2))
+    rows.push(Entry("dog", 1))
+    let ranks_first = fn(a Entry, b Entry) int
+        b.count - a.count
+    let top = rows.sorted_by(ranks_first).first(2)
+    for entry in top
+        println(f"{entry.word}:{entry.count}")
+    println(f"kept {rows.length()}")

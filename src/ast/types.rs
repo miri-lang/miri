@@ -596,6 +596,59 @@ impl TypeKind {
         }
     }
 
+    /// The element type of a sequence, for either the canonical variant
+    /// (`TypeKind::List(...)`) or a class reference (`TypeKind::Custom("List",
+    /// Some([...]))`). `None` for every other type, and for a collection written
+    /// without its type argument — the unresolved self-reference a stdlib class
+    /// body uses, which names no element.
+    pub fn sequence_element_kind(&self) -> Option<&TypeKind> {
+        let element = match self {
+            TypeKind::List(expr) | TypeKind::Array(expr, _) => expr,
+            TypeKind::Custom(name, Some(args)) => match BuiltinCollectionKind::from_name(name) {
+                Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array) => args.first()?,
+                Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set) | None => {
+                    return None
+                }
+            },
+            TypeKind::Custom(_, None)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Tuple(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Void
+            | TypeKind::Error => return None,
+        };
+        let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
+            return None;
+        };
+        Some(&ty.kind)
+    }
+
     /// Returns the `BuiltinCollectionKind` if this type is a built-in collection,
     /// for either the canonical variant (`TypeKind::List(...)`) or a class reference
     /// (`TypeKind::Custom("List", ...)`).  Returns `None` for all other types.

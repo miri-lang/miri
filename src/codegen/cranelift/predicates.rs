@@ -484,16 +484,18 @@ impl<'a> FunctionTranslator<'a> {
         type_defs: &HashMap<String, TypeDefinition>,
     ) -> bool {
         match type_defs.get(name) {
-            Some(TypeDefinition::Struct(def)) => def.fields.iter().any(|(_, ty, _)| {
-                crate::codegen::cranelift::translator::is_field_managed(&ty.kind)
-            }),
-            Some(TypeDefinition::Class(def)) => def.fields.iter().any(|(_, fi)| {
-                crate::codegen::cranelift::translator::is_field_managed(&fi.ty.kind)
-            }),
+            Some(TypeDefinition::Struct(def)) => def
+                .fields
+                .iter()
+                .any(|(_, ty, _)| crate::mir::rc::is_field_managed(&ty.kind)),
+            Some(TypeDefinition::Class(def)) => def
+                .fields
+                .iter()
+                .any(|(_, fi)| crate::mir::rc::is_field_managed(&fi.ty.kind)),
             Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
                 fields
                     .iter()
-                    .any(|ty| crate::codegen::cranelift::translator::is_field_managed(&ty.kind))
+                    .any(|ty| crate::mir::rc::is_field_managed(&ty.kind))
             }),
             None
             | Some(TypeDefinition::Generic(_))

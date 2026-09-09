@@ -9,10 +9,10 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::translator::{
-    empty_module_ctx, is_field_managed, CallSite, ElementShape, FunctionTranslator, ModuleCtx,
-    TypeCtx,
+    empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::error::CodegenError;
+use crate::mir::rc::is_field_managed;
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{ClassDefinition, EnumDefinition, TypeDefinition};
 

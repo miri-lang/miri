@@ -1,0 +1,33 @@
+# Chain one list transform onto another's result, over an element type that
+# carries a heap field.
+#
+# The idiom an author reaches for first -- rank, then keep the top few -- reads
+# the second collection out of a temporary the first call produced, and no local
+# ever binds that temporary. It is the only task in this corpus that does so.
+# The wrong method name is what an author writes when they know the result is a
+# list but not which method takes a count, and the diagnostic names the arity it
+# expected. The last line reads the source list after the whole chain has been
+# released: it prints the wrong number, or nothing at all, if the chain took the
+# source's elements with it.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_002"
+assert_output_contains = ["Too many positional arguments"]
+
+[[step]]
+type = "Patch"
+file = "program.mi"
+fn_name = "main"
+old_text = ".first(2)"
+new_text = ".take(2)"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["the:3", "fox:2", "kept 3"]

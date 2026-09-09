@@ -852,7 +852,7 @@ impl<'a> FunctionTranslator<'a> {
                             if crate::type_checker::generics::is_generic_parameter_kind(
                                 &kind,
                                 enum_def.generics.as_ref(),
-                            ) || crate::codegen::cranelift::translator::is_field_managed(&kind)
+                            ) || crate::mir::rc::is_field_managed(&kind)
                             {
                                 None
                             } else {

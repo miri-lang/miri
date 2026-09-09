@@ -88,6 +88,7 @@
 //! `--verify-mir` flag, makes findings fatal.
 
 use crate::ast::literal::Literal;
+use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use crate::mir::rvalue::Rvalue;
@@ -993,4 +994,112 @@ fn local_display_name(body: &Body, local: Local) -> String {
         .as_ref()
         .map(|n| n.as_ref().to_string())
         .unwrap_or_else(|| format!("_{}", local.0))
+}
+
+/// Report every call that hands a reference-counted element to a shared generic
+/// body.
+///
+/// A sequence's trait defaults are lowered once per receiver class with the
+/// element type left as the trait's own parameter. Such a body reads an element
+/// as a borrow and stores it without taking a reference, while the call site —
+/// which knows the concrete element — releases every element of the collection
+/// it gets back. The source sequence is then left holding pointers to freed
+/// objects. Giving the body the concrete element makes both sides agree, and the
+/// per-instantiation symbol is what says it has one.
+///
+/// The rule reads the *receiver*: a method that builds tuples of its own
+/// (`zip`, `enumerate`) returns a reference-counted element from a sequence of
+/// plain integers, and the shared body owns those tuples correctly because it
+/// can see they are tuples.
+///
+/// `Map` and `Set` are outside the rule. They implement only `Iterable` and
+/// `Cloneable`, so they inherit no default that reads an element, and every
+/// transform they offer they declare themselves.
+///
+/// `intrinsic_backed` names the symbols exempt from the rule: a sequence's own
+/// methods settle element ownership by calling the runtime (`miri_rt_list_clone`
+/// retains what it copies, `miri_rt_list_take_at` hands the container's own
+/// reference over), and none of that is visible as an RC operation in MIR.
+pub fn verify_collection_element_ownership(
+    body: &Body,
+    intrinsic_backed: &HashSet<String>,
+) -> Vec<VerificationViolation> {
+    let mut violations = Vec::new();
+    for block in &body.basic_blocks {
+        let Some(terminator) = &block.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
+            continue;
+        };
+        let Some(symbol) = called_symbol(func) else {
+            continue;
+        };
+        if intrinsic_backed.contains(symbol) || symbol.contains(GENERIC_MANGLE_SEPARATOR) {
+            continue;
+        }
+        if !symbol_belongs_to_a_builtin_collection(symbol) {
+            continue;
+        }
+        let Some(receiver) = args.first().and_then(bare_local_read) else {
+            continue;
+        };
+        let decl = &body.local_decls[receiver.0];
+        if !holds_reference_counted_elements(&decl.ty.kind) {
+            continue;
+        }
+        violations.push(VerificationViolation {
+            local: receiver,
+            local_name: local_display_name(body, receiver),
+            message: format!(
+                "`{}` reads the elements of a {}, which are reference-counted, but it is the \
+                 shared generic body: it stores each element without taking a reference, while \
+                 this call site releases every one of them",
+                symbol, decl.ty.kind
+            ),
+        });
+    }
+    violations
+}
+
+/// The separator [`crate::mir::lowering::dispatch::mangle_generic_name`] puts
+/// between a symbol and each concrete type argument.
+const GENERIC_MANGLE_SEPARATOR: &str = "__";
+
+/// The identifier a `Call` names, or `None` for an indirect call.
+fn called_symbol(func: &Operand) -> Option<&str> {
+    let Operand::Constant(constant) = func else {
+        return None;
+    };
+    match &constant.literal {
+        Literal::Identifier(name) => Some(name.as_str()),
+        Literal::Integer(_)
+        | Literal::Float(_)
+        | Literal::String(_)
+        | Literal::Boolean(_)
+        | Literal::Regex(_)
+        | Literal::None => None,
+    }
+}
+
+/// Whether `kind` is a sequence whose elements the drop site releases one by
+/// one — the release that a borrowed element cannot survive — and that a
+/// per-instantiation body could be named for.
+///
+/// A receiver the symbol mangler cannot spell has no such body to be given, so
+/// the shared generic one is the only body there is and reporting it would name
+/// a defect nothing in the compiler can act on. That covers a nested collection
+/// or `Option` element, an `Array` (whose size argument is a value), and a
+/// receiver written as a canonical variant rather than a class reference.
+fn holds_reference_counted_elements(kind: &crate::ast::types::TypeKind) -> bool {
+    kind.sequence_element_kind()
+        .is_some_and(crate::mir::rc::is_field_managed)
+        && crate::mir::lowering::can_be_monomorphized_at(kind)
+}
+
+/// Whether `symbol` is a `{Collection}_{method}` method of a built-in collection.
+fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
+    symbol
+        .split_once('_')
+        .is_some_and(|(class, _)| BuiltinCollectionKind::from_name(class).is_some())
 }

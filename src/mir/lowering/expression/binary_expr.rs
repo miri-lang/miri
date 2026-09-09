@@ -524,7 +524,7 @@ pub(crate) fn lower_binary_expr(
         }
     }
 
-    emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest)
+    emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest, arg_watermark)
 }
 
 /// True when the operator is `==` or `!=`.
@@ -629,6 +629,7 @@ fn emit_binary_op(
     rhs_op: Operand,
     expr: &Expression,
     dest: Option<Place>,
+    operand_watermark: usize,
 ) -> Result<Operand, LoweringError> {
     let bin_op = op_to_binop(op, expr.span)?;
     let result_ty = binary_result_type(ctx, op, expr);
@@ -640,6 +641,11 @@ fn emit_binary_op(
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
 
+    let operand_locals: Vec<Local> = [&lhs_op, &rhs_op]
+        .iter()
+        .filter_map(|o| operand_local(o))
+        .collect();
+
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             target,
@@ -647,5 +653,14 @@ fn emit_binary_op(
         ),
         span: expr.span,
     });
+
+    // The result is a fresh scalar, never an alias of either side, so an operand
+    // this expression produced is dead the moment the operation has read it.
+    // `emit_temp_drop` leaves alone anything older than the watermark, anything a
+    // name or a scope already owns, and anything unmanaged — which is every
+    // operand of the arithmetic and comparison this path usually lowers.
+    for local in operand_locals {
+        ctx.emit_temp_drop(local, operand_watermark, expr.span);
+    }
     Ok(ret_op)
 }

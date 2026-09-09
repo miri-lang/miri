@@ -28,6 +28,7 @@ this file on every run. The harness prints it to stdout instead.
 | j | recover from a runtime trap | yes | 5 | 1030 | 233 |
 | l | repair a file with four faults, three of which carry a repair | yes | 8 | 6403 | 1292 |
 | m | sort a list whose element type has no ordering | yes | 3 | 948 | 679 |
+| n | chain a list transform onto another transform's result | yes | 3 | 1262 | 433 |
 | k | read the warnings a green test run left behind | no | 2 | 1084 | 0 |
 
 Tasks recorded as not succeeding are pinned on a gap the loop still has.

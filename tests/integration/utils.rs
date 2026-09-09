@@ -685,3 +685,34 @@ pub fn get_allocation_count_value(code: &str) -> usize {
         .parse()
         .unwrap_or_else(|_| panic!("Failed to parse count as number from: {}", line))
 }
+
+/// Assert that `code` builds once and prints `expected_output` on every one of
+/// `runs` consecutive runs of the same executable.
+///
+/// [`assert_runs_with_output`] compiles and runs once, which a use-after-free
+/// passes whenever the allocator happens to leave the freed block intact. This
+/// helper is for the defects that only show up as a disagreement between runs.
+pub fn assert_repeated_runs_have_output(code: &str, expected_output: &str, runs: usize) {
+    use crate::utils::miri_build_and_run_repeatedly;
+
+    for (index, result) in miri_build_and_run_repeatedly(code, runs)
+        .into_iter()
+        .enumerate()
+    {
+        if !result.success {
+            panic!(
+                "Run {} of {} did not exit successfully:\n{}",
+                index + 1,
+                runs,
+                result.output()
+            );
+        }
+        assert_eq!(
+            result.stdout.trim(),
+            expected_output.trim(),
+            "Run {} of {} printed different output",
+            index + 1,
+            runs
+        );
+    }
+}
