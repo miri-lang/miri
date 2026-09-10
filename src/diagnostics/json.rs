@@ -341,6 +341,29 @@ pub struct JsonDiagnostic {
     pub preexisting: Option<bool>,
 }
 
+impl JsonDiagnostic {
+    /// Construct a minimal error diagnostic with severity "error", default None/empty fields,
+    /// and optional diagnostic code.
+    pub fn error(message: impl Into<String>, code: Option<String>) -> Self {
+        Self {
+            severity: "error".to_string(),
+            code,
+            message: message.into(),
+            path: None,
+            line: None,
+            column: None,
+            length: None,
+            expected: None,
+            actual: None,
+            help: None,
+            fix_safety: None,
+            repair: None,
+            related: vec![],
+            preexisting: None,
+        }
+    }
+}
+
 /// A repair suggestion (reserved for Task 4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

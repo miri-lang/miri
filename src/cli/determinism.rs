@@ -330,22 +330,7 @@ fn build_failure_envelope(
 /// Envelope for a failure of this command's own machinery rather than of the
 /// build it was asked to check.
 fn command_failure_envelope(message: &str, elapsed_ms: u64) -> DiagnosticsEnvelope {
-    let diagnostic = JsonDiagnostic {
-        severity: "error".to_string(),
-        code: None,
-        message: message.to_string(),
-        path: None,
-        line: None,
-        column: None,
-        length: None,
-        expected: None,
-        actual: None,
-        help: None,
-        fix_safety: None,
-        repair: None,
-        related: vec![],
-        preexisting: None,
-    };
+    let diagnostic = JsonDiagnostic::error(message, None);
     DiagnosticsEnvelope::new(JsonCommand::Determinism, false, vec![diagnostic])
         .with_exit_code(1)
         .with_duration_ms(elapsed_ms)
