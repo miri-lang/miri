@@ -1275,3 +1275,99 @@ fn test_one_import_repaired_once_however_many_diagnostics_asked_for_it() {
         contents
     );
 }
+
+/// A diagnostic whose help names the exact token to write instead hands over
+/// the edit as well as the sentence. These prove the two shapes that name one:
+/// a near-miss member, and a binding nothing reads.
+#[test]
+fn test_a_near_miss_member_is_renamed_to_the_one_the_receiver_declares() {
+    assert_eq!(
+        repaired(
+            "rename-member",
+            "fn main()\n    let accounts = [1, 2, 3]\n    println(f\"{accounts.len()}\")\n",
+            "rename-to-suggestion",
+        ),
+        "fn main()\n    let accounts = [1, 2, 3]\n    println(f\"{accounts.length()}\")\n"
+    );
+}
+
+#[test]
+fn test_an_unread_local_gains_the_underscore_its_help_names() {
+    assert_eq!(
+        repaired(
+            "underscore-local",
+            "fn main()\n    let total = 42\n",
+            "underscore-unread-binding",
+        ),
+        "fn main()\n    let _total = 42\n"
+    );
+}
+
+/// Renaming a parameter rewrites the signature callers name their arguments
+/// through, so the same edit that is a local one on a local is api-changing on
+/// a parameter. The repair is offered either way; only the second needs the
+/// caller to say they accept the risk.
+#[test]
+fn test_an_unread_parameter_is_underscored_only_when_the_risk_is_accepted() {
+    let source = "fn greet(name String)\n    println(\"hi\")\n\nfn main()\n    greet(\"a\")\n";
+    let fixture = Fixture::new("underscore-parameter", source);
+
+    let envelope = plan(fixture.path());
+    assert_eq!(repair_ids(&envelope), vec!["underscore-unread-binding"]);
+    assert_eq!(
+        diagnostic_with_code(&envelope, "MER_TYP_072")
+            .fix_safety
+            .as_deref(),
+        Some("api-changing"),
+        "renaming a parameter changes the signature"
+    );
+
+    let (_, _, refused) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(
+        !refused,
+        "the rename should be withheld without --allow-risky"
+    );
+    assert_eq!(
+        fixture.contents(),
+        source,
+        "nothing should have been written"
+    );
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes", "--allow-risky"]);
+    assert!(ok, "the rename should be applied once the risk is accepted");
+    assert_eq!(
+        fixture.contents(),
+        "fn greet(_name String)\n    println(\"hi\")\n\nfn main()\n    greet(\"a\")\n"
+    );
+    assert!(
+        checks_clean(fixture.path()),
+        "the repaired source should check clean"
+    );
+}
+
+/// `let-to-var` refuses a statement binding several names because one keyword
+/// governs them all. The underscore is the other case: each name is its own
+/// text, so the one nothing reads is the only one rewritten.
+#[test]
+fn test_only_the_unread_name_of_a_multi_binding_statement_is_underscored() {
+    assert_eq!(
+        repaired(
+            "underscore-one-of-several",
+            "fn main()\n    let a = 1, b = 2\n    println(f\"{a}\")\n",
+            "underscore-unread-binding",
+        ),
+        "fn main()\n    let a = 1, _b = 2\n    println(f\"{a}\")\n"
+    );
+}
+
+#[test]
+fn test_a_rename_lands_correctly_after_multi_byte_characters() {
+    assert_eq!(
+        repaired(
+            "rename-after-multibyte",
+            "fn main()\n    // ünïcödé\n    let n = [1, 2, 3]\n    println(f\"{n.len()}\")\n",
+            "rename-to-suggestion",
+        ),
+        "fn main()\n    // ünïcödé\n    let n = [1, 2, 3]\n    println(f\"{n.length()}\")\n"
+    );
+}

@@ -49,7 +49,9 @@ pub fn repair_fix_safety(repair: &RepairRequest) -> FixSafety {
         | RepairRequest::PrintlnBang { .. }
         | RepairRequest::DropIteratorAccessor { .. }
         | RepairRequest::ConcatToFormattedString { .. }
-        | RepairRequest::QualifyVariantPattern { .. } => FixSafety::LocalEdit,
+        | RepairRequest::QualifyVariantPattern { .. }
+        | RepairRequest::RenameToSuggestion { .. }
+        | RepairRequest::UnderscoreUnreadBinding { .. } => FixSafety::LocalEdit,
     }
 }
 

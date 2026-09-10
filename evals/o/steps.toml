@@ -1,0 +1,51 @@
+# Apply the edit a diagnostic already named in its help.
+
+# Two faults whose help spells out the token to write instead: a method named
+# the way another language spells it, and a binding nothing reads. Neither
+# needs a decision from the agent -- the compiler has already picked `length`
+# and `_unused` -- so both are cleared by `fix --apply` rather than by reading
+# the sentence and re-typing what it said.
+#
+# They arrive in two passes and not one, because a file that does not type-check
+# reports its errors and none of its warnings: the unread binding is only
+# visible once the member call resolves. That is the cost this task records.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_TYP_033"
+assert_output_contains = [
+  "Did you mean 'length'?",
+  "\"id\": \"rename-to-suggestion\"",
+]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+assert_diagnostic_code = "MER_TYP_071"
+assert_output_contains = ["\"id\": \"underscore-unread-binding\""]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["3"]

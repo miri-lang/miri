@@ -218,7 +218,11 @@ const REPAIR_WIDTH: usize = 26;
 /// The repairs reachable from `code`, as one column of the listing.
 ///
 /// A code with none reads `-` rather than blank, so the column is visibly
-/// answered rather than merely absent.
+/// answered rather than merely absent. A code with one names what is reachable
+/// from *some* of its diagnostics: a code is raised for every condition it
+/// covers and a repair answers one of them, so this column is a lower bound on
+/// what a tool will meet and never a promise about a given diagnostic. That
+/// promise is the `repair` the diagnostic itself carries.
 fn repair_column(code: DiagnosticCode) -> String {
     let repairs = crate::diagnostics::repair::repairs_for(code);
     if repairs.is_empty() {

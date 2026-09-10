@@ -20,7 +20,7 @@ this file on every run. The harness prints it to stdout instead.
 | b | repair a broken program using check, explain and fix | yes | 6 | 2965 | 74 |
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 4 | 2013 | 85 |
-| e | recover from a capability rejection | yes | 5 | 3489 | 118 |
+| e | recover from a capability rejection | yes | 5 | 4105 | 118 |
 | f | make a failing test pass | yes | 4 | 631 | 128 |
 | g | author a struct, a class and a match over an enum from an empty directory | yes | 3 | 588 | 1339 |
 | h | repair a cascade with one root cause | yes | 4 | 2185 | 232 |
@@ -29,7 +29,8 @@ this file on every run. The harness prints it to stdout instead.
 | l | repair a file with four faults, three of which carry a repair | yes | 8 | 6403 | 1292 |
 | m | sort a list whose element type has no ordering | yes | 3 | 948 | 679 |
 | n | chain a list transform onto another transform's result | yes | 3 | 1262 | 433 |
-| k | read the warnings a green test run left behind | no | 2 | 1084 | 0 |
+| o | apply the edit a diagnostic already named in its help | yes | 6 | 3186 | 219 |
+| k | read the warnings a green test run left behind | no | 2 | 1398 | 0 |
 
 Tasks recorded as not succeeding are pinned on a gap the loop still has.
 They are replayed to the step that fails and cost what they cost getting

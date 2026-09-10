@@ -798,7 +798,7 @@
         },
         "repairs": {
           "type": "array",
-          "description": "Wire identifiers of the repairs reachable from this code, in declaration order. Empty when no repair exists, which is how a tool tells an automatically fixable condition from one it has to act on itself.",
+          "description": "Wire identifiers of the repairs reachable from this code, in declaration order. Empty when no repair exists, which is how a tool tells an automatically fixable condition from one it has to act on itself. A code covers every condition it is raised for and a repair covers one of them, so a listed repair is reachable from some of a code's diagnostics rather than all of them: a code listed here may still raise a diagnostic that carries no repair. For a particular diagnostic, read its own 'repair' field.",
           "items": {
             "type": "string"
           }

@@ -324,6 +324,7 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Shared)?;
 
+        let name_span = self.current_token_span();
         let name = self.simple_identifier()?;
         let typ_expr = self.type_expression()?;
         let typ = match typ_expr {
@@ -333,6 +334,7 @@ impl<'source> Parser<'source> {
 
         let declaration = VariableDeclaration {
             name,
+            name_span,
             typ,
             initializer: None,
             declaration_type: VariableDeclarationType::Mutable,
@@ -414,6 +416,7 @@ impl<'source> Parser<'source> {
 
         Ok(VariableDeclaration {
             name,
+            name_span,
             typ,
             initializer,
             declaration_type: declaration_type.clone(),
@@ -483,10 +486,11 @@ impl<'source> Parser<'source> {
             return Err(error);
         }
 
-        let (name, _) = self.declaration_name()?;
+        let (name, name_span) = self.declaration_name()?;
         let typ = self.type_expression()?.map(Box::new);
         Ok(VariableDeclaration {
             name,
+            name_span,
             typ,
             initializer: None,
             declaration_type: VariableDeclarationType::Immutable,

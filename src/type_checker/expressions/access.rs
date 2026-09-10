@@ -1112,11 +1112,12 @@ impl TypeChecker {
 
         let candidates: Vec<&str> = def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field '{}'", type_name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
             );
         } else {
             self.report_error(
@@ -1366,11 +1367,12 @@ impl TypeChecker {
         if let Some(suggestion) =
             member_hints::suggest_member(prop_name, &member_candidates, call_arity)
         {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
                 format!("Type '{}' has no field or method '{}'", name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
             );
         } else if let Some(iteration_help) = member_hints::suggest_iteration_help(
             prop_name,
@@ -1677,11 +1679,12 @@ impl TypeChecker {
 
         let all_methods = self.collect_trait_methods_for_access(name);
         if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
                 format!("Trait '{}' has no method '{}'", name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
             );
         } else {
             self.report_error(
@@ -2007,11 +2010,12 @@ impl TypeChecker {
 
         let candidates: Vec<&str> = def.variants.keys().map(|s| s.as_str()).collect();
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypEnumVariant,
                 format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
             );
         } else {
             self.report_error(

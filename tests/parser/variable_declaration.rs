@@ -201,6 +201,7 @@ fn test_parse_shared_variable_declaration() {
 
     let expected_decl = VariableDeclaration {
         name: "cache".into(),
+        name_span: Default::default(),
         typ: Some(Box::new(type_expr_non_null(type_array(type_float(), 256)))),
         initializer: None,
         declaration_type: VariableDeclarationType::Mutable, // Shared is mutable

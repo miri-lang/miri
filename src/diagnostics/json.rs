@@ -236,6 +236,12 @@ pub struct JsonCode {
     ///
     /// Empty when the code carries no repair, which is what a tool reads to
     /// tell an automatic fix from a diagnosis it has to act on itself.
+    ///
+    /// A code covers every condition it is raised for, and a repair covers one
+    /// of them, so a listed repair is reachable from *some* of a code's
+    /// diagnostics rather than all of them. The answer for a particular
+    /// diagnostic is the `repair` it carries, and only that: a code listed here
+    /// with a repair may still raise a diagnostic that has none.
     pub repairs: Vec<String>,
 }
 

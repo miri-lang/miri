@@ -379,7 +379,7 @@ fn main()
 
 **Loop:** `check --format json` → `fix --apply --yes` → re-check → `run` or `test`. Iterate until clean.
 
-1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair`. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text.
+1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair`. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text. The repair column `miri explain --list` prints is per code, and a code stands for every condition it is raised for, so it is a lower bound: only the `repair` on the diagnostic in front of you says whether this one can be applied.
 2. **miri fix** — `miri fix myfile.mi --apply --yes` writes every repair the check recorded, in one call. `miri explain CODE` describes the rule behind one. `miri fix myfile.mi --plan --format json` previews the edits without writing them; it is a preview, not a step — the check already said which diagnostics carry a repair, so `--plan` adds a round trip and no information.
 3. **miri run** / **miri test** — `miri run myfile.mi`, `miri test --dir <DIR>`; both take `--format json`. Only a run finds a fault the frontend cannot see.
 4. **miri view** — read part of a file instead of all of it. `miri view myfile.mi --outline --public` gives the surface a caller can reach and is much smaller than the outline alone; `miri view myfile.mi --fn name` reads one function and `miri view myfile.mi --fn name --around text` narrows to the innermost block holding that text; `miri view --type Name --public` lists what can be called on a type; `miri view myfile.mi --raw --format json` returns the file's own bytes, comments and all, behind their line numbers. Without `--raw` the output is canonical, not literal, and a module name works wherever a path does.
@@ -398,3 +398,5 @@ The auto-applicable repairs are:
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
 - `println-bang`: Drop the `!` from a macro-style call.
 - `qualify-variant-pattern`: Prefix a bare variant pattern with the enum that declares it.
+- `rename-to-suggestion`: Rewrite a name as the one spelling the help offers in its place.
+- `underscore-unread-binding`: Prefix a binding nothing reads with `_` to say the value is not meant to be read.

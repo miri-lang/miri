@@ -5,7 +5,7 @@
 
 use crate::ast::common::Parameter;
 use crate::ast::statement::{FunctionDeclarationData, Statement, StatementKind};
-use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::syntax::Span;
 use crate::type_checker::hygiene::is_deliberately_unread;
 use crate::type_checker::hygiene::names::References;
@@ -46,16 +46,17 @@ impl TypeChecker {
             if is_deliberately_unread(name) || references.contains(name) {
                 continue;
             }
-            self.report_warning(
+            self.report_unread_binding(
                 DiagnosticCode::TypUnusedLocal,
-                DiagnosticCode::TypUnusedLocal.title().to_string(),
                 format!("Unused local: '{}' is never read", name),
                 statement.span,
-                Some(format!(
+                format!(
                     "remove the binding, or name it '_{}' to say the value is not meant to be \
                      read.",
                     name
-                )),
+                ),
+                name,
+                declaration.name_span,
             );
         }
     }
@@ -84,19 +85,50 @@ impl TypeChecker {
         function: &str,
         declaration: &FunctionDeclarationData,
     ) {
-        self.report_warning(
+        self.report_unread_binding(
             DiagnosticCode::TypUnusedParameter,
-            DiagnosticCode::TypUnusedParameter.title().to_string(),
             format!(
                 "Unused parameter: '{}' is never read in the body of '{}'",
                 parameter.name, function
             ),
             report_span(parameter, declaration),
-            Some(format!(
+            format!(
                 "remove the parameter and the arguments passed to it, or name it '_{}' to say \
                  this body has no use for the value.",
                 parameter.name
-            )),
+            ),
+            &parameter.name,
+            parameter.name_span,
+        );
+    }
+
+    /// Reports a binding nothing reads, handing over the underscore its help
+    /// names wherever the name is something the reader wrote.
+    ///
+    /// A binding the compiler synthesized has no name span, so there are no
+    /// bytes to insert ahead of and the report carries the sentence alone. The
+    /// other half of the help — deleting the binding outright — is a choice
+    /// between two edits, and only the underscore is determined.
+    fn report_unread_binding(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: String,
+        name: &str,
+        name_span: Span,
+    ) {
+        let repair = (!name_span.is_empty()).then(|| RepairRequest::UnderscoreUnreadBinding {
+            name_start: name_span.start,
+            name: name.to_string(),
+        });
+        self.report_warning_with_repair(
+            code,
+            code.title().to_string(),
+            message,
+            span,
+            Some(help),
+            repair,
         );
     }
 }

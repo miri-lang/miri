@@ -125,6 +125,11 @@ const TASKS: &[Task] = &[
         blocked_by: None,
     },
     Task {
+        id: "o",
+        description: "apply the edit a diagnostic already named in its help",
+        blocked_by: None,
+    },
+    Task {
         id: "k",
         description: "read the warnings a green test run left behind",
         blocked_by: Some(

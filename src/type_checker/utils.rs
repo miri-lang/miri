@@ -2309,11 +2309,12 @@ impl TypeChecker {
         candidates.extend(["Int", "Float", "String", "Bool", "Void", "Any"]);
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypTypeNotFound,
                 format!("Unknown type: {}", name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, name, &suggestion),
             );
         } else {
             self.report_error(
@@ -2661,6 +2662,24 @@ impl TypeChecker {
         }
     }
 
+    /// Reports a type error whose help names a replacement, together with the
+    /// edit that writes it where one could be determined.
+    ///
+    /// The help is the same sentence either way. Whether the edit travels with
+    /// it is decided by the check that raised the diagnostic, which is the only
+    /// place that knows whether the bytes it recorded are the ones the reader
+    /// wrote.
+    pub(crate) fn report_error_with_help_and_optional_repair(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        span: Span,
+        help: String,
+        repair: Option<RepairRequest>,
+    ) {
+        self.report_error_with_related(code, message, span, Some(help), Vec::new(), repair);
+    }
+
     /// Reports an already-classified error, preserving its diagnostic code.
     /// Errors built from a [`TypeErrorKind`] must travel this path; the
     /// message-only reporters relabel everything as a generic type error.
@@ -2687,6 +2706,25 @@ impl TypeChecker {
         span: Span,
         help: Option<String>,
     ) {
+        self.report_warning_with_repair(code, title, message, span, help, None);
+    }
+
+    /// Records a warning together with the edit its help describes, where the
+    /// check that raised it could determine one.
+    ///
+    /// A warning whose help names the exact token to write instead has already
+    /// decided the edit, so it travels with one rather than leaving every
+    /// consumer to re-type it. The same warning about a node the compiler
+    /// synthesized has no bytes to edit and carries the sentence alone.
+    pub(crate) fn report_warning_with_repair(
+        &mut self,
+        code: DiagnosticCode,
+        title: String,
+        message: String,
+        span: Span,
+        help: Option<String>,
+        repair: Option<RepairRequest>,
+    ) {
         if self.suppress_diagnostics {
             return;
         }
@@ -2702,7 +2740,7 @@ impl TypeChecker {
             source_override: self.modules.current_source_override.clone(),
             expected: None,
             actual: None,
-            repair: None,
+            repair,
         });
     }
 
