@@ -343,22 +343,7 @@ fn report_run(
 
 /// Create an error diagnostic from a code and message.
 fn error_diagnostic(code: String, message: String) -> JsonDiagnostic {
-    JsonDiagnostic {
-        severity: "error".to_string(),
-        code: Some(code),
-        message,
-        path: None,
-        line: None,
-        column: None,
-        length: None,
-        expected: None,
-        actual: None,
-        help: None,
-        fix_safety: None,
-        repair: None,
-        related: vec![],
-        preexisting: None,
-    }
+    JsonDiagnostic::error(message, Some(code))
 }
 
 /// The diagnostic a runtime trap is reported as.
