@@ -89,6 +89,36 @@ const PROVOCATIONS: &[Provocation] = &[
         source: "fn get() Result<int, String>\n    Result.Ok(1)\n\nfn main()\n    match \
                  get()\n        Ok(n): println(f\"{n}\")\n        Result.Err(e): println(e)\n",
     },
+    Provocation {
+        repair: RepairId::RenameToSuggestion,
+        code: "MER_TYP_033",
+        source: "fn main()\n    let accounts = [1, 2, 3]\n    println(f\"{accounts.len()}\")\n",
+    },
+    Provocation {
+        repair: RepairId::RenameToSuggestion,
+        code: "MER_TYP_038",
+        source: "enum Color\n    Red\n    Green\n\nfn main()\n    let c = Color.Rd\n                     println(f\"{c}\")\n",
+    },
+    Provocation {
+        repair: RepairId::RenameToSuggestion,
+        code: "MER_TYP_043",
+        source: "fn f(x Strng) int\n    1\n\nfn main()\n    println(f\"{f(1)}\")\n",
+    },
+    Provocation {
+        repair: RepairId::RenameToSuggestion,
+        code: "MER_TYP_034",
+        source: "fn main()\n    let count = 1\n    println(f\"{cout}\")\n",
+    },
+    Provocation {
+        repair: RepairId::UnderscoreUnreadBinding,
+        code: "MER_TYP_071",
+        source: "fn main()\n    let total = 42\n",
+    },
+    Provocation {
+        repair: RepairId::UnderscoreUnreadBinding,
+        code: "MER_TYP_072",
+        source: "fn greet(name String)\n    println(\"hi\")\n\nfn main()\n    greet(\"a\")\n",
+    },
 ];
 
 /// The (code, repair) pairs `miri fix` reports for `source`.

@@ -363,11 +363,12 @@ impl TypeChecker {
         }
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
-            self.report_error_with_help(
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypUndefinedName,
                 message,
                 span,
                 format!("Did you mean '{}'?", suggestion),
+                RepairRequest::rename(span.start, span.end, name, &suggestion),
             );
         } else {
             self.report_error(DiagnosticCode::TypUndefinedName, message, span);

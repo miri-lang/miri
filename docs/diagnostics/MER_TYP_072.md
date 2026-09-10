@@ -2,7 +2,9 @@
 
 A parameter is never read in the body of the function that declares it. The caller computes an argument for it on every call and the body throws it away.
 
-Either the body should be using it, or the parameter should go — and removing it changes the signature, so every call site changes with it. That is why this is reported and not repaired automatically.
+Either the body should be using it, or the parameter should go — and removing it changes the signature, so every call site changes with it. Which of the two is right is a decision the compiler cannot make, so removal is never offered as an edit.
+
+The third answer is offered: `miri fix` carries the `underscore-unread-binding` repair, which renames the parameter with a leading underscore. That rewrites the signature too, so it is classed `api-changing` and withheld unless the call is made with `--allow-risky`.
 
 A parameter whose name begins with `_` is never reported. That spelling is what to write when the signature is fixed by something outside the function — a trait it implements, a callback shape it is passed to — and this particular body has no use for the value.
 

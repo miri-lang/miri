@@ -28,6 +28,7 @@ impl<'source> Parser<'source> {
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
         let name_expr = self.identifier()?;
+        let name_span = name_expr.span;
         let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
             n
         } else {
@@ -43,6 +44,7 @@ impl<'source> Parser<'source> {
 
         let decl = VariableDeclaration {
             name,
+            name_span,
             typ: Some(typ),
             initializer: None,
             declaration_type: VariableDeclarationType::Unmarked,

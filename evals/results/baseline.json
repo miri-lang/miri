@@ -31,7 +31,7 @@
     "task": "e",
     "success": true,
     "invocations": 5,
-    "bytes_read": 3489,
+    "bytes_read": 4105,
     "bytes_written": 118
   },
   {
@@ -91,10 +91,17 @@
     "bytes_written": 433
   },
   {
+    "task": "o",
+    "success": true,
+    "invocations": 6,
+    "bytes_read": 3186,
+    "bytes_written": 219
+  },
+  {
     "task": "k",
     "success": false,
     "invocations": 2,
-    "bytes_read": 1084,
+    "bytes_read": 1398,
     "bytes_written": 0,
     "failed_step": 2
   }

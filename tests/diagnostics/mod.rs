@@ -7,6 +7,7 @@ pub mod json;
 pub mod jsonl;
 pub mod registry;
 pub mod repairs_are_reachable;
+pub mod replacement_help_carries_a_repair;
 pub mod rpc;
 pub mod runtime_traps;
 pub mod schema;

@@ -1,0 +1,6 @@
+use system.io
+
+fn main()
+    let accounts = [1, 2, 3]
+    let unused = 0
+    println(f"{accounts.len()}")

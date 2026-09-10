@@ -155,14 +155,48 @@ pub enum AcceleratorTarget {
 }
 
 /// Represents a variable declaration
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub struct VariableDeclaration {
     pub name: String,
+    /// Where the name itself is written.
+    ///
+    /// The statement's own span opens at the keyword, which is one binding's
+    /// worth of text away from the name when a report is about the name rather
+    /// than the declaration. Empty for a declaration the compiler synthesized,
+    /// which has no source text to point at.
+    pub name_span: Span,
     pub typ: Option<Box<Expression>>,
     pub initializer: Option<Box<Expression>>,
     pub declaration_type: VariableDeclarationType,
     pub is_shared: bool,
     pub residency: BindingResidency,
+}
+
+/// Equality and hashing ignore `name_span`, matching
+/// [`crate::ast::common::Parameter`], where a node's source location is
+/// metadata rather than part of its identity. This keeps a declaration built by
+/// the AST factory (which has no source text, so no span) equal to the same
+/// declaration produced by the parser.
+impl PartialEq for VariableDeclaration {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.typ == other.typ
+            && self.initializer == other.initializer
+            && self.declaration_type == other.declaration_type
+            && self.is_shared == other.is_shared
+            && self.residency == other.residency
+    }
+}
+
+impl Hash for VariableDeclaration {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.typ.hash(state);
+        self.initializer.hash(state);
+        self.declaration_type.hash(state);
+        self.is_shared.hash(state);
+        self.residency.hash(state);
+    }
 }
 
 /// Represents a statement kind

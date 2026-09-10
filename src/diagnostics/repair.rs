@@ -47,6 +47,10 @@ pub enum RepairId {
     ConcatToFormattedString,
     /// Prefix a bare variant pattern with the enum that declares it.
     QualifyVariantPattern,
+    /// Rewrite a name as the one spelling the help offers in its place.
+    RenameToSuggestion,
+    /// Prefix a binding nothing reads with an underscore.
+    UnderscoreUnreadBinding,
 }
 
 impl RepairId {
@@ -64,6 +68,8 @@ impl RepairId {
             Self::DropIteratorAccessor => "drop-iterator-accessor",
             Self::ConcatToFormattedString => "concat-to-formatted-string",
             Self::QualifyVariantPattern => "qualify-variant-pattern",
+            Self::RenameToSuggestion => "rename-to-suggestion",
+            Self::UnderscoreUnreadBinding => "underscore-unread-binding",
         }
     }
 
@@ -88,6 +94,16 @@ impl RepairId {
             Self::DropIteratorAccessor => &[DiagnosticCode::TypFieldNotFound],
             Self::ConcatToFormattedString => &[DiagnosticCode::TypTypeMismatch],
             Self::QualifyVariantPattern => &[DiagnosticCode::TypEnumVariant],
+            Self::RenameToSuggestion => &[
+                DiagnosticCode::TypFieldNotFound,
+                DiagnosticCode::TypEnumVariant,
+                DiagnosticCode::TypTypeNotFound,
+                DiagnosticCode::TypUndefinedName,
+            ],
+            Self::UnderscoreUnreadBinding => &[
+                DiagnosticCode::TypUnusedLocal,
+                DiagnosticCode::TypUnusedParameter,
+            ],
         }
     }
 
@@ -115,6 +131,12 @@ impl RepairId {
             Self::QualifyVariantPattern => {
                 "Prefix a bare variant pattern with the enum that declares it."
             }
+            Self::RenameToSuggestion => {
+                "Rewrite a name as the one spelling the help offers in its place."
+            }
+            Self::UnderscoreUnreadBinding => {
+                "Prefix a binding nothing reads with `_` to say the value is not meant to be read."
+            }
         }
     }
 
@@ -132,6 +154,8 @@ impl RepairId {
             Self::DropIteratorAccessor,
             Self::ConcatToFormattedString,
             Self::QualifyVariantPattern,
+            Self::RenameToSuggestion,
+            Self::UnderscoreUnreadBinding,
         ]
     }
 }
@@ -242,6 +266,28 @@ pub enum RepairRequest {
         enum_name: String,
         sites: Vec<VariantPatternSite>,
     },
+    /// Rewrite the `spelling` that ends `start..end` as `replacement`.
+    ///
+    /// The range is the one the diagnostic underlines, which for a bare name is
+    /// the name itself and for a member access is the receiver, the dot and the
+    /// member together. Recording the range the reader sees rather than the
+    /// name's own offsets means the projection can confirm the name still
+    /// terminates it, and a range holding only part of the name — a drifted
+    /// offset, or a receiver whose text happens to end in the same letters —
+    /// is refused instead of rewriting a receiver.
+    RenameToSuggestion {
+        start: usize,
+        end: usize,
+        spelling: String,
+        replacement: String,
+    },
+    /// Insert an underscore before the name at `name_start`.
+    ///
+    /// The name travels with the offset so the projection can confirm the
+    /// binding it was recorded against is still the one at that offset. A name
+    /// already spelled with the underscore is never recorded, because the check
+    /// that raises the diagnostic treats such a binding as deliberately unread.
+    UnderscoreUnreadBinding { name_start: usize, name: String },
 }
 
 /// One leaf of a `+` chain being rewritten as a formatted string.
@@ -275,6 +321,25 @@ const LET_KEYWORD: &str = "let";
 const MUT_KEYWORD: &str = "mut";
 
 impl RepairRequest {
+    /// The repair that writes `replacement` where the reader wrote `spelling`,
+    /// or nothing when there is no edit to make.
+    ///
+    /// `start..end` is the range the diagnostic underlines. A range with no
+    /// text behind it belongs to a node the compiler synthesized rather than to
+    /// something a reader wrote, and a replacement equal to the spelling
+    /// describes no change; neither is a repair.
+    pub fn rename(start: usize, end: usize, spelling: &str, replacement: &str) -> Option<Self> {
+        if start >= end || spelling.is_empty() || spelling == replacement {
+            return None;
+        }
+        Some(Self::RenameToSuggestion {
+            start,
+            end,
+            spelling: spelling.to_string(),
+            replacement: replacement.to_string(),
+        })
+    }
+
     /// The stable identifier for this request's shape.
     pub fn id(&self) -> RepairId {
         match self {
@@ -289,6 +354,8 @@ impl RepairRequest {
             Self::DropIteratorAccessor { .. } => RepairId::DropIteratorAccessor,
             Self::ConcatToFormattedString { .. } => RepairId::ConcatToFormattedString,
             Self::QualifyVariantPattern { .. } => RepairId::QualifyVariantPattern,
+            Self::RenameToSuggestion { .. } => RepairId::RenameToSuggestion,
+            Self::UnderscoreUnreadBinding { .. } => RepairId::UnderscoreUnreadBinding,
         }
     }
 
@@ -346,6 +413,22 @@ impl RepairRequest {
             }
             Self::QualifyVariantPattern { enum_name, sites } => {
                 Self::project_qualify_variant_pattern(path, source, enum_name, sites)
+            }
+            Self::RenameToSuggestion {
+                start,
+                end,
+                spelling,
+                replacement,
+            } => Self::project_rename_to_suggestion(
+                path,
+                source,
+                *start,
+                *end,
+                spelling,
+                replacement,
+            ),
+            Self::UnderscoreUnreadBinding { name_start, name } => {
+                Self::project_underscore_unread_binding(path, source, *name_start, name)
             }
         }
     }
@@ -615,6 +698,65 @@ impl RepairRequest {
         })
     }
 
+    fn project_rename_to_suggestion(
+        path: &str,
+        source: &str,
+        start: usize,
+        end: usize,
+        spelling: &str,
+        replacement: &str,
+    ) -> Option<JsonRepair> {
+        // A replacement equal to what is already written is not an edit. The
+        // checks that record this never offer one, and a request that somehow
+        // carries one describes no change, which a repair cannot represent.
+        if spelling.is_empty() || spelling == replacement {
+            return None;
+        }
+        let underlined = source.get(start..end)?;
+        if !underlined.ends_with(spelling) {
+            return None;
+        }
+        let name_start = end.checked_sub(spelling.len())?;
+        // Anything ahead of the name inside the underlined range is a receiver,
+        // so a dot must separate the two. Without one the range ends in the
+        // same letters by accident and the name is not what is written there.
+        if name_start > start && !underlined[..name_start - start].ends_with('.') {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::RenameToSuggestion.as_str().to_string(),
+            summary: format!("Write `{}` instead of `{}`.", replacement, spelling),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: name_start,
+                end,
+                replacement: replacement.to_string(),
+            }],
+        })
+    }
+
+    fn project_underscore_unread_binding(
+        path: &str,
+        source: &str,
+        name_start: usize,
+        name: &str,
+    ) -> Option<JsonRepair> {
+        let end = name_start.checked_add(name.len())?;
+        if name.is_empty() || source.get(name_start..end)? != name {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::UnderscoreUnreadBinding.as_str().to_string(),
+            summary: format!("Name the binding `_{}` to say nothing reads it.", name),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: name_start,
+                end: name_start,
+                replacement: "_".to_string(),
+            }],
+        })
+    }
+
     fn project_println_bang(path: &str, source: &str, bang_start: usize) -> Option<JsonRepair> {
         if source.get(bang_start..bang_start + 1)? != "!" {
             return None;
@@ -852,6 +994,87 @@ mod tests {
         };
 
         assert!(request.project("main.mi", "tags.keys(1)\n").is_none());
+    }
+
+    #[test]
+    fn test_a_rename_rewrites_the_member_and_leaves_the_receiver() {
+        let source = "println(accounts.len())\n";
+        let request = RepairRequest::rename(8, 20, "len", "length")
+            .expect("a rename with a different spelling is an edit");
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("the member is where it was recorded");
+        let edit = &repair.edits[0];
+
+        assert_eq!(&source[edit.start..edit.end], "len");
+        assert_eq!(edit.replacement, "length");
+    }
+
+    #[test]
+    fn test_a_rename_of_a_bare_name_covers_the_whole_range() {
+        let source = "let x Widgt = 1\n";
+        let request = RepairRequest::rename(6, 11, "Widgt", "Widget")
+            .expect("a rename with a different spelling is an edit");
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("the name is where it was recorded");
+        let edit = &repair.edits[0];
+
+        assert_eq!(&source[edit.start..edit.end], "Widgt");
+        assert_eq!(edit.replacement, "Widget");
+    }
+
+    #[test]
+    fn test_a_rename_to_the_spelling_already_written_is_not_an_edit() {
+        assert!(RepairRequest::rename(0, 3, "len", "len").is_none());
+    }
+
+    #[test]
+    fn test_a_rename_whose_range_ends_mid_receiver_is_refused() {
+        // `xlen` ends in the recorded spelling without being it. Renaming there
+        // would rewrite the tail of the receiver rather than the member.
+        let request = RepairRequest::rename(0, 4, "len", "length")
+            .expect("a rename with a different spelling is an edit");
+
+        assert!(request.project("main.mi", "xlen.count()\n").is_none());
+    }
+
+    #[test]
+    fn test_a_rename_against_source_that_moved_is_refused() {
+        let request = RepairRequest::rename(8, 20, "len", "length")
+            .expect("a rename with a different spelling is an edit");
+
+        assert!(request.project("main.mi", "println(x)\n").is_none());
+    }
+
+    #[test]
+    fn test_an_underscore_is_inserted_ahead_of_the_name_alone() {
+        let source = "    let total = 42\n";
+        let request = RepairRequest::UnderscoreUnreadBinding {
+            name_start: 8,
+            name: "total".to_string(),
+        };
+
+        let repair = request
+            .project("main.mi", source)
+            .expect("the name is where it was recorded");
+        let edit = &repair.edits[0];
+
+        assert_eq!(edit.start, 8);
+        assert_eq!(edit.end, 8, "the insertion replaces nothing");
+        assert_eq!(edit.replacement, "_");
+    }
+
+    #[test]
+    fn test_an_underscore_is_not_inserted_where_the_name_is_no_longer_written() {
+        let request = RepairRequest::UnderscoreUnreadBinding {
+            name_start: 8,
+            name: "total".to_string(),
+        };
+
+        assert!(request.project("main.mi", "    let sum = 42\n").is_none());
     }
 
     #[test]

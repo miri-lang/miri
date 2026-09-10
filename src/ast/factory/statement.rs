@@ -10,6 +10,7 @@ use crate::ast::statement::{
     AcceleratorTarget, IfStatementType, Statement, StatementKind, VariableDeclaration,
     VariableDeclarationType, WhileStatementType,
 };
+use crate::error::syntax::Span;
 
 /// Creates a variable declaration statement.
 pub fn variable_statement(
@@ -168,6 +169,7 @@ pub fn let_variable(
 ) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
+        name_span: Span::default(),
         typ,
         initializer: init,
         declaration_type: VariableDeclarationType::Immutable,
@@ -184,6 +186,7 @@ pub fn var(
 ) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
+        name_span: Span::default(),
         typ,
         initializer: init,
         declaration_type: VariableDeclarationType::Mutable,
@@ -200,6 +203,7 @@ pub fn const_variable(
 ) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
+        name_span: Span::default(),
         typ,
         initializer: init,
         declaration_type: VariableDeclarationType::Constant,
