@@ -116,43 +116,42 @@ fn main()
 
 #[test]
 fn test_function_correct_call() {
-    assert_type_checks(
+    assert_runs_with_output(
         r#"
-
 fn add(a int, b int) int
     a + b
 
 fn main()
     println(f"{add(3, 4)}")
     "#,
+        "7",
     );
 }
 
 #[test]
 fn test_function_named_args_reordered() {
-    assert_type_checks(
+    assert_runs_with_output(
         r#"
-
 fn sub(a int, b int) int
     a - b
 
 fn main()
     println(f"{sub(b: 2, a: 10)}")
     "#,
+        "8",
     );
 }
 
 #[test]
 fn test_function_default_param_can_be_omitted() {
-    assert_type_checks(
+    assert_runs_with_output(
         r#"
-
 fn greet(name String, prefix String = "Hello") String
-    prefix
+    f"{prefix}, {name}"
 
 fn main()
-    let _ = greet("Alice")
-    println("ok")
+    println(greet("Alice"))
     "#,
+        "Hello, Alice",
     );
 }
