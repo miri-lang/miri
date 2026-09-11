@@ -19,6 +19,15 @@
 //! inside a frame and desynchronise the stream, so everything this module says
 //! to a human goes to stderr.
 //!
+//! **A message that is not a frame is refused, not skipped.** Line-delimited
+//! JSON is the framing a client reaches for first, and a session that read it,
+//! found no frame, and exited 0 would have told the client its message was
+//! handled. Such a message ends the session: what was framed before it is
+//! answered, the fault is reported on stderr under a code, and the caller maps
+//! [`Outcome::Refused`] to a failing exit status. Nothing else can be done with
+//! the stream, because after such a message nothing says where the next one
+//! starts.
+//!
 //! **Cancellation reaches a request that has not started.** A reader thread
 //! takes messages off stdin while the worker compiles, so a `$/cancelRequest`
 //! that arrives during a long compile is seen immediately and withdraws any
@@ -39,11 +48,16 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use crate::cli::{check, explain, fix, patch, skill, version_string, view};
+use crate::cli::{
+    check, coded, explain, fix, patch, sanitize_for_terminal, skill, version_string, view,
+    ColorMode,
+};
 use crate::diagnostics::rpc::{
     InitializeResult, RpcId, RpcRequest, RpcResponse, ServerCapabilities, ServerInfo,
     INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, REQUEST_CANCELLED,
 };
+use crate::diagnostics::DiagnosticCode;
+use crate::error::format::format_diagnostic_with_color;
 
 /// The methods this build answers, derived from the schema registry.
 fn served_methods() -> Vec<String> {
@@ -83,6 +97,108 @@ const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 /// Headers are read a line at a time, and a stream that never sends a newline
 /// would otherwise grow a buffer without end.
 const MAX_HEADER_BYTES: u64 = 8 * 1024;
+
+/// How a session ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The client closed stdin, and every message it sent was answered.
+    Ended,
+    /// A message could not be read as a frame. The refusal has been reported
+    /// on stderr; the caller maps it to a failing exit status.
+    Refused,
+}
+
+/// A message that could not be read as a frame.
+///
+/// Each variant is one way the bytes on stdin failed to be a `Content-Length`
+/// header, a blank line, and a body — the one shape this session reads. Any of
+/// them ends the session: afterwards nothing says where the next message
+/// starts.
+#[derive(Debug, PartialEq, Eq)]
+enum FrameFault {
+    /// A line arrived where a header was expected and is not one.
+    NotAHeader(String),
+    /// Input ended inside a message's headers.
+    HeadersCutOff,
+    /// The blank line ending the headers came with no readable `Content-Length` before it.
+    LengthMissing,
+    /// A header line ran past the length this session reads.
+    HeaderTooLong,
+    /// The declared body length is over the limit.
+    OverLimit(usize),
+    /// Input ended before the declared body had arrived in full.
+    BodyCutOff(usize),
+    /// The body is not UTF-8.
+    NotUtf8,
+}
+
+impl std::fmt::Display for FrameFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAHeader(line) => write!(
+                f,
+                "a message arrived without a Content-Length header: the line `{}` is not a header",
+                preview(line)
+            ),
+            Self::HeadersCutOff => write!(
+                f,
+                "input ended inside a message's headers, before the blank line that ends them"
+            ),
+            Self::LengthMissing => write!(
+                f,
+                "a message's headers ended without a Content-Length this session can read"
+            ),
+            Self::HeaderTooLong => write!(
+                f,
+                "a header line ran past the {} bytes this session reads",
+                MAX_HEADER_BYTES
+            ),
+            Self::OverLimit(length) => write!(
+                f,
+                "a message declared {} bytes, over the {} byte limit",
+                length, MAX_MESSAGE_BYTES
+            ),
+            Self::BodyCutOff(length) => write!(
+                f,
+                "input ended before the {} bytes a message declared had arrived",
+                length
+            ),
+            Self::NotUtf8 => write!(f, "a message body is not UTF-8"),
+        }
+    }
+}
+
+/// The start of a line, safe to echo to a terminal and short enough to read.
+fn preview(line: &str) -> String {
+    const SHOWN: usize = 48;
+    let shown: String = line.chars().take(SHOWN).collect();
+    let mut text = sanitize_for_terminal(&shown);
+    if line.chars().count() > SHOWN {
+        text.push('…');
+    }
+    text
+}
+
+/// Why the reader stopped taking messages off stdin.
+#[derive(Debug)]
+enum ReadError {
+    /// A message that was not a frame: the client's fault, reported under a code.
+    Frame(FrameFault),
+    /// stdin itself failed.
+    Io(std::io::Error),
+}
+
+impl From<FrameFault> for ReadError {
+    fn from(fault: FrameFault) -> Self {
+        Self::Frame(fault)
+    }
+}
+
+impl From<std::io::Error> for ReadError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
 
 /// A message the reader took off stdin, or the reason it stopped.
 enum Incoming {
@@ -141,11 +257,14 @@ impl Withdrawals {
 /// Requests withdrawn by a `$/cancelRequest` that has not been claimed yet.
 type Cancellations = Arc<Mutex<Withdrawals>>;
 
-/// Serve JSON-RPC requests until the client closes stdin.
+/// Serve JSON-RPC requests until the client closes stdin or sends a message
+/// that is not a frame.
 ///
 /// Runs on the caller's thread, which the binary has already given a stack
-/// large enough for the compiler's recursive passes.
-pub fn run() -> std::io::Result<()> {
+/// large enough for the compiler's recursive passes. `color_mode` governs the
+/// one thing this session writes for a person: the report of a message it
+/// could not read as a frame.
+pub fn run(color_mode: ColorMode) -> std::io::Result<Outcome> {
     let cancelled: Cancellations = Arc::new(Mutex::new(Withdrawals::default()));
     let (sender, receiver) = mpsc::channel();
 
@@ -160,10 +279,37 @@ pub fn run() -> std::io::Result<()> {
     // is closed once this function returns. Joining reports a panic in it
     // rather than letting the process exit as though the session ended
     // cleanly.
-    match reader.join() {
+    let stopped = match reader.join() {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
+    };
+    match stopped {
+        Ok(()) => Ok(Outcome::Ended),
+        Err(ReadError::Frame(fault)) => {
+            report_frame_fault(&fault, color_mode);
+            Ok(Outcome::Refused)
+        }
+        Err(ReadError::Io(error)) => Err(error),
     }
+}
+
+/// Tell the client, on stderr, that a message could not be read as a frame.
+///
+/// The report goes where everything for a person goes. It carries the code so
+/// a client reading stderr can match it, and the help line says what a frame
+/// is, because the client that needs this report is the one that framed
+/// wrongly.
+fn report_frame_fault(fault: &FrameFault, color_mode: ColorMode) {
+    let diagnostic = coded(
+        DiagnosticCode::BldMessageNotFramed,
+        fault.to_string(),
+        "frame every message as `Content-Length: N`, a blank line (`\\r\\n\\r\\n`), then \
+         exactly N bytes of UTF-8 JSON; `miri agent --help` describes the framing",
+    );
+    eprint!(
+        "{}",
+        format_diagnostic_with_color("", &diagnostic, None, color_mode.into())
+    );
 }
 
 /// Take messages off `input` until it ends, forwarding each to the worker.
@@ -174,7 +320,7 @@ fn read_messages(
     input: impl BufRead,
     sender: Sender<Incoming>,
     cancelled: Cancellations,
-) -> std::io::Result<()> {
+) -> Result<(), ReadError> {
     let mut input = input;
     loop {
         let body = match read_frame(&mut input)? {
@@ -254,7 +400,7 @@ fn recover_id(body: &str) -> Option<RpcId> {
 /// Read one `Content-Length`-framed message.
 ///
 /// Returns `None` at end of input.
-fn read_frame<R: BufRead>(input: &mut R) -> std::io::Result<Option<String>> {
+fn read_frame<R: BufRead>(input: &mut R) -> Result<Option<String>, ReadError> {
     let Some(length) = read_headers(input)? else {
         return Ok(None);
     };
@@ -262,58 +408,79 @@ fn read_frame<R: BufRead>(input: &mut R) -> std::io::Result<Option<String>> {
     if length > MAX_MESSAGE_BYTES {
         // The stream cannot be resynchronised: the only thing saying where this
         // body ends is the number that was just rejected.
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "a frame declared {} bytes, over the {} byte limit",
-                length, MAX_MESSAGE_BYTES
-            ),
-        ));
+        return Err(FrameFault::OverLimit(length).into());
     }
 
     let mut body = vec![0u8; length];
-    input.read_exact(&mut body)?;
+    input
+        .read_exact(&mut body)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::UnexpectedEof => ReadError::Frame(FrameFault::BodyCutOff(length)),
+            _ => ReadError::Io(error),
+        })?;
     String::from_utf8(body)
         .map(Some)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        .map_err(|_| FrameFault::NotUtf8.into())
 }
 
 /// Read a frame's headers and return the body length they declare.
 ///
-/// Returns `None` at end of input. A header this module does not know is
-/// skipped rather than rejected, so that a client may send the `Content-Type`
-/// a language server sends without being turned away.
-fn read_headers<R: BufRead>(input: &mut R) -> std::io::Result<Option<usize>> {
+/// Returns `None` at end of input — but only when input ends before any
+/// header line: ending inside the headers is a message cut off, not a session
+/// closed. A header this module does not know is skipped rather than
+/// rejected, so that a client may send the `Content-Type` a language server
+/// sends without being turned away; a line that is not a header at all is
+/// refused, so that a message sent with no framing is reported rather than
+/// swallowed.
+fn read_headers<R: BufRead>(input: &mut R) -> Result<Option<usize>, ReadError> {
     let mut length = None;
+    let mut started = false;
     loop {
         let mut line = String::new();
         let mut limited = <&mut R as std::io::Read>::take(&mut *input, MAX_HEADER_BYTES);
         let read = limited.read_line(&mut line)? as u64;
         if read == 0 {
-            return Ok(None);
+            return if started {
+                Err(FrameFault::HeadersCutOff.into())
+            } else {
+                Ok(None)
+            };
         }
+        started = true;
         if read == MAX_HEADER_BYTES && !line.ends_with('\n') {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "a header line exceeded the length this session will read",
-            ));
+            return Err(FrameFault::HeaderTooLong.into());
         }
 
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             return match length {
                 Some(length) => Ok(Some(length)),
-                None => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "a frame arrived without a Content-Length header",
-                )),
+                None => Err(FrameFault::LengthMissing.into()),
             };
         }
 
-        if let Some(value) = line.strip_prefix("Content-Length:") {
+        let Some((name, value)) = header(line) else {
+            return Err(FrameFault::NotAHeader(line.to_string()).into());
+        };
+        if name == "Content-Length" {
             length = value.trim().parse::<usize>().ok();
         }
     }
+}
+
+/// Split a header line into its name and value.
+///
+/// A name is an HTTP token — the characters a header field name may be made
+/// of — before a colon. A line that does not fit, such as a JSON body sent
+/// with no header in front of it, is not a header this session does not know;
+/// it is not a header at all.
+fn header(line: &str) -> Option<(&str, &str)> {
+    let (name, value) = line.split_once(':')?;
+    let is_token = !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte));
+    is_token.then_some((name, value))
 }
 
 /// Answer messages until the reader stops sending them.
@@ -891,8 +1058,77 @@ mod tests {
         let wire = "Content-Type: application/json\r\n\r\n{}";
         let read = read_frame(&mut BufReader::new(wire.as_bytes()));
         assert!(
-            read.is_err(),
-            "a frame whose length is unknown cannot be read without desynchronising the stream"
+            matches!(read, Err(ReadError::Frame(FrameFault::LengthMissing))),
+            "a frame whose length is unknown cannot be read without desynchronising the stream: {:?}",
+            read
+        );
+    }
+
+    #[test]
+    fn test_a_line_that_is_not_a_header_is_refused_as_an_unframed_message() {
+        // Line-delimited JSON has colons in it, so "has a colon" is not what
+        // makes a header. The line is reported, so the client sees what it
+        // sent where a header was expected.
+        let wire = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n";
+        let read = read_frame(&mut BufReader::new(wire.as_bytes()));
+        match read {
+            Err(ReadError::Frame(FrameFault::NotAHeader(line))) => {
+                assert_eq!(
+                    line,
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"
+                );
+            }
+            other => panic!("an unframed message is refused as one, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_input_ending_inside_the_headers_is_a_message_cut_off() {
+        // End of input is the end of the session only between messages. After
+        // a header line has been read, it is a message the client never
+        // finished.
+        let read = read_frame(&mut BufReader::new(&b"Content-Length: 44\r\n"[..]));
+        assert!(
+            matches!(read, Err(ReadError::Frame(FrameFault::HeadersCutOff))),
+            "a truncated header section is refused, not taken as end of input: {:?}",
+            read
+        );
+    }
+
+    #[test]
+    fn test_input_ending_inside_the_body_is_a_message_cut_off() {
+        let read = read_frame(&mut BufReader::new(&b"Content-Length: 44\r\n\r\n{}"[..]));
+        assert!(
+            matches!(read, Err(ReadError::Frame(FrameFault::BodyCutOff(44)))),
+            "a body shorter than declared is refused with the length it declared: {:?}",
+            read
+        );
+    }
+
+    #[test]
+    fn test_a_header_name_is_a_token_and_nothing_else() {
+        assert_eq!(
+            header("Content-Type: application/json"),
+            Some(("Content-Type", " application/json"))
+        );
+        assert_eq!(header("Content-Length:46"), Some(("Content-Length", "46")));
+        assert_eq!(header("{\"a\":1}"), None, "a JSON object is not a header");
+        assert_eq!(header(": no name"), None, "a header has a name");
+        assert_eq!(header("no colon"), None, "a header has a value");
+        assert_eq!(header("two words: value"), None, "a name has no whitespace");
+    }
+
+    #[test]
+    fn test_a_preview_is_bounded_and_safe_to_echo() {
+        let long = "x".repeat(100);
+        let shown = preview(&long);
+        assert!(shown.ends_with('…'), "a long line is cut and marked as cut");
+        assert_eq!(shown.chars().count(), 49, "48 characters and the mark");
+        assert_eq!(preview("short"), "short");
+        assert_eq!(
+            preview("a\u{1b}[2Jb"),
+            "a\\u{1b}[2Jb",
+            "control characters are escaped"
         );
     }
 
@@ -929,10 +1165,9 @@ mod tests {
         let refused = read_frame(&mut BufReader::new(wire.as_bytes()));
 
         let error = refused.expect_err("a body larger than the limit must be refused");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(
-            error.to_string().contains("limit"),
-            "the refusal should say what was exceeded: {}",
+            matches!(error, ReadError::Frame(FrameFault::OverLimit(usize::MAX))),
+            "the refusal names the length that was over the limit: {:?}",
             error
         );
     }
@@ -959,7 +1194,11 @@ mod tests {
         let refused = read_frame(&mut BufReader::new(wire.as_bytes()));
 
         let error = refused.expect_err("an unbounded header line must be refused");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(error, ReadError::Frame(FrameFault::HeaderTooLong)),
+            "the refusal says the header line ran past the limit: {:?}",
+            error
+        );
     }
 
     #[test]

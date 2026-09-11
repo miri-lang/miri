@@ -21,7 +21,16 @@ Content-Length: 68\r\n
 ```
 
 `Content-Length` is required. Any other header is skipped, so a client may send
-the `Content-Type` a language server sends. Closing stdin ends the session.
+the `Content-Type` a language server sends. Closing stdin ends the session with
+exit status 0.
+
+A message that is not framed this way is refused, not skipped. Line-delimited
+JSON, a header section that input ends inside, a blank line with no
+`Content-Length` before it, or a body shorter than the length it declared each
+end the session: what was framed before it is answered, the fault is reported
+on stderr under `MER_BLD_024`, and the process exits 1. Nothing else can be
+done with the stream, because after such a message nothing says where the next
+one starts. A session that exits 0 has answered every message it was sent.
 
 **stdout carries nothing but response frames.** Everything written for a person
 goes to stderr, so a client can read the stream without filtering it.

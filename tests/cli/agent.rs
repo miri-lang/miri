@@ -2784,3 +2784,162 @@ fn test_fix_apply_reports_the_code_the_command_line_reports() {
         "the refusal carries its code, got {codes:?}"
     );
 }
+
+/// Feed `wire` to a fresh session, close stdin, and collect what it did.
+///
+/// The bytes go in unframed on purpose: these tests are about what the
+/// session says when a client gets the framing wrong, so `Session` — which
+/// frames for the caller — is the wrong tool.
+fn raw_session(wire: &[u8]) -> std::process::Output {
+    let directory = project("raw-session", &[]);
+    let mut process = Command::new(assert_cmd::cargo_bin!("miri"))
+        .arg("agent")
+        .current_dir(directory.path())
+        .env(
+            "MIRI_STDLIB_PATH",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/stdlib"),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the compiler binary should start");
+    {
+        let mut input = process.stdin.take().expect("stdin was piped");
+        input.write_all(wire).expect("the bytes are sent");
+        input.flush().expect("the bytes are sent");
+    }
+    within(30, move || {
+        process
+            .wait_with_output()
+            .expect("the session should end once stdin closes")
+    })
+}
+
+#[test]
+fn test_a_message_without_a_length_header_is_refused_and_the_session_fails() {
+    // Line-delimited JSON is the framing a client reaches for first. A session
+    // that reads it, finds nothing, and exits 0 has told the client its
+    // message was handled. The refusal has to be on stderr, under a code, and
+    // in the exit status — a client reads whichever of the three it reads.
+    let output = raw_session(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a message the session cannot frame ends it with exit 1, got {:?}; stderr: {stderr}",
+        output.status
+    );
+    assert!(
+        stderr.contains("MER_BLD_024"),
+        "the refusal is reported under its code on stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Content-Length"),
+        "the refusal names the header the message lacked, got: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout carries nothing but response frames, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn test_a_frame_cut_off_inside_its_headers_is_refused() {
+    // A header line with no blank line after it and then end of input is a
+    // truncated message, not the end of a session: the client wrote something
+    // and never got an answer.
+    let output = raw_session(b"Content-Length: 44\r\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a truncated frame ends the session with exit 1, got {:?}; stderr: {stderr}",
+        output.status
+    );
+    assert!(
+        stderr.contains("MER_BLD_024"),
+        "the refusal is reported under its code on stderr, got: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout carries nothing but frames"
+    );
+}
+
+#[test]
+fn test_a_framed_request_is_answered_before_a_later_unframed_one_ends_the_session() {
+    // The refusal must not swallow work already accepted: a well-framed
+    // request ahead of the bad message is still answered on stdout.
+    let handshake = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+    let mut wire = format!("Content-Length: {}\r\n\r\n", handshake.len()).into_bytes();
+    wire.extend_from_slice(handshake);
+    wire.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\"}\n");
+
+    let output = raw_session(&wire);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut stdout = BufReader::new(std::io::Cursor::new(output.stdout.clone()));
+    let mut length = None;
+    loop {
+        let mut line = String::new();
+        let read = stdout.read_line(&mut line).expect("stdout is readable");
+        assert!(
+            read > 0,
+            "the framed request was answered before the session ended; stderr: {stderr}"
+        );
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            break;
+        }
+        if let Some(value) = line.strip_prefix("Content-Length:") {
+            length = value.trim().parse::<usize>().ok();
+        }
+    }
+    let length = length.expect("the answer declares its length");
+    let mut body = vec![0u8; length];
+    stdout
+        .read_exact(&mut body)
+        .expect("the answer is complete");
+    let answer: Value = serde_json::from_slice(&body).expect("the answer is JSON");
+    assert_eq!(
+        answer["id"],
+        json!(1),
+        "the framed request got its answer: {answer}"
+    );
+
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).expect("stdout is readable");
+    assert!(
+        rest.is_empty(),
+        "nothing is written for the unframed message, got: {}",
+        String::from_utf8_lossy(&rest)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the unframed message ends the session with exit 1"
+    );
+    assert!(
+        stderr.contains("MER_BLD_024"),
+        "the refusal carries its code: {stderr}"
+    );
+}
+
+#[test]
+fn test_the_help_text_states_the_exit_status_of_a_framing_failure() {
+    // A client author reading `--help` learns what a framing mistake looks
+    // like from the outside: the code on stderr and the exit status.
+    let help = agent_help();
+    assert!(
+        help.contains("MER_BLD_024"),
+        "`agent --help` names the code a framing failure is reported under, got:\n{help}"
+    );
+    assert!(
+        help.contains("exit status 1") || help.contains("exits 1") || help.contains("exit 1"),
+        "`agent --help` states the exit status of a framing failure, got:\n{help}"
+    );
+}
