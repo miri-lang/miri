@@ -398,3 +398,61 @@ fn test_integer_invalid_types_in_expression() {
     type_checker_error_test("1 * [1, 2, 3]", "Invalid types for arithmetic operation");
     type_checker_error_test("1 / {1, 2}", "Invalid types for arithmetic operation");
 }
+
+#[test]
+fn test_integer_literal_max_i64_boundary() {
+    type_checker_vars_type_test("let x = 9223372036854775807", vec![("x", type_int())]);
+}
+
+#[test]
+fn test_integer_literal_overflow_i64() {
+    type_checker_error_test(
+        "let x = 9223372036854775808",
+        "Integer literal '9223372036854775808' is out of range for the default int type (i64, max 9223372036854775807)",
+    );
+}
+
+#[test]
+fn test_integer_literal_min_i64_boundary() {
+    type_checker_vars_type_test("let x = -9223372036854775808", vec![("x", type_int())]);
+}
+
+#[test]
+fn test_integer_literal_neg_overflow_i64() {
+    type_checker_error_test(
+        "let x = -9223372036854775809",
+        "Integer literal '9223372036854775809' is out of range for the default int type (i64, max 9223372036854775807)",
+    );
+}
+
+#[test]
+fn test_gpu_integer_literal_max_i32_boundary() {
+    type_checker_test(
+        "
+gpu fn my_kernel()
+    let x = 2147483647
+",
+    );
+}
+
+#[test]
+fn test_gpu_integer_literal_overflow_i32() {
+    type_checker_error_test(
+        "
+gpu fn my_kernel()
+    let x = 2147483648
+",
+        "Integer literal '2147483648' is out of range for GPU 32-bit signed integer (i32 range is -2147483648 to 2147483647)",
+    );
+}
+
+#[test]
+fn test_explicit_wide_integer_literal_bypass() {
+    type_checker_vars_type_test(
+        "
+let a u64 = 9223372036854775808
+let b i128 = 9223372036854775808
+",
+        vec![("a", type_u64()), ("b", type_i128())],
+    );
+}
