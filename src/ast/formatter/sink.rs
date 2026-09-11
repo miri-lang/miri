@@ -106,6 +106,64 @@ impl Sink {
         self.comments
     }
 
+    /// Leave a blank line above the cursor's line when the source wrote one
+    /// above the line `offset` starts on.
+    ///
+    /// Only a whole-program rendering keeps blank lines, and only one of them
+    /// however many the source held: they are the author's grouping of the
+    /// declarations, and a file rewritten without them is a wall of code. A
+    /// single declaration is rendered for an anchor to match, where a blank
+    /// line would be one more way for the rendering to differ from what a
+    /// caller wrote.
+    pub fn keep_blank_line_above(&mut self, offset: usize) {
+        if self.comments && self.source_has_blank_line_above(offset) {
+            self.open_blank_line();
+        }
+    }
+
+    /// Whether the line above the one holding `offset` in the source is blank.
+    ///
+    /// The line is what counts rather than the column, because a statement is
+    /// not always recorded from its first token: `gpu let` is recorded from
+    /// `let`, and an expression statement from its expression. A blank line at
+    /// the very top of the file separates nothing from nothing, and does not
+    /// count.
+    fn source_has_blank_line_above(&self, offset: usize) -> bool {
+        let Some(before) = self
+            .source
+            .as_deref()
+            .and_then(|source| source.get(..offset))
+        else {
+            return false;
+        };
+        let Some(line_break) = before.rfind('\n') else {
+            return false;
+        };
+        let above = &before[..line_break];
+        above
+            .rfind('\n')
+            .is_some_and(|previous_break| above[previous_break + 1..].trim().is_empty())
+    }
+
+    /// Put one blank line above the cursor's line, which holds nothing but
+    /// indentation so far.
+    ///
+    /// Nothing is added at the top of the output, where a blank line would
+    /// separate nothing, or below a blank line already written.
+    fn open_blank_line(&mut self) {
+        let Some(line_break) = self.text.rfind('\n') else {
+            return;
+        };
+        if self.text[line_break + 1..].chars().any(|c| c != ' ') {
+            return;
+        }
+        let above = &self.text[..line_break];
+        if above.is_empty() || above.ends_with('\n') {
+            return;
+        }
+        self.text.insert(line_break, '\n');
+    }
+
     /// The meaning-free modifiers the declaration being rendered was written
     /// with.
     ///

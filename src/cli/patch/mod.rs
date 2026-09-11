@@ -516,7 +516,8 @@ fn accepted_report(
         edits: applied.edits,
         revalidations: 1,
         file_written: applied.file_was_written,
-        diff: diff_label.map(|label| unified_diff(label, &texts.before, &texts.after)),
+        diff: diff_label
+            .map(|label| crate::cli::diff::unified_diff(label, &texts.before, &texts.after)),
         diagnostics,
         source: texts.after,
         source_path: texts.path,
@@ -1238,48 +1239,6 @@ fn common_prefix_suffix(before: &str, after: &str) -> (usize, usize) {
         .min(new.len() - prefix);
 
     (prefix, suffix)
-}
-
-/// Render the change as one unified-diff hunk.
-///
-/// The hunk spans from the first differing line to the last, so a batch that
-/// touches several places is reported as one stretch rather than as separate
-/// hunks. That is more context than the smallest possible diff, and it is
-/// always a truthful account of what the file becomes.
-fn unified_diff(label: &str, before: &str, after: &str) -> String {
-    let old: Vec<&str> = before.lines().collect();
-    let new: Vec<&str> = after.lines().collect();
-    let (prefix, suffix) = common_prefix_suffix(before, after);
-
-    let old_changed = &old[prefix..old.len() - suffix];
-    let new_changed = &new[prefix..new.len() - suffix];
-
-    let (old_label, new_label) = if label.starts_with('/') {
-        (format!("a{}", label), format!("b{}", label))
-    } else {
-        (format!("a/{}", label), format!("b/{}", label))
-    };
-
-    let mut diff = format!(
-        "--- {}\n+++ {}\n@@ -{},{} +{},{} @@\n",
-        old_label,
-        new_label,
-        prefix + 1,
-        old_changed.len(),
-        prefix + 1,
-        new_changed.len()
-    );
-    for line in old_changed {
-        diff.push('-');
-        diff.push_str(line);
-        diff.push('\n');
-    }
-    for line in new_changed {
-        diff.push('+');
-        diff.push_str(line);
-        diff.push('\n');
-    }
-    diff
 }
 
 /// Read text the caller passed by file, or from standard input for `-`.

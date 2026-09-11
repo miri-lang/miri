@@ -32,6 +32,7 @@ pub fn statement(sink: &mut Sink, node: &Statement, indent: usize) {
     let carries_comments = sink.renders_comments() && sink.at_line_start();
     if carries_comments {
         leading_comments(sink, node, indent);
+        sink.keep_blank_line_above(node.span.start);
     }
     sink.with_written_modifiers(node.trivia.written_modifiers, |sink| {
         statement_code(sink, node, indent)
@@ -46,6 +47,7 @@ pub fn statement(sink: &mut Sink, node: &Statement, indent: usize) {
 fn trailing_lines(sink: &mut Sink, node: &Statement, indent: usize) {
     for comment in &node.trivia.trailing_lines {
         sink.emit_line(indent);
+        sink.keep_blank_line_above(comment.span.start);
         sink.emit(&comment.text);
     }
 }
@@ -54,6 +56,7 @@ fn trailing_lines(sink: &mut Sink, node: &Statement, indent: usize) {
 /// at the statement's indentation.
 fn leading_comments(sink: &mut Sink, node: &Statement, indent: usize) {
     for comment in &node.trivia.leading_comments {
+        sink.keep_blank_line_above(comment.span.start);
         sink.emit(&comment.text);
         sink.emit_line(indent);
     }
@@ -614,6 +617,7 @@ fn enum_declaration(
     enum_header(sink, name, generics.as_deref(), level, entries, indent);
     for variant in variants {
         sink.emit_line(indent + 1);
+        sink.keep_blank_line_above(variant.span.start);
         format_expression(sink, variant, indent + 1);
     }
     for method in methods {
@@ -639,6 +643,7 @@ fn struct_declaration(
     struct_header(sink, name, generics.as_deref(), level, traits, indent);
     for field in fields {
         sink.emit_line(indent + 1);
+        sink.keep_blank_line_above(field.span.start);
         format_expression(sink, field, indent + 1);
     }
     for method in methods {

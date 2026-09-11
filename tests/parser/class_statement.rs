@@ -1129,3 +1129,25 @@ class Dog extends Animal Pet
         },
     );
 }
+
+#[test]
+fn test_a_class_member_records_the_source_it_was_parsed_from() {
+    let source = "class Counter\n    var count int\n\n    @deprecated(\"use bump\")\n    fn old() int\n        return 0\n";
+    let program = super::utils::parse_program(source);
+    let miri::ast::statement::StatementKind::Class(class) = &program.body[0].node else {
+        panic!("the fixture declares a class");
+    };
+    let [field, method] = class.body.as_slice() else {
+        panic!("the fixture declares two members");
+    };
+    assert!(
+        source[field.span.start..].starts_with("var count int"),
+        "a field is recorded from its keyword, got {:?}",
+        field.span
+    );
+    assert_eq!(
+        &source[method.span.start..method.span.end],
+        "@deprecated(\"use bump\")\n    fn old() int\n        return 0",
+        "a method's span runs from its first token, attributes included, to its last"
+    );
+}

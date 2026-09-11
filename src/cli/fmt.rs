@@ -15,7 +15,6 @@
 use std::path::Path;
 
 use crate::ast::formatter;
-use crate::ast::types::BuiltinCollectionKind;
 use crate::cli::{serialize_envelope, ColorMode, Format};
 use crate::diagnostics::json::{DiagnosticsEnvelope, JsonCommand};
 use crate::error::diagnostic::{Diagnostic, DiagnosticBuilder, Reportable};
@@ -194,19 +193,11 @@ fn words_in(text: &str) -> Vec<String> {
             && lexeme
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
-        if is_word && !rendered_as_sugar(lexeme) {
+        if is_word {
             words.push(lexeme.to_string());
         }
     }
     words
-}
-
-/// Whether the rendering is allowed not to write this word, because it spells
-/// the type the word names in the sugar the language prefers: a built-in
-/// collection is written `[T]`, `[T; N]`, `{K: V}` or `{T}` rather than by the
-/// name of the class behind it.
-fn rendered_as_sugar(word: &str) -> bool {
-    BuiltinCollectionKind::from_name(word).is_some()
 }
 
 /// Every comment `text` holds, in the order the lexer meets them.
@@ -324,8 +315,9 @@ impl FmtReport {
 
 /// Format the file at `path` and write the result, or check if already canonical.
 ///
-/// With `check=true`, the file is not written; instead, a non-zero exit code
-/// is returned if the file is not already canonical.
+/// With `check=true`, the file is not written; instead, the unified diff the
+/// rewrite would make is printed and a non-zero exit code is returned if the
+/// file is not already canonical. A JSON run prints the envelope alone.
 pub fn run(path: &Path, check: bool, format: Format, color_mode: ColorMode) -> Outcome {
     let Some(source) =
         crate::cli::source::read_or_report(path, JsonCommand::Fmt, format, color_mode)
@@ -346,6 +338,13 @@ pub fn run(path: &Path, check: bool, format: Format, color_mode: ColorMode) -> O
             println!("{}", summary);
         }
         if mode == Mode::Check && report.changed {
+            if let Some(canonical) = &report.canonical_text {
+                let label = crate::cli::sanitize_for_terminal(&path.display().to_string());
+                print!(
+                    "{}",
+                    crate::cli::diff::unified_diff(&label, &source, canonical)
+                );
+            }
             eprintln!(
                 "{} is not in canonical form; run `miri fmt` to rewrite it.",
                 path.display()

@@ -1490,3 +1490,50 @@ fn test_a_failure_to_narrow_does_not_make_the_read_fail() {
         );
     });
 }
+
+/// The type text written after `name` on the first line of `output` that
+/// declares it, with any `var` keyword and trailing annotation left off.
+fn declared_type_of(output: &str, name: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("var ").unwrap_or(line);
+        let rest = line.strip_prefix(name)?.strip_prefix(' ')?;
+        Some(rest.split("  ").next().unwrap_or(rest).trim().to_string())
+    })
+}
+
+#[test]
+fn test_outline_and_type_spell_a_field_the_same_way() {
+    let source = "\
+use system.collections.list
+use system.collections.map
+
+class Task
+    var tasks List<Task>
+    var names [String]
+    var lookup Map<String, int>
+
+fn main()
+    let task = Task(tasks: List<Task>(), names: List<String>(), lookup: Map<String, int>())
+    println(f\"{task.names.length()}\")
+";
+    with_source(source, |path| {
+        let target = path.display().to_string();
+        let (outline, _, outline_ok) = view(&[&target, "--outline"]);
+        let (members, stderr, type_ok) = view(&[&target, "--type", "Task"]);
+        assert!(outline_ok && type_ok, "both reads answer: {stderr}");
+
+        for field in ["tasks", "names", "lookup"] {
+            let outlined = declared_type_of(&outline, field);
+            let listed = declared_type_of(&members, field);
+            assert!(
+                outlined.is_some(),
+                "the outline lists `{field}`, got:\n{outline}"
+            );
+            assert_eq!(
+                outlined, listed,
+                "one field, one spelling\n--- outline ---\n{outline}\n--- type ---\n{members}"
+            );
+        }
+    });
+}

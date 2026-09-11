@@ -500,14 +500,16 @@ An anchor is refused when it names no site (`MER_BLD_006`) or more than one
 
 A file whose text cannot be aligned to its canonical form at all answers
 `MER_BLD_010` — redundant parentheses around an expression, say. That is what
-`miri fmt` is for: it rewrites the file to its canonical text, comments
-included, and the anchor then holds. `miri fmt --check` reports whether a file
-is already canonical without writing to it.
+`miri fmt` is for: it rewrites the file to its canonical text, comments and blank
+lines included, and the anchor then holds. `miri fmt --check` writes nothing; it
+prints the unified diff the rewrite would make and fails when there is one.
 
 Canonical is a statement about layout, not about content. `miri fmt` refuses to
 write a file when the rewrite would drop a comment or a word — a `public` or an
-`abstract` — and it writes a number back in the spelling it was written with,
-so `0xFF` stays `0xFF`.
+`abstract` — and it writes back a number and a collection type in the spelling
+they were written with, so `0xFF` stays `0xFF` and `Map<String, int>` stays
+`Map<String, int>`. A declaration that uses either spelling is anchorable as
+written.
 
 ### `skillsGet`
 

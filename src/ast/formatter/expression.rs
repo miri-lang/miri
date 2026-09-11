@@ -151,7 +151,7 @@ fn kind(sink: &mut Sink, node: &ExpressionKind, span: Span, indent: usize) {
         ExpressionKind::Call(callee, arguments) => call(sink, callee, arguments, indent),
         ExpressionKind::ImportPath(segments, form) => import_path(sink, segments, form, indent),
         ExpressionKind::Type(declared, is_nullable) => {
-            type_expression(sink, declared, *is_nullable)
+            type_expression(sink, declared, *is_nullable, span)
         }
         ExpressionKind::GenericType(name, arguments, _) => {
             generic_type(sink, name, arguments.as_deref(), indent)

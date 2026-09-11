@@ -206,7 +206,9 @@ impl<'source> Parser<'source> {
             // A member is parsed here rather than through `statement`, so the
             // comments written around it are claimed here too.
             let leading = self.lexer.take_leading_comments();
+            let start = self.current_token_span().start;
             let mut member = self.class_member(mode)?;
+            self.close_span(&mut member, start);
             self.claim_trivia(&mut member, leading);
             statements.push(member);
             self.try_eat_expression_end()?;
