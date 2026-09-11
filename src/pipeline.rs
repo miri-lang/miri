@@ -1320,16 +1320,16 @@ impl Pipeline {
         else {
             return Vec::new();
         };
-        let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut pending: Vec<String> = def.traits.clone();
+        let mut wanted: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut pending: Vec<&str> = def.traits.iter().map(String::as_str).collect();
         while let Some(trait_name) = pending.pop() {
-            if !wanted.insert(trait_name.clone()) {
+            if !wanted.insert(trait_name) {
                 continue;
             }
             if let Some(TypeDefinition::Trait(trait_def)) =
-                result.type_checker.type_definitions().get(&trait_name)
+                result.type_checker.type_definitions().get(trait_name)
             {
-                pending.extend(trait_def.parent_traits.iter().cloned());
+                pending.extend(trait_def.parent_traits.iter().map(String::as_str));
             }
         }
 
