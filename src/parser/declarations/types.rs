@@ -4,7 +4,7 @@
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
 use super::super::Parser;
@@ -13,6 +13,7 @@ impl<'source> Parser<'source> {
     /// Parses an enum variant declaration (name with optional associated types).
     pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
+        let start = identifier.span.start;
         let types = if self.match_lookahead_type(|t| t == &Token::LParen) {
             self.multiple_element_type_expressions(
                 "Enum value type",
@@ -23,7 +24,9 @@ impl<'source> Parser<'source> {
             vec![]
         };
 
-        Ok(ast::enum_value_expression(identifier, types))
+        let mut variant = ast::enum_value_expression(identifier, types);
+        variant.span = Span::new(start, self.last_consumed_end);
+        Ok(variant)
     }
 
     pub(crate) fn type_statement(

@@ -737,19 +737,6 @@ fn test_a_number_the_tree_alone_can_spell_is_unchanged() {
     assert!(rendered.contains("let value = 42"), "got:\n{rendered}");
 }
 
-/// Whether the formatter is allowed to drop this word, because it writes the
-/// type the word names in the sugar the language prefers: a built-in
-/// collection renders `[T]`, `[T; N]`, `{K: V}` or `{T}` rather than by the
-/// name of the class behind it.
-///
-/// That is the whole excuse. Every other word a source is written with has to
-/// come back, which is what makes the gate below able to see a dropped
-/// modifier: a `public` or an `abstract` the rendering does not write is a
-/// word that went missing, and nothing excuses it.
-fn rendered_as_sugar(word: &str) -> bool {
-    miri::ast::types::BuiltinCollectionKind::from_name(word).is_some()
-}
-
 /// The words `text` is written with: every keyword, identifier and number in
 /// it, in the order the lexer meets them.
 ///
@@ -757,7 +744,8 @@ fn rendered_as_sugar(word: &str) -> bool {
 /// drops a grouping parenthesis that changes nothing and writes a body as an
 /// indented block rather than after a colon. A word is different: the
 /// formatter has no reason to write one the source did not, and no right to
-/// drop one the source did.
+/// drop one the source did — a collection type written `List<T>` included,
+/// which comes back spelled that way rather than as `[T]`.
 fn words_in(text: &str) -> Vec<String> {
     let mut words = Vec::new();
     for token in Lexer::new(text) {
@@ -774,7 +762,7 @@ fn words_in(text: &str) -> Vec<String> {
             && lexeme
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
-        if is_word && !rendered_as_sugar(lexeme) {
+        if is_word {
             words.push(lexeme.to_string());
         }
     }
@@ -832,4 +820,163 @@ fn test_the_repository_corpus_keeps_every_word_it_was_written_with() {
             failures.join("\n")
         );
     });
+}
+
+#[test]
+fn test_a_blank_line_between_declarations_survives_a_render() {
+    let source = "struct A\n    x int\n\nstruct B\n    y int\n";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
+#[test]
+fn test_declarations_written_together_stay_together() {
+    let source = "use system.io\nuse system.math\n\nfn main()\n    println(\"ok\")\n";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
+#[test]
+fn test_a_run_of_blank_lines_renders_as_one() {
+    let source = "fn a() int\n    return 1\n\n\n\nfn b() int\n    return 2\n";
+    assert_eq!(
+        assert_render_is_a_fixed_point(source),
+        "fn a() int\n    return 1\n\nfn b() int\n    return 2\n"
+    );
+}
+
+#[test]
+fn test_a_blank_line_below_a_file_header_comment_survives_a_render() {
+    let source = "// SPDX-License-Identifier: Apache-2.0\n// Copyright\n\n// What main does.\nfn main()\n    println(\"ok\")\n";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
+#[test]
+fn test_blank_lines_between_members_and_statements_survive_a_render() {
+    let source = "\
+class Counter
+    var count int
+
+    fn bump() int
+        let next = self.count + 1
+
+        return next
+
+    @deprecated(\"use bump\")
+    fn old() int
+        return 0
+";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
+#[test]
+fn test_a_collection_type_keeps_the_spelling_it_was_written_with() {
+    let source = "\
+fn audit(names List<String>, seen Set<int>, grid Array<int, 3>, pair Tuple<int, int>) Map<String, int>
+    let counts Map<String, int> = Map<String, int>()
+    return counts
+
+fn sugar(names [String], seen {int}, grid [int; 3], pair (int, int)) {String: int}
+    return {}
+";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
+}
+
+#[test]
+fn test_a_collection_type_rendered_from_the_tree_alone_is_written_in_sugar() {
+    let program = parse("fn audit(names List<String>) Map<String, int>\n    return names\n")
+        .expect("the fixture parses");
+    let rendered = formatter::declaration(&program.body[0]).text;
+    assert!(
+        rendered.starts_with("fn audit(names [String]) {String: int}"),
+        "a tree with no source to read renders the sugar, got: {rendered}"
+    );
+}
+
+/// How many separate places `text` holds one or more blank lines between two
+/// lines that are not blank.
+///
+/// Counted over text rather than over the tree, so it sees a blank line
+/// wherever one was written — above an attribute, between two comments, inside
+/// a body — without depending on where the parser recorded a statement's start.
+fn blank_line_separations(text: &str) -> usize {
+    let mut separations = 0;
+    let mut seen_code = false;
+    let mut pending_blank = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            pending_blank = seen_code;
+            continue;
+        }
+        if pending_blank {
+            separations += 1;
+            pending_blank = false;
+        }
+        seen_code = true;
+    }
+    separations
+}
+
+#[test]
+fn test_the_repository_corpus_keeps_every_blank_line_it_was_written_with() {
+    on_a_deep_stack(|| {
+        let mut checked = 0;
+        let mut failures = Vec::new();
+
+        for path in miri_sources() {
+            let source = std::fs::read_to_string(&path).expect("a listed source file is readable");
+            let Ok(program) = parse(&source) else {
+                continue;
+            };
+            checked += 1;
+
+            let rendered = formatter::program(&program, &source).text;
+            let before = blank_line_separations(&source);
+            let after = blank_line_separations(&rendered);
+            if before != after {
+                failures.push(format!(
+                    "{}: written with {before} blank-line separations, rendered with {after}",
+                    path.display()
+                ));
+            }
+            if rendered.contains("\n\n\n") {
+                failures.push(format!("{}: rendered a run of blank lines", path.display()));
+            }
+        }
+
+        assert!(checked > 0, "the corpus scan found no parseable sources");
+        assert!(
+            failures.is_empty(),
+            "{} of {checked} corpus files lost their layout:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    });
+}
+
+#[test]
+fn test_blank_lines_between_enum_and_struct_members_survive_a_render() {
+    let source = "\
+enum Shape
+    Circle(float)
+
+    Square(float)
+
+    fn area() float
+        return 1.0
+
+    private static fn unit() Shape
+        return Shape.Circle(1.0)
+
+struct Point
+    x int
+
+    y int
+
+    fn norm() int
+        return self.x
+
+gpu let weights = [1.0, 2.0]
+
+gpu var outputs = [0.0, 0.0]
+";
+    assert_eq!(assert_render_is_a_fixed_point(source), source);
 }

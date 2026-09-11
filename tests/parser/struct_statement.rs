@@ -317,3 +317,29 @@ struct Token
         )],
     );
 }
+
+#[test]
+fn test_struct_fields_and_enum_variants_record_the_source_they_were_parsed_from() {
+    use miri::ast::expression::Expression;
+    use miri::ast::statement::StatementKind;
+
+    let source =
+        "struct Point\n    x int\n    tags [String]\n\nenum Shape\n    Circle(float)\n    Empty\n";
+    let program = super::utils::parse_program(source);
+    let spelled = |members: &[Expression]| -> Vec<String> {
+        members
+            .iter()
+            .map(|member| source[member.span.start..member.span.end].to_string())
+            .collect()
+    };
+
+    let StatementKind::Struct(_, _, fields, ..) = &program.body[0].node else {
+        panic!("the fixture declares a struct first");
+    };
+    assert_eq!(spelled(fields), vec!["x int", "tags [String]"]);
+
+    let StatementKind::Enum(_, _, variants, ..) = &program.body[1].node else {
+        panic!("the fixture declares an enum second");
+    };
+    assert_eq!(spelled(variants), vec!["Circle(float)", "Empty"]);
+}

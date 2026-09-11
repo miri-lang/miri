@@ -371,7 +371,7 @@ pub enum Commands {
         #[arg(required = true)]
         path: PathBuf,
 
-        /// Validate without writing; exit non-zero if file is not already canonical
+        /// Write nothing; print the diff the rewrite would make and exit non-zero if there is one
         #[arg(long, action = ArgAction::SetTrue)]
         check: bool,
 

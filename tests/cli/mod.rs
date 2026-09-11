@@ -7,6 +7,7 @@ pub mod build_web_gpu;
 pub mod color;
 pub mod determinism;
 pub mod dev;
+pub mod diff;
 pub mod explain;
 pub mod explain_snippets;
 pub mod fix;

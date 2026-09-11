@@ -7,6 +7,7 @@ pub mod args;
 pub mod check;
 pub mod determinism;
 pub mod dev;
+pub mod diff;
 pub mod explain;
 pub mod fix;
 pub mod fmt;

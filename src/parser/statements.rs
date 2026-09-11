@@ -181,7 +181,7 @@ impl<'source> Parser<'source> {
     /// A statement that consumed no source text keeps its empty span: at end of
     /// input the parse yields an empty statement covering nothing, and giving it
     /// the range `len..len` would put a node at the end of every file.
-    fn close_span(&self, statement: &mut Statement, start: usize) {
+    pub(crate) fn close_span(&self, statement: &mut Statement, start: usize) {
         if !statement.span.is_empty() || self.last_consumed_end <= start {
             return;
         }

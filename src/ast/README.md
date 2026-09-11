@@ -19,8 +19,10 @@ Unlike the linear stream of tokens produced by the Lexer, the AST forms a tree t
 recovers the comments the lexer discards so an outline can show them.
 
 The rendering is canonical rather than faithful: it is derived from the tree, so
-comments, blank lines and the author's spacing are normalized away and one
-program shape always produces one text. Its contract is that rendering is a
+the author's spacing and indentation are normalized away. A whole-program
+rendering keeps the comments and one blank line wherever the author left one or
+more, and every spelling the tree does not keep — a number's, and a collection
+type's (`List<T>` or `[T]`) — is read back from the source. Its contract is that rendering is a
 fixed point — text rendered from a tree parses back to a tree that renders to
 the same text — which is what lets a tool read a declaration and later anchor an
 edit against the bytes it read. `tests/ast/formatter.rs` holds that invariant

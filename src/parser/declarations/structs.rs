@@ -64,7 +64,10 @@ impl<'source> Parser<'source> {
                             Some((Token::Fn, _))
                             | Some((Token::Async, _))
                             | Some((Token::Gpu, _)) => {
-                                let stmt = self.function_declaration(MemberVisibility::Public)?;
+                                let start = self.current_token_span().start;
+                                let mut stmt =
+                                    self.function_declaration(MemberVisibility::Public)?;
+                                self.close_span(&mut stmt, start);
                                 methods.push(stmt);
                             }
                             _ => {
@@ -88,9 +91,11 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn struct_member_expression(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
+        let start = name.span.start;
         let typ = self
             .type_expression()?
             .ok_or_else(|| self.error_missing_struct_member_type(name.span))?;
-        Ok(ast::struct_member_expression(name, typ))
+        let span = crate::error::syntax::Span::new(start, self.last_consumed_end);
+        Ok(ast::struct_member_expression_with_span(name, typ, span))
     }
 }

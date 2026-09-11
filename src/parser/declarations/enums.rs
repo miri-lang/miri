@@ -83,6 +83,8 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
+                        let start = self.current_token_span().start;
+                        let methods_before = methods.len();
                         // Check for contextual `static` keyword followed by function keywords
                         if self.is_contextual_static_before_fn() {
                             // Don't consume the token; let function_declaration handle parsing `static`
@@ -114,6 +116,9 @@ impl<'source> Parser<'source> {
                                     variants.push(self.enum_value_expression()?);
                                 }
                             }
+                        }
+                        if let Some(method) = methods.get_mut(methods_before) {
+                            self.close_span(method, start);
                         }
                         self.try_eat_expression_end()?;
                     }

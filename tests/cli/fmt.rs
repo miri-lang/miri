@@ -310,3 +310,51 @@ fn test_fmt_writes_back_every_file_in_the_repository() {
         .join()
         .expect("the scan thread finishes");
 }
+
+#[test]
+fn test_fmt_keeps_the_blank_line_between_declarations() {
+    let source = "struct A\n    x int\n\nstruct B\n    y int\n";
+    with_source(source, |path| {
+        let (_, stderr, ok) = fmt(&[&path.display().to_string()]);
+        assert!(ok, "the file formats: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(path).expect("the file is readable"),
+            source,
+            "a blank line between two declarations is layout the author chose"
+        );
+    });
+}
+
+#[test]
+fn test_check_prints_the_diff_it_wants() {
+    with_source(UNFORMATTED, |path| {
+        let (stdout, _, ok) = fmt(&[&path.display().to_string(), "--check"]);
+
+        assert!(!ok, "a file that is not canonical fails --check");
+        assert!(
+            stdout.contains("@@ -"),
+            "the answer names where the file differs, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("-    let t = (a + b)\n") && stdout.contains("+    let t = a + b\n"),
+            "the answer shows the line as written and as it would be, got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains(" fn helper(a int, b int) int\n    return t"),
+            "a line that does not change is context, not the change, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_check_prints_no_diff_for_a_canonical_file() {
+    with_source("fn helper(a int, b int) int\n    return a + b\n", |path| {
+        let (stdout, _, ok) = fmt(&[&path.display().to_string(), "--check"]);
+
+        assert!(ok, "a canonical file passes --check");
+        assert!(
+            !stdout.contains("@@"),
+            "there is nothing to show, got:\n{stdout}"
+        );
+    });
+}

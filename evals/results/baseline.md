@@ -24,7 +24,7 @@ this file on every run. The harness prints it to stdout instead.
 | f | make a failing test pass | yes | 4 | 631 | 128 |
 | g | author a struct, a class and a match over an enum from an empty directory | yes | 3 | 588 | 1339 |
 | h | repair a cascade with one root cause | yes | 4 | 2185 | 232 |
-| i | look up an API and edit through view and patch only | yes | 4 | 1233 | 97 |
+| i | look up an API and edit through view and patch only | yes | 4 | 1225 | 97 |
 | j | recover from a runtime trap | yes | 5 | 1030 | 233 |
 | l | repair a file with four faults, three of which carry a repair | yes | 8 | 6403 | 1292 |
 | m | sort a list whose element type has no ordering | yes | 3 | 948 | 679 |

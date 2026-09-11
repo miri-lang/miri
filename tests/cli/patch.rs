@@ -3506,3 +3506,42 @@ fn test_a_function_holding_a_hex_literal_can_still_be_patched() {
         );
     });
 }
+
+// A declaration holding a collection constructor, in a file nobody has run
+// `miri fmt` over, is anchored as written: the types keep their spelling in the
+// rendering the anchor is matched against, so nothing has to be reformatted
+// before the edit can land.
+#[test]
+fn test_a_function_holding_a_collection_constructor_is_patchable_without_formatting() {
+    let source = "\
+use system.collections.map
+
+fn audit(names List<String>) Map<String, int>
+    var counts = Map<String, int>()
+    for name in names
+        counts[name] = 1
+    return counts
+
+fn main()
+    let totals = audit(List([\"a\"]))
+    println(f\"{totals.length()}\")
+";
+    with_source(source, |path| {
+        let (_, stderr, ok) = patch(&[
+            "--replace-in-fn",
+            "audit",
+            "--old",
+            "counts[name] = 1",
+            "--new",
+            "counts[name] = 2",
+            &path.display().to_string(),
+        ]);
+
+        assert!(ok, "the edit anchors without formatting first: {stderr}");
+        assert_eq!(
+            read_file(path),
+            source.replace("counts[name] = 1", "counts[name] = 2"),
+            "only the named text changes; every other byte stays as written"
+        );
+    });
+}
