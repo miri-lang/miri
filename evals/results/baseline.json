@@ -98,6 +98,13 @@
     "bytes_written": 219
   },
   {
+    "task": "p",
+    "success": true,
+    "invocations": 4,
+    "bytes_read": 4251,
+    "bytes_written": 362
+  },
+  {
     "task": "k",
     "success": false,
     "invocations": 2,

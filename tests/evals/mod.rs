@@ -130,6 +130,11 @@ const TASKS: &[Task] = &[
         blocked_by: None,
     },
     Task {
+        id: "p",
+        description: "repair three syntax faults reported from one check",
+        blocked_by: None,
+    },
+    Task {
         id: "k",
         description: "read the warnings a green test run left behind",
         blocked_by: Some(

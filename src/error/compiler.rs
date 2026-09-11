@@ -7,7 +7,7 @@ use crate::error::diagnostic::{
 };
 use crate::error::format::{format_diagnostic, format_diagnostic_with_color, ColorChoice};
 use crate::error::lowering::LoweringError;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{SyntaxError, SyntaxErrors};
 use crate::error::type_error::TypeError;
 use thiserror::Error;
 
@@ -48,8 +48,12 @@ pub enum CompilerError {
     #[error("Lexer Error: {0}")]
     Lexer(SyntaxError),
 
+    /// Every syntax fault one parse reported.
+    ///
+    /// The parser resynchronises at top-level declaration boundaries, so a file
+    /// broken in three declarations is rejected once and names all three.
     #[error("Parser Error: {0}")]
-    Parser(SyntaxError),
+    Parser(SyntaxErrors),
 
     #[error("Type Error: {0}")]
     Type(Box<TypeError>),
@@ -99,9 +103,8 @@ impl CompilerError {
     /// one or more Diagnostic values. An EXHAUSTIVE match is required (no `_ =>`).
     pub fn to_diagnostics(&self) -> Vec<Diagnostic> {
         match self {
-            CompilerError::Lexer(e) | CompilerError::Parser(e) => {
-                vec![e.to_diagnostic()]
-            }
+            CompilerError::Lexer(e) => vec![e.to_diagnostic()],
+            CompilerError::Parser(errors) => errors.iter().map(|e| e.to_diagnostic()).collect(),
             CompilerError::Type(e) => vec![e.to_diagnostic()],
             CompilerError::TypeErrors { errors, warnings } => {
                 let mut diags: Vec<Diagnostic> = warnings.clone();

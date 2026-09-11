@@ -26,5 +26,5 @@ pub use format::{
 };
 pub use lowering::{LoweringError, LoweringErrorKind};
 pub use runtime::RuntimeError;
-pub use syntax::{find_line_info, Span, SyntaxError, SyntaxErrorKind};
+pub use syntax::{find_line_info, Span, SyntaxError, SyntaxErrorKind, SyntaxErrors};
 pub use type_error::{TypeError, TypeErrorKind};

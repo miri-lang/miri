@@ -17,6 +17,7 @@ pub mod r#loop;
 pub mod number;
 pub mod operator;
 pub mod regex;
+pub mod resume;
 pub mod source_format;
 pub mod string;
 pub mod use_statement;

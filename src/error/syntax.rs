@@ -231,6 +231,54 @@ impl SyntaxError {
     }
 }
 
+/// The syntax faults a single parse reported, in source order.
+///
+/// The parser resynchronises at top-level declaration boundaries, so one
+/// invocation can reject several declarations. The first fault is held apart
+/// from the rest so a caller that can only show one never has to reason about
+/// an empty collection.
+#[derive(Debug, PartialEq, Clone)]
+pub struct SyntaxErrors {
+    first: SyntaxError,
+    rest: Vec<SyntaxError>,
+}
+
+impl SyntaxErrors {
+    /// Creates a collection holding the fault a parse failed on.
+    pub fn new(first: SyntaxError) -> Self {
+        Self {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
+    /// Records a fault found in a later declaration.
+    pub fn push(&mut self, error: SyntaxError) {
+        self.rest.push(error);
+    }
+
+    /// The fault the parse failed on first.
+    pub fn first(&self) -> &SyntaxError {
+        &self.first
+    }
+
+    /// How many faults were reported. Never zero.
+    pub fn count(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    /// Every fault, in source order.
+    pub fn iter(&self) -> impl Iterator<Item = &SyntaxError> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+}
+
+impl std::fmt::Display for SyntaxErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.first)
+    }
+}
+
 impl std::fmt::Display for SyntaxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let props = self.kind.properties();

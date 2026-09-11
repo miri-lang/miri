@@ -1,0 +1,19 @@
+use system.collections.list
+
+struct Reading
+    label String
+    value int
+
+fn scale(r Reading) int
+    let factor: int = 3
+    return r.value * factor
+
+fn total(rs [Reading]) int
+    var sum: int = 0
+    for r in rs
+        sum = sum + scale(r)
+    return sum
+
+fn main()
+    let rs: [Reading] = List([Reading("a", 2), Reading("b", 5)])
+    println(f"{total(rs)}")
