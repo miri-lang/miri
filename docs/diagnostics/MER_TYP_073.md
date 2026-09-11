@@ -10,6 +10,10 @@ A public declaration is never reported. An exported name is used by definition â
 
 - `Unused private declaration: '{name}' is never used in this file`
 
+## Help
+
+- `remove the {noun}, or declare it 'public' if it is meant to be part of this module's surface.`
+
 ## Before
 
 ```miri

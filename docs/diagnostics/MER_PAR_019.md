@@ -6,6 +6,10 @@ An attribute is being applied to a declaration type that does not support attrib
 
 - `Unsupported Attribute Target`
 
+## Help
+
+- `Attributes may only precede an enum, function, or class declaration.`
+
 ## Before
 
 ```miri

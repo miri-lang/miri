@@ -12,6 +12,10 @@ Loop variables are not reported: `for index in 0..3` names the iteration whether
 
 - `Unused local: '{name}' is never read`
 
+## Help
+
+- `remove the binding, or name it '_{name}' to say the value is not meant to be read.`
+
 ## Before
 
 ```miri

@@ -30,6 +30,10 @@ The same code covers operands an operator cannot combine. `+` never converts bet
 - `Type mismatch: guard must be boolean, got {type}`
 - `Type {type} is not iterable`
 
+## Help
+
+- `'+' does not convert between types — build the text with an f-string, e.g. f"n={n}".`
+
 ## Before
 
 ```miri

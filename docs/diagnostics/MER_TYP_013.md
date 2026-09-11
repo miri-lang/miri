@@ -7,6 +7,11 @@ Each attribute is valid only on certain declaration kinds (functions, enums, cla
 - `Attribute @{attr} is not valid on {target}`
 - `Attributes valid on {target}: {list}.`
 
+## Help
+
+- `Attributes valid on {target}: {accepted}.`
+- `No attribute is valid on {target}.`
+
 ## Before
 
 ```miri

@@ -6,6 +6,10 @@ A pattern in a `match` expression has already been covered by a previous branch.
 
 - `Duplicate Match Pattern`
 
+## Help
+
+- `This pattern is already covered in a previous branch.`
+
 ## Before
 
 ```miri

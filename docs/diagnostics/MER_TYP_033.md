@@ -10,6 +10,10 @@ Where the compiler can name a likely intent it does so in the help line. A membe
 - `Type '{name}' has no field '{member}'`
 - `Type '{name}' does not have members`
 
+## Help
+
+- `Did you mean '{suggestion}'?`
+
 ## Before
 
 ```miri

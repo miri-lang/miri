@@ -6,6 +6,10 @@ A resource type (a class with a `fn drop(self)` method) was declared in a scope 
 
 - `resource '{var}' of type '{type}' was not consumed before scope exit`
 
+## Help
+
+- `pass the resource to a consuming function or call its drop method`
+
 ## Before
 
 ```miri

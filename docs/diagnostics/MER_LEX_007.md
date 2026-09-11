@@ -6,6 +6,10 @@ A hexadecimal literal must start with the `0x` or `0X` prefix followed by only t
 
 - `Invalid Hex Literal`
 
+## Help
+
+- `Hexadecimal literals must start with '0x' followed by hex digits.`
+
 ## Before
 
 ```miri

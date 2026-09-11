@@ -7,6 +7,10 @@ Some attributes do not accept arguments. When an argument is provided to an attr
 - `Attribute @{attr} does not take an argument`
 - `Remove the argument: @{attr}`
 
+## Help
+
+- `Remove the argument: @{name}`
+
 ## Before
 
 ```miri

@@ -14,6 +14,10 @@ A declaration with no body (a trait method signature, an abstract method, a `run
 
 - `Unused parameter: '{name}' is never read in the body of '{function}'`
 
+## Help
+
+- `remove the parameter and the arguments passed to it, or name it '_{name}' to say this body has no use for the value.`
+
 ## Before
 
 ```miri

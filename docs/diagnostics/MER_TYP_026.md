@@ -6,6 +6,10 @@ Attributes can be written in two syntaxes: the modern `@name` prefix syntax and 
 
 - `` the `{keyword}` keyword is deprecated; use `@{replacement}` instead ``
 
+## Help
+
+- `` Write `@{name}` on the line above the declaration instead. ``
+
 ## Before
 
 ```miri

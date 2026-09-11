@@ -6,6 +6,10 @@ An integer literal could not be parsed. The lexer tokenized the input as an inte
 
 - `Invalid Integer Literal`
 
+## Help
+
+- `Ensure the integer literal format is correct.`
+
 ## Before
 
 ```miri

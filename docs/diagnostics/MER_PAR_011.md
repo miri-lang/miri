@@ -6,6 +6,10 @@ A `match` expression does not cover all possible cases. Every value the match ex
 
 - `Missing Match Branches`
 
+## Help
+
+- `The match expression must cover all possible cases.`
+
 ## Before
 
 ```miri

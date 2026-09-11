@@ -6,6 +6,10 @@ A binary literal must start with the `0b` or `0B` prefix followed by only the di
 
 - `Invalid Binary Literal`
 
+## Help
+
+- `Binary literals must start with '0b' followed by 0s and 1s.`
+
 ## Before
 
 ```miri

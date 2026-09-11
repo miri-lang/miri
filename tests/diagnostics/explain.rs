@@ -161,8 +161,10 @@ fn test_section_headings_are_exactly_as_contracted() {
         // A retired code documents the rule and where to read more. It carries
         // no example pair, because the check it named no longer runs and there
         // is nothing to reproduce.
-        // A live code may have a Messages section (newly added documentation) between
-        // Rule and Before, which describes the shapes the code can emit.
+        // A live code may declare what it says between Rule and Before: Messages
+        // for the shapes it emits, then Help for the advice it offers. Both are
+        // gated against the text the compiler really builds, so a code gains them
+        // as its example becomes reproducible rather than all at once.
         if code.is_reserved() {
             assert_eq!(
                 headings,
@@ -171,16 +173,16 @@ fn test_section_headings_are_exactly_as_contracted() {
                 code.as_str()
             );
         } else {
-            // Live codes may optionally have a Messages section between Rule and Before
             let valid_patterns = vec![
                 vec!["Rule", "Before", "After", "Reference"],
                 vec!["Rule", "Messages", "Before", "After", "Reference"],
+                vec!["Rule", "Messages", "Help", "Before", "After", "Reference"],
             ];
             assert!(
                 valid_patterns.iter().any(|pattern| headings == *pattern),
-                "{} has the wrong sections; live codes must be [Rule, Before, After, Reference] \
-                 or [Rule, Messages, Before, After, Reference], got {:?}",
+                "{} has the wrong sections; a live code must be one of {:?}, got {:?}",
                 code.as_str(),
+                valid_patterns,
                 headings
             );
         }

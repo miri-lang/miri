@@ -6,6 +6,10 @@ An enum literal is missing some of its required variants or initialization. When
 
 - `Missing Enum Members`
 
+## Help
+
+- `All enum variants must be handled.`
+
 ## Before
 
 ```miri

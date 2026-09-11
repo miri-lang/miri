@@ -15,6 +15,10 @@ If the module is in the standard library, ensure the module name matches the std
 - `Failed to read module '{module}': {error}`
 - `Module '{module}' not found`
 
+## Help
+
+- `Module was not found in any of these search roots:\n{roots}\n\nYou can override the stdlib search path by setting the MIRI_STDLIB_PATH environment variable.`
+
 ## Before
 
 ```miri

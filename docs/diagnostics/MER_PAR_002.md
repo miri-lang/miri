@@ -6,6 +6,10 @@ The parser reached the end of the file unexpectedly. The token stream terminated
 
 - `Unexpected end of file`
 
+## Help
+
+- `The file ended unexpectedly. Check for unclosed blocks or expressions.`
+
 ## Before
 
 ```miri

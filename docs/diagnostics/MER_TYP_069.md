@@ -21,6 +21,10 @@ blocks and jumps — are rejected.
 
 - `top-level statement will never run: this file declares 'main', so nothing executes it`
 
+## Help
+
+- `move the statement into 'main', or remove the 'main' declaration so the file runs as a script.`
+
 ## Before
 
 ```miri

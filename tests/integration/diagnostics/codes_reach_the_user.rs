@@ -98,3 +98,29 @@ fn main()
         "MER_TYP_042",
     );
 }
+
+/// A string literal inside an interpolation is the commonest way to reach
+/// `MER_LEX_012`: the quote closes the f-string where it stands, so the `{`
+/// that opened the interpolation never meets a `}`. The help has to say that,
+/// because the braces a reader is told to count are already balanced.
+#[test]
+fn nested_quote_in_an_interpolation_is_named_by_the_help() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let name = "world"
+    let msg = f"greeting = {name.to_upper("x")}"
+    println(msg)
+"#,
+        "MER_LEX_012",
+    );
+    assert_compiler_error(
+        r#"
+fn main()
+    let name = "world"
+    let msg = f"greeting = {name.to_upper("x")}"
+    println(msg)
+"#,
+        "quote inside the braces closes the f-string",
+    );
+}

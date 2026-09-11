@@ -6,6 +6,10 @@ A runtime function declaration specifies an unknown runtime name. Runtime functi
 
 - `Unknown runtime '{name}'`
 
+## Help
+
+- `Known runtimes: "core".`
+
 ## Before
 
 ```miri

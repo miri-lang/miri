@@ -8,6 +8,10 @@ This is reported wherever the statement is written, including a statement that f
 
 - `Unreachable statement: the '{keyword}' above leaves this block, so nothing after it runs`
 
+## Help
+
+- `move the statement above the '{keyword}', or remove it.`
+
 ## Before
 
 ```miri

@@ -6,6 +6,10 @@ An indentation level does not match any enclosing block. The lexer tracks indent
 
 - `Indentation Mismatch`
 
+## Help
+
+- `Ensure the indentation level matches the surrounding code block.`
+
 ## Before
 
 ```miri

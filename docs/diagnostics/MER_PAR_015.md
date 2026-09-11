@@ -6,6 +6,10 @@ A type expression is required but missing or invalid. In contexts where the pars
 
 - `Missing Type Expression`
 
+## Help
+
+- `A type expression is expected here.`
+
 ## Before
 
 ```miri

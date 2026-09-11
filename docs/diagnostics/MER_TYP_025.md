@@ -6,6 +6,10 @@ When a variable is declared with an explicit `Option<T>` type but is initialized
 
 - `Unnecessary optional declaration for variable '{name}'`
 
+## Help
+
+- `` Variable '{name}' is immutable and its initializer is not optional. Remove `?` from the type to simplify. ``
+
 ## Before
 
 ```miri

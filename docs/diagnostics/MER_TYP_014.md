@@ -7,6 +7,10 @@ Some attributes require a string literal argument (e.g., `@deprecated("reason")`
 - `Attribute @{attr} requires a string literal argument`
 - `Provide an argument: @{attr}("value")`
 
+## Help
+
+- `Provide an argument: @{name}("value")`
+
 ## Before
 
 ```miri

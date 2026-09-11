@@ -6,6 +6,10 @@ Two or more access modifiers or other declarative modifiers have been combined i
 
 - `Invalid Modifier Combination`
 
+## Help
+
+- `These modifiers cannot be used together.`
+
 ## Before
 
 ```miri

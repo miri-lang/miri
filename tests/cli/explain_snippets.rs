@@ -210,13 +210,19 @@ fn before_example(code: DiagnosticCode) -> Option<String> {
     Some(body[..close].trim_start_matches('\n').to_string())
 }
 
-/// Compile a source file and extract the first diagnostic code and message.
+/// What one documented example reports when the compiler really reads it.
+struct Reported {
+    message: String,
+    help: Option<String>,
+}
+
+/// Compile a source file and extract the first diagnostic it reports.
 ///
 /// The file is written inside the repository because module resolution is
 /// relative to the working directory: the same source checked from elsewhere
 /// fails to find the standard library and reports that instead of the error
 /// under test.
-fn first_diagnostic(source: &str, slot: &str) -> Option<(String, String)> {
+fn first_diagnostic(source: &str, slot: &str) -> Option<Reported> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
     std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
     let path = dir.join(format!("{}.mi", slot));
@@ -237,9 +243,10 @@ fn first_diagnostic(source: &str, slot: &str) -> Option<(String, String)> {
         .as_array()
         .and_then(|items| items.first())
         .and_then(|d| {
-            let code = d["code"].as_str().map(str::to_string);
-            let message = d["message"].as_str().map(str::to_string);
-            code.zip(message)
+            Some(Reported {
+                message: d["message"].as_str()?.to_string(),
+                help: d["help"].as_str().map(str::to_string),
+            })
         })
 }
 
@@ -273,53 +280,37 @@ fn codes_reported_for(source: &str, slot: &str) -> Vec<String> {
 }
 
 /// Check if a message matches one of the documented shapes.
-/// A shape is a template where {identifier} matches any sequence of characters (including newlines).
-/// All other text is literal and must match exactly.
+///
+/// A shape is a template where `{identifier}` matches any sequence of
+/// characters, including newlines. All other text is literal and must match
+/// exactly.
+///
+/// A brace is a placeholder only when it wraps a bare identifier, because that
+/// is the only thing the compiler ever substitutes: a `format!` writes
+/// `{name}`, never `{' that opened this}`. Reading every brace as a placeholder
+/// made a shape that merely *mentions* a brace match almost any message, which
+/// is how a page could declare a rule and gate nothing.
 fn message_matches_shape(message: &str, shape: &str) -> bool {
-    // Build a regex: literal text is escaped, {identifier} becomes a capturing group for .+,
-    // and \n (backslash followed by 'n') becomes a literal newline.
+    let chars: Vec<char> = shape.chars().collect();
     let mut regex_str = String::from("^(?s)");
-    let mut chars = shape.chars().peekable();
+    let mut index = 0;
 
-    while let Some(ch) = chars.next() {
-        if ch == '{' {
-            // Collect identifier name
-            let mut found_close = false;
-            while let Some(&c) = chars.peek() {
-                if c == '}' {
-                    chars.next();
-                    found_close = true;
-                    break;
-                }
-                chars.next(); // consume the character without storing it
-            }
-            if !found_close {
-                panic!(
-                    "shape '{}' has an unterminated placeholder (unclosed '{{')  — fix the shape definition",
-                    shape
-                );
-            }
-            // Placeholder matches any sequence including newlines
+    while index < chars.len() {
+        if let Some(after) = placeholder_end(&chars, index) {
             regex_str.push_str("([\\s\\S]+)");
-        } else if ch == '\\' && chars.peek() == Some(&'n') {
-            // Handle \n escape: consume the 'n' and add a literal newline to the regex
-            chars.next();
-            regex_str.push('\n');
-        } else {
-            // Escape special regex characters for literal text
-            match ch {
-                '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}'
-                | '|' => {
-                    regex_str.push('\\');
-                    regex_str.push(ch);
-                }
-                _ => regex_str.push(ch),
-            }
+            index = after;
+            continue;
         }
+        if chars[index] == '\\' && chars.get(index + 1) == Some(&'n') {
+            regex_str.push('\n');
+            index += 2;
+            continue;
+        }
+        push_literal(&mut regex_str, chars[index]);
+        index += 1;
     }
     regex_str.push('$');
 
-    // Compile and match the regex
     match regex::Regex::new(&regex_str) {
         Ok(re) => re.is_match(message),
         Err(e) => {
@@ -328,6 +319,40 @@ fn message_matches_shape(message: &str, shape: &str) -> bool {
                 shape, e
             );
         }
+    }
+}
+
+/// The index just past `{identifier}` starting at `open`, or None if the brace
+/// at `open` is literal text rather than a substitution point.
+fn placeholder_end(chars: &[char], open: usize) -> Option<usize> {
+    if chars.get(open) != Some(&'{') {
+        return None;
+    }
+    let first = *chars.get(open + 1)?;
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return None;
+    }
+    let mut cursor = open + 2;
+    while let Some(ch) = chars.get(cursor) {
+        if *ch == '}' {
+            return Some(cursor + 1);
+        }
+        if !ch.is_ascii_alphanumeric() && *ch != '_' {
+            return None;
+        }
+        cursor += 1;
+    }
+    None
+}
+
+/// Append one shape character to the regex, escaping what regex syntax claims.
+fn push_literal(regex_str: &mut String, ch: char) {
+    match ch {
+        '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
+            regex_str.push('\\');
+            regex_str.push(ch);
+        }
+        _ => regex_str.push(ch),
     }
 }
 
@@ -390,16 +415,16 @@ fn verified_examples_emit_the_code_they_document() {
         }
 
         match first_diagnostic(&example, wire) {
-            Some((_, message)) => {
+            Some(reported) => {
                 let matches_any = explanation
                     .messages
                     .iter()
-                    .any(|shape| message_matches_shape(&message, shape));
+                    .any(|shape| message_matches_shape(&reported.message, shape));
 
                 if !matches_any {
                     failures.push(format!(
                         "{}: the first diagnostic message '{}' does not match any declared shape: {:?}",
-                        wire, message, explanation.messages
+                        wire, reported.message, explanation.messages
                     ));
                 }
             }
@@ -414,6 +439,145 @@ fn verified_examples_emit_the_code_they_document() {
             "{} verified codes failed:\n  {}",
             failures.len(),
             failures.join("\n  ")
+        );
+    }
+}
+
+/// Codes whose documented example reports a diagnostic carrying no `help`.
+///
+/// The `help` is the compiler's own one-line statement of the rule, and the
+/// gate below makes the page carry it verbatim. A code that states no rule has
+/// nothing to pin its page against, so its prose is unpoliced — listing them
+/// here keeps that gap countable and stops it growing silently.
+const NO_HELP_EMITTED: &[&str] = &[
+    "MER_IMP_002",
+    "MER_OWN_003",
+    "MER_OWN_004",
+    "MER_PAR_001",
+    "MER_TAR_002",
+    "MER_TAR_005",
+    "MER_TAR_006",
+    "MER_TAR_007",
+    "MER_TAR_008",
+    "MER_TAR_009",
+    "MER_TYP_016",
+    "MER_TYP_017",
+    "MER_TYP_018",
+    "MER_TYP_027",
+    "MER_TYP_030",
+    "MER_TYP_031",
+    "MER_TYP_032",
+    "MER_TYP_034",
+    "MER_TYP_039",
+    "MER_TYP_040",
+    "MER_TYP_041",
+    "MER_TYP_042",
+    "MER_TYP_043",
+    "MER_TYP_044",
+    "MER_TYP_048",
+    "MER_TYP_051",
+    "MER_TYP_053",
+    "MER_TYP_054",
+    "MER_TYP_060",
+    "MER_TYP_063",
+    "MER_TYP_065",
+    "MER_TYP_067",
+    "MER_TYP_068",
+];
+
+/// A page must state the rule the compiler states.
+///
+/// `MER_LEX_012` is why this exists: its page told a reader to count braces
+/// while the compiler reported a nested quote, and every gate passed, because
+/// nothing compared the prose against what fires. Declaring the `help` on the
+/// page ties the two together — the page cannot describe a rule the compiler
+/// does not state, and a help reworded in the compiler reddens the page that
+/// quotes it.
+#[test]
+fn verified_pages_declare_the_help_that_fires() {
+    let mut failures = Vec::new();
+
+    for wire in VERIFIED {
+        let Ok(code) = wire.parse::<DiagnosticCode>() else {
+            failures.push(format!("{} is not a registered code", wire));
+            continue;
+        };
+        let Some(example) = before_example(code) else {
+            failures.push(format!("{} has no Before example", wire));
+            continue;
+        };
+        let Some(reported) = first_diagnostic(&example, wire) else {
+            failures.push(format!("{}: could not extract the first diagnostic", wire));
+            continue;
+        };
+        let declared = code.explanation().helps;
+        let silent = NO_HELP_EMITTED.contains(wire);
+
+        match reported.help {
+            Some(help) => {
+                if silent {
+                    failures.push(format!(
+                        "{} is listed as emitting no help, but it emitted '{}'; \
+                         remove it from NO_HELP_EMITTED and declare the help on its page",
+                        wire, help
+                    ));
+                    continue;
+                }
+                if declared.is_empty() {
+                    failures.push(format!(
+                        "{} emits the help '{}' but its page declares none. \
+                         Add a ## Help section carrying it as a backticked shape.",
+                        wire, help
+                    ));
+                    continue;
+                }
+                if !declared
+                    .iter()
+                    .any(|shape| message_matches_shape(&help, shape))
+                {
+                    failures.push(format!(
+                        "{}: the help that fires, '{}', matches no shape its page declares: {:?}",
+                        wire, help, declared
+                    ));
+                }
+            }
+            None => {
+                if !silent {
+                    failures.push(format!(
+                        "{} emits no help; add it to NO_HELP_EMITTED, or give the \
+                         diagnostic a help line that states the rule",
+                        wire
+                    ));
+                }
+                if !declared.is_empty() {
+                    failures.push(format!(
+                        "{} declares a ## Help section but its example emits no help, \
+                         so nothing proves the declaration: {:?}",
+                        wire, declared
+                    ));
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{} pages disagree with the help that fires:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+}
+
+/// A code listed as silent must be a live code whose page is verified.
+#[test]
+fn every_silent_code_is_verified() {
+    for wire in NO_HELP_EMITTED {
+        assert!(
+            VERIFIED.contains(wire),
+            "{} is listed as emitting no help, but its example is not verified, \
+             so nothing ever runs it to find out",
+            wire
         );
     }
 }
@@ -485,60 +649,26 @@ fn declared_shapes_appear_in_compiler_sources() {
         };
 
         let explanation = code.explanation();
-        for shape in &explanation.messages {
-            // Split the shape on {placeholders} and collect literal runs.
-            let mut literal_runs = Vec::new();
-            let mut current_literal = String::new();
+        let declared = explanation
+            .messages
+            .iter()
+            .map(|shape| ("message", shape))
+            .chain(explanation.helps.iter().map(|shape| ("help", shape)));
 
-            let mut chars = shape.chars().peekable();
-            while let Some(ch) = chars.next() {
-                if ch == '{' {
-                    // End current literal run if it has >= 8 chars (trimmed for length check)
-                    if current_literal.trim().len() >= 8 {
-                        // Keep the literal run as-is (with whitespace) for source matching
-                        literal_runs.push(current_literal.clone());
-                    }
-                    current_literal.clear();
-
-                    // Skip the placeholder name until '}'
-                    while let Some(&c) = chars.peek() {
-                        chars.next();
-                        if c == '}' {
-                            break;
-                        }
-                    }
-                } else if ch == '\\' && chars.peek() == Some(&'n') {
-                    // Handle \n escape: insert literal newline into the literal run
-                    chars.next();
-                    current_literal.push('\n');
-                } else {
-                    current_literal.push(ch);
-                }
-            }
-
-            // Don't forget the final run
-            if current_literal.trim().len() >= 8 {
-                literal_runs.push(current_literal);
-            }
-
-            // If the shape has no verifiable literal run, that's a gate failure
-            if literal_runs.is_empty() {
+        for (kind, shape) in declared {
+            let runs = literal_runs(shape);
+            if runs.is_empty() {
                 failures.push(format!(
-                    "{}: shape '{}' is too vague to verify (no literal text ≥8 chars) — \
+                    "{}: {} shape '{}' is too vague to verify (no literal text ≥8 chars) — \
                      document the exact format string the compiler builds",
-                    wire, shape
+                    wire, kind, shape
                 ));
                 continue;
             }
-
-            // Check that at least one literal run appears in src/ (with exact whitespace)
-            let found = literal_runs
-                .iter()
-                .any(|run| all_source.contains(run.as_str()));
-            if !found {
+            if !runs.iter().any(|run| source_carries(&all_source, run)) {
                 failures.push(format!(
-                    "{}: shape '{}' has no verifiable literal text in the compiler source",
-                    wire, shape
+                    "{}: {} shape '{}' has no verifiable literal text in the compiler source",
+                    wire, kind, shape
                 ));
             }
         }
@@ -546,11 +676,65 @@ fn declared_shapes_appear_in_compiler_sources() {
 
     if !failures.is_empty() {
         panic!(
-            "{} message shapes do not appear in compiler source:\n  {}",
+            "{} declared shapes do not appear in compiler source:\n  {}",
             failures.len(),
             failures.join("\n  ")
         );
     }
+}
+
+/// The stretches of a shape that are literal text rather than substitution.
+///
+/// Only runs long enough to be distinctive are returned: a shape grounded on
+/// `is` or `the` alone would match the compiler source by accident.
+fn literal_runs(shape: &str) -> Vec<String> {
+    const SHORTEST_DISTINCTIVE_RUN: usize = 8;
+    let chars: Vec<char> = shape.chars().collect();
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+
+    while index < chars.len() {
+        if let Some(after) = placeholder_end(&chars, index) {
+            if current.trim().chars().count() >= SHORTEST_DISTINCTIVE_RUN {
+                runs.push(current.clone());
+            }
+            current.clear();
+            index = after;
+            continue;
+        }
+        if chars[index] == '\\' && chars.get(index + 1) == Some(&'n') {
+            current.push('\n');
+            index += 2;
+            continue;
+        }
+        current.push(chars[index]);
+        index += 1;
+    }
+    if current.trim().chars().count() >= SHORTEST_DISTINCTIVE_RUN {
+        runs.push(current);
+    }
+    runs
+}
+
+/// Whether the compiler source carries this run of a shape.
+///
+/// A shape records the text a reader sees, while the source spells it as a Rust
+/// literal, so a quote reaches the page as `"` and the source as `\"`, and a
+/// newline as an escape rather than as the character. Both spellings are tried
+/// so a faithful shape is not rejected for the way Rust writes it down.
+fn source_carries(source: &str, run: &str) -> bool {
+    let escaped_quotes = run.replace('"', "\\\"");
+    let escaped_newlines = run.replace('\n', "\\n");
+    let both = escaped_quotes.replace('\n', "\\n");
+    [
+        run,
+        escaped_quotes.as_str(),
+        escaped_newlines.as_str(),
+        both.as_str(),
+    ]
+    .iter()
+    .any(|candidate| source.contains(candidate))
 }
 
 /// Normalize Rust source by collapsing string literal line continuations.
@@ -659,6 +843,25 @@ fn test_message_matches_shape_anchoring_no_prefix() {
         shape
     ));
     assert!(!message_matches_shape("Error: Division by zero", shape));
+}
+
+#[test]
+fn test_message_matches_shape_brace_around_non_identifier_is_literal() {
+    // The shape mentions braces; it must not therefore match everything.
+    let shape = "The '{' that opened this is never closed by a '}'.";
+    assert!(message_matches_shape(
+        "The '{' that opened this is never closed by a '}'.",
+        shape
+    ));
+    assert!(!message_matches_shape("something else entirely", shape));
+}
+
+#[test]
+fn test_message_matches_shape_brace_run_is_literal() {
+    // A brace pair with no identifier inside is text, not a substitution point.
+    let shape = "use system.io.{... as ...}";
+    assert!(message_matches_shape("use system.io.{... as ...}", shape));
+    assert!(!message_matches_shape("use system.io.{anything}", shape));
 }
 
 #[test]

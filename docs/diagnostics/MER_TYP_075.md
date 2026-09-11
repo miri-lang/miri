@@ -10,6 +10,11 @@ Equality is a separate capability and is unaffected: `==` and `!=` stay availabl
 
 - `Type '{type}' has no ordering: '{operator}' requires the Comparable trait`
 
+## Help
+
+- `` Implement Comparable on '{type}' with `public fn compare(other Self) int` (negative sorts self first, zero ties, positive sorts self last), or compare a member that does order: `{comparison}`. ``
+- `` Implement Comparable on '{type}' with `public fn compare(other Self) int` (negative sorts self first, zero ties, positive sorts self last). ``
+
 ## Before
 
 ```miri

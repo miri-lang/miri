@@ -164,8 +164,11 @@ impl SyntaxErrorKind {
             K::InvalidFormattedString => p(DiagnosticCode::LexInvalidFormattedString)
                 .with_help("The format string syntax is incorrect."),
             K::InvalidFormattedStringExpression => {
-                p(DiagnosticCode::LexInvalidFormattedStringExpression)
-                    .with_help("The expression inside the format string is invalid.")
+                p(DiagnosticCode::LexInvalidFormattedStringExpression).with_help(
+                    "The '{' that opened this interpolation is never closed by a '}'. \
+                     A quote inside the braces closes the f-string at that quote, so write \
+                     a nested string literal with the other quote character.",
+                )
             }
             K::BackslashInFStringExpression => p(DiagnosticCode::LexBackslashInFormatString)
                 .with_help("Backslashes are not allowed in format string expressions."),
