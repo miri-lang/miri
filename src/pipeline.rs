@@ -613,7 +613,7 @@ impl Pipeline {
     pub fn frontend(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
-        let mut ast = parser.parse().map_err(CompilerError::Parser)?;
+        let mut ast = parser.parse_all().map_err(CompilerError::Parser)?;
 
         crate::ast::normalize::normalize(&mut ast);
 
@@ -634,7 +634,7 @@ impl Pipeline {
     pub fn frontend_script(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
-        let mut ast = parser.parse().map_err(CompilerError::Parser)?;
+        let mut ast = parser.parse_all().map_err(CompilerError::Parser)?;
 
         crate::ast::normalize::normalize(&mut ast);
 

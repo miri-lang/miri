@@ -3,12 +3,13 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind, SyntaxErrors};
 use crate::lexer::{Lexer, TokenSpan};
 
 pub mod declarations;
 pub mod expressions;
 pub mod literals;
+pub mod recovery;
 pub mod statements;
 pub mod types;
 pub mod utils;
@@ -47,15 +48,95 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /// Parses the token stream into a complete program AST.
+    /// Parses the token stream into a complete program AST, stopping at the
+    /// first fault.
+    ///
+    /// Callers that rewrite a file from the tree — `fmt`, `patch`, `view` —
+    /// cannot proceed past any fault, so a second one tells them nothing and
+    /// the work of finding it is wasted. A caller that reports to a reader
+    /// wants [`parse_all`](Self::parse_all).
     pub fn parse(&mut self) -> Result<Program, SyntaxError> {
-        self.lookahead = self.lexer.next().transpose()?;
-        self.program()
+        self.program_from(0)
     }
 
-    fn program(&mut self) -> Result<Program, SyntaxError> {
-        let statements = self.statement_list()?;
-        Ok(ast::program(statements))
+    /// Parses the token stream, reporting at most one fault per top-level
+    /// declaration.
+    ///
+    /// After a fault the parse resumes at the next line that opens a top-level
+    /// declaration, abandoning the rest of the one that failed. That is what
+    /// keeps a single fault from cascading: everything indented under the
+    /// broken declaration is skipped rather than parsed out of context.
+    pub fn parse_all(&mut self) -> Result<Program, SyntaxErrors> {
+        match self.program_from(0) {
+            Ok(program) => Ok(program),
+            Err(first) => Err(self.faults_in_later_declarations(first)),
+        }
+    }
+
+    /// Parses the declarations that begin at `offset`.
+    fn program_from(&mut self, offset: usize) -> Result<Program, SyntaxError> {
+        self.lexer.resume_at(offset);
+        self.depth = 0;
+        self.last_consumed_end = offset;
+        self.lookahead = self.lexer.next().transpose()?;
+        Ok(ast::program(self.statement_list()?))
+    }
+
+    /// Collects the faults in the declarations that follow `first`.
+    ///
+    /// Each round resumes strictly past the previous resume point, so the loop
+    /// is bounded by the number of declarations in the source. Everything
+    /// between the fault and the next boundary is abandoned rather than parsed
+    /// out of context, which is what keeps one fault from cascading.
+    fn faults_in_later_declarations(&mut self, first: SyntaxError) -> SyntaxErrors {
+        let mut faults = SyntaxErrors::new(first);
+        let mut resumed_at = 0;
+        while let Some(offset) = self.next_declaration_start(resumed_at) {
+            resumed_at = offset;
+            match self.program_from(offset) {
+                Ok(_) => break,
+                Err(error) => faults.push(error),
+            }
+        }
+        faults
+    }
+
+    /// The offset of the next declaration that opens a line, scanning forward
+    /// from where the failed parse stopped. `None` at end of input.
+    ///
+    /// The scan reads tokens rather than source text, and that is what keeps it
+    /// out of a string literal or a comment: the lexer produces each of those
+    /// as one token, so a `fn` written inside a multi-line string is never seen
+    /// as a declaration. A text scan for the same shape would resume in the
+    /// middle of the literal and report a fault the file does not have.
+    fn next_declaration_start(&mut self, after: usize) -> Option<usize> {
+        while let Some((token, span)) = self.next_token_to_scan() {
+            if span.start > after
+                && recovery::opens_a_line(self.source, span.start)
+                && recovery::opens_a_declaration(&token)
+            {
+                return Some(span.start);
+            }
+        }
+        None
+    }
+
+    /// The next token the resynchronisation scan should look at: the one the
+    /// failed parse stopped on, then whatever follows it.
+    ///
+    /// Lexer faults met while scanning are dropped. They lie inside the
+    /// declaration the parse has already rejected, and a reader who fixes the
+    /// fault that was reported gets them on the next run.
+    fn next_token_to_scan(&mut self) -> Option<TokenSpan> {
+        if let Some(pending) = self.lookahead.take() {
+            return Some(pending);
+        }
+        loop {
+            match self.lexer.next()? {
+                Ok(token) => return Some(token),
+                Err(_) => continue,
+            }
+        }
     }
 
     /// Enters a recursive-descent frame, rejecting input that nests deeper than

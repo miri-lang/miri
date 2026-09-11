@@ -143,6 +143,22 @@ error beside it. `assert_output_contains` reads both, so it can assert on what
 either stream said. Byte counts cover both: a loop pays for everything it has to
 read.
 
+## What task `p` shows about reporting more than one syntax fault
+
+Task `p` repairs three type annotations written with a colon, one in each of
+three declarations, and costs four invocations: a `check`, a `fix --apply`, a
+`check` and a `run`.
+
+The number only means something next to what it replaced. The parser used to
+stop at the first fault, so the same file cost a check and a fix per fault —
+three of each — before the closing check and run. Three faults reported from one
+`check` is what removes them, and because all three carry the same repair, one
+`fix --apply` clears them together.
+
+The first step asserts three `"line"` values rather than the diagnostic code
+alone. A code assertion would hold just as well if one fault were reported,
+which is the behaviour this task exists to keep from coming back.
+
 ## A caveat about where the baseline was recorded
 
 The committed numbers were recorded on macOS; CI runs ubuntu-24.04. Nothing the

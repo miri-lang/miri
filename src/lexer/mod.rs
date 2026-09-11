@@ -605,6 +605,40 @@ impl<'source> Lexer<'source> {
             .is_empty()
     }
 
+    /// Resumes lexing at `offset`, discarding every trace of the region before
+    /// it.
+    ///
+    /// The parser calls this to pick up at a top-level declaration boundary
+    /// after a fault, so one invocation can report the faults in several
+    /// declarations. Everything the abandoned region left behind — buffered
+    /// comments, an unfinished formatted string, open brackets, and the
+    /// indentation stack — is dropped, because the boundary is a line that
+    /// starts in column zero and none of that state is in scope there.
+    ///
+    /// Spans stay absolute: the inner lexer is rebuilt over the whole source
+    /// and advanced to `offset`, so a diagnostic reported after a resume points
+    /// at the same byte a single-pass parse would have named. An `offset` that
+    /// is not a character boundary resumes at end of input instead, leaving the
+    /// parse to finish rather than slicing a code point in half.
+    pub fn resume_at(&mut self, offset: usize) {
+        let offset = if self.source.is_char_boundary(offset) {
+            offset
+        } else {
+            self.source.len()
+        };
+
+        self.inner = Token::lexer(self.source);
+        self.inner.bump(offset);
+        self.pending_tokens_stack.clear();
+        self.indent_stack = vec![0];
+        self.indent_level = 0;
+        self.eof_handled = false;
+        self.open_brackets.clear();
+        self.previous_tokens = [None, None];
+        self.previous_tokens_count = 0;
+        self.pending_comments.clear();
+    }
+
     /// Takes the pending comments that begin their own line, leaving any that
     /// follow code where they are.
     ///

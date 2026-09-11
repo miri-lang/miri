@@ -1,0 +1,45 @@
+# Repair three syntax faults that sit in three different declarations.
+
+# Syntax is the most common way generated code fails, and a parse that stopped
+# at the first fault charged one invocation per fault: three checks, three
+# fixes, then a check and a run. The parser resynchronises at the next top-level
+# declaration, so the same job is one check, one fix, one check and one run.
+#
+# The three faults are the same fault written three times -- a type annotation
+# spelled with a colon -- because that is what a generator producing Miri from
+# another language's habits actually emits. All three carry the same repair, so
+# one `fix --apply` clears them together; what this task measures is that the
+# loop is shown all three before it spends anything.
+#
+# The three `"line"` assertions are the point of the first step. Asserting the
+# code alone would hold just as well if one fault were reported, which is the
+# behaviour this task exists to keep from coming back.
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = false
+assert_diagnostic_code = "MER_PAR_001"
+assert_output_contains = [
+  "\"line\": 8",
+  "\"line\": 12",
+  "\"line\": 18",
+  "\"id\": \"colon-annotation\"",
+]
+
+[[step]]
+type = "FixApply"
+file = "program.mi"
+must_succeed = true
+assert_file_changed = ["program.mi"]
+
+[[step]]
+type = "Check"
+file = "program.mi"
+must_succeed = true
+
+[[step]]
+type = "Run"
+file = "program.mi"
+must_succeed = true
+assert_output_contains = ["21"]

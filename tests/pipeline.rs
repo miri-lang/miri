@@ -81,11 +81,15 @@ fn frontend_reports_a_parser_error_for_an_unclosed_string() {
 
     match error {
         CompilerError::Parser(syntax) => {
+            assert_eq!(syntax.count(), 1, "one declaration, one fault");
             // The span runs from the opening quote to the end of the line: an
             // unterminated literal is only recognised once the line ends, so
             // the newline that ended it is part of the reported text.
             assert_eq!(
-                spanned_text("fn main()\n    let s = \"unterminated\n", syntax.span),
+                spanned_text(
+                    "fn main()\n    let s = \"unterminated\n",
+                    syntax.first().span
+                ),
                 "\"unterminated\n"
             );
         }
