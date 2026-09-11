@@ -6,6 +6,10 @@ A C-style operator has been used instead of the Miri keyword equivalent. Miri do
 
 - `'{operator}' is not a valid operator in Miri`
 
+## Help
+
+- `Use '{suggestion}' instead of '{found}'.`
+
 ## Before
 
 ```miri

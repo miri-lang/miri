@@ -6,6 +6,10 @@ The parser has exceeded the maximum allowed nesting depth. Expressions and state
 
 - `Recursion Limit Exceeded`
 
+## Help
+
+- `The expression or statement is nested too deeply. Simplify your code.`
+
 ## Before
 
 ```miri

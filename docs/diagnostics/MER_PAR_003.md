@@ -6,6 +6,10 @@ A type declaration is invalid. The parser expects a type to be declared using a 
 
 - `Invalid Type Declaration`
 
+## Help
+
+- `Types must be declared with a valid identifier.`
+
 ## Before
 
 ```miri

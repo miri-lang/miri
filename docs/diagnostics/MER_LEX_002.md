@@ -6,6 +6,10 @@ A multiline comment starting with `/*` has not been closed with `*/`. The lexer 
 
 - `Unclosed Multiline Comment`
 
+## Help
+
+- `Add '*/' to close the comment.`
+
 ## Before
 
 ```miri

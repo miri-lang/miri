@@ -6,6 +6,10 @@ A double negation (`- - x`) is semantically equivalent to a single identity oper
 
 - `Unnecessary double negation`
 
+## Help
+
+- `The two negations cancel out. If this is intentional, consider simplifying to just the inner expression.`
+
 ## Before
 
 ```miri

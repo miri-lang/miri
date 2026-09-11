@@ -7,6 +7,10 @@ Attributes are a closed set of identifiers prefixed with `@`. The compiler defin
 - `Unknown attribute: @{attr}`
 - `Attributes are a closed set. Known attributes: {list}.`
 
+## Help
+
+- `Attributes are a closed set. Known attributes: {known}.`
+
 ## Before
 
 ```miri

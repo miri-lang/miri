@@ -6,6 +6,10 @@ A constant declaration is missing its required initializer. Constants must be de
 
 - `Constant '{name}' must be initialized with a value`
 
+## Help
+
+- `Add '= <value>' after the constant name, e.g. 'const X = 1'.`
+
 ## Before
 
 ```miri

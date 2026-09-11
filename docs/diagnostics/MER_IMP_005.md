@@ -10,6 +10,11 @@ A wildcard import (`use module.*`) is never reported — what it brings in is wh
 
 - `Unused import: '{name}' is never used in this file`
 
+## Help
+
+- `nothing in this file reads what the import brings in; remove the line.`
+- `the rest of the line is read; drop '{name}' from the selection.`
+
 ## Before
 
 ```miri

@@ -19,6 +19,10 @@ whatever their parameters.
 
 - `Function '{name}' is already declared in this file`
 
+## Help
+
+- `an earlier declaration of '{name}' appears above; rename one of them or remove this declaration.`
+
 ## Before
 
 ```miri

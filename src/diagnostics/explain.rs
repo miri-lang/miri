@@ -30,6 +30,12 @@ pub struct Explanation {
     pub reference_summary: Option<String>,
     /// Message shapes that this code can emit (backticked, from `## Messages` section).
     pub messages: Vec<String>,
+    /// Help shapes that this code can emit (backticked, from `## Help` section).
+    ///
+    /// The help is the compiler's own one-line statement of the rule. A page
+    /// carrying it verbatim cannot describe a rule the compiler does not state,
+    /// which is the drift the `## Rule` prose alone never caught.
+    pub helps: Vec<String>,
 }
 
 impl Explanation {
@@ -42,7 +48,8 @@ impl Explanation {
         let example_before = extract_section_opt(doc, "Before").map(|s| strip_code_fence(&s));
         let example_after = extract_section_opt(doc, "After").map(|s| strip_code_fence(&s));
         let reference = extract_reference_link(doc);
-        let messages = extract_messages(doc);
+        let messages = extract_shapes(doc, "Messages");
+        let helps = extract_shapes(doc, "Help");
 
         // Extract reference title and summary if a reference path exists
         let (reference_title, reference_summary) = reference
@@ -60,6 +67,7 @@ impl Explanation {
             reference_title,
             reference_summary,
             messages,
+            helps,
         }
     }
 
@@ -177,16 +185,18 @@ fn extract_reference_link(doc: &str) -> Option<String> {
     None
 }
 
-/// Extract message shapes from the `## Messages` section.
-/// The section is a bullet list with backticked shapes: `- \`Unknown type: {name}\``.
-/// Each backticked shape is extracted and returned in order.
+/// Extract the shapes declared under a `## Heading`, in order.
+///
+/// The section is a bullet list of backticked shapes: `- \`Unknown type: {name}\``.
+/// `## Messages` declares what the diagnostic says, `## Help` what it advises;
+/// both are gated against the text the compiler really builds.
 ///
 /// Uses CommonMark code-span rules: a span opens with N backticks and closes at
 /// exactly N backticks. If both the first and last character of the content are
 /// spaces, a single space is removed from each end (CommonMark spec).
 /// Empty shapes are silently skipped (never added to the list).
-fn extract_messages(doc: &str) -> Vec<String> {
-    let section = match extract_section_opt(doc, "Messages") {
+fn extract_shapes(doc: &str, heading: &str) -> Vec<String> {
+    let section = match extract_section_opt(doc, heading) {
         Some(s) => s,
         None => return vec![],
     };
@@ -395,7 +405,7 @@ mod tests {
     fn test_extract_messages_simple() {
         let doc =
             "## Messages\n\n- `Unknown type: {name}`\n- `Unknown type '{name}' in declaration`";
-        let messages = extract_messages(doc);
+        let messages = extract_shapes(doc, "Messages");
         assert_eq!(
             messages,
             vec![
@@ -406,9 +416,28 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_shapes_reads_the_help_section() {
+        let doc = "## Messages\n\n- `Unknown type: {name}`\n\n## Help\n\n- `try '{name}' instead`";
+        assert_eq!(
+            extract_shapes(doc, "Help"),
+            vec!["try '{name}' instead".to_string()]
+        );
+        assert_eq!(
+            extract_shapes(doc, "Messages"),
+            vec!["Unknown type: {name}".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_extract_shapes_help_absent_is_empty() {
+        let doc = "## Rule\n\nSome rule.\n\n## Messages\n\n- `boom`";
+        assert!(extract_shapes(doc, "Help").is_empty());
+    }
+
+    #[test]
     fn test_extract_messages_missing() {
         let doc = "## Rule\n\nSome rule.";
-        let messages = extract_messages(doc);
+        let messages = extract_shapes(doc, "Messages");
         assert!(messages.is_empty());
     }
 

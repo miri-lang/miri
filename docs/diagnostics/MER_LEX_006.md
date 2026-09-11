@@ -6,6 +6,10 @@ An octal literal must start with the `0o` or `0O` prefix followed by only the di
 
 - `Invalid Octal Literal`
 
+## Help
+
+- `Octal literals must start with '0o' followed by digits 0-7.`
+
 ## Before
 
 ```miri

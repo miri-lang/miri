@@ -8,6 +8,10 @@ Two `use` lines are the same import when they name the same module, select the s
 
 - `Duplicate import: '{path}' is already imported in this file`
 
+## Help
+
+- `an earlier 'use' above imports the same thing; remove this line.`
+
 ## Before
 
 ```miri

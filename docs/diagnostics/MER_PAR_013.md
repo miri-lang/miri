@@ -6,6 +6,10 @@ A struct literal is missing some of its required fields. When creating a struct 
 
 - `Missing Struct Members`
 
+## Help
+
+- `All struct fields must be initialized.`
+
 ## Before
 
 ```miri

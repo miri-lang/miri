@@ -6,6 +6,10 @@ When matching on an enum declared with `@non_exhaustive` from outside its defini
 
 - `` Match on `@non_exhaustive` enum '{enum}' requires a `default` arm outside its defining module '{module}' ``
 
+## Help
+
+- `` Add a `default:` arm. '{enum_name}' may gain variants later, and listing only today's variants would stop compiling when it does. ``
+
 ## Before
 
 ```miri

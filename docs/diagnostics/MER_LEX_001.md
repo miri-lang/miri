@@ -6,6 +6,10 @@ An invalid character or sequence has been encountered that cannot be tokenized. 
 
 - `Invalid Token`
 
+## Help
+
+- `The character or sequence of characters here is not a valid part of the language.`
+
 ## Before
 
 ```miri

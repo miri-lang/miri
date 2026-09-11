@@ -6,6 +6,10 @@ Miri does not support the decrement operator. The `--` syntax is parsed as two n
 
 - `Decrement operator not supported`
 
+## Help
+
+- `` `--x` is parsed as two negations (`-(-x)`), not as a decrement. Miri does not have a decrement operator — use `x = x - 1` instead. ``
+
 ## Before
 
 ```miri

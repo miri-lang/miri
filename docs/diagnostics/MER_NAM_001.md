@@ -6,6 +6,10 @@ The name `gpu` (lowercase) is deprecated and will be removed in a future release
 
 - `` `{old}` is deprecated; use `{new}` instead ``
 
+## Help
+
+- `` Rename `{deprecated}` to `{replacement}`. The alias is removed one release after this. ``
+
 ## Before
 
 ```miri

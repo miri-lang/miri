@@ -6,6 +6,10 @@ A decimal number literal has invalid underscore placement. Underscores are allow
 
 - `Invalid Number Literal`
 
+## Help
+
+- `Ensure the number literal format is correct.`
+
 ## Before
 
 ```miri

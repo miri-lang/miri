@@ -6,6 +6,10 @@ A struct member declaration is missing its type. Struct fields must each be decl
 
 - `Missing Struct Member Type`
 
+## Help
+
+- `Struct members must have a type annotation.`
+
 ## Before
 
 ```miri

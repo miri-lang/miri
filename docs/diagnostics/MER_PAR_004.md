@@ -6,6 +6,10 @@ The left-hand side of an assignment is not a valid lvalue. An assignment target 
 
 - `Invalid Left-Hand Side Expression`
 
+## Help
+
+- `The expression on the left side of the assignment is not valid.`
+
 ## Before
 
 ```miri

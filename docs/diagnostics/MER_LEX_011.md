@@ -6,6 +6,10 @@ A backslash character has been used inside an expression within a formatted stri
 
 - `Backslash in Format String`
 
+## Help
+
+- `Backslashes are not allowed in format string expressions.`
+
 ## Before
 
 ```miri

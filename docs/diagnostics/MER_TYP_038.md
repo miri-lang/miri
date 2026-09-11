@@ -19,6 +19,10 @@ The commonest form is a pattern that spells the variant without its enum. A bare
 - `Invalid enum variant definition`
 - `Static method '{name}' has the same name as an enum variant - collision between static method and variant`
 
+## Help
+
+- `write '{enum_name}.{variant}' so the pattern names the variant it matches; a bare name binds a new variable instead.`
+
 ## Before
 
 ```miri
