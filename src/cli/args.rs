@@ -228,8 +228,12 @@ pub enum Commands {
     /// FRAMING. Messages are framed the way a language server frames them: a
     /// `Content-Length: N` header line, then `\r\n\r\n` — that is, a blank
     /// line — then exactly N bytes of UTF-8 JSON. Any other header is skipped.
-    /// Line-delimited JSON is not read: a message arriving without a length
-    /// header ends the session, as does closing stdin.
+    /// Line-delimited JSON is not read. A message that is not framed this
+    /// way — no `Content-Length` header, input ending inside a message, a body
+    /// shorter than it declared — is refused: the session reports it on stderr
+    /// under MER_BLD_024 and ends with exit status 1, after answering every
+    /// message framed before it. Closing stdin ends the session with exit
+    /// status 0.
     ///
     /// HANDSHAKE. Send `{"jsonrpc":"2.0","id":1,"method":"initialize"}` first.
     /// Its reply is where the method list comes from: `capabilities.methods`

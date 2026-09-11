@@ -75,7 +75,7 @@ fn run_command(cli: Cli) -> Result<()> {
             ),
             Commands::Check { path, format } => check_file(path, format, cli.verify_mir, cli.color),
             Commands::Dev { path, format } => dev_watch(path, format, cli.verify_mir, cli.color),
-            Commands::Agent {} => serve_agent(),
+            Commands::Agent {} => serve_agent(cli.color),
             Commands::Explain { code, list, format } => explain_code(code, list, format, cli.color),
             Commands::View {
                 path,
@@ -499,8 +499,11 @@ fn dev_watch(path: PathBuf, format: Format, verify_mir: bool, color_mode: ColorM
 /// The session runs on this thread, which already has the stack the compiler's
 /// recursive passes need, so every request is served with the same headroom a
 /// one-shot command gets.
-fn serve_agent() -> Result<()> {
-    miri::cli::agent::run().context("the agent session ended in an I/O error")
+fn serve_agent(color_mode: ColorMode) -> Result<()> {
+    match miri::cli::agent::run(color_mode).context("the agent session ended in an I/O error")? {
+        miri::cli::agent::Outcome::Ended => Ok(()),
+        miri::cli::agent::Outcome::Refused => std::process::exit(1),
+    }
 }
 
 /// Explain one diagnostic code. Rendering lives in the CLI layer; this arm only

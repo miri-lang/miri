@@ -1360,7 +1360,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::TargetChanging,
-    // BLD — Build and command-invocation (23 codes: 001-023)
+    // BLD — Build and command-invocation (24 codes: 001-024)
     "BLD",
     "001",
     BldUnknownDiagnosticCode,
@@ -1520,6 +1520,13 @@ diagnostics!(
     BldViewCouldNotNarrow,
     "Read Could Not Be Narrowed",
     Severity::Warning,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "024",
+    BldMessageNotFramed,
+    "Message Not Framed",
+    Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
 );
