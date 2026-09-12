@@ -30,6 +30,9 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 ///   `miri_rt_list_clone` to produce a deep copy instead of an IncRef.
 ///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined class
 ///   elements that implement `Cloneable`.
+/// - `elem_compare_fn`: If non-zero, called by `miri_rt_list_sort` to order two
+///   element values. Set for element types whose bytes are a reference rather
+///   than a value, which have no order of their own to read.
 #[repr(C)]
 pub struct MiriList {
     data: *mut u8,
@@ -42,6 +45,9 @@ pub struct MiriList {
     /// Clone function for managed elements: `fn(*mut u8) -> *mut u8`.
     /// When non-zero, `miri_rt_list_clone` calls this instead of IncRef-ing.
     elem_clone_fn: usize,
+    /// Comparator for elements that carry no order in their bytes:
+    /// `fn(*const u8, *const u8) -> isize`. Zero means order by the bytes.
+    elem_compare_fn: usize,
 }
 
 impl MiriList {
@@ -54,6 +60,7 @@ impl MiriList {
             elem_size,
             elem_drop_fn: 0,
             elem_clone_fn: 0,
+            elem_compare_fn: 0,
         }
     }
 
@@ -84,6 +91,7 @@ impl MiriList {
             elem_size,
             elem_drop_fn: 0,
             elem_clone_fn: 0,
+            elem_compare_fn: 0,
         }
     }
 
@@ -314,7 +322,6 @@ impl Drop for MiriList {
 
 /// Stable FFI interface for list operations.
 pub mod ffi {
-    use super::read_as_i64;
     use super::*;
     use crate::guard;
     use std::alloc::{alloc, dealloc, Layout};
@@ -428,6 +435,7 @@ pub mod ffi {
         (*list).elem_size = elem_size;
         (*list).elem_drop_fn = 0;
         (*list).elem_clone_fn = 0;
+        (*list).elem_compare_fn = 0;
         list
     }
 
@@ -694,6 +702,20 @@ pub mod ffi {
         }
     }
 
+    /// Sets the `elem_compare_fn` callback for this list.
+    ///
+    /// When non-zero, `miri_rt_list_sort` orders two elements by calling this
+    /// function with the values their slots hold, instead of reading those
+    /// slots as numbers.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_set_elem_compare_fn(ptr: *mut MiriList, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_compare_fn = fn_ptr;
+        }
+    }
+
     /// Decrements the RC of a managed List element and frees it if RC reaches zero.
     ///
     /// Used as `elem_drop_fn` by outer collections (Array, List, Set, Map) when
@@ -773,6 +795,7 @@ pub mod ffi {
 
         (*list).elem_drop_fn = src.elem_drop_fn;
         (*list).elem_clone_fn = src.elem_clone_fn;
+        (*list).elem_compare_fn = src.elem_compare_fn;
 
         if src.elem_clone_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
             let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
@@ -874,9 +897,10 @@ pub mod ffi {
         (*ptr).get((*ptr).len() - 1)
     }
 
-    /// Sorts the list in ascending order (elements compared as signed 64-bit integers).
+    /// Sorts the list in ascending order.
     ///
-    /// Uses insertion sort which is stable and efficient for small lists.
+    /// Elements are ordered by the comparator registered for the element type,
+    /// or by their bytes read as a signed 64-bit integer when none is.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
@@ -885,35 +909,12 @@ pub mod ffi {
             return;
         }
         let list = &mut *ptr;
-        if list.len < 2 || list.data.is_null() {
-            return;
-        }
-
-        let elem_size = list.elem_size;
-        let mut temp = vec![0u8; elem_size];
-
-        for i in 1..list.len {
-            // Copy element[i] to temp
-            let src = list.data.add(i * elem_size);
-            ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
-            let key = read_as_i64(temp.as_ptr(), elem_size);
-
-            let mut j = i;
-            while j > 0 {
-                let prev = list.data.add((j - 1) * elem_size);
-                let prev_val = read_as_i64(prev, elem_size);
-                if prev_val <= key {
-                    break;
-                }
-                // Shift element[j-1] to element[j]
-                let dest = list.data.add(j * elem_size);
-                ptr::copy_nonoverlapping(prev, dest, elem_size);
-                j -= 1;
-            }
-            // Place temp at position j
-            let dest = list.data.add(j * elem_size);
-            ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
-        }
+        crate::element_order::sort_elements(
+            list.data,
+            list.len,
+            list.elem_size,
+            list.elem_compare_fn,
+        );
     }
 
     /// Reverses the list in place.
@@ -950,22 +951,3 @@ pub mod ffi {
         }
     }
 } // pub mod ffi
-
-/// Reads raw bytes as a signed 64-bit integer for comparison purposes.
-///
-/// Handles common element sizes (1, 2, 4, 8 bytes) with sign extension.
-/// Other sizes are zero-padded.
-pub(crate) unsafe fn read_as_i64(ptr: *const u8, elem_size: usize) -> i64 {
-    match elem_size {
-        1 => *(ptr as *const i8) as i64,
-        2 => *(ptr as *const i16) as i64,
-        4 => *(ptr as *const i32) as i64,
-        8 => *(ptr as *const i64),
-        _ => {
-            let mut buf = [0u8; 8];
-            let copy_len = elem_size.min(8);
-            std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_len);
-            i64::from_ne_bytes(buf)
-        }
-    }
-}

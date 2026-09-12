@@ -15,7 +15,7 @@
 use super::context::{Context, TypeDefinition};
 use super::operators::missing_ordering_at_instantiation_message;
 use super::TypeChecker;
-use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use std::collections::{BTreeSet, HashMap};
@@ -72,6 +72,61 @@ impl TypeChecker {
             .entry(body)
             .or_default()
             .insert(parameter.to_string());
+    }
+
+    /// Record that the body being checked hands a container to a call that
+    /// orders that container's elements, when the element type is one of the
+    /// body's own generic parameters.
+    ///
+    /// The runtime knows an element only by its size, so a sort it performs has
+    /// nothing but the element's bytes to order by — which for a reference is
+    /// where the value lives rather than what it is. A body written against a
+    /// parameter states the need here, and the sites that pin the parameter
+    /// answer it, the same way an ordering operator written in Miri does.
+    pub(crate) fn record_elements_a_call_orders(
+        &mut self,
+        callee: &str,
+        container: &Type,
+        context: &Context,
+    ) {
+        if !crate::runtime_fns::orders_its_elements(callee) {
+            return;
+        }
+        let Some(element) = self.sorted_element_type(container) else {
+            return;
+        };
+        self.record_ordering_requirement(&element, context);
+    }
+
+    /// The element type of a container handed to such a call.
+    ///
+    /// A call written inside the container's own class names the receiver
+    /// without type arguments — `List`, not `List<T>` — so the element is read
+    /// from the class's own parameter list, in the position a written argument
+    /// would occupy.
+    fn sorted_element_type(&self, container: &Type) -> Option<Type> {
+        if let Some(element) = container.kind.sequence_element_kind() {
+            return Some(Type::new(element.clone(), container.span));
+        }
+        let TypeKind::Custom(name, None) = &container.kind else {
+            return None;
+        };
+        if !matches!(
+            BuiltinCollectionKind::from_name(name),
+            Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+        ) {
+            return None;
+        }
+        let Some(TypeDefinition::Class(class_def)) =
+            self.type_table.global_type_definitions.get(name.as_str())
+        else {
+            return None;
+        };
+        let parameter = class_def.generics.as_ref()?.first()?;
+        Some(Type::new(
+            TypeKind::Generic(parameter.name.clone(), None, TypeDeclarationKind::None),
+            container.span,
+        ))
     }
 
     /// Report every parameter of `body` that `substitution` pins to a type

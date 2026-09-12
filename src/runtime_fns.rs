@@ -64,6 +64,8 @@ pub mod rt {
     pub const ARRAY_SET_ELEM_DROP_FN: &str = "miri_rt_array_set_elem_drop_fn";
     /// Compiler-internal: registers the element clone function on an array, not in stdlib.
     pub const ARRAY_SET_ELEM_CLONE_FN: &str = "miri_rt_array_set_elem_clone_fn";
+    /// Compiler-internal: registers the element comparator on an array, not in stdlib.
+    pub const ARRAY_SET_ELEM_COMPARE_FN: &str = "miri_rt_array_set_elem_compare_fn";
 
     // ── Tuple ─────────────────────────────────────────────────────────────────
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
@@ -95,6 +97,8 @@ pub mod rt {
     pub const LIST_SET_ELEM_DROP_FN: &str = "miri_rt_list_set_elem_drop_fn";
     /// Compiler-internal: registers the element clone function, not in stdlib.
     pub const LIST_SET_ELEM_CLONE_FN: &str = "miri_rt_list_set_elem_clone_fn";
+    /// Compiler-internal: registers the element comparator, not in stdlib.
+    pub const LIST_SET_ELEM_COMPARE_FN: &str = "miri_rt_list_set_elem_compare_fn";
 
     // ── Map ──────────────────────────────────────────────────────────────────
     pub const MAP_NEW: &str = "miri_rt_map_new";
@@ -287,6 +291,7 @@ pub mod rt {
         ARRAY_DECREF_ELEMENT,
         ARRAY_SET_ELEM_DROP_FN,
         ARRAY_SET_ELEM_CLONE_FN,
+        ARRAY_SET_ELEM_COMPARE_FN,
         // Tuple
         TUPLE_LEN,
         // List
@@ -310,6 +315,7 @@ pub mod rt {
         LIST_DECREF_ELEMENT,
         LIST_SET_ELEM_DROP_FN,
         LIST_SET_ELEM_CLONE_FN,
+        LIST_SET_ELEM_COMPARE_FN,
         // Map
         MAP_NEW,
         MAP_FREE,
@@ -494,6 +500,18 @@ pub fn element_value_positions(name: &str) -> &'static [usize] {
         rt::MAP_SET => &[1, 2],
         _ => &[],
     }
+}
+
+/// Whether `name` orders the elements of the container it is handed.
+///
+/// The runtime knows an element only by its size, so a sort it performs reads
+/// those bytes as a number. An element type whose bytes are a reference carries
+/// no order in them, and one that defines no ordering at all has none to read:
+/// a body that hands its container to one of these needs the element type to
+/// order its values, and the type checker answers that requirement wherever the
+/// element type is pinned.
+pub fn orders_its_elements(name: &str) -> bool {
+    matches!(name, rt::LIST_SORT | rt::ARRAY_SORT)
 }
 
 /// Whether `name` hands its caller an element value as opaque bytes.

@@ -26,6 +26,18 @@ pub enum BuiltinCollectionKind {
 /// compiler. Mirrors the role of [`BuiltinCollectionKind`] / [`RESULT_TYPE_NAME`].
 pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
 
+/// Canonical name of the built-in `Comparable` trait, which a type implements
+/// to say how its values sort.
+///
+/// Centralized beside [`CLONEABLE_TRAIT_NAME`] so the type checker's ordering
+/// gate, the operator lowering that calls the method, and the element
+/// comparator codegen registers all name one trait.
+pub const ORDERING_TRAIT_NAME: &str = "Comparable";
+
+/// The method [`ORDERING_TRAIT_NAME`] declares: it answers which of two values
+/// sorts first, as a negative, zero or positive number.
+pub const ORDERING_METHOD_NAME: &str = "compare";
+
 /// Canonical name of the stdlib `Accelerable` capability trait.
 ///
 /// The residency gate dispatches on this trait to decide whether a type may

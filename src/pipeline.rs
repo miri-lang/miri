@@ -1331,7 +1331,9 @@ impl Pipeline {
                         let base = Self::mangle_method_name(class_name, &decl.name);
                         let mangled =
                             mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
-                        if lowered_names.contains(&mangled) || !called.contains(&mangled) {
+                        let reached = called.contains(&mangled)
+                            || Self::is_element_comparator_body(result, class_name, &decl.name);
+                        if lowered_names.contains(&mangled) || !reached {
                             continue;
                         }
                         Self::lower_one_instantiation_method(
@@ -1355,6 +1357,30 @@ impl Pipeline {
                 return Ok(());
             }
         }
+    }
+
+    /// Whether this method is what a container's element comparator calls.
+    ///
+    /// The ordering method of a class that orders its values is reached through
+    /// the comparator codegen registers on a List or Array of that class, which
+    /// is a reference no MIR body carries — so scanning call sites never finds
+    /// it, and the instantiation it needs has to be emitted on the strength of
+    /// the class implementing the trait.
+    fn is_element_comparator_body(
+        result: &PipelineResult,
+        class_name: &str,
+        method_name: &str,
+    ) -> bool {
+        use crate::ast::types::{ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME};
+        use crate::type_checker::context::TypeDefinition;
+        if method_name != ORDERING_METHOD_NAME {
+            return false;
+        }
+        matches!(
+            result.type_checker.type_definitions().get(class_name),
+            Some(TypeDefinition::Class(class_def))
+                if class_def.traits.iter().any(|t| t == ORDERING_TRAIT_NAME)
+        )
     }
 
     /// The `{Collection}_{method}` symbols a built-in collection declares itself.

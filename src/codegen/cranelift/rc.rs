@@ -6,10 +6,13 @@
 //! `translator.rs`; this module dispatches into them.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{
+    BuiltinCollectionKind, Type, TypeKind, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME,
+};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::translator::{
     empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
+    COMPARE_THUNK_PREFIX,
 };
 use crate::error::CodegenError;
 use crate::mir::rc::is_field_managed;
@@ -266,6 +269,38 @@ impl<'a> FunctionTranslator<'a> {
         crate::mir::lowering::apply_generic_sub(field_ty, &subs)
     }
 
+    /// Address of the comparator to register as a container's `elem_compare_fn`
+    /// for element type `elem_kind`, or `None` when the element's bytes are its
+    /// value and the runtime orders them itself.
+    ///
+    /// The element type is named the way the collection's decref path names it:
+    /// a string through its class, a custom type through its own name, and a
+    /// recorded instantiation of a generic class through that instantiation, so
+    /// the comparison runs the body compiled for the element's concrete type.
+    pub(crate) fn elem_compare_addr_for_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<Value>, CodegenError> {
+        let name = match Self::classify_element_shape(elem_kind) {
+            ElementShape::String => crate::ast::types::STRING_TYPE_NAME,
+            ElementShape::UserClass(name) => name,
+            ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
+        };
+        if !Self::orders_its_elements_by_compare(name, type_ctx.type_definitions) {
+            return Ok(None);
+        }
+        let symbol =
+            Self::generic_drop_thunk_name_part(name, Self::custom_type_args(elem_kind), type_ctx);
+        Ok(Some(Self::get_custom_compare_thunk_addr(
+            builder,
+            ctx,
+            &symbol,
+            type_ctx.ptr_type,
+        )?))
+    }
+
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
     ///
     /// Used when an empty `Set<T>()` aggregate is assigned: there are no operands
@@ -309,6 +344,26 @@ impl<'a> FunctionTranslator<'a> {
             Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
         {
             Self::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
+        }
+        Ok(())
+    }
+
+    /// Sets `elem_compare_fn` on `list_ptr` when the element type orders its
+    /// values through its own `compare`. Mirrors `emit_list_clone_fn_for_elem_kind`
+    /// for the ordering side, on the empty-constructor path where
+    /// `translate_rvalue` has no operands to inspect.
+    pub(crate) fn emit_list_compare_fn_for_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        list_ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+            return Ok(());
+        }
+        if let Some(addr) = Self::elem_compare_addr_for_kind(builder, ctx, elem_kind, type_ctx)? {
+            Self::call_rt_list_set_elem_compare_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
     }
@@ -1824,6 +1879,211 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Generates `__compare_{type_name}(a, b) -> int` for each concrete class
+    /// that implements the ordering trait.
+    ///
+    /// This is what a List or Array registers as its `elem_compare_fn`, so a
+    /// sort orders elements by what they hold rather than by the addresses the
+    /// slots contain. It delegates to the user's compiled `compare()` method,
+    /// which is where the type states its own order.
+    ///
+    /// The two element values are borrowed for the call: a callee owns none of
+    /// its parameters, so the container's references survive the comparison.
+    pub(crate) fn generate_compare_function(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        type_name: &str,
+        inst_args: Option<&[Type]>,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Result<(), CodegenError> {
+        if !Self::orders_its_elements_by_compare(type_name, type_definitions) {
+            return Ok(());
+        }
+
+        let ptr_type = isa.pointer_type();
+        let call_conv = isa.default_call_conv();
+        let compare_name = format!(
+            "{COMPARE_THUNK_PREFIX}{}",
+            Self::instantiated_symbol(type_name, inst_args)
+        );
+
+        let mut sig = Signature::new(call_conv);
+        sig.params.push(AbiParam::new(ptr_type));
+        sig.params.push(AbiParam::new(ptr_type));
+        sig.returns.push(AbiParam::new(ptr_type));
+
+        let func_id = module
+            .declare_function(&compare_name, Linkage::Export, &sig)
+            .map_err(|e| CodegenError::declare_function(compare_name.clone(), e.to_string()))?;
+
+        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
+            sig.clone(),
+        );
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        Self::emit_compare_body(
+            module,
+            ctx,
+            &mut builder_ctx,
+            &Self::instantiated_symbol(
+                &Self::resolve_compare_method_name(type_name, type_definitions),
+                inst_args,
+            ),
+            ptr_type,
+            call_conv,
+        )?;
+
+        module
+            .define_function(func_id, ctx)
+            .map_err(|e| CodegenError::define_function(compare_name, e.to_string()))?;
+        ctx.clear();
+        Ok(())
+    }
+
+    /// `base` mangled with an instantiation's type arguments, or `base` itself
+    /// when there is no instantiation to mangle.
+    fn instantiated_symbol(base: &str, inst_args: Option<&[Type]>) -> String {
+        match inst_args {
+            Some(args) => mangle_class_instantiation(base, args),
+            None => base.to_string(),
+        }
+    }
+
+    /// Whether a container of `type_name` elements can be sorted by asking the
+    /// elements themselves which comes first.
+    ///
+    /// A class that implements the ordering trait answers, as long as the
+    /// `compare` its chain resolves to has a body: a method declared without one
+    /// names no symbol the comparator could call.
+    fn orders_its_elements_by_compare(
+        type_name: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> bool {
+        if !matches!(
+            type_definitions.get(type_name),
+            Some(TypeDefinition::Class(_))
+        ) || !Self::class_implements(type_name, ORDERING_TRAIT_NAME, type_definitions)
+        {
+            return false;
+        }
+        crate::mir::lowering::dispatch::resolve_inherited_method(
+            type_definitions,
+            type_name,
+            ORDERING_METHOD_NAME,
+        )
+        .is_some_and(|(_, method)| !method.is_abstract)
+    }
+
+    /// Emit the body of `__compare_TypeName(a, b)`: order a null element before
+    /// every value, then call `compare_method_name`.
+    ///
+    /// A null element is not reachable from Miri source — a managed slot always
+    /// holds a value — but a container the runtime has cleared would otherwise
+    /// dereference one inside the user's method.
+    fn emit_compare_body(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        builder_ctx: &mut FunctionBuilderContext,
+        compare_method_name: &str,
+        ptr_type: cl_types::Type,
+        call_conv: cranelift_codegen::isa::CallConv,
+    ) -> Result<(), CodegenError> {
+        let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
+
+        let entry_block = builder.create_block();
+        builder.append_block_params_for_function_params(entry_block);
+        builder.switch_to_block(entry_block);
+        builder.seal_block(entry_block);
+        let left = builder.block_params(entry_block)[0];
+        let right = builder.block_params(entry_block)[1];
+
+        let call_block = builder.create_block();
+        let null_block = builder.create_block();
+        let null = builder.ins().iconst(ptr_type, 0);
+        let left_is_null =
+            builder
+                .ins()
+                .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, left, null);
+        let right_is_null =
+            builder
+                .ins()
+                .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, right, null);
+        let either_is_null = builder.ins().bor(left_is_null, right_is_null);
+        builder
+            .ins()
+            .brif(either_is_null, null_block, &[], call_block, &[]);
+
+        // A null on the left sorts first, a null on the right sorts last, and
+        // two nulls tie: exactly `right_is_null - left_is_null`.
+        builder.switch_to_block(null_block);
+        builder.seal_block(null_block);
+        let left_rank = builder.ins().uextend(ptr_type, left_is_null);
+        let right_rank = builder.ins().uextend(ptr_type, right_is_null);
+        let ordering = builder.ins().isub(right_rank, left_rank);
+        builder.ins().return_(&[ordering]);
+
+        builder.switch_to_block(call_block);
+        builder.seal_block(call_block);
+        let result = Self::emit_user_compare_call(
+            module,
+            &mut builder,
+            compare_method_name,
+            ptr_type,
+            call_conv,
+            [left, right],
+        )?;
+        builder.ins().return_(&[result]);
+
+        builder.seal_all_blocks();
+        builder.finalize();
+        Ok(())
+    }
+
+    /// Call the user's compiled `compare(self, other)` on two element values and
+    /// hand back the number it answers with.
+    fn emit_user_compare_call(
+        module: &mut ObjectModule,
+        builder: &mut FunctionBuilder,
+        compare_method_name: &str,
+        ptr_type: cl_types::Type,
+        call_conv: cranelift_codegen::isa::CallConv,
+        [left, right]: [Value; 2],
+    ) -> Result<Value, CodegenError> {
+        let mut sig = Signature::new(call_conv);
+        sig.params.push(AbiParam::new(ptr_type)); // self
+        sig.params.push(AbiParam::new(ptr_type)); // other
+        sig.params.push(AbiParam::new(ptr_type)); // allocator
+        sig.returns.push(AbiParam::new(ptr_type));
+
+        let func_id = module
+            .declare_function(compare_method_name, Linkage::Import, &sig)
+            .map_err(|e| {
+                CodegenError::declare_function(compare_method_name.to_string(), e.to_string())
+            })?;
+        let local_fn = module.declare_func_in_func(func_id, builder.func);
+        let no_allocator = builder.ins().iconst(ptr_type, 0);
+        let call = builder.ins().call(local_fn, &[left, right, no_allocator]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Resolves the mangled name of the `compare()` method for `type_name`,
+    /// applying the same concrete-caller / abstract-definer rule the clone thunk
+    /// does.
+    pub fn resolve_compare_method_name(
+        type_name: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> String {
+        crate::mir::lowering::dispatch::resolve_inherited_method(
+            type_definitions,
+            type_name,
+            ORDERING_METHOD_NAME,
+        )
+        .map(|(defining, _)| format!("{defining}_{ORDERING_METHOD_NAME}"))
+        .unwrap_or_else(|| format!("{type_name}_{ORDERING_METHOD_NAME}"))
+    }
+
     /// Resolves the mangled name of the `clone()` method for `type_name`.
     ///
     /// Walks the inheritance chain to find where `clone()` is defined.  The
@@ -1848,15 +2108,25 @@ impl<'a> FunctionTranslator<'a> {
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {
+        Self::class_implements(
+            type_name,
+            crate::ast::types::CLONEABLE_TRAIT_NAME,
+            type_definitions,
+        )
+    }
+
+    /// Returns true if `type_name` or any class it extends lists `trait_name`
+    /// among the traits it implements.
+    pub fn class_implements(
+        type_name: &str,
+        trait_name: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> bool {
         let mut current = type_name.to_string();
         loop {
             match type_definitions.get(&current) {
                 Some(TypeDefinition::Class(cd)) => {
-                    if cd
-                        .traits
-                        .iter()
-                        .any(|t| t == crate::ast::types::CLONEABLE_TRAIT_NAME)
-                    {
+                    if cd.traits.iter().any(|t| t == trait_name) {
                         return true;
                     }
                     match &cd.base_class {
