@@ -425,6 +425,11 @@ impl<'a> FunctionTranslator<'a> {
     }
     /// Read a value from a place.
     ///
+    /// Each projection is resolved against the type reached so far, not against
+    /// the root local's type: `words[0].text` takes its field offset from the
+    /// element's own layout, where the collection's layout would name a
+    /// different slot and hand back a neighbouring field.
+    ///
     /// When `expected_ty` is Some and the place has a Field projection that would
     /// normally load as `ptr_type` (e.g., enum or Option payload), use the expected type's
     /// Cranelift width instead. This prevents field-type erasure for payloads.
@@ -436,129 +441,171 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         expected_ty: Option<&Type>,
     ) -> Result<Value, CodegenError> {
-        let local_types = type_ctx.local_types;
-        let type_definitions = type_ctx.type_definitions;
         let ptr_type = type_ctx.ptr_type;
         let var = locals
             .get(&place.local)
             .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
 
         let mut value = builder.use_var(*var);
+        // The type at the current projection depth, advanced in step with
+        // `value` so every field offset is read out of the right layout.
+        let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
         // When the previous projection was an `Index` onto an inline vector
         // element, `value` holds the element *address* and this carries that
         // element's vector type so a following `Field` loads the scalar from it.
-        let mut inline_elem: Option<&TypeKind> = None;
+        let mut inline_elem: Option<TypeKind> = None;
 
-        for proj in &place.projection {
+        for (depth, proj) in place.projection.iter().enumerate() {
             match proj {
                 PlaceElem::Deref => {
                     value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
                     inline_elem = None;
                 }
                 PlaceElem::Field(idx) => {
-                    if let Some(vec_kind) = inline_elem {
-                        // `value` is the inline element address; load the field
-                        // scalar at its in-element offset.
-                        let (offset, field_ty) =
-                            layout::field_layout(vec_kind, *idx, type_definitions, ptr_type);
-                        value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
-                        inline_elem = None;
-                        continue;
-                    }
-                    let base_type = &local_types[place.local.0];
-                    if matches!(base_type.kind, TypeKind::Function(_)) {
-                        // Closure env field: capture `idx` lives at
-                        // payload_ptr + (idx+2)*ptr_size (slot 0=fn_ptr, slot 1=dtor_ptr).
-                        let offset = (*idx as i64 + 2) * ptr_type.bytes() as i64;
-                        value = builder
-                            .ins()
-                            .load(ptr_type, MemFlags::new(), value, offset as i32);
-                    } else {
-                        let (offset, mut field_ty) =
-                            layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
-                        // When loading an enum or Option payload field with a known destination
-                        // type, use that type instead of ptr_ty to avoid field-type erasure.
-                        // For enums, field_layout always returns ptr_ty; for Options,
-                        // Field(0) also returns ptr_ty. Use expected_ty when available.
-                        // This is especially important for generic enums like Result<T,E>
-                        // where the binding type is resolved but the aggregate definition is generic.
-                        let should_use_expected_ty = if expected_ty.is_some() {
-                            match &base_type.kind {
-                                TypeKind::Option(_) => true,
-                                TypeKind::Custom(name, _) => type_definitions
-                                    .get(name)
-                                    .map(|def| {
-                                        matches!(
-                                            def,
-                                            crate::type_checker::context::TypeDefinition::Enum(_)
-                                        )
-                                    })
-                                    .unwrap_or(false),
-                                // Generic type parameters (from type substitution in match bindings)
-                                // also need the expected type to resolve to concrete types
-                                TypeKind::Generic(_, _, _) => true,
-                                TypeKind::Int
-                                | TypeKind::I8
-                                | TypeKind::I16
-                                | TypeKind::I32
-                                | TypeKind::I64
-                                | TypeKind::I128
-                                | TypeKind::U8
-                                | TypeKind::U16
-                                | TypeKind::U32
-                                | TypeKind::U64
-                                | TypeKind::U128
-                                | TypeKind::Float
-                                | TypeKind::F16
-                                | TypeKind::F32
-                                | TypeKind::F64
-                                | TypeKind::String
-                                | TypeKind::Boolean
-                                | TypeKind::Identifier
-                                | TypeKind::RawPtr
-                                | TypeKind::List(_)
-                                | TypeKind::Array(_, _)
-                                | TypeKind::Map(_, _)
-                                | TypeKind::Tuple(_)
-                                | TypeKind::Set(_)
-                                | TypeKind::Result(_, _)
-                                | TypeKind::Future(_)
-                                | TypeKind::Function(_)
-                                | TypeKind::Meta(_)
-                                | TypeKind::Void
-                                | TypeKind::Error
-                                | TypeKind::Linear(_) => false,
-                            }
-                        } else {
-                            false
-                        };
-                        if should_use_expected_ty {
-                            if let Some(expected) = expected_ty {
-                                field_ty = crate::codegen::cranelift::types::translate_type_kind(
-                                    &expected.kind,
-                                    ptr_type,
-                                );
-                            }
-                        }
-                        value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
-                    }
+                    value = match inline_elem.take() {
+                        Some(vec_kind) => Self::load_inline_element_field(
+                            builder, value, &vec_kind, *idx, type_ctx,
+                        ),
+                        None => Self::load_owned_field(
+                            builder,
+                            value,
+                            &current_type,
+                            *idx,
+                            expected_ty,
+                            type_ctx,
+                        ),
+                    };
+                    current_type =
+                        Self::type_after_projection(place, depth, &current_type, type_ctx);
                 }
                 PlaceElem::Index(local) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
                         CodegenError::Internal(format!("Unknown index local: {:?}", local))
                     })?;
                     let idx_val = builder.use_var(*idx_var);
-                    let base_type = &local_types[place.local.0];
+                    let elem_type =
+                        Self::resolve_collection_elem_type_as_type(&current_type).cloned();
                     value = Self::translate_collection_index_read(
-                        builder, ctx, value, idx_val, base_type, type_ctx,
+                        builder,
+                        ctx,
+                        value,
+                        idx_val,
+                        &current_type,
+                        type_ctx,
                     )?;
-                    inline_elem = Self::resolve_collection_elem_type(base_type)
+                    inline_elem = elem_type
+                        .as_ref()
+                        .map(|t| t.kind.clone())
                         .filter(|k| inline_vec_element_layout(k, ptr_type).is_some());
+                    if let Some(elem_type) = elem_type {
+                        current_type = elem_type;
+                    }
                 }
             }
         }
 
         Ok(value)
+    }
+
+    /// Load field `idx` out of an inline vector element whose address is `value`.
+    ///
+    /// A collection lays vector elements out inline, so an index read yields the
+    /// element's address rather than a pointer stored in the slot; the field
+    /// scalar sits at its offset inside that element.
+    fn load_inline_element_field(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        vec_kind: &TypeKind,
+        idx: usize,
+        type_ctx: &TypeCtx,
+    ) -> Value {
+        let (offset, field_ty) =
+            layout::field_layout(vec_kind, idx, type_ctx.type_definitions, type_ctx.ptr_type);
+        builder.ins().load(field_ty, MemFlags::new(), value, offset)
+    }
+
+    /// Load field `idx` out of the aggregate of type `owner_type` at `value`.
+    ///
+    /// `owner_type` is the type reached at this projection depth, so a field
+    /// read off a collection element takes its offset from the element rather
+    /// than from the collection.
+    fn load_owned_field(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        owner_type: &Type,
+        idx: usize,
+        expected_ty: Option<&Type>,
+        type_ctx: &TypeCtx,
+    ) -> Value {
+        let ptr_type = type_ctx.ptr_type;
+        if matches!(owner_type.kind, TypeKind::Function(_)) {
+            // Closure env field: capture `idx` lives at
+            // payload_ptr + (idx+2)*ptr_size (slot 0=fn_ptr, slot 1=dtor_ptr).
+            let offset = (idx as i64 + 2) * ptr_type.bytes() as i64;
+            return builder
+                .ins()
+                .load(ptr_type, MemFlags::new(), value, offset as i32);
+        }
+        let (offset, mut field_ty) =
+            layout::field_layout(&owner_type.kind, idx, type_ctx.type_definitions, ptr_type);
+        if let Some(expected) = expected_ty {
+            if Self::field_width_comes_from_expected_ty(&owner_type.kind, type_ctx) {
+                field_ty =
+                    crate::codegen::cranelift::types::translate_type_kind(&expected.kind, ptr_type);
+            }
+        }
+        builder.ins().load(field_ty, MemFlags::new(), value, offset)
+    }
+
+    /// True when a field of `owner_kind` must be loaded at the destination's
+    /// width instead of the one `field_layout` reports.
+    ///
+    /// An enum or Option payload lays out as a pointer-sized slot whatever it
+    /// holds, and a generic parameter carries no width of its own, so loading
+    /// at the reported width erases the field's real type. A generic enum such
+    /// as `Result<T, E>` is the case that makes this load-bearing: the binding
+    /// is resolved where the aggregate definition is still generic.
+    fn field_width_comes_from_expected_ty(owner_kind: &TypeKind, type_ctx: &TypeCtx) -> bool {
+        match owner_kind {
+            TypeKind::Option(_) => true,
+            TypeKind::Custom(name, _) => type_ctx
+                .type_definitions
+                .get(name)
+                .map(|def| matches!(def, crate::type_checker::context::TypeDefinition::Enum(_)))
+                .unwrap_or(false),
+            TypeKind::Generic(_, _, _) => true,
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Meta(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => false,
+        }
     }
     /// Cast a value between Cranelift types.
     ///
