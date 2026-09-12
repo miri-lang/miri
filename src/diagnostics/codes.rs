@@ -1536,6 +1536,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "BLD",
+    "026",
+    BldTestFileBuilt,
+    "Test File Built",
+    Severity::Note,
+    false,
+    FixSafety::RequiresHumanReview,
 );
 
 #[cfg(test)]

@@ -118,6 +118,24 @@ fn has_executable_entry_point(program: &Program) -> bool {
     })
 }
 
+/// True when the file declares a function the test runner would call.
+///
+/// Such a file has no `main` by design: a test file holds only declarations,
+/// and the runner synthesizes the entry point. Reading it as a program with
+/// nothing to run reports a correct artifact as suspect, and proposes an edit
+/// — adding `main` — that the runner then refuses.
+fn declares_a_test(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let StatementKind::FunctionDeclaration(declaration) = &stmt.node else {
+            return false;
+        };
+        declaration
+            .attributes
+            .iter()
+            .any(|attribute| attribute.name == crate::ast::TEST_ATTRIBUTE)
+    })
+}
+
 /// What `run` and `build` report for a program with nothing to execute.
 ///
 /// A warning rather than an error, because an empty program, a file of `const`
@@ -139,6 +157,27 @@ fn nothing_to_run_warning() -> crate::error::diagnostic::Diagnostic {
         .help(
             "add a 'main' function, or check the file instead with 'miri check' if it is a module.",
         )
+        .build()
+}
+
+/// What `run` and `build` report for a file whose only callable code is tests.
+///
+/// A note rather than a warning: the file is correct as written, and the only
+/// thing worth saying is that the command used does not run what it holds. The
+/// executable a build produces from it calls none of its tests, so the report
+/// names the command that does.
+fn test_file_built_note() -> crate::error::diagnostic::Diagnostic {
+    use crate::diagnostics::DiagnosticCode;
+    use crate::error::diagnostic::DiagnosticBuilder;
+
+    let code = DiagnosticCode::BldTestFileBuilt;
+    DiagnosticBuilder::note(code.title())
+        .code(code.as_str())
+        .message(
+            "this file declares '@test' functions and no other entry point, so the executable \
+             built from it runs none of them",
+        )
+        .help("run the tests it declares with 'miri test' on this file.")
         .build()
 }
 
@@ -639,6 +678,7 @@ impl Pipeline {
         crate::ast::normalize::normalize(&mut ast);
 
         let nothing_to_run = !has_executable_entry_point(&ast);
+        let declares_tests = declares_a_test(&ast);
 
         wrap_script_in_main(&mut ast);
         patch_main_return(&mut ast);
@@ -655,7 +695,7 @@ impl Pipeline {
         // Reported after checking, so a file that also has real errors reports
         // those instead: a module whose imports collide should say so, not that
         // it has no entry point.
-        if nothing_to_run {
+        if nothing_to_run && !declares_tests {
             type_checker.record_warning(nothing_to_run_warning());
         }
 
@@ -665,6 +705,20 @@ impl Pipeline {
                 crate::error::format::format_diagnostic(
                     source,
                     warning,
+                    self.source_path.as_deref(),
+                )
+            );
+        }
+
+        // Printed rather than recorded, because it is not a warning: a test
+        // file is correct without an entry point, and the warning channel is
+        // what a caller holding the build to a no-warnings bar reads.
+        if nothing_to_run && declares_tests {
+            eprintln!(
+                "{}",
+                crate::error::format::format_diagnostic(
+                    source,
+                    &test_file_built_note(),
                     self.source_path.as_deref(),
                 )
             );

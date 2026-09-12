@@ -251,6 +251,15 @@ fn test_copy_clone_debug_eq_hash() {
     assert!(set.contains(&code));
 }
 
+/// Codes that report on the command rather than on anything wrong with the file.
+///
+/// The file such a code is raised on is correct as written; what the note says
+/// is that the command used does not do what the file is for. Listing them
+/// keeps that a deliberate choice and countable: a check that found a real
+/// problem has to reach the caller as a warning or an error, and a severity
+/// quietly lowered to a note is how one would stop being seen.
+const NOTE_SEVERITY_CODES: &[&str] = &["MER_BLD_026"];
+
 #[test]
 fn test_all_codes_have_usable_metadata() {
     // Calling each accessor proves only that it does not panic. What matters is
@@ -272,11 +281,21 @@ fn test_all_codes_have_usable_metadata() {
             "code {wire} disagrees with its own area/number metadata"
         );
 
-        assert!(
-            matches!(code.severity(), Severity::Error | Severity::Warning),
-            "code {wire} has severity {:?}; a registry entry is never a bare note",
-            code.severity()
-        );
+        if NOTE_SEVERITY_CODES.contains(&wire) {
+            assert_eq!(
+                code.severity(),
+                Severity::Note,
+                "code {wire} is listed as reporting on the command, but carries {:?}",
+                code.severity()
+            );
+        } else {
+            assert!(
+                matches!(code.severity(), Severity::Error | Severity::Warning),
+                "code {wire} has severity {:?}; a registry entry is a note only when listed \
+                 in NOTE_SEVERITY_CODES",
+                code.severity()
+            );
+        }
     }
 }
 
