@@ -23,6 +23,13 @@ pub static GPU_CONTEXT: Lazy<RwLock<Option<Arc<GpuContext>>>> = Lazy::new(|| RwL
 /// since been reset and must not be bound on the replacement device.
 static DEVICE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+/// Cached answer to "can this machine reach a GPU adapter?". `None` until the
+/// first probe; cleared by `miri_gpu_reset_context` so a reset that follows an
+/// adapter change re-probes rather than repeating a stale answer. Adapter
+/// enumeration costs milliseconds, and a program is free to ask the question in
+/// a loop, so the answer is not re-derived on every call.
+static ADAPTER_AVAILABLE: RwLock<Option<bool>> = RwLock::new(None);
+
 #[derive(Debug, Clone)]
 pub enum GpuError {
     NoAdapter,
@@ -109,6 +116,31 @@ fn optional_shader_features() -> Features {
     Features::SHADER_INT64 | Features::SHADER_F64 | Features::SHADER_F16 | Features::SUBGROUP
 }
 
+/// Builds the wgpu instance both the device path and the availability probe
+/// use.
+///
+/// Honors `WGPU_BACKEND` (e.g. `vulkan`) so headless CI can pin the software
+/// Vulkan adapter (Mesa lavapipe). Only the backend selection is taken from the
+/// environment; all other options stay at their defaults so this matches
+/// `Instance::default()` when no env is set.
+fn new_instance() -> Instance {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if let Some(backends) = wgpu::Backends::from_env() {
+        descriptor.backends = backends;
+    }
+    Instance::new(descriptor)
+}
+
+/// Adapter selection shared by the device path and the availability probe, so
+/// the probe answers for the same adapter a launch would go on to use.
+fn adapter_options() -> wgpu::RequestAdapterOptions<'static, 'static> {
+    wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }
+}
+
 /// Number of times device creation is attempted before giving up. A shared
 /// GPU box can momentarily report the adapter's device as lost (the Metal
 /// adapter is recycled between concurrent processes); a fresh instance plus a
@@ -152,21 +184,9 @@ impl GpuContext {
     }
 
     fn try_new() -> Result<Self, GpuError> {
-        // Honor `WGPU_BACKEND` (e.g. `vulkan`) so headless CI can pin the
-        // software Vulkan adapter (Mesa lavapipe). Only the backend selection
-        // is taken from the environment; all other options stay at their
-        // defaults so this matches `Instance::default()` when no env is set.
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        if let Some(backends) = wgpu::Backends::from_env() {
-            descriptor.backends = backends;
-        }
-        let instance = Instance::new(descriptor);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .map_err(|_| GpuError::NoAdapter)?;
+        let instance = new_instance();
+        let adapter = pollster::block_on(instance.request_adapter(&adapter_options()))
+            .map_err(|_| GpuError::NoAdapter)?;
 
         let required_shader_features = optional_shader_features() & adapter.features();
         // Request the adapter's full limits rather than the conservative
@@ -257,8 +277,8 @@ pub fn current_device_generation() -> u64 {
 
 /// `pub(crate)` so the inline launch path can lazily initialize the
 /// process-wide `GPU_CONTEXT` instead of holding its own. A single shared
-/// context is what makes `miri_gpu_is_available()` reflect the actual state
-/// after a `forall` dispatch.
+/// context is what lets every buffer and kernel operation reach the same
+/// device a `forall` dispatch created.
 pub(crate) fn init_gpu_context() -> Result<Arc<GpuContext>, GpuError> {
     if let Some(ctx) = GPU_CONTEXT.read().clone() {
         return Ok(ctx);
@@ -302,9 +322,39 @@ pub extern "C" fn miri_gpu_init() -> u8 {
     }
 }
 
+/// Whether this machine can reach a GPU adapter, whether or not a device has
+/// been created yet.
+///
+/// A live context answers immediately: its device proves its adapter. With no
+/// context, the adapter is requested on a throwaway instance which is dropped
+/// again, so asking the question never creates a device — a program that
+/// checks for a GPU and then decides not to use one pays for no device.
+fn adapter_is_available() -> bool {
+    if GPU_CONTEXT.read().is_some() {
+        return true;
+    }
+    // Read into a local first: the probe below must not run while a read guard
+    // is alive, because storing its answer takes the write guard.
+    let cached = *ADAPTER_AVAILABLE.read();
+    if let Some(available) = cached {
+        return available;
+    }
+    let available = probe_adapter();
+    // A concurrent probe may have stored the same answer already; both
+    // observed the same adapter, so either write leaves the cache correct.
+    *ADAPTER_AVAILABLE.write() = Some(available);
+    available
+}
+
+/// Requests an adapter purely to learn whether one exists, then drops it.
+/// Requesting an adapter creates no device and no queue.
+fn probe_adapter() -> bool {
+    pollster::block_on(new_instance().request_adapter(&adapter_options())).is_ok()
+}
+
 #[no_mangle]
 pub extern "C" fn miri_gpu_is_available() -> u8 {
-    u8::from(GPU_CONTEXT.read().is_some())
+    u8::from(adapter_is_available())
 }
 
 /// Drops the current GPU device and queue and invalidates every resident
@@ -327,6 +377,9 @@ pub extern "C" fn miri_gpu_reset_context() -> u64 {
     // waiting on it could hang — so the `Arc` is simply dropped and wgpu tears
     // the old device down.
     GPU_CONTEXT.write().take();
+    // The reset exists to pick up a changed adapter, so the cached
+    // availability answer describes the previous one and must be re-probed.
+    ADAPTER_AVAILABLE.write().take();
     crate::device_table::clear_resident();
     crate::buffer::clear_registry();
     new_generation

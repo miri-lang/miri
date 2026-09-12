@@ -12,11 +12,12 @@ runtime "gpu" fn miri_gpu_telemetry_readbacks() int
 runtime "gpu" fn miri_gpu_telemetry_fences() int
 runtime "gpu" fn miri_gpu_telemetry_releases() int
 
-/// Returns `true` when the GPU runtime has been initialized and a
-/// device is reachable, `false` otherwise.
+/// Returns `true` when a GPU adapter is reachable on this machine, `false`
+/// otherwise. The answer does not depend on whether anything has been launched
+/// yet, so it is the same before and after the first kernel.
 ///
-/// Probes the global runtime context without forcing initialization;
-/// safe to call from any program that imports `system.gpu`.
+/// Asking creates no device: a program that checks for a GPU and then decides
+/// not to use one pays for nothing.
 public fn is_gpu_available() bool
     return miri_gpu_is_available()
 

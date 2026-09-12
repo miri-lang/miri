@@ -83,11 +83,9 @@ pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
     }
 }
 
-/// Routes through the shared `context::GPU_CONTEXT` so a successful
-/// `forall` dispatch makes `miri_gpu_is_available()` (and therefore
-/// `system.gpu.is_gpu_available()`) start returning true. Keeping a
-/// separate `OnceCell` here would leave the public probe permanently
-/// false even after the runtime has booted a device.
+/// Routes through the shared `context::GPU_CONTEXT` so every dispatch, upload,
+/// and readback reaches one device per process. Keeping a separate `OnceCell`
+/// here would strand resident buffers on a device no other call site can see.
 fn ensure_context() -> Result<Arc<GpuContext>, GpuError> {
     init_gpu_context()
 }
