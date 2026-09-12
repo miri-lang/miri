@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, ORDERING_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
@@ -15,9 +15,6 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
-
-/// The method a type defines to say how its values sort.
-const ORDERING_METHOD_NAME: &str = "compare";
 
 #[allow(clippy::too_many_arguments)]
 fn try_lower_binary_trait_method(

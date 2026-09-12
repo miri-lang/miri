@@ -339,6 +339,7 @@ impl TypeChecker {
                     call_id,
                 );
                 self.check_call_pins_an_ordering(func, span, call_id);
+                self.record_element_ordering_for_call(func, positional_args, context);
                 result
             }
             TypeKind::Meta(inner_type) => {
@@ -1904,6 +1905,27 @@ impl TypeChecker {
             callee.clone(),
         );
         self.check_pinned_ordering(&body, &substitution, span);
+    }
+
+    /// State the ordering a call needs of the elements it sorts, against the
+    /// body that writes the call.
+    ///
+    /// Only a call written as a bare name carries this: the intrinsics that
+    /// order a container's elements are declared as free functions, and the
+    /// container they are handed is their first argument.
+    fn record_element_ordering_for_call(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        context: &Context,
+    ) {
+        let ExpressionKind::Identifier(callee, _) = &func.node else {
+            return;
+        };
+        let Some((_, container_ty)) = positional_args.first() else {
+            return;
+        };
+        self.record_elements_a_call_orders(callee, container_ty, context);
     }
 
     fn store_generic_call_mapping(

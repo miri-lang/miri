@@ -234,6 +234,7 @@ impl Backend for CraneliftBackend {
         self.declare_runtime_imports(&mut module)?;
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
         self.generate_structural_element_decref_functions(&mut module, &mut ctx, &isa, bodies)?;
+        self.generate_element_compare_functions(&mut module, &mut ctx, &isa)?;
         self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
         let kernel_registry =
             crate::codegen::cranelift::gpu_launch::build_kernel_registry(&mut module, bodies)?;
@@ -658,6 +659,84 @@ impl CraneliftBackend {
                 &self.type_definitions,
             )?;
             self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
+        }
+        Ok(())
+    }
+
+    /// Generate `__compare_TypeName` for every type whose values carry an
+    /// order, so a List or Array of them can be sorted by that order.
+    ///
+    /// Kept apart from the drop-thunk pass: that one skips the built-in classes
+    /// whose drop path routes through a runtime helper, and one of those —
+    /// the string type — is the element type sorting by content matters most
+    /// for. Names are sorted so the object file comes out the same on every
+    /// build.
+    ///
+    /// A generic class also gets one thunk per recorded instantiation, so a
+    /// `Box<String>` element is compared by the body compiled for `String`
+    /// rather than by the shared one, which reads its own parameter.
+    fn generate_element_compare_functions(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+    ) -> Result<(), CodegenError> {
+        let mut names: Vec<&str> = self
+            .type_definitions
+            .keys()
+            .map(String::as_str)
+            .filter(|name| BuiltinCollectionKind::from_name(name).is_none())
+            .collect();
+        names.sort_unstable();
+        for type_name in names {
+            FunctionTranslator::generate_compare_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                None,
+                &self.type_definitions,
+            )?;
+            self.generate_instantiation_compare_functions(module, ctx, isa, type_name)?;
+        }
+        Ok(())
+    }
+
+    /// Generate `__compare_TypeName__Args` for each recorded instantiation of a
+    /// generic class that orders its values, deduplicated by mangled name so the
+    /// same symbol is never defined twice.
+    fn generate_instantiation_compare_functions(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+        type_name: &str,
+    ) -> Result<(), CodegenError> {
+        let Some(TypeDefinition::Class(class_def)) = self.type_definitions.get(type_name) else {
+            return Ok(());
+        };
+        if class_def.generics.is_none() {
+            return Ok(());
+        }
+        let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
+            return Ok(());
+        };
+        let mut emitted: Vec<String> = Vec::new();
+        for args in tuples {
+            let mangled =
+                crate::codegen::cranelift::rc::mangle_class_instantiation(type_name, args);
+            if emitted.contains(&mangled) {
+                continue;
+            }
+            FunctionTranslator::generate_compare_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                Some(args),
+                &self.type_definitions,
+            )?;
+            emitted.push(mangled);
         }
         Ok(())
     }

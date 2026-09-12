@@ -1181,6 +1181,13 @@ impl<'a> FunctionTranslator<'a> {
         )? {
             FunctionTranslator::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
         }
+        FunctionTranslator::emit_list_compare_fn_for_elem_kind(
+            builder,
+            ctx,
+            &inner_ty.kind,
+            list_ptr,
+            type_ctx,
+        )?;
         Ok(())
     }
 
@@ -1218,6 +1225,13 @@ impl<'a> FunctionTranslator<'a> {
             list_ptr,
             ptr_type,
             type_ctx.type_definitions,
+        )?;
+        FunctionTranslator::emit_list_compare_fn_for_elem_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            list_ptr,
+            type_ctx,
         )?;
         Ok(())
     }

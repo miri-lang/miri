@@ -29,11 +29,19 @@ use std::collections::HashMap;
 /// evaluated entirely at compile time.
 const OOM_TRAP_CODE: TrapCode = TrapCode::unwrap_user(2);
 
+/// Registers one element callback on a container, given the container pointer
+/// and the address of the function to record.
+type ElementCallbackSetter =
+    fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>;
+
 /// Per-container runtime setter callbacks used by `register_elem_drop_clone`.
 #[derive(Clone, Copy)]
 struct ElementCallbackSetters {
-    set_drop: fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>,
-    set_clone: fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>,
+    set_drop: ElementCallbackSetter,
+    set_clone: ElementCallbackSetter,
+    /// Registers the element comparator, for the containers that can be sorted.
+    /// `None` for a set and for a map's values, which have no order to keep.
+    set_compare: Option<ElementCallbackSetter>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -460,6 +468,7 @@ impl<'a> FunctionTranslator<'a> {
                 ElementCallbackSetters {
                     set_drop: Self::call_rt_array_set_elem_drop_fn,
                     set_clone: Self::call_rt_array_set_elem_clone_fn,
+                    set_compare: Some(Self::call_rt_array_set_elem_compare_fn),
                 },
             )?;
         }
@@ -503,6 +512,7 @@ impl<'a> FunctionTranslator<'a> {
                     ElementCallbackSetters {
                         set_drop: Self::call_rt_list_set_elem_drop_fn,
                         set_clone: Self::call_rt_list_set_elem_clone_fn,
+                        set_compare: Some(Self::call_rt_list_set_elem_compare_fn),
                     },
                 )?;
             }
@@ -628,6 +638,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementCallbackSetters {
                 set_drop: Self::call_rt_map_set_val_drop_fn,
                 set_clone: Self::call_rt_map_set_val_clone_fn,
+                set_compare: None,
             },
         )
     }
@@ -661,6 +672,7 @@ impl<'a> FunctionTranslator<'a> {
                     ElementCallbackSetters {
                         set_drop: Self::call_rt_set_set_elem_drop_fn,
                         set_clone: Self::call_rt_set_set_elem_clone_fn,
+                        set_compare: None,
                     },
                 )?;
             }
@@ -668,7 +680,8 @@ impl<'a> FunctionTranslator<'a> {
         Ok(set_ptr)
     }
 
-    /// Register decref + clone runtime callbacks for an element kind onto a container.
+    /// Register the decref, clone and ordering runtime callbacks for an element
+    /// kind onto a container.
     ///
     /// `setters` are the container-specific runtime setter callbacks (e.g.
     /// `call_rt_array_set_elem_drop_fn` / `call_rt_array_set_elem_clone_fn`).
@@ -695,6 +708,12 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
         )? {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
+        }
+        if let Some(set_compare) = setters.set_compare {
+            if let Some(addr) = Self::elem_compare_addr_for_kind(builder, ctx, elem_kind, type_ctx)?
+            {
+                set_compare(builder, ctx, container_ptr, addr)?;
+            }
         }
         Ok(())
     }

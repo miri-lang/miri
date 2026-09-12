@@ -9,7 +9,8 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{
-    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, STRING_TYPE_NAME,
+    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, ORDERING_TRAIT_NAME,
+    STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
@@ -18,9 +19,6 @@ use crate::ast::UnaryOp;
 /// refuses. The comparison is expanded inline, so an unbounded chain would
 /// exhaust the compiler's stack on user input.
 const MAX_STRUCTURAL_EQUALITY_DEPTH: usize = 64;
-
-/// The trait a type implements to say how its values sort.
-pub(crate) const ORDERING_TRAIT_NAME: &str = "Comparable";
 
 /// True for the operators that ask which operand sorts first, as opposed to
 /// whether the two operands are the same.

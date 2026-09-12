@@ -30,6 +30,9 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 ///   `miri_rt_array_clone` to produce a deep copy instead of an IncRef.
 ///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined
 ///   class elements that implement `Cloneable`.
+/// - `elem_compare_fn`: If non-zero, called by `miri_rt_array_sort` to order two
+///   element values. Set for element types whose bytes are a reference rather
+///   than a value, which have no order of their own to read.
 #[repr(C)]
 pub struct MiriArray {
     data: *mut u8,
@@ -37,6 +40,7 @@ pub struct MiriArray {
     elem_size: usize,
     elem_drop_fn: usize,
     elem_clone_fn: usize,
+    elem_compare_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
@@ -116,6 +120,7 @@ pub mod ffi {
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
                     (*arr).elem_clone_fn = 0;
+                    (*arr).elem_compare_fn = 0;
                     return arr;
                 }
             };
@@ -127,6 +132,7 @@ pub mod ffi {
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
                     (*arr).elem_clone_fn = 0;
+                    (*arr).elem_compare_fn = 0;
                     return arr;
                 }
             };
@@ -142,6 +148,7 @@ pub mod ffi {
         (*arr).elem_size = elem_size;
         (*arr).elem_drop_fn = 0;
         (*arr).elem_clone_fn = 0;
+        (*arr).elem_compare_fn = 0;
 
         arr
     }
@@ -232,6 +239,20 @@ pub mod ffi {
         guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_clone_fn = fn_ptr;
+        }
+    }
+
+    /// Sets the `elem_compare_fn` callback for this array.
+    ///
+    /// When non-zero, `miri_rt_array_sort` orders two elements by calling this
+    /// function with the values their slots hold, instead of reading those
+    /// slots as numbers.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set_elem_compare_fn(ptr: *mut MiriArray, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_compare_fn = fn_ptr;
         }
     }
 
@@ -386,6 +407,7 @@ pub mod ffi {
         }
         (*new_arr).elem_drop_fn = src.elem_drop_fn;
         (*new_arr).elem_clone_fn = src.elem_clone_fn;
+        (*new_arr).elem_compare_fn = src.elem_compare_fn;
         if src.elem_clone_fn != 0 && !src.data.is_null() && src.elem_count > 0 && src.elem_size > 0
         {
             let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
@@ -414,9 +436,10 @@ pub mod ffi {
         new_arr
     }
 
-    /// Sorts the array in ascending order (elements compared as signed 64-bit integers).
+    /// Sorts the array in ascending order.
     ///
-    /// Uses insertion sort which is stable and efficient for small arrays.
+    /// Elements are ordered by the comparator registered for the element type,
+    /// or by their bytes read as a signed 64-bit integer when none is.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
@@ -425,32 +448,12 @@ pub mod ffi {
             return;
         }
         let arr = &*ptr;
-        if arr.elem_count < 2 || arr.data.is_null() {
-            return;
-        }
-
-        let elem_size = arr.elem_size;
-        let mut temp = vec![0u8; elem_size];
-
-        for i in 1..arr.elem_count {
-            let src = arr.data.add(i * elem_size);
-            ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
-            let key = crate::list::read_as_i64(temp.as_ptr(), elem_size);
-
-            let mut j = i;
-            while j > 0 {
-                let prev = arr.data.add((j - 1) * elem_size);
-                let prev_val = crate::list::read_as_i64(prev, elem_size);
-                if prev_val <= key {
-                    break;
-                }
-                let dest = arr.data.add(j * elem_size);
-                ptr::copy_nonoverlapping(prev, dest, elem_size);
-                j -= 1;
-            }
-            let dest = arr.data.add(j * elem_size);
-            ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
-        }
+        crate::element_order::sort_elements(
+            arr.data,
+            arr.elem_count,
+            arr.elem_size,
+            arr.elem_compare_fn,
+        );
     }
 
     /// Returns a raw pointer to the underlying data buffer.

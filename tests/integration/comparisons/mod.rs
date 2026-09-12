@@ -7,5 +7,6 @@ pub mod float;
 pub mod integer;
 pub mod logical;
 pub mod ordering;
+pub mod sorting;
 pub mod string;
 pub mod structural_equality;
