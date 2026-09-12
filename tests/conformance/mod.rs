@@ -543,6 +543,7 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_BLD_023", "Command-invocation diagnostic (miri view --around narrowed nothing); reports how much of a declaration a read returned rather than a property of the source"),
     ("MER_BLD_024", "Command-invocation diagnostic (miri agent read a message that was not a Content-Length frame); reports what arrived on stdin rather than a property of the source"),
     ("MER_BLD_025", "Command-invocation diagnostic (miri test discovered no @test at all); reports what the walk read rather than a property of the source"),
+    ("MER_BLD_026", "Command-invocation diagnostic (miri run/build on a file whose only callable code is tests); the corpus runs `miri check`, which accepts a module and does not raise it"),
     ("MER_BLD_001", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),
     ("MER_BLD_002", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),
     ("MER_BLD_003", "Command-invocation diagnostic (miri check/build/explain/fix); not reachable from .mi source"),

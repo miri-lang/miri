@@ -12,7 +12,9 @@ pub enum Severity {
     Error,
     /// Warning - compilation continues, user should address.
     Warning,
-    /// Note - additional context for another diagnostic.
+    /// Note - reports on the command rather than on the source, either as
+    /// additional context for another diagnostic or on its own. Compilation
+    /// continues and there is nothing in the file for the author to address.
     Note,
 }
 
