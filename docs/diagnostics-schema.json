@@ -143,6 +143,14 @@
       "items": {
         "$ref": "#/$defs/JsonCode"
       }
+    },
+    "gpu": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "What the run's GPU work cost (run command only). Absent for a program that never reached the GPU runtime, which is what distinguishes no GPU work from GPU work that cost nothing.",
+      "$ref": "#/$defs/JsonGpuTelemetry"
     }
   },
   "required": [
@@ -817,6 +825,29 @@
         "retired",
         "fixSafety",
         "repairs"
+      ]
+    },
+    "JsonGpuTelemetry": {
+      "type": "object",
+      "description": "Residency cost counters for a run that used the GPU. A non-zero launch count beside a readback count of zero says the values the program printed were never transferred back from the device.",
+      "properties": {
+        "uploads": {
+          "type": "integer",
+          "description": "Host buffers copied to the device."
+        },
+        "launches": {
+          "type": "integer",
+          "description": "Kernel dispatches."
+        },
+        "readbacks": {
+          "type": "integer",
+          "description": "Device buffers copied back to the host."
+        }
+      },
+      "required": [
+        "uploads",
+        "launches",
+        "readbacks"
       ]
     }
   }

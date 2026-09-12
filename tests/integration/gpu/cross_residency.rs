@@ -328,3 +328,123 @@ fn main()
         "cannot be represented in device code",
     );
 }
+
+/// A readback into an already-declared binding (`h = g`) transfers the device
+/// buffer exactly as the declaring spelling (`let h = g`) does. The assigned
+/// binding is read *before* the declaring spelling runs: a readback into the
+/// shared host buffer would otherwise repair the assignment after the fact and
+/// make a missing transfer look correct.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn assignment_into_existing_var_reads_back_like_a_declaration() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+gpu fn fill(dst out Array<int, 4>)
+    dst[kernel.global_idx.x] = kernel.global_idx.x + 99
+
+fn main()
+    gpu var out = Array<int, 4>()
+    fill(out).launch(Dim3(4, 1, 1), Dim3(1, 1, 1))
+
+    var assigned = Array<int, 4>()
+    assigned = out
+    println(f\"{assigned[0]} {assigned[1]} {assigned[2]} {assigned[3]}\")
+
+    let declared = out
+    println(f\"{declared[0]} {declared[1]} {declared[2]} {declared[3]}\")
+",
+        "99 100 101 102\n99 100 101 102",
+    );
+}
+
+/// The assignment spelling pays exactly one readback, and the gpu binding
+/// survives it: a declaring readback afterwards answers with the same values
+/// and costs a second one.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn assignment_readback_leaves_the_gpu_binding_readable() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.gpu
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var arr = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        arr[i] = i * i
+
+    var h = [0, 0, 0, 0]
+    h = arr
+    println(f\"{h[3]} {gpu_readbacks()}\")
+
+    let h2 = arr
+    println(f\"{h2[3]} {gpu_readbacks()}\")
+",
+        "9 1\n9 2",
+    );
+}
+
+/// A gpu-resident scalar assigned into an existing host `var` is read back the
+/// same way a declaration reads it, and is read before the declaring spelling
+/// runs.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn scalar_assignment_into_existing_var_reads_back() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var data = [1, 2, 3, 4]
+    gpu let total = data.reduce(0, fn(a i32, b i32) i32: a + b)
+
+    var assigned = 0
+    assigned = total
+    println(f\"{assigned}\")
+
+    let declared = total
+    println(f\"{declared}\")
+",
+        "10\n10",
+    );
+}
+
+/// The class gate. Every program the suite compiles runs with `MIRI_VERIFY_MIR`
+/// findings fatal, and the verifier now refuses any copy of a gpu binding into
+/// a host binding that no readback fences — whichever spelling emitted it. A
+/// lowering path added later that forgets the fence fails the build rather than
+/// shipping as a silent no-op. Building is enough to run the check, so this
+/// covers the class on a machine with no adapter.
+#[test]
+fn both_readback_spellings_pass_the_cross_residency_verifier() {
+    assert_builds(
+        "
+use system.collections.array
+
+fn main()
+    gpu var g = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        g[i] = i * i
+
+    var assigned = [0, 0, 0, 0]
+    assigned = g
+    let declared = g
+    println(f\"{assigned.length()} {declared.length()}\")
+",
+    );
+}

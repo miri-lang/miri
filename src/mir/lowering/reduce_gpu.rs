@@ -27,10 +27,7 @@ use crate::mir::{
 use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::forall_gpu::{compute_thread_index, int_constant, needs_int_narrowing, push_assign};
-
-/// Runtime entry that fences outstanding device writes and copies a
-/// `gpu`-resident buffer back to its host array.
-const READBACK_FN: &str = "miri_gpu_readback";
+use super::variable::READBACK_FN;
 
 /// Block size for GPU reduction kernels (1D workgroups, 256 threads).
 /// This value is coordinated with `GPU_REDUCE_BLOCK_SIZE`

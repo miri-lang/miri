@@ -390,6 +390,13 @@ fn resolve_member_field_index(
     }
 }
 
+// TODO: assigning a collection into an already-initialised managed field empties
+// it — `box.data = src` leaves the field holding a freed buffer, which the heap
+// guard reports as a use-after-free in `miri_rt_array_element_at` and a program
+// reads as an empty collection or a crash. The `Reassign` below releases the
+// field's old value; the source appears to be released as well rather than
+// retained for its new owner. Not residency-specific: it reproduces with no
+// `gpu` binding in the program.
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
@@ -728,6 +735,48 @@ fn emit_gpu_upload(
     Ok(())
 }
 
+/// A gpu-resident binding read into an existing host binding (`h = g`) is the
+/// same cross-residency transfer the declaring spelling (`let h = g`) performs,
+/// and it has to be fenced here too. The assignment copies the gpu binding's
+/// *host* array, which holds its zero initialisation until the device buffer is
+/// copied into it — so without this the transfer silently does not happen and
+/// the program reads its own initial values back as a result.
+///
+/// Emitted before the right-hand side is lowered, so the value the assignment
+/// copies is the one the device produced.
+///
+/// A gpu-resident target is left alone: `gpu_b = gpu_a` stays on the device,
+/// and a host array assigned into a gpu binding is an upload, which
+/// `handle_managed_place_assign` emits instead.
+fn emit_assigned_source_readback(
+    ctx: &mut LoweringContext,
+    lhs: &crate::ast::expression::LeftHandSideExpression,
+    rhs: &Expression,
+    span: crate::error::syntax::Span,
+) {
+    if assignment_target_is_gpu_resident(ctx, lhs) {
+        return;
+    }
+    crate::mir::lowering::variable::emit_cross_residency_readback(ctx, Some(rhs), span);
+}
+
+/// Whether an assignment writes into a `gpu`-resident binding. Only a bare
+/// identifier can name one: a field or an element belongs to a host object.
+fn assignment_target_is_gpu_resident(
+    ctx: &LoweringContext,
+    lhs: &crate::ast::expression::LeftHandSideExpression,
+) -> bool {
+    let crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) = lhs else {
+        return false;
+    };
+    let ExpressionKind::Identifier(name, _) = &id_expr.node else {
+        return false;
+    };
+    ctx.variable_map
+        .get(name.as_str())
+        .is_some_and(|local| ctx.body.local_decls[local.0].residency == MirResidency::Gpu)
+}
+
 pub(crate) fn lower_assignment_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -736,6 +785,7 @@ pub(crate) fn lower_assignment_expr(
     let ExpressionKind::Assignment(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
+    emit_assigned_source_readback(ctx, lhs, rhs, expr.span);
     match &**lhs {
         crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) => {
             assign_to_identifier(ctx, id_expr, op, rhs, expr, dest)

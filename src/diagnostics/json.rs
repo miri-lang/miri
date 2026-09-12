@@ -65,6 +65,9 @@ pub struct DiagnosticsEnvelope {
     /// Diagnostic code registry (explain list command only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codes: Option<Vec<JsonCode>>,
+    /// What the run's GPU work cost (run command, programs that used the GPU).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<JsonGpuTelemetry>,
 }
 
 impl DiagnosticsEnvelope {
@@ -90,6 +93,7 @@ impl DiagnosticsEnvelope {
             patch: None,
             skills: None,
             codes: None,
+            gpu: None,
         }
     }
 
@@ -166,6 +170,31 @@ impl DiagnosticsEnvelope {
         self.codes = Some(codes);
         self
     }
+
+    /// Set what the run's GPU work cost.
+    pub fn with_gpu(mut self, gpu: JsonGpuTelemetry) -> Self {
+        self.gpu = Some(gpu);
+        self
+    }
+}
+
+/// What a run's GPU work cost, in the residency operations the cost model is
+/// written in.
+///
+/// Present exactly when the run reached the GPU runtime, which is what makes
+/// the three numbers readable together: a launch count beside a readback count
+/// of zero says the results a program printed were never transferred back,
+/// which is otherwise indistinguishable from a kernel that computed those
+/// values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonGpuTelemetry {
+    /// Host buffers copied to the device.
+    pub uploads: u64,
+    /// Kernel dispatches.
+    pub launches: u64,
+    /// Device buffers copied back to the host.
+    pub readbacks: u64,
 }
 
 /// What a `miri view` call read back.

@@ -89,6 +89,13 @@ pub fn release(handle_id: u64) -> bool {
 /// Safe to call with any value; `handle_id` is an opaque key.
 #[no_mangle]
 pub extern "C" fn miri_gpu_release(handle_id: u64) {
+    // The compiler emits this at every `gpu let` / `gpu var`, so it is the
+    // earliest point at which a program's GPU use is observable from outside
+    // the process. Reporting here is what lets a run that declared a gpu
+    // binding and never launched anything be told apart from one that never
+    // reached the GPU at all: the first reports zeros, the second reports
+    // nothing.
+    crate::telemetry::report();
     let _ = release(handle_id);
 }
 

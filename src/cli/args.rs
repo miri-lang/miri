@@ -70,7 +70,8 @@ pub enum AgentFlavor {
     long_about = "Miri Compiler - a modern, GPU-first, statically-typed programming language.\n\n\
 Global options:\n\n\
 --verify-mir: Run the MIR verification pass after Perceus RC insertion, checking RC invariants \
-(StorageLive/Dead balance, no RC ops on parameters). Disabled by default. Also enabled by \
+(StorageLive/Dead balance, no RC ops on parameters) and that every copy of a gpu-resident \
+binding to the host is fenced by a readback. Disabled by default. Also enabled by \
 setting MIRI_VERIFY_MIR to any non-empty value in the environment.\n\n\
 --color: Control ANSI color codes in diagnostic output. `auto` (default) detects TTY and emits \
 colors only if stderr is a terminal. `always` forces color codes on; useful for piping to \

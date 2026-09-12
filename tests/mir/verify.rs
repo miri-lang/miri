@@ -12,11 +12,12 @@
 //! because the verifier is right is distinguishable from one passing because the
 //! verifier reports nothing at all.
 
-use miri::ast::literal::Literal;
+use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
-use miri::mir::verify::{verify_body, VerificationViolation};
+use miri::mir::body::{BindingResidency, DeviceHandleId};
+use miri::mir::verify::{verify_body, verify_cross_residency_readback, VerificationViolation};
 use miri::mir::{
     Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
@@ -1047,7 +1048,7 @@ fn main()
     );
     assert!(result.stdout.contains("hello"), "got: {}", result.output());
     assert!(
-        !result.stderr.contains("RC invariant violation"),
+        !result.stderr.contains("MIR invariant violation"),
         "got: {}",
         result.stderr
     );
@@ -1132,4 +1133,113 @@ fn dealloc_in_one_arm_and_decref_in_the_other_verifies_clean() {
         ],
     );
     assert_clean(&mixed, "a dealloc on one arm and a decref on the other");
+}
+
+/// A body whose local 1 is a `gpu`-resident binding carrying `handle`, local 2
+/// a host binding of the same type, and local 3 an unmanaged call destination.
+fn cross_residency_body(handle: u64, blocks: Vec<BasicBlockData>) -> Body {
+    let mut body = body_of(&[void_ty(), string_ty(), string_ty(), void_ty()], 0, blocks);
+    body.local_decls[1].residency = BindingResidency::Gpu;
+    body.local_decls[1].device_handle = Some(DeviceHandleId(handle));
+    body
+}
+
+/// The handle argument a readback call carries, spelled as lowering spells it.
+fn handle_argument(handle: u64) -> Operand {
+    constant(
+        Type::new(TypeKind::Int, span()),
+        Literal::Integer(IntegerLiteral::I64(handle as i64)),
+    )
+}
+
+#[test]
+fn copying_a_gpu_binding_to_the_host_without_a_readback_is_reported() {
+    // The defect 15.48 recorded: the copy runs, the host binding keeps its own
+    // initial contents, and the program exits 0 having transferred nothing.
+    let unfenced = cross_residency_body(7, vec![block(vec![assign_copy(2, 1)], ret())]);
+
+    let violations = verify_cross_residency_readback(&unfenced);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert_eq!(violations[0].local, Local(1));
+    assert!(
+        violations[0].message.contains("no readback"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn a_readback_before_the_copy_verifies_clean() {
+    let fenced = cross_residency_body(
+        7,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_readback",
+                    vec![handle_argument(7), Operand::Copy(place(1))],
+                    3,
+                    1,
+                ),
+            ),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+
+    let violations = verify_cross_residency_readback(&fenced);
+    assert!(
+        violations.is_empty(),
+        "a fenced copy must verify clean, got: {}",
+        messages(&violations)
+    );
+}
+
+/// The readback has to name the handle being copied: fencing a different
+/// binding's buffer leaves this one's transfer as silent as no fence at all.
+#[test]
+fn a_readback_of_another_handle_does_not_fence_this_copy() {
+    let wrong_handle = cross_residency_body(
+        7,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_readback",
+                    vec![handle_argument(9), Operand::Copy(place(1))],
+                    3,
+                    1,
+                ),
+            ),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+
+    let violations = verify_cross_residency_readback(&wrong_handle);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A copy between two gpu-resident bindings stays on the device, so nothing
+/// has to be fenced for it.
+#[test]
+fn a_gpu_to_gpu_copy_needs_no_readback() {
+    let mut gpu_to_gpu = cross_residency_body(7, vec![block(vec![assign_copy(2, 1)], ret())]);
+    gpu_to_gpu.local_decls[2].residency = BindingResidency::Gpu;
+    gpu_to_gpu.local_decls[2].device_handle = Some(DeviceHandleId(8));
+
+    let violations = verify_cross_residency_readback(&gpu_to_gpu);
+    assert!(
+        violations.is_empty(),
+        "a gpu-to-gpu copy must verify clean, got: {}",
+        messages(&violations)
+    );
 }
