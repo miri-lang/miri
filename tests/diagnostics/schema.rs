@@ -252,6 +252,11 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             fix_safety: "local-edit".to_string(),
             repairs: vec!["drop-extra-arguments".to_string()],
         }]),
+        gpu: Some(miri::diagnostics::json::JsonGpuTelemetry {
+            uploads: 1,
+            launches: 2,
+            readbacks: 1,
+        }),
     }
 }
 

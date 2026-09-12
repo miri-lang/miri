@@ -25,7 +25,11 @@ use crate::error::lowering::LoweringError;
 
 /// Runtime entry that fences outstanding device writes and copies a
 /// `gpu`-resident buffer back to its host array.
-const READBACK_FN: &str = "miri_gpu_readback";
+///
+/// Shared with the verifier, which recognizes a fenced copy by this symbol:
+/// spelling it twice would let a rename turn that check off without failing
+/// anything.
+pub(crate) const READBACK_FN: &str = "miri_gpu_readback";
 
 /// Runtime entry that drops the persistent device buffer owned by a handle.
 const RELEASE_FN: &str = "miri_gpu_release";

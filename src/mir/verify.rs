@@ -1103,3 +1103,111 @@ fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
         .split_once('_')
         .is_some_and(|(class, _)| BuiltinCollectionKind::from_name(class).is_some())
 }
+
+/// Report every copy of a `gpu`-resident binding into a host binding that no
+/// readback fences.
+///
+/// Bringing a device buffer to the host is the language's only boundary
+/// crossing, and it is a *copy of the host array* — the gpu binding's host-side
+/// bytes hold whatever they were initialized with until a readback writes the
+/// device's results over them. So a copy emitted without one does not fail: it
+/// hands back the initial values, exits 0, and reports nothing, which reads as
+/// a result rather than as a transfer that did not happen.
+///
+/// This is checked per body rather than per statement so that a spelling the
+/// lowering grows later is covered the day it lands: whichever statement
+/// performs the copy, the handle it copies from has to have been read back
+/// somewhere in the same body. Asking only that much is deliberate — a readback
+/// on one branch and a copy on another is unusual but not wrong, and a verifier
+/// that reported it would be reporting a shape the compiler can legitimately
+/// emit.
+pub fn verify_cross_residency_readback(body: &Body) -> Vec<VerificationViolation> {
+    let fenced = fenced_device_handles(body);
+    let mut violations = Vec::new();
+    for block in &body.basic_blocks {
+        for statement in &block.statements {
+            let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
+                &statement.kind
+            else {
+                continue;
+            };
+            let Some(source) = unfenced_gpu_source(body, dest, rvalue, &fenced) else {
+                continue;
+            };
+            violations.push(VerificationViolation {
+                local: source,
+                local_name: local_display_name(body, source),
+                message: format!(
+                    "`{}` is gpu-resident and is copied into host-resident `{}` with no \
+                     readback fencing its device buffer, so the copy hands back the host \
+                     array's initial values instead of the device's results",
+                    local_display_name(body, source),
+                    local_display_name(body, dest.local),
+                ),
+            });
+        }
+    }
+    violations
+}
+
+/// The device handles some `miri_gpu_readback` call in this body fences.
+fn fenced_device_handles(body: &Body) -> HashSet<u64> {
+    let mut fenced = HashSet::new();
+    for block in &body.basic_blocks {
+        let Some(TerminatorKind::Call { func, args, .. }) =
+            block.terminator.as_ref().map(|t| &t.kind)
+        else {
+            continue;
+        };
+        if called_symbol(func) != Some(crate::mir::lowering::variable::READBACK_FN) {
+            continue;
+        }
+        if let Some(handle) = args.first().and_then(integer_operand) {
+            fenced.insert(handle);
+        }
+    }
+    fenced
+}
+
+/// The gpu-resident local a host-resident destination is copied from, when no
+/// readback in this body fenced that local's device buffer.
+///
+/// Only a whole-local copy qualifies: a projection reads a part of the host
+/// array, which the element cross-read diagnostic refuses at the source level
+/// before lowering ever sees it.
+fn unfenced_gpu_source(
+    body: &Body,
+    dest: &Place,
+    rvalue: &Rvalue,
+    fenced: &HashSet<u64>,
+) -> Option<Local> {
+    if !dest.projection.is_empty() {
+        return None;
+    }
+    if body.local_decls[dest.local.0].residency != crate::mir::body::BindingResidency::Host {
+        return None;
+    }
+    let Rvalue::Use(Operand::Copy(source) | Operand::Move(source)) = rvalue else {
+        return None;
+    };
+    if !source.projection.is_empty() {
+        return None;
+    }
+    let decl = &body.local_decls[source.local.0];
+    let handle = decl.device_handle?;
+    if decl.residency != crate::mir::body::BindingResidency::Gpu || fenced.contains(&handle.0) {
+        return None;
+    }
+    Some(source.local)
+}
+
+/// The value of an integer constant operand, or `None` for anything else.
+fn integer_operand(operand: &Operand) -> Option<u64> {
+    let Operand::Constant(constant) = operand else {
+        return None;
+    };
+    let Literal::Integer(value) = &constant.literal else {
+        return None;
+    };
+    u64::try_from(value.to_i128()).ok()
+}

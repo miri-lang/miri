@@ -43,6 +43,24 @@ pub struct RunCaptureResult {
     pub stderr: Vec<u8>,
     /// The diagnostic code a runtime trap reported, if one did.
     pub trap_code: Option<DiagnosticCode>,
+    /// What the run's GPU work cost, when it reached the GPU runtime at all.
+    pub gpu: Option<GpuTelemetry>,
+}
+
+/// The residency operations a run paid for, as the GPU runtime counted them.
+///
+/// Absent rather than zeroed for a program that never reached the GPU runtime:
+/// "no GPU work" and "GPU work that cost nothing" are different answers, and a
+/// reader deciding whether a kernel's results were ever transferred back needs
+/// to tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GpuTelemetry {
+    /// Host buffers copied to the device.
+    pub uploads: u64,
+    /// Kernel dispatches.
+    pub launches: u64,
+    /// Device buffers copied back to the host.
+    pub readbacks: u64,
 }
 
 fn has_main_function(program: &Program) -> bool {
@@ -745,6 +763,7 @@ impl Pipeline {
             .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
         let executable_path = temp_dir.path().join("program");
         let trap_report_path = temp_dir.path().join("trap");
+        let gpu_report_path = temp_dir.path().join("gpu_telemetry");
 
         let build_opts = BuildOptions {
             out_path: Some(executable_path.clone()),
@@ -774,6 +793,7 @@ impl Pipeline {
         let output = Command::new(&canonical_executable)
             .args(program_args)
             .env("MIRI_TRAP_REPORT_PATH", &trap_report_path)
+            .env("MIRI_GPU_TELEMETRY_PATH", &gpu_report_path)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
@@ -788,6 +808,7 @@ impl Pipeline {
         let signal = None;
 
         let trap_code = read_trap_report(&trap_report_path);
+        let gpu = read_gpu_telemetry_report(&gpu_report_path);
 
         Ok(RunCaptureResult {
             exit_code,
@@ -795,6 +816,7 @@ impl Pipeline {
             stdout: output.stdout,
             stderr: output.stderr,
             trap_code,
+            gpu,
         })
     }
 
@@ -1502,7 +1524,8 @@ impl Pipeline {
             mir::optimization::elide_rc(body);
         }
 
-        // Optional MIR verification pass: check RC invariants after Perceus.
+        // Optional MIR verification pass: check RC invariants and cross-residency
+        // readback fencing after Perceus.
         // Enabled by setting the MIRI_VERIFY_MIR environment variable.
         // Set MIRI_VERIFY_MIR=warn for warnings only; any other non-empty value is hard error.
         let verify_mode = self
@@ -1511,15 +1534,15 @@ impl Pipeline {
             .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok());
 
         if let Some(mode) = verify_mode {
-            Self::report_rc_violations(result, &bodies, &mode)?;
+            Self::report_mir_violations(result, &bodies, &mode)?;
         }
 
         Ok(bodies)
     }
 
-    /// Run both RC verification passes over every body and turn what they find
+    /// Run every verification pass over every body and turn what they find
     /// into one report — printed under `warn`, fatal otherwise.
-    fn report_rc_violations(
+    fn report_mir_violations(
         result: &PipelineResult,
         bodies: &[(String, mir::Body)],
         mode: &str,
@@ -1533,6 +1556,7 @@ impl Pipeline {
                 body,
                 &intrinsic_backed,
             ));
+            violations.extend(mir::verify::verify_cross_residency_readback(body));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }
@@ -1544,7 +1568,7 @@ impl Pipeline {
             return Ok(());
         }
         let message = format!(
-            "{} RC invariant violation(s) in {} function(s):\n{}",
+            "{} MIR invariant violation(s) in {} function(s):\n{}",
             all_violations.len(),
             functions_with_violations,
             all_violations.join("\n")
@@ -3042,6 +3066,40 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
     )))
 }
 
+/// Longest GPU telemetry report the runtime can legitimately leave: five
+/// `name=count` pairs over 64-bit counters.
+const MAX_GPU_REPORT_LEN: u64 = 256;
+
+/// Read the residency counters the GPU runtime left behind, if it ran at all.
+///
+/// Subject to the same rule as the trap report: the spawned program is
+/// untrusted and receives the report path in its own environment, so the report
+/// is honoured only when it is a regular file of a plausible size, and only the
+/// counters this reader knows are taken from it. A counter the runtime does not
+/// yet write, or one a program invented, reads as zero rather than as a number
+/// the run did not pay.
+fn read_gpu_telemetry_report(path: &std::path::Path) -> Option<GpuTelemetry> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_GPU_REPORT_LEN {
+        return None;
+    }
+
+    let contents = std::fs::read_to_string(path).ok()?;
+    let count_of = |name: &str| {
+        contents
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value.parse().ok())
+            .unwrap_or(0)
+    };
+    Some(GpuTelemetry {
+        uploads: count_of("uploads"),
+        launches: count_of("launches"),
+        readbacks: count_of("readbacks"),
+    })
+}
+
 /// Longest trap report the runtime can legitimately leave: a diagnostic code
 /// plus a trailing newline.
 const MAX_TRAP_REPORT_LEN: u64 = 32;
@@ -3067,4 +3125,75 @@ fn read_trap_report(path: &std::path::Path) -> Option<DiagnosticCode> {
         return None;
     }
     Some(code)
+}
+
+#[cfg(test)]
+mod gpu_telemetry_report_tests {
+    use super::{read_gpu_telemetry_report, GpuTelemetry, MAX_GPU_REPORT_LEN};
+
+    /// Write `contents` into a fresh file and read it back as a report.
+    fn report_of(contents: &str) -> Option<GpuTelemetry> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("gpu_telemetry");
+        std::fs::write(&path, contents).expect("write report");
+        read_gpu_telemetry_report(&path)
+    }
+
+    /// The record the GPU runtime writes, read back counter for counter. This
+    /// pins the text the two crates agree on: the runtime cannot reach the
+    /// compiler's parser, so a rename on either side shows up here.
+    #[test]
+    fn the_runtime_record_reads_back_counter_for_counter() {
+        assert_eq!(
+            report_of("uploads=1 launches=3 readbacks=2 fences=2 releases=1"),
+            Some(GpuTelemetry {
+                uploads: 1,
+                launches: 3,
+                readbacks: 2,
+            })
+        );
+    }
+
+    /// A counter this reader does not know is ignored rather than mis-read as
+    /// one it does, and a counter the record omits reads as zero rather than as
+    /// a number the run did not pay.
+    #[test]
+    fn an_unknown_counter_is_ignored_and_a_missing_one_reads_as_zero() {
+        assert_eq!(
+            report_of("launches=4 something_new=9"),
+            Some(GpuTelemetry {
+                uploads: 0,
+                launches: 4,
+                readbacks: 0,
+            })
+        );
+    }
+
+    /// The program that writes the report is untrusted: a record too large to
+    /// be one, or a value that is not a count, is discarded rather than
+    /// believed.
+    #[test]
+    fn an_oversized_or_unparseable_record_is_discarded() {
+        let oversized = "x".repeat(MAX_GPU_REPORT_LEN as usize + 1);
+        assert_eq!(report_of(&oversized), None);
+        assert_eq!(
+            report_of("uploads=lots launches=-1 readbacks=2"),
+            Some(GpuTelemetry {
+                uploads: 0,
+                launches: 0,
+                readbacks: 2,
+            })
+        );
+    }
+
+    /// A run that never reached the GPU runtime leaves no report, and no report
+    /// is not a run that paid nothing.
+    #[test]
+    fn an_absent_report_is_absent_rather_than_zero() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert_eq!(
+            read_gpu_telemetry_report(&dir.path().join("never_written")),
+            None
+        );
+    }
 }

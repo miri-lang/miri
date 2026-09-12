@@ -7,10 +7,10 @@ use std::path::PathBuf;
 
 use miri::cli::skill;
 use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillCommand};
-use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic};
+use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
-use miri::pipeline::{BuildOptions, Pipeline};
+use miri::pipeline::{BuildOptions, Pipeline, RunCaptureResult};
 
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -206,14 +206,7 @@ fn run_file(
         // In JSON mode, capture output and emit envelope
         match pipeline.run_and_capture(&source, &program_args) {
             Ok(result) => {
-                let exit_code = report_run(
-                    result.exit_code,
-                    result.signal,
-                    &result.stdout,
-                    &result.stderr,
-                    result.trap_code,
-                    start.elapsed().as_millis() as u64,
-                );
+                let exit_code = report_run(&result, start.elapsed().as_millis() as u64);
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }
@@ -285,16 +278,10 @@ fn run_file(
 /// that number reads `exitCode`. What makes it false is the program dying
 /// rather than finishing — a runtime trap, or a signal death, or a trap that
 /// produced no status of its own at all.
-fn report_run(
-    exit_code: i32,
-    signal: Option<i32>,
-    stdout_bytes: &[u8],
-    stderr_bytes: &[u8],
-    trap_code: Option<DiagnosticCode>,
-    elapsed_ms: u64,
-) -> i32 {
-    let (stdout_tail, stdout_truncated) = tail_output(stdout_bytes, 8192);
-    let (stderr_tail, stderr_truncated) = tail_output(stderr_bytes, 8192);
+fn report_run(result: &RunCaptureResult, elapsed_ms: u64) -> i32 {
+    let (exit_code, signal, trap_code) = (result.exit_code, result.signal, result.trap_code);
+    let (stdout_tail, stdout_truncated) = tail_output(&result.stdout, 8192);
+    let (stderr_tail, stderr_truncated) = tail_output(&result.stderr, 8192);
 
     // Compute the final exit code: if killed by signal, use 128 + signal; otherwise use the status code.
     // If there's no status code and no signal, NO_EXIT_STATUS (-1) reports as 255.
@@ -335,6 +322,14 @@ fn report_run(
 
     if let Some(sig) = signal {
         envelope = envelope.with_signal(sig);
+    }
+
+    if let Some(gpu) = result.gpu {
+        envelope = envelope.with_gpu(JsonGpuTelemetry {
+            uploads: gpu.uploads,
+            launches: gpu.launches,
+            readbacks: gpu.readbacks,
+        });
     }
 
     println!("{}", miri::cli::serialize_envelope(&envelope));

@@ -79,6 +79,7 @@ mod tests {
             patch: None,
             skills: None,
             codes: None,
+            gpu: None,
         };
 
         let json_str = serde_json::to_string(&envelope).expect("serialize");
