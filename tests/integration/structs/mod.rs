@@ -8,3 +8,4 @@ pub mod definition;
 pub mod edge_cases;
 pub mod fields;
 pub mod functions;
+pub mod managed_field_assignment;

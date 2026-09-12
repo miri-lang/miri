@@ -273,7 +273,13 @@ fn assign_to_member(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     if let ExpressionKind::Member(obj, prop) = &member_expr.node {
-        let val = lower_expression(ctx, rhs, None)?;
+        // A store through a field projection hands its reference to the object
+        // being written, which releases it when that object dies — so the store
+        // takes a reference of its own. Reading the right-hand side as a `Copy`
+        // is what funds it: moving would leave the field and the source sharing
+        // one reference that both release, and the field holding freed memory
+        // as soon as the first release ran.
+        let val = crate::mir::lowering::dispatch::move_to_copy(lower_expression(ctx, rhs, None)?);
         let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
         let obj_ty = ctx
             .type_checker
@@ -390,13 +396,6 @@ fn resolve_member_field_index(
     }
 }
 
-// TODO: assigning a collection into an already-initialised managed field empties
-// it — `box.data = src` leaves the field holding a freed buffer, which the heap
-// guard reports as a use-after-free in `miri_rt_array_element_at` and a program
-// reads as an empty collection or a crash. The `Reassign` below releases the
-// field's old value; the source appears to be released as well rather than
-// retained for its new owner. Not residency-specific: it reproduces with no
-// `gpu` binding in the program.
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
