@@ -399,7 +399,7 @@ impl JsonDiagnostic {
     }
 }
 
-/// A repair suggestion (reserved for Task 4).
+/// A repair suggestion attached to a diagnostic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JsonRepair {
