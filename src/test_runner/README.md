@@ -73,9 +73,17 @@ The command's own exit status is distinct from the dispatcher statuses above, wh
 |---|---|
 | `0` | Every test passed, was ignored, or failed as its `@xfail` documents |
 | `1` | At least one test failed, and every discovered file ran |
-| `2` | At least one file was refused, whatever the tests that did run reported |
+| `2` | No test has a verdict: a file was refused, or the walk discovered no test at all |
 
-A refusal outranks a failure because it means tests never ran at all, so the run is incomplete rather than merely red. The JSON envelope's `exitCode` is the same value the process returns; both are computed once, in one place, so the two cannot drift apart.
+A run that did not happen outranks a run that happened and disagreed with its assertions, so both ways of arriving with nothing built share `2` rather than the failure code. The JSON envelope's `exitCode` is the same value the process returns; both are computed once, in one place, so the two cannot drift apart.
+
+## A run that discovered nothing is not a run that passed
+
+A walk that turns up no `@test` prints no failures, and so does a walk that found every test and watched them all pass. Left green, the two are indistinguishable — which is exactly the report an author gets after guessing at the syntax for declaring a test. So a run that discovered nothing is refused under `MER_BLD_025` and returns `2`.
+
+The message separates the two ways a run comes up empty, because they point at different mistakes: having read files and found no `@test` in any of them means the tests are not declared the way the runner recognises, while having read no files at all means the path names a tree with no `.mi` source in it. The count travels in the envelope as `tests.filesRead`, so a consumer tells them apart without reading prose.
+
+A filter that selected none of the tests that were found is not this. Those tests exist and the caller narrowed them away, which is what a filter is for, so that run stays green.
 
 ## Files a test file may not be
 

@@ -11,6 +11,9 @@
 use serde::Serialize;
 use std::path::Path;
 
+use crate::diagnostics::DiagnosticCode;
+use crate::error::diagnostic::{Diagnostic, DiagnosticBuilder};
+
 mod discovery;
 mod harness;
 pub mod report;
@@ -101,6 +104,15 @@ pub struct TestResult {
     pub code: Option<String>,
 }
 
+/// What the walk looked at, so a run that executed nothing can say why.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Census {
+    /// `.mi` files the walk opened and read.
+    pub files_read: usize,
+    /// Of those, the ones declaring at least one `@test` function.
+    pub files_declaring_tests: usize,
+}
+
 /// Everything one `miri test` invocation produced.
 #[derive(Debug, Serialize)]
 pub struct TestSummary {
@@ -111,6 +123,8 @@ pub struct TestSummary {
     pub results: Vec<TestResult>,
     /// Files that declare `@test` functions but cannot be run as test files.
     pub rejected_files: Vec<RejectedFile>,
+    /// What discovery read, whether or not any of it held a test.
+    pub census: Census,
 }
 
 impl TestSummary {
@@ -118,7 +132,11 @@ impl TestSummary {
     ///
     /// The rule for which outcomes count as passed, failed or ignored lives
     /// here and nowhere else, so a change to it cannot half-land.
-    pub fn from_results(results: Vec<TestResult>, rejected: Vec<RejectedFile>) -> Self {
+    pub fn from_results(
+        results: Vec<TestResult>,
+        rejected: Vec<RejectedFile>,
+        census: Census,
+    ) -> Self {
         let ignored = count_outcome(&results, Outcome::Ignored);
         let passed = results
             .iter()
@@ -133,16 +151,59 @@ impl TestSummary {
             ignored,
             results,
             rejected_files: rejected,
+            census,
         }
     }
 
-    /// True when nothing failed and every discovered file was runnable.
+    /// True when the walk turned up no test at all.
+    ///
+    /// A rejected file holds tests, so a run that rejected every file it read
+    /// did discover tests and is red for that reason instead. A filter that
+    /// selected none of the tests that were found is not this either: those
+    /// tests exist and the caller narrowed them away.
+    pub fn discovered_nothing(&self) -> bool {
+        self.census.files_declaring_tests == 0 && self.rejected_files.is_empty()
+    }
+
+    /// True when nothing failed, every discovered file was runnable, and there
+    /// was something to discover.
     ///
     /// A rejected file counts against the run: it holds tests that were never
     /// executed, and reporting that as success is the greenwash this runner
-    /// exists to avoid.
+    /// exists to avoid. Discovering no test at all is the same greenwash
+    /// reached from the other side — a run with nothing to report is
+    /// indistinguishable from one that reported everything green.
     pub fn is_green(&self) -> bool {
-        self.failed == 0 && self.rejected_files.is_empty()
+        self.failed == 0 && self.rejected_files.is_empty() && !self.discovered_nothing()
+    }
+
+    /// The refusal a run that discovered nothing is reported as.
+    ///
+    /// Built here rather than at either output so the terminal and the envelope
+    /// carry one message and one help, and cannot drift into disagreeing about
+    /// what the run did.
+    pub fn empty_run_diagnostic(&self) -> Option<Box<Diagnostic>> {
+        if !self.discovered_nothing() {
+            return None;
+        }
+        let message = match self.census.files_read {
+            0 => "found no .mi files to read".to_string(),
+            1 => "read 1 .mi file, which declares no '@test' function".to_string(),
+            count => format!(
+                "read {} .mi files, none of which declares a '@test' function",
+                count
+            ),
+        };
+        Some(Box::new(
+            DiagnosticBuilder::error(DiagnosticCode::BldNoTestsDiscovered.title().to_string())
+                .code(DiagnosticCode::BldNoTestsDiscovered.as_str())
+                .message(message)
+                .help(
+                    "a test is a function carrying the '@test' attribute; write '@test' on the line above its 'fn', and point 'miri test' at the file or directory that holds it"
+                        .to_string(),
+                )
+                .build(),
+        ))
     }
 }
 
@@ -157,6 +218,10 @@ impl TestSummary {
 pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSummary> {
     let discovered = discovery::discover(target)?;
     let root = discovery::root_of(target);
+    let census = Census {
+        files_read: discovered.files_read,
+        files_declaring_tests: discovered.files.len(),
+    };
     let mut results = Vec::new();
     let mut rejected = discovered.rejected;
 
@@ -172,7 +237,7 @@ pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSum
         }
     }
 
-    let summary = TestSummary::from_results(results, rejected);
+    let summary = TestSummary::from_results(results, rejected, census);
     Ok(summary)
 }
 
@@ -320,6 +385,15 @@ mod tests {
         }
     }
 
+    /// One file, read and holding tests: the census a run that found something
+    /// reports.
+    fn found_tests() -> Census {
+        Census {
+            files_read: 1,
+            files_declaring_tests: 1,
+        }
+    }
+
     #[test]
     fn expected_failure_counts_as_passing() {
         let summary = TestSummary::from_results(
@@ -328,6 +402,7 @@ mod tests {
                 result("b", Outcome::ExpectedFailure),
             ],
             Vec::new(),
+            found_tests(),
         );
         assert_eq!(summary.passed, 2);
         assert_eq!(summary.failed, 0);
@@ -336,8 +411,11 @@ mod tests {
 
     #[test]
     fn unexpected_pass_fails_the_run() {
-        let summary =
-            TestSummary::from_results(vec![result("a", Outcome::UnexpectedPass)], Vec::new());
+        let summary = TestSummary::from_results(
+            vec![result("a", Outcome::UnexpectedPass)],
+            Vec::new(),
+            found_tests(),
+        );
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.passed, 0);
         assert!(!summary.is_green());
@@ -345,7 +423,11 @@ mod tests {
 
     #[test]
     fn ignored_is_counted_apart_from_passed() {
-        let summary = TestSummary::from_results(vec![result("a", Outcome::Ignored)], Vec::new());
+        let summary = TestSummary::from_results(
+            vec![result("a", Outcome::Ignored)],
+            Vec::new(),
+            found_tests(),
+        );
         assert_eq!(summary.ignored, 1);
         assert_eq!(summary.passed, 0);
         assert!(summary.is_green());
@@ -359,9 +441,110 @@ mod tests {
                 "bad.mi".to_string(),
                 RejectionReason::DeclaresMain,
             )],
+            found_tests(),
         );
         assert_eq!(summary.failed, 0);
         assert!(!summary.is_green());
+    }
+
+    #[test]
+    fn a_run_that_discovered_no_test_is_not_green() {
+        let summary = TestSummary::from_results(
+            Vec::new(),
+            Vec::new(),
+            Census {
+                files_read: 3,
+                files_declaring_tests: 0,
+            },
+        );
+        assert_eq!(summary.total, 0);
+        assert!(summary.discovered_nothing());
+        assert!(!summary.is_green());
+    }
+
+    #[test]
+    fn the_empty_run_refusal_counts_the_files_it_read() {
+        let summary = TestSummary::from_results(
+            Vec::new(),
+            Vec::new(),
+            Census {
+                files_read: 3,
+                files_declaring_tests: 0,
+            },
+        );
+        let diagnostic = summary
+            .empty_run_diagnostic()
+            .expect("a run that discovered nothing is refused");
+        assert_eq!(
+            diagnostic.code.as_deref(),
+            Some("MER_BLD_025"),
+            "{:?}",
+            diagnostic.code
+        );
+        assert!(
+            diagnostic.message.contains("read 3 .mi files"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn one_file_read_is_reported_in_the_singular() {
+        let summary = TestSummary::from_results(
+            Vec::new(),
+            Vec::new(),
+            Census {
+                files_read: 1,
+                files_declaring_tests: 0,
+            },
+        );
+        let diagnostic = summary
+            .empty_run_diagnostic()
+            .expect("a run that discovered nothing is refused");
+        assert!(
+            diagnostic.message.contains("read 1 .mi file,"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn reading_no_file_reads_differently_from_reading_files_without_tests() {
+        let summary = TestSummary::from_results(Vec::new(), Vec::new(), Census::default());
+        let diagnostic = summary
+            .empty_run_diagnostic()
+            .expect("a run that discovered nothing is refused");
+        assert_eq!(diagnostic.message, "found no .mi files to read");
+    }
+
+    /// A file that holds tests and could not be run is reported as that file's
+    /// failure. Tests were discovered, so the empty-run refusal does not also
+    /// fire and say the opposite.
+    #[test]
+    fn a_rejected_file_is_not_also_an_empty_run() {
+        let summary = TestSummary::from_results(
+            Vec::new(),
+            vec![RejectedFile::shaped(
+                "bad.mi".to_string(),
+                RejectionReason::DeclaresMain,
+            )],
+            Census {
+                files_read: 1,
+                files_declaring_tests: 0,
+            },
+        );
+        assert!(!summary.discovered_nothing());
+        assert!(summary.empty_run_diagnostic().is_none());
+        assert!(!summary.is_green());
+    }
+
+    /// Tests were found and the caller narrowed them away. That is what a
+    /// filter is for, and it is not the runner discovering nothing.
+    #[test]
+    fn a_filter_that_selected_nothing_is_not_an_empty_run() {
+        let summary = TestSummary::from_results(Vec::new(), Vec::new(), found_tests());
+        assert!(!summary.discovered_nothing());
+        assert!(summary.is_green());
     }
 
     #[test]

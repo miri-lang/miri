@@ -99,6 +99,12 @@ impl RejectedFile {
 pub struct Discovered {
     pub files: Vec<TestFile>,
     pub rejected: Vec<RejectedFile>,
+    /// `.mi` files the walk opened and read, whether or not they held tests.
+    ///
+    /// A run that discovered nothing needs this to say which nothing it found:
+    /// files that declare no test read differently from no files at all, and
+    /// the two point at different mistakes.
+    pub files_read: usize,
 }
 
 /// The directory a run's results are named relative to.
@@ -132,22 +138,34 @@ pub fn discover(target: &Path) -> std::io::Result<Discovered> {
 
     if target.is_file() {
         let source = std::fs::read_to_string(target)?;
+        // Counted by the walk's own rule, so the census means the same thing
+        // whether one file or the directory holding it was named.
+        if is_source_file(target) {
+            discovered.files_read += 1;
+        }
         classify(target, source, &root, &mut discovered);
         return Ok(discovered);
     }
 
     for entry in WalkDir::new(target).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "mi") {
+        if !is_source_file(path) {
             continue;
         }
         let Ok(source) = std::fs::read_to_string(path) else {
             continue;
         };
+        discovered.files_read += 1;
         classify(path, source, &root, &mut discovered);
     }
 
     Ok(discovered)
+}
+
+/// Whether the walk reads this path at all. One rule, so what a directory walk
+/// picks up and what the census counts cannot disagree.
+fn is_source_file(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "mi")
 }
 
 /// Sort one file into a runnable test file, a rejection, or neither.

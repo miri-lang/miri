@@ -673,50 +673,51 @@ fn rejection_reason_to_string(reason: miri::test_runner::RejectionReason) -> Str
     }
 }
 
+/// One test's verdict as the envelope carries it.
+fn to_json_test_result(
+    result: &miri::test_runner::TestResult,
+) -> miri::diagnostics::json::JsonTestResult {
+    let (code, line, column, expression, expected, actual, message) = result
+        .failure
+        .as_ref()
+        .map(|f| {
+            (
+                Some(f.code.clone()),
+                f.line,
+                f.column,
+                f.expression.clone(),
+                f.expected.clone(),
+                f.actual.clone(),
+                f.message.clone(),
+            )
+        })
+        .unwrap_or((None, None, None, None, None, None, None));
+
+    // Signal-killed tests carry the code in the TestResult, not in failure
+    let code = code.or_else(|| result.code.clone());
+
+    miri::diagnostics::json::JsonTestResult {
+        path: result.path.clone(),
+        name: result.name.clone(),
+        outcome: outcome_to_string(result.outcome),
+        detail: result.detail.clone(),
+        code,
+        line,
+        column,
+        expression,
+        expected,
+        actual,
+        message,
+    }
+}
+
 /// Build DiagnosticsEnvelope for test results in JSON format.
 fn build_test_envelope(
     summary: &miri::test_runner::TestSummary,
     elapsed_ms: u64,
     exit_code: i32,
 ) -> DiagnosticsEnvelope {
-    let json_results = summary
-        .results
-        .iter()
-        .map(|result| {
-            let (code, line, column, expression, expected, actual, message) = result
-                .failure
-                .as_ref()
-                .map(|f| {
-                    (
-                        Some(f.code.clone()),
-                        f.line,
-                        f.column,
-                        f.expression.clone(),
-                        f.expected.clone(),
-                        f.actual.clone(),
-                        f.message.clone(),
-                    )
-                })
-                .unwrap_or((None, None, None, None, None, None, None));
-
-            // Signal-killed tests carry the code in the TestResult, not in failure
-            let code = code.or_else(|| result.code.clone());
-
-            miri::diagnostics::json::JsonTestResult {
-                path: result.path.clone(),
-                name: result.name.clone(),
-                outcome: outcome_to_string(result.outcome),
-                detail: result.detail.clone(),
-                code,
-                line,
-                column,
-                expression,
-                expected,
-                actual,
-                message,
-            }
-        })
-        .collect();
+    let json_results = summary.results.iter().map(to_json_test_result).collect();
 
     let json_rejected = summary
         .rejected_files
@@ -730,11 +731,17 @@ fn build_test_envelope(
     // A file that would not compile carries the compiler's own diagnostics, so
     // they travel where a consumer already reads them: the same `diagnostics`
     // array `check` fills, with the same `help` and the same `repair`.
-    let diagnostics = summary
+    let mut diagnostics: Vec<_> = summary
         .rejected_files
         .iter()
         .flat_map(|rf| rf.diagnostics.iter().cloned())
         .collect();
+
+    // A run that discovered nothing is refused under a code, and the refusal
+    // reaches a consumer where every other one does.
+    if let Some(diagnostic) = summary.empty_run_diagnostic() {
+        diagnostics.push(miri::error::diagnostic::to_json(&diagnostic, "", None));
+    }
 
     let json_summary = miri::diagnostics::json::JsonTestSummary {
         total: summary.total,
@@ -743,6 +750,7 @@ fn build_test_envelope(
         ignored: summary.ignored,
         results: json_results,
         rejected_files: json_rejected,
+        files_read: summary.census.files_read,
     };
 
     DiagnosticsEnvelope::new(JsonCommand::Test, summary.is_green(), diagnostics)
@@ -782,10 +790,13 @@ fn run_tests(
     let summary = miri::test_runner::run_tests(&target, filter.as_deref())?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    // Compute exit code once: rejected files take priority (incomplete run),
-    // then test failures, then success.
-    let exit_code = if !summary.rejected_files.is_empty() {
-        2 // Any rejected file means tests never ran
+    // Compute exit code once: a run that did not happen takes priority over one
+    // that happened and disagreed with its assertions. A rejected file and a
+    // run that discovered nothing are both the former — no test executed — so
+    // they share the incomplete-run code, apart from the failure code that
+    // means the tests ran.
+    let exit_code = if !summary.rejected_files.is_empty() || summary.discovered_nothing() {
+        2 // No test was built, so none has a verdict
     } else if summary.failed > 0 {
         1 // Tests failed
     } else {

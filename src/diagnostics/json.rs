@@ -466,6 +466,12 @@ pub struct JsonTestSummary {
     pub ignored: usize,
     pub results: Vec<JsonTestResult>,
     pub rejected_files: Vec<JsonRejectedFile>,
+    /// `.mi` files discovery opened and read, whether or not they held tests.
+    ///
+    /// A run that executed nothing is refused, and this is what separates the
+    /// two ways it can come up empty without a consumer reading the prose:
+    /// files were read and declared no test, or no file was read at all.
+    pub files_read: usize,
 }
 
 /// Individual test result in summary.

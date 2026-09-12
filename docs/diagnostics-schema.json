@@ -407,6 +407,10 @@
           "items": {
             "$ref": "#/$defs/JsonRejectedFile"
           }
+        },
+        "filesRead": {
+          "type": "integer",
+          "description": "Number of .mi files discovery opened and read, whether or not they declared a test. With total 0 it separates 'read files, none declared a test' from 'read no files at all'."
         }
       },
       "required": [
@@ -415,7 +419,8 @@
         "failed",
         "ignored",
         "results",
-        "rejectedFiles"
+        "rejectedFiles",
+        "filesRead"
       ]
     },
     "JsonTestResult": {

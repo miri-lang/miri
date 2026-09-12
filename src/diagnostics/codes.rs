@@ -1360,7 +1360,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::TargetChanging,
-    // BLD — Build and command-invocation (24 codes: 001-024)
+    // BLD — Build and command-invocation (25 codes: 001-025)
     "BLD",
     "001",
     BldUnknownDiagnosticCode,
@@ -1526,6 +1526,13 @@ diagnostics!(
     "024",
     BldMessageNotFramed,
     "Message Not Framed",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "BLD",
+    "025",
+    BldNoTestsDiscovered,
+    "No Tests Discovered",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

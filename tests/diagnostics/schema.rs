@@ -200,6 +200,7 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
                 path: "tests/unparseable.mi".to_string(),
                 reason: "unparseable".to_string(),
             }],
+            files_read: 4,
         }),
         explanation: Some(JsonExplanation {
             code: "MER_TYP_002".to_string(),

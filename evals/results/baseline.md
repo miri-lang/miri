@@ -31,7 +31,7 @@ this file on every run. The harness prints it to stdout instead.
 | n | chain a list transform onto another transform's result | yes | 3 | 1262 | 433 |
 | o | apply the edit a diagnostic already named in its help | yes | 6 | 3186 | 219 |
 | p | repair three syntax faults reported from one check | yes | 4 | 4251 | 362 |
-| k | read the warnings a green test run left behind | no | 2 | 1398 | 0 |
+| k | read the warnings a green test run left behind | no | 2 | 1418 | 0 |
 
 Tasks recorded as not succeeding are pinned on a gap the loop still has.
 They are replayed to the step that fails and cost what they cost getting

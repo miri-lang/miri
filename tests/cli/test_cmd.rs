@@ -33,9 +33,109 @@ fn test_test_command_help() {
     cmd.arg("test").arg("--help").assert().success();
 }
 
+/// A run that found nothing to execute is not a run that passed. An author who
+/// guessed the wrong syntax for declaring a test writes a file, runs the suite,
+/// and would otherwise be told it passed.
 #[test]
-fn test_directory_without_any_tests_is_green() {
+fn test_a_directory_whose_files_declare_no_test_is_not_a_pass() {
     let dir = test_dir_with("plain.mi", "fn helper()\n    var x = 1\n");
+    write_file(dir.path(), "other.mi", "fn second()\n    var y = 2\n");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stdout(predicates::str::contains("error[MER_BLD_025]"))
+        // The count is what tells a reader the walk looked and found files,
+        // rather than looking in the wrong place.
+        .stdout(predicates::str::contains("read 2 .mi files"))
+        .stdout(predicates::str::contains(
+            "none of which declares a '@test' function",
+        ))
+        .stdout(predicates::str::contains("test result: FAILED"))
+        // A run with nothing to report must not print an empty failures block.
+        .stdout(predicates::str::contains("failures:").not());
+}
+
+/// Reading no files at all is a different mistake from reading files that
+/// declare no test — usually a path that names an empty or wrong directory —
+/// so the two do not share a sentence.
+#[test]
+fn test_an_empty_directory_says_it_read_nothing() {
+    let dir = TempDir::new().expect("a temporary directory");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("test")
+        .arg("--dir")
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stdout(predicates::str::contains("error[MER_BLD_025]"))
+        .stdout(predicates::str::contains("found no .mi files to read"))
+        .stdout(predicates::str::contains(".mi files,").not())
+        .stdout(predicates::str::contains("test result: FAILED"));
+}
+
+/// One file reads as one file. The count is the run's own report of what it
+/// looked at, so it must not be spelled in a way that reads as a stock phrase.
+#[test]
+fn test_a_single_file_without_tests_is_counted_in_the_singular() {
+    let dir = test_dir_with("plain.mi", "fn helper()\n    var x = 1\n");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("test")
+        .arg(dir.path().join("plain.mi"))
+        .assert()
+        .code(2)
+        .stdout(predicates::str::contains("read 1 .mi file,"));
+}
+
+#[test]
+fn test_a_run_that_discovered_nothing_is_not_ok_in_the_envelope() {
+    let dir = test_dir_with("plain.mi", "fn helper()\n    var x = 1\n");
+
+    let envelope = envelope_of(dir.path(), &["test", "--dir", ".", "--format", "json"]);
+
+    assert_eq!(envelope["ok"], false, "envelope: {envelope}");
+    assert_eq!(envelope["exitCode"], 2, "envelope: {envelope}");
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "MER_BLD_025",
+        "envelope: {envelope}"
+    );
+    assert!(
+        envelope["diagnostics"][0]["help"].is_string(),
+        "the refusal must say what a test looks like: {envelope}"
+    );
+    // The count travels as a number, so a consumer does not parse it out of
+    // prose to tell "looked and found nothing" from "looked nowhere".
+    assert_eq!(envelope["tests"]["filesRead"], 1, "envelope: {envelope}");
+    assert_eq!(envelope["tests"]["total"], 0, "envelope: {envelope}");
+}
+
+#[test]
+fn test_an_empty_directory_reports_no_files_read_in_the_envelope() {
+    let dir = TempDir::new().expect("a temporary directory");
+
+    let envelope = envelope_of(dir.path(), &["test", "--dir", ".", "--format", "json"]);
+
+    assert_eq!(envelope["ok"], false, "envelope: {envelope}");
+    assert_eq!(envelope["tests"]["filesRead"], 0, "envelope: {envelope}");
+}
+
+/// A file that declares a test keeps the run honest: the refusal fires on the
+/// absence of tests, not on the presence of files that merely have none.
+#[test]
+fn test_a_directory_holding_one_test_beside_plain_files_runs_green() {
+    let dir = test_dir_with(
+        "math.mi",
+        &format!(
+            "{}@test\nfn test_adds()\n    assert(1 + 1 == 2)\n",
+            TESTING_IMPORT
+        ),
+    );
+    write_file(dir.path(), "plain.mi", "fn helper()\n    var x = 1\n");
 
     let mut cmd = miri_cmd();
     cmd.arg("test")
@@ -43,10 +143,8 @@ fn test_directory_without_any_tests_is_green() {
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(predicates::str::contains("running 0 tests"))
-        .stdout(predicates::str::contains("test result: ok"))
-        // A run with nothing to report must not print an empty failures block.
-        .stdout(predicates::str::contains("failures:").not());
+        .stdout(predicates::str::contains("test result: ok. 1 passed"))
+        .stdout(predicates::str::contains("MER_BLD_025").not());
 }
 
 #[test]
@@ -276,7 +374,16 @@ fn test_unparseable_file_declaring_tests_is_refused() {
 /// turn every run red.
 #[test]
 fn test_unparseable_file_without_tests_is_ignored_quietly() {
-    let dir = test_dir_with("notatest.mi", "fn broken(\n");
+    // A file that declares a test sits beside it, so the run has something to
+    // execute and the broken file's silence is what the verdict proves.
+    let dir = test_dir_with(
+        "math.mi",
+        &format!(
+            "{}@test\nfn test_adds()\n    assert(1 + 1 == 2)\n",
+            TESTING_IMPORT
+        ),
+    );
+    write_file(dir.path(), "notatest.mi", "fn broken(\n");
 
     let mut cmd = miri_cmd();
     cmd.arg("test")
@@ -284,8 +391,9 @@ fn test_unparseable_file_without_tests_is_ignored_quietly() {
         .arg(dir.path())
         .assert()
         .success()
-        .stdout(predicates::str::contains("running 0 tests"))
-        .stdout(predicates::str::contains("test result: ok"));
+        .stdout(predicates::str::contains("test result: ok. 1 passed"))
+        .stdout(predicates::str::contains("not run:").not())
+        .stdout(predicates::str::contains("notatest.mi").not());
 }
 
 #[test]
