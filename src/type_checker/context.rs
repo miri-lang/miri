@@ -441,6 +441,10 @@ pub struct Context {
     pub in_async_function: bool,
     /// Name of the current class being checked (for self resolution).
     pub current_class: Option<String>,
+    /// Name of the function or method whose body is being checked, `None` at
+    /// top level. Paired with `current_class` it names the declaration a
+    /// generic-parameter requirement is recorded against.
+    pub current_function: Option<String>,
     /// Name of the base class of the current class (for super resolution).
     pub current_base_class: Option<String>,
     /// The type of the current class (for self expression type inference).
@@ -472,6 +476,7 @@ impl Context {
             in_function: false,
             in_async_function: false,
             current_class: None,
+            current_function: None,
             current_base_class: None,
             current_class_type: None,
             in_static_method: false,

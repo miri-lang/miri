@@ -1140,6 +1140,11 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
+        if self.orders_a_parameter_of(prop_name) {
+            let pinned = self.build_class_method_mapping(def, name, type_args);
+            self.check_pinned_ordering_for_method(name, prop_name, &pinned, span);
+        }
+
         if let Some(ty) =
             self.search_class_hierarchy(def, name, prop_name, type_args, span, context)
         {

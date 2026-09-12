@@ -45,6 +45,19 @@ pub(crate) fn missing_ordering_message(ty: &Type, op: &BinaryOp) -> String {
     )
 }
 
+/// The message reported where a generic parameter a body orders is pinned to a
+/// type that defines no ordering.
+///
+/// The comparison sits in a body written against the parameter, which may spell
+/// it with any of the four ordering operators, so this names the capability
+/// rather than one operator the reader cannot see from the call site.
+pub(crate) fn missing_ordering_at_instantiation_message(ty: &Type) -> String {
+    format!(
+        "Type '{}' has no ordering: comparing it requires the {} trait",
+        ty, ORDERING_TRAIT_NAME
+    )
+}
+
 impl TypeChecker {
     /// Checks that binary operation operands have compatible types.
     ///

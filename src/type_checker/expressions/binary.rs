@@ -144,6 +144,10 @@ impl TypeChecker {
             }
         }
 
+        if crate::type_checker::operators::is_ordering_op(op) {
+            self.record_ordering_requirement(&left_ty, context);
+        }
+
         if let Some(message) = self.missing_ordering(&left_ty, op, &right_ty, context) {
             let help = self.ordering_help(&left_ty, left, right, op);
             self.report_error_with_help(

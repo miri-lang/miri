@@ -329,14 +329,18 @@ impl TypeChecker {
         }
 
         match &func_type.kind {
-            TypeKind::Function(func_data) => self.infer_function_call(
-                func_data,
-                positional_args,
-                named_args,
-                span,
-                context,
-                call_id,
-            ),
+            TypeKind::Function(func_data) => {
+                let result = self.infer_function_call(
+                    func_data,
+                    positional_args,
+                    named_args,
+                    span,
+                    context,
+                    call_id,
+                );
+                self.check_call_pins_an_ordering(func, span, call_id);
+                result
+            }
             TypeKind::Meta(inner_type) => {
                 self.infer_constructor_call(inner_type, positional_args, named_args, span, context)
             }
@@ -1870,6 +1874,36 @@ impl TypeChecker {
         } else {
             Some(crate::ast::statement::BindingResidency::Host)
         }
+    }
+
+    /// Answer, for this call, every ordering requirement the callee's body
+    /// recorded against a generic parameter this call pins.
+    ///
+    /// Only a call written as a bare name is answered here: a requirement is
+    /// keyed by the type that declares the body, and a method reached through a
+    /// receiver is answered where that receiver's type arguments are known. A
+    /// method call matched on its bare name would be read against a free
+    /// function that happens to share it.
+    ///
+    /// The inferred arguments are read back from the mapping the call already
+    /// stored, so a call that pins nothing generic costs one map lookup.
+    fn check_call_pins_an_ordering(&mut self, func: &Expression, span: Span, call_id: usize) {
+        if self.ordering_requirements.is_empty() {
+            return;
+        }
+        let ExpressionKind::Identifier(callee, _) = &func.node else {
+            return;
+        };
+        let Some(mapping) = self.call_generic_mappings.get(&call_id) else {
+            return;
+        };
+        let substitution: std::collections::HashMap<String, Type> =
+            mapping.iter().cloned().collect();
+        let body = (
+            crate::type_checker::ordering_requirements::FREE_FUNCTION_OWNER.to_string(),
+            callee.clone(),
+        );
+        self.check_pinned_ordering(&body, &substitution, span);
     }
 
     fn store_generic_call_mapping(
