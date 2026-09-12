@@ -15,9 +15,13 @@
 //! - 3 = other OS error
 
 use std::cell::RefCell;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use crate::string::{into_raw_ptr, MiriString};
+
+/// Global lock to synchronize environment variable access (`std::env::var`, `std::env::set_var`)
+/// across threads to prevent data races and UB/segfaults in C/POSIX env manipulation.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 thread_local! {
     /// Thread-local status code for the last environment operation.
@@ -78,6 +82,7 @@ pub mod ffi {
 
         let name_str = (*name).as_str();
         set_env_status(0, String::new());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if std::env::var(name_str).is_ok() {
             1
         } else {
@@ -105,6 +110,7 @@ pub mod ffi {
 
         let name_str = (*name).as_str();
         set_env_status(0, String::new());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let value = std::env::var(name_str).unwrap_or_default();
         into_raw_ptr(MiriString::from_str(&value))
     }
@@ -150,11 +156,15 @@ pub mod ffi {
             return 0;
         }
 
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
         // Check if the variable was already set
         let was_set = std::env::var(name_str).is_ok();
 
         // Set the environment variable (this only affects this process and children)
-        std::env::set_var(name_str, value_str);
+        unsafe {
+            std::env::set_var(name_str, value_str);
+        }
 
         set_env_status(0, String::new());
         if was_set {
