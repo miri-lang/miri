@@ -561,7 +561,7 @@ fn operand_src_local(op: &Operand) -> Option<Local> {
 }
 
 /// Convert a `Move` operand into a `Copy` of the same place.
-fn move_to_copy(op: Operand) -> Operand {
+pub(crate) fn move_to_copy(op: Operand) -> Operand {
     match op {
         Operand::Move(p) => Operand::Copy(p),
         other => other,

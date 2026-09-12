@@ -985,3 +985,56 @@ fn probe(seed String) int
         &statements[subject_assign - 1]
     );
 }
+
+/// A store through a field projection hands its reference to the object being
+/// written, so the source has to be retained before it. Without the retain the
+/// field and the source share one reference that both release, and the field is
+/// left holding freed memory — the shape a `Move` into the field used to emit.
+#[test]
+fn a_store_into_a_managed_field_retains_the_source() {
+    let body = lowered_with_rc(
+        "
+use system.collections.list
+
+struct Holder
+    data [int]
+
+fn main()
+    var src = List([1, 2])
+    var holder = Holder(List<int>())
+    holder.data = src
+",
+        "main",
+    );
+
+    let statements = all_statements(&body);
+    let store = statements
+        .iter()
+        .position(|kind| {
+            matches!(
+                kind,
+                StatementKind::Reassign(place, Rvalue::Use(Operand::Copy(_)))
+                    if matches!(place.projection.last(), Some(PlaceElem::Field(_)))
+            )
+        })
+        .unwrap_or_else(|| panic!("no copy into a field found in {:?}", statements));
+
+    let Some(StatementKind::Reassign(field, _)) = statements.get(store) else {
+        unreachable!("the position above matched a Reassign")
+    };
+
+    assert!(
+        statements[..store].iter().any(
+            |kind| matches!(kind, StatementKind::IncRef(place) if place.projection.is_empty())
+        ),
+        "the value stored into the field must be retained first, got {:?}",
+        &statements[..=store]
+    );
+    assert!(
+        statements[..store].iter().any(
+            |kind| matches!(kind, StatementKind::DecRef(place) if place.projection == field.projection)
+        ),
+        "the field's old value must be released before the store, got {:?}",
+        &statements[..=store]
+    );
+}

@@ -631,7 +631,7 @@ impl<'a> FunctionTranslator<'a> {
             place,
             value,
             addr,
-            current_type,
+            &current_type,
             locals,
             type_ctx,
         )
@@ -641,20 +641,23 @@ impl<'a> FunctionTranslator<'a> {
     /// and tracking the type at the current depth. Returns the address that
     /// the final projection should consume and the type of the value at that
     /// address.
-    fn walk_projection_path<'tc>(
+    fn walk_projection_path(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         place: &Place,
         base_addr: Value,
         locals: &HashMap<Local, Variable>,
-        type_ctx: &'tc TypeCtx,
-    ) -> Result<(Value, &'tc Type), CodegenError> {
+        type_ctx: &TypeCtx,
+    ) -> Result<(Value, Type), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let type_definitions = type_ctx.type_definitions;
         let mut addr = base_addr;
-        let mut current_type: &Type = type_ctx.local_types[place.local.0];
+        let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
 
-        for proj in &place.projection[..place.projection.len() - 1] {
+        for (depth, proj) in place.projection[..place.projection.len() - 1]
+            .iter()
+            .enumerate()
+        {
             match proj {
                 PlaceElem::Deref => {
                     addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
@@ -663,6 +666,17 @@ impl<'a> FunctionTranslator<'a> {
                     let (offset, _) =
                         layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type);
                     addr = builder.ins().iadd_imm(addr, offset as i64);
+                    current_type =
+                        Self::type_after_projection(place, depth, &current_type, type_ctx);
+                    // A field that owns its own allocation stores a *pointer* to
+                    // it, so reaching what lives inside that field means loading
+                    // the pointer rather than adding another offset to the
+                    // object holding it. Skipping the load writes the value into
+                    // the outer object's own slot: the store lands one level too
+                    // high, and what it overwrote is leaked.
+                    if crate::mir::rc::is_field_managed(&current_type.kind) {
+                        addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
+                    }
                 }
                 PlaceElem::Index(local) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
@@ -674,18 +688,41 @@ impl<'a> FunctionTranslator<'a> {
                         ctx,
                         addr,
                         idx_val,
-                        current_type,
+                        &current_type,
                         type_ctx,
                     )?;
                     if let Some(elem_type) =
-                        Self::resolve_collection_elem_type_as_type(current_type)
+                        Self::resolve_collection_elem_type_as_type(&current_type)
                     {
-                        current_type = elem_type;
+                        current_type = elem_type.clone();
                     }
                 }
             }
         }
         Ok((addr, current_type))
+    }
+
+    /// The type reached after applying `place`'s projections up to and
+    /// including `depth`, or `fallback` when it cannot be resolved.
+    ///
+    /// Walking the prefix through the one resolver that knows how a field type
+    /// is read out of a struct, a class, or a generic instantiation keeps the
+    /// store path from growing a second, divergent copy of those rules.
+    fn type_after_projection(
+        place: &Place,
+        depth: usize,
+        fallback: &Type,
+        type_ctx: &TypeCtx,
+    ) -> Type {
+        let prefix = Place {
+            local: place.local,
+            projection: place.projection[..=depth].to_vec(),
+        };
+        let kind = Self::resolve_projected_type_kind(&prefix, type_ctx);
+        if matches!(kind, TypeKind::Error) {
+            return fallback.clone();
+        }
+        Type::new(kind, fallback.span)
     }
 
     /// Apply the final projection on `place` as a store of `value`.
