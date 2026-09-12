@@ -16,16 +16,50 @@ fn miri_gpu_init_is_pure() {
     let _ = miri_gpu_init();
 }
 
+/// Requests an adapter independently of the runtime, so the assertions below
+/// compare `miri_gpu_is_available` against ground truth rather than against
+/// itself. Mirrors the runtime's own selection: default instance options plus
+/// whatever `WGPU_BACKEND` pins.
+fn an_adapter_is_reachable() -> bool {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if let Some(backends) = wgpu::Backends::from_env() {
+        descriptor.backends = backends;
+    }
+    let instance = wgpu::Instance::new(descriptor);
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .is_ok()
+}
+
 #[test]
-fn miri_gpu_is_available_matches_context_presence() {
-    // The two functions must agree: `is_available` is the contract
-    // exposed to Miri source via `system.gpu.is_gpu_available()`.
+fn is_available_answers_for_the_adapter_not_the_context() {
+    // The predicate is what Miri source sees as `system.gpu.is_gpu_available()`.
+    // It must report whether a device *can* be created, so a program that asks
+    // before launching anything gets the same answer as one that asks after.
     let _serialize = PRESENCE_LOCK.lock().unwrap();
+    miri_gpu_reset_context();
     let observed = miri_gpu_is_available();
-    let actual_presence = u8::from(GPU_CONTEXT.read().is_some());
     assert_eq!(
-        observed, actual_presence,
-        "is_available must mirror GPU_CONTEXT state without reinitializing"
+        observed,
+        u8::from(an_adapter_is_reachable()),
+        "is_available must reflect adapter reachability, not whether a device \
+        happens to have been created yet"
+    );
+}
+
+#[test]
+fn is_available_answers_without_creating_a_device() {
+    // Checking for a GPU must not cost one. A device created by the probe
+    // would also outlive the answer, holding the adapter for the process.
+    let _serialize = PRESENCE_LOCK.lock().unwrap();
+    miri_gpu_reset_context();
+    let _ = miri_gpu_is_available();
+    assert!(
+        GPU_CONTEXT.read().is_none(),
+        "probing availability must leave no device behind"
     );
 }
 
