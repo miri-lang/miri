@@ -108,6 +108,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_BLD_022", "raised by the view command when asked about a type name not in scope, not by compiling a source file"),
     ("MER_BLD_023", "raised by the view command when an anchor narrows nothing, not by compiling a source file"),
     ("MER_BLD_024", "raised by the agent session when a message on stdin is not a Content-Length frame, not by compiling a source file"),
+    ("MER_BLD_025", "raised by the test runner when a walk turned up no `@test` at all, not by compiling a source file"),
     ("MER_BLD_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_BLD_002", "emitted by CLI refusal logic, not by compiling a source file"),
     ("MER_BLD_003", "emitted by comparing two builds' artifacts, not by compiling a source file"),

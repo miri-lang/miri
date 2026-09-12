@@ -3,6 +3,7 @@
 
 //! Rendering of a finished run, in the shape `cargo test` reports.
 
+use crate::error::format::format_diagnostic;
 use crate::test_runner::{Outcome, RejectedFile, TestResult, TestSummary};
 
 /// Render a run for a terminal.
@@ -20,8 +21,18 @@ pub fn format_pretty(summary: &TestSummary) -> String {
 
     output.push_str(&failure_details(summary));
     output.push_str(&rejection_details(&summary.rejected_files));
+    output.push_str(&empty_run_details(summary));
     output.push_str(&result_line(summary));
     output
+}
+
+/// The refusal a run that discovered nothing carries, rendered the way every
+/// other diagnostic on this command's output is.
+fn empty_run_details(summary: &TestSummary) -> String {
+    match summary.empty_run_diagnostic() {
+        Some(diagnostic) => format!("\n{}", format_diagnostic("", &diagnostic, None)),
+        None => String::new(),
+    }
 }
 
 /// The trailing verdict on one test's line.
@@ -95,6 +106,9 @@ fn result_line(summary: &TestSummary) -> String {
             summary.rejected_files.len()
         ));
     }
+    if summary.discovered_nothing() {
+        line.push_str("; no tests discovered");
+    }
     line.push('\n');
     line
 }
@@ -102,7 +116,7 @@ fn result_line(summary: &TestSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_runner::RejectionReason;
+    use crate::test_runner::{Census, RejectionReason};
 
     fn result(name: &str, outcome: Outcome, detail: Option<&str>) -> TestResult {
         TestResult {
@@ -115,8 +129,17 @@ mod tests {
         }
     }
 
+    /// A summary of a run that discovered tests, so only the outcomes under
+    /// test decide the verdict.
     fn summary_of(results: Vec<TestResult>, rejected: Vec<RejectedFile>) -> TestSummary {
-        TestSummary::from_results(results, rejected)
+        TestSummary::from_results(
+            results,
+            rejected,
+            Census {
+                files_read: 1,
+                files_declaring_tests: 1,
+            },
+        )
     }
 
     #[test]
@@ -158,12 +181,51 @@ mod tests {
         assert!(rendered.contains("test result: ok. 1 passed; 0 failed; 0 ignored"));
     }
 
+    /// Tests were discovered and the caller's filter selected none of them.
+    /// Nothing failed and nothing is wrong, so the run stays green and says
+    /// nothing beyond its counts.
     #[test]
-    fn an_empty_run_is_green_and_quiet() {
+    fn a_run_whose_filter_selected_nothing_is_green_and_quiet() {
         let rendered = format_pretty(&summary_of(Vec::new(), Vec::new()));
         assert!(rendered.starts_with("running 0 tests\n"));
         assert!(!rendered.contains("failures:"));
         assert!(rendered.contains("test result: ok."));
+    }
+
+    #[test]
+    fn a_run_that_discovered_nothing_prints_the_refusal_and_reads_as_failed() {
+        let rendered = format_pretty(&TestSummary::from_results(
+            Vec::new(),
+            Vec::new(),
+            Census {
+                files_read: 2,
+                files_declaring_tests: 0,
+            },
+        ));
+        assert!(rendered.contains("MER_BLD_025"), "{rendered}");
+        assert!(rendered.contains("read 2 .mi files"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "test result: FAILED. 0 passed; 0 failed; 0 ignored; no tests discovered"
+            ),
+            "{rendered}"
+        );
+        // Nothing ran, so nothing disagreed with an assertion.
+        assert!(!rendered.contains("failures:"), "{rendered}");
+    }
+
+    #[test]
+    fn an_empty_directory_reads_differently_from_files_without_tests() {
+        let rendered = format_pretty(&TestSummary::from_results(
+            Vec::new(),
+            Vec::new(),
+            Census::default(),
+        ));
+        assert!(
+            rendered.contains("found no .mi files to read"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(".mi files,"), "{rendered}");
     }
 
     #[test]

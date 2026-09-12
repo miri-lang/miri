@@ -198,9 +198,11 @@ pub enum Commands {
     /// Run tests
     ///
     /// Discovers and executes all `@test` functions under the specified directory or file.
-    /// Exit codes: 0 on success, 1 when a test fails and no files were rejected,
-    /// 2 when any file was rejected from the test run (rejected files take priority,
-    /// indicating tests never ran). The JSON envelope's exitCode matches the process status.
+    /// Exit codes: 0 on success, 1 when a test fails and every discovered file ran,
+    /// 2 when no test has a verdict — a file was rejected, or the walk discovered no
+    /// `@test` at all and is refused under MER_BLD_025 rather than reported as a pass.
+    /// A run that did not happen takes priority over one whose tests disagreed with
+    /// their assertions. The JSON envelope's exitCode matches the process status.
     Test {
         /// File or directory to test. Defaults to the current directory.
         /// Mutually exclusive with --dir.

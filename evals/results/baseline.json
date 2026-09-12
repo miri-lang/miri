@@ -108,7 +108,7 @@
     "task": "k",
     "success": false,
     "invocations": 2,
-    "bytes_read": 1398,
+    "bytes_read": 1418,
     "bytes_written": 0,
     "failed_step": 2
   }
