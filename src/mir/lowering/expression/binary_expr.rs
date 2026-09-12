@@ -35,7 +35,7 @@ fn try_lower_binary_trait_method(
     };
     try_lower_operator_trait_call(
         ctx,
-        class_name,
+        &class_name,
         op,
         OperatorOperands { lhs_op, rhs_op },
         expr,
@@ -85,8 +85,20 @@ pub(crate) fn try_lower_operator_trait_call(
 
 /// The class name implementing a binary operator trait for the lhs type
 /// (`String` or a user `Custom` type), else None.
-fn binary_trait_class_name<'tc>(ctx: &LoweringContext<'tc>, lhs: &Expression) -> Option<&'tc str> {
-    operator_trait_class_name(&ctx.type_checker.get_type(lhs.id)?.kind)
+///
+/// The type is read through the active instantiation substitution. A body
+/// lowered for one instantiation of a generic class or function reuses the
+/// types the type checker recorded once, against the generic parameter; read
+/// raw, the operand's type is still that parameter, which names no class and so
+/// leaves the operator comparing the two operands' addresses. Outside an
+/// instantiated body the substitution is empty and this is the recorded type.
+fn binary_trait_class_name(ctx: &LoweringContext, lhs: &Expression) -> Option<String> {
+    let recorded = ctx.type_checker.get_type(lhs.id)?;
+    if ctx.generic_subs.is_empty() {
+        return operator_trait_class_name(&recorded.kind).map(str::to_string);
+    }
+    let instantiated = super::super::apply_generic_sub(recorded, &ctx.generic_subs);
+    operator_trait_class_name(&instantiated.kind).map(str::to_string)
 }
 
 /// The class name whose operator-trait methods apply to values of `kind`.

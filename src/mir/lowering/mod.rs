@@ -755,6 +755,12 @@ fn lower_instantiation_core(
     // substitution. Populate type_params with the original names anyway so that
     // any types not yet substituted (e.g. nested generics) are handled correctly.
     ctx.body.type_params = subs.keys().cloned().collect();
+    // Carry the substitution so that a type the type checker recorded against
+    // the generic parameter — an operand of an operator, an intrinsic element
+    // read — resolves to the instantiation's concrete type. Without it the
+    // operator dispatch sees a parameter that names no class and compares the
+    // operands' addresses.
+    ctx.generic_subs = subs.clone();
 
     // _0: Return value (concrete type)
     ctx.body

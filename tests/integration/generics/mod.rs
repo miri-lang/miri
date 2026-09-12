@@ -4,4 +4,5 @@
 pub use crate::integration::utils;
 
 pub mod basic;
+pub mod operator_dispatch;
 pub mod structs;
