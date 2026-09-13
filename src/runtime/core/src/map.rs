@@ -5,17 +5,15 @@
 //!
 //! Implements a type-erased hash map using open addressing with linear probing.
 //! Keys and values are stored as opaque byte arrays. The Miri compiler provides
-//! key/value sizes and a key kind tag at each call site.
-//!
-//! Key kinds:
-//! - 0: value type (int, float, bool) — hashed/compared by raw bytes
-//! - 1: string type — dereferences MiriString pointer for hash/compare
+//! key/value sizes and registers how keys are matched — by bytes, by string
+//! content, or through the key type's `equals` — the same way a set matches
+//! its elements (see [`crate::element_identity`]).
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ptr;
 
+use crate::element_identity::ElementIdentity;
 use crate::rc::{alloc_with_rc, free_with_rc};
-use crate::string::MiriString;
 
 /// State flags for hash table slots.
 const SLOT_EMPTY: u8 = 0;
@@ -39,7 +37,8 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `capacity`: total number of slots
 /// - `key_size`: size of each key in bytes
 /// - `value_size`: size of each value in bytes
-/// - `key_kind`: 0 = value type, 1 = string type
+/// - `key_identity`: how two keys are recognised as the same key — see
+///   [`ElementIdentity`]
 /// - `val_drop_fn`: If non-zero, called on each value pointer when that entry is
 ///   removed by a mutation operation (`remove`, `clear`, or `set` overwriting an
 ///   existing key). Allows managed values (Lists, Maps, etc.) to have their RC
@@ -56,7 +55,7 @@ pub struct MiriMap {
     capacity: usize,
     key_size: usize,
     value_size: usize,
-    key_kind: usize,
+    key_identity: ElementIdentity,
     /// Drop function for managed values: `fn(val_ptr: *mut u8)`.
     /// Zero means values are plain (no RC management on removal).
     val_drop_fn: usize,
@@ -71,63 +70,7 @@ pub struct MiriMap {
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
 
-/// Compares two byte sequences for equality.
-unsafe fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
-    for i in 0..len {
-        if *a.add(i) != *b.add(i) {
-            return false;
-        }
-    }
-    true
-}
-
 impl MiriMap {
-    /// Computes the hash of a key.
-    unsafe fn hash_key(&self, key: *const u8) -> u64 {
-        if self.key_kind == 1 {
-            // String key: the key bytes contain a pointer to MiriString
-            let str_ptr = *(key as *const *const MiriString);
-            if str_ptr.is_null() {
-                return 0;
-            }
-            let s = &*str_ptr;
-            if s.data.is_null() || s.len == 0 {
-                return crate::hash::fnv1a(ptr::null(), 0);
-            }
-            crate::hash::fnv1a(s.data, s.len)
-        } else {
-            // Value key: hash the raw bytes
-            crate::hash::fnv1a(key, self.key_size)
-        }
-    }
-
-    /// Compares two keys for equality.
-    unsafe fn keys_equal(&self, a: *const u8, b: *const u8) -> bool {
-        if self.key_kind == 1 {
-            // String key: compare string contents
-            let ptr_a = *(a as *const *const MiriString);
-            let ptr_b = *(b as *const *const MiriString);
-            if ptr_a.is_null() && ptr_b.is_null() {
-                return true;
-            }
-            if ptr_a.is_null() || ptr_b.is_null() {
-                return false;
-            }
-            let sa = &*ptr_a;
-            let sb = &*ptr_b;
-            if sa.len != sb.len {
-                return false;
-            }
-            if sa.len == 0 {
-                return true;
-            }
-            bytes_equal(sa.data, sb.data, sa.len)
-        } else {
-            // Value key: compare raw bytes
-            bytes_equal(a, b, self.key_size)
-        }
-    }
-
     /// Raises the count of a key the map is about to hand to a caller.
     ///
     /// Everything a map returns is owned by whoever receives it: the caller
@@ -156,7 +99,7 @@ impl MiriMap {
         if self.capacity == 0 {
             return (0, false);
         }
-        let hash = self.hash_key(key);
+        let hash = self.key_identity.hash(key, self.key_size);
         let mut idx = (hash as usize) % self.capacity;
         let mut first_tombstone: Option<usize> = None;
 
@@ -169,7 +112,7 @@ impl MiriMap {
                 }
                 SLOT_OCCUPIED => {
                     let existing_key = self.keys.add(idx * self.key_size);
-                    if self.keys_equal(existing_key, key) {
+                    if self.key_identity.same(existing_key, key, self.key_size) {
                         return (idx, true);
                     }
                 }
@@ -488,7 +431,7 @@ pub mod ffi {
 
     /// Creates a new empty map with the given key/value sizes and key kind.
     ///
-    /// `key_kind`: 0 = value type (int/float/bool), 1 = string type.
+    /// `key_kind` is one of the kinds in [`crate::element_identity`].
     ///
     /// Allocates `[RC=1][MiriMap fields]`.
     #[no_mangle]
@@ -510,7 +453,8 @@ pub mod ffi {
         (*map).capacity = 0;
         (*map).key_size = key_size;
         (*map).value_size = value_size;
-        (*map).key_kind = key_kind;
+        (*map).key_identity = ElementIdentity::BYTES;
+        (*map).key_identity.set_kind(key_kind);
         (*map).val_drop_fn = 0;
         (*map).key_drop_fn = 0;
         (*map).val_clone_fn = 0;
@@ -705,7 +649,26 @@ pub mod ffi {
         if ptr.is_null() {
             return;
         }
-        (*ptr).key_kind = key_kind;
+        (*ptr).key_identity.set_kind(key_kind);
+    }
+
+    /// Matches keys through `fn_ptr`, an
+    /// [`crate::element_identity::ElementEqualsFn`] the compiler generates
+    /// from the key type's own `equals`.
+    ///
+    /// Registered before the first entry is stored, since every stored key sits
+    /// where the rule in force when it arrived hashed it.
+    ///
+    /// # Safety
+    /// - `ptr` must be a valid pointer to a `MiriMap`, or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_key_equals_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() {
+            return;
+        }
+        (*ptr).key_identity.set_equals_fn(fn_ptr);
     }
 
     /// Returns the key at the nth occupied slot (0-based sequential index).
@@ -813,10 +776,11 @@ pub mod ffi {
             return miri_rt_map_new(0, 0, 0);
         }
         let src = &*ptr;
-        let new_map = miri_rt_map_new(src.key_size, src.value_size, src.key_kind);
+        let new_map = miri_rt_map_new(src.key_size, src.value_size, 0);
         if new_map.is_null() {
             return new_map;
         }
+        (*new_map).key_identity = src.key_identity;
         (*new_map).val_drop_fn = src.val_drop_fn;
         (*new_map).key_drop_fn = src.key_drop_fn;
         (*new_map).val_clone_fn = src.val_clone_fn;

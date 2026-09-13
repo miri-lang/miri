@@ -116,10 +116,11 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Value of `MiriMap::key_kind` selecting content-based hashing and
-    /// comparison for string keys. Mirrors the runtime's encoding, where the
-    /// default `0` means the key is a value type compared by its raw bytes.
-    pub(crate) const MANAGED_STRING_KEY_KIND: i64 = 1;
+    /// The element kind that makes a set match its string elements, or a map
+    /// its string keys, by content. Mirrors the runtime's
+    /// `element_identity::BY_STRING_CONTENT`; the default `0` compares an
+    /// element's raw bytes.
+    pub(crate) const STRING_CONTENT_ELEMENT_KIND: i64 = 1;
 
     /// Extracts the key and value expressions from a Map TypeKind.
     ///

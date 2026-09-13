@@ -10,6 +10,7 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ptr;
 
+use crate::element_identity::ElementIdentity;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
 /// State flags for hash table slots.
@@ -35,6 +36,8 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `elem_drop_fn`: if non-zero, called on each element when removed/freed
 /// - `elem_clone_fn`: if non-zero, called on each element during clone to
 ///   produce a deep copy. Signature: `fn(*mut u8) -> *mut u8`.
+/// - `elem_identity`: how two elements are recognised as the same element —
+///   see [`ElementIdentity`].
 ///
 /// The first two fields (`data`, `len`) match MiriList/MiriArray layout so
 /// that `Rvalue::Len` and `element_at` use the same offsets.
@@ -47,6 +50,7 @@ pub struct MiriSet {
     elem_size: usize,
     elem_drop_fn: usize,
     elem_clone_fn: usize,
+    elem_identity: ElementIdentity,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
@@ -57,7 +61,7 @@ impl MiriSet {
         if self.capacity == 0 {
             return None;
         }
-        let hash = crate::hash::fnv1a(elem, self.elem_size);
+        let hash = self.elem_identity.hash(elem, self.elem_size);
         let mut idx = (hash as usize) % self.capacity;
         for _ in 0..self.capacity {
             let state = *self.states.add(idx);
@@ -66,7 +70,7 @@ impl MiriSet {
             }
             if state == SLOT_OCCUPIED {
                 let slot_data = self.data.add(idx * self.elem_size);
-                if Self::bytes_equal(slot_data, elem, self.elem_size) {
+                if self.elem_identity.same(slot_data, elem, self.elem_size) {
                     return Some(idx);
                 }
             }
@@ -81,7 +85,7 @@ impl MiriSet {
     /// further in the probe chain. Returns the first available slot
     /// (tombstone or empty) only after confirming no duplicate exists.
     unsafe fn find_insert_slot(&self, elem: *const u8) -> usize {
-        let hash = crate::hash::fnv1a(elem, self.elem_size);
+        let hash = self.elem_identity.hash(elem, self.elem_size);
         let mut idx = (hash as usize) % self.capacity;
         let mut first_tombstone: Option<usize> = None;
         for _ in 0..self.capacity {
@@ -92,7 +96,7 @@ impl MiriSet {
                 }
                 SLOT_OCCUPIED => {
                     let slot_data = self.data.add(idx * self.elem_size);
-                    if Self::bytes_equal(slot_data, elem, self.elem_size) {
+                    if self.elem_identity.same(slot_data, elem, self.elem_size) {
                         return idx; // duplicate found
                     }
                 }
@@ -105,15 +109,6 @@ impl MiriSet {
         }
         // Table is full (shouldn't happen with proper load factor)
         first_tombstone.unwrap_or(0)
-    }
-
-    fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
-        for i in 0..len {
-            if unsafe { *a.add(i) != *b.add(i) } {
-                return false;
-            }
-        }
-        true
     }
 
     unsafe fn ensure_capacity(&mut self) {
@@ -200,6 +195,15 @@ impl MiriSet {
         elem_ptr
     }
 
+    /// Releases one reference to a managed element through `elem_drop_fn`;
+    /// does nothing for an element the set does not manage.
+    unsafe fn release_element(&self, elem_ptr: usize) {
+        if self.elem_drop_fn != 0 && elem_ptr != 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.elem_drop_fn);
+            drop_fn(elem_ptr as *mut u8);
+        }
+    }
+
     fn contains_key(&self, elem: *const u8) -> bool {
         unsafe { self.find_slot(elem).is_some() }
     }
@@ -241,6 +245,7 @@ pub mod ffi {
         (*set).elem_size = elem_size;
         (*set).elem_drop_fn = 0;
         (*set).elem_clone_fn = 0;
+        (*set).elem_identity = ElementIdentity::BYTES;
         set
     }
 
@@ -268,6 +273,37 @@ pub mod ffi {
         guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
             (*ptr).elem_clone_fn = fn_ptr;
+        }
+    }
+
+    /// Selects how elements are matched: by their bytes or, for a string
+    /// element, by content. Takes one of the kinds in
+    /// [`crate::element_identity`].
+    ///
+    /// A set literal and an empty constructor both register it from the
+    /// element type before the first element is added; an element already
+    /// stored sits where the previous rule's hash placed it.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_set_elem_kind(ptr: *mut MiriSet, kind: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_identity.set_kind(kind);
+        }
+    }
+
+    /// Matches elements through `fn_ptr`, an
+    /// [`crate::element_identity::ElementEqualsFn`] the compiler generates
+    /// from the element type's own `equals`.
+    ///
+    /// Registered before the first element is added, on the same contract as
+    /// [`miri_rt_set_set_elem_kind`].
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_set_elem_equals_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_identity.set_equals_fn(fn_ptr);
         }
     }
 
@@ -302,6 +338,11 @@ pub mod ffi {
     /// The value is passed as a pointer-sized integer. The runtime copies
     /// `elem_size` bytes from the address of the parameter on the stack.
     /// Returns true (1) if the element was newly inserted, false (0) if duplicate.
+    ///
+    /// A managed element arrives with a reference donated to the set. When the
+    /// set already holds the same element it keeps the one it has and releases
+    /// the donated reference, so an add that changes nothing leaves no count
+    /// raised.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: usize) -> u8 {
@@ -313,6 +354,7 @@ pub mod ffi {
         if set.insert(&elem as *const usize as *const u8) {
             1
         } else {
+            set.release_element(elem);
             0
         }
     }
@@ -345,13 +387,7 @@ pub mod ffi {
         let set = &mut *ptr;
         if let Some(idx) = set.find_slot(&elem as *const usize as *const u8) {
             if set.elem_drop_fn != 0 {
-                let slot = set.data.add(idx * set.elem_size) as *const usize;
-                let elem_ptr = *slot;
-                if elem_ptr != 0 {
-                    let drop_fn: unsafe extern "C" fn(*mut u8) =
-                        std::mem::transmute(set.elem_drop_fn);
-                    drop_fn(elem_ptr as *mut u8);
-                }
+                set.release_element(*(set.data.add(idx * set.elem_size) as *const usize));
             }
             *set.states.add(idx) = SLOT_TOMBSTONE;
             set.len -= 1;
@@ -465,6 +501,7 @@ pub mod ffi {
         }
         (*new_set).elem_drop_fn = src.elem_drop_fn;
         (*new_set).elem_clone_fn = src.elem_clone_fn;
+        (*new_set).elem_identity = src.elem_identity;
         if !src.states.is_null() && src.capacity > 0 && src.elem_size > 0 {
             for i in 0..src.capacity {
                 if *src.states.add(i) == SLOT_OCCUPIED {

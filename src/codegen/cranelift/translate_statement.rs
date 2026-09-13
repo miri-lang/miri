@@ -4,6 +4,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::TypeKind;
+use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
     needs_out_pointer, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
@@ -367,11 +368,11 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Registers the key kind and key drop callback for a map with managed keys.
+    /// Registers how the map matches its keys and, for managed keys, the drop
+    /// callback that releases each key the runtime discards.
     ///
-    /// A string key also switches the map to content-based comparison; every
-    /// other managed key keeps the default byte comparison and only needs the
-    /// drop callback, so the runtime releases each key it discards.
+    /// A string key is matched by content and a class key through its own
+    /// `equals`, exactly as a set of that type matches its elements.
     fn register_map_key_callbacks(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -383,12 +384,17 @@ impl<'a> FunctionTranslator<'a> {
         let ExpressionKind::Type(key_ty, _) = &key_expr.node else {
             return Ok(());
         };
-        if matches!(key_ty.kind, TypeKind::String) {
-            let key_kind_val = builder
-                .ins()
-                .iconst(ptr_type, FunctionTranslator::MANAGED_STRING_KEY_KIND);
-            FunctionTranslator::call_rt_map_set_key_kind(builder, ctx, map_ptr, key_kind_val)?;
-        }
+        FunctionTranslator::emit_element_identity(
+            builder,
+            ctx,
+            &key_ty.kind,
+            map_ptr,
+            type_ctx,
+            ElementIdentitySetters {
+                set_kind: FunctionTranslator::call_rt_map_set_key_kind,
+                set_equals_fn: FunctionTranslator::call_rt_map_set_key_equals_fn,
+            },
+        )?;
 
         let Some(drop_fn_addr) = FunctionTranslator::key_decref_addr_for_kind(
             builder,
@@ -445,7 +451,8 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// After an empty `Set<T>()` constructor: derive the element type from the
-    /// destination annotation and register `elem_drop_fn` + `elem_clone_fn`.
+    /// destination annotation and register how elements are matched, plus
+    /// `elem_drop_fn` + `elem_clone_fn`.
     fn apply_empty_set_init(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -460,6 +467,17 @@ impl<'a> FunctionTranslator<'a> {
         let ExpressionKind::Type(elem_ty, _) = &elem_expr.node else {
             return Ok(());
         };
+        FunctionTranslator::emit_element_identity(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            set_ptr,
+            type_ctx,
+            ElementIdentitySetters {
+                set_kind: FunctionTranslator::call_rt_set_set_elem_kind,
+                set_equals_fn: FunctionTranslator::call_rt_set_set_elem_equals_fn,
+            },
+        )?;
         FunctionTranslator::emit_set_drop_fn_for_elem_kind(
             builder,
             ctx,

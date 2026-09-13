@@ -5,6 +5,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::layout::field_layout;
+use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
@@ -31,8 +32,7 @@ const OOM_TRAP_CODE: TrapCode = TrapCode::unwrap_user(2);
 
 /// Registers one element callback on a container, given the container pointer
 /// and the address of the function to record.
-type ElementCallbackSetter =
-    fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>;
+type ElementCallbackSetter = ContainerSetter;
 
 /// Per-container runtime setter callbacks used by `register_elem_drop_clone`.
 #[derive(Clone, Copy)]
@@ -529,18 +529,19 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let (key_size, value_size, key_kind) =
-            Self::map_aggregate_descriptor(builder, &translated, operands, type_ctx, ptr_type);
+        let (key_size, value_size) = Self::map_aggregate_sizes(builder, &translated, ptr_type);
 
         let key_size_val = builder.ins().iconst(ptr_type, key_size);
         let value_size_val = builder.ins().iconst(ptr_type, value_size);
-        let key_kind_val = builder.ins().iconst(ptr_type, key_kind);
+        let bytes_key_kind = builder.ins().iconst(ptr_type, 0);
 
         let map_ptr =
-            Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, key_kind_val)?;
+            Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, bytes_key_kind)?;
 
         Self::register_map_value_callbacks(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
-        Self::register_map_key_drop(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
+        Self::register_map_key_callbacks_from_operand(
+            builder, ctx, operands, map_ptr, ptr_type, type_ctx,
+        )?;
 
         for chunk in translated.chunks(2) {
             if chunk.len() == 2 {
@@ -552,44 +553,29 @@ impl<'a> FunctionTranslator<'a> {
         Ok(map_ptr)
     }
 
-    /// Returns `(key_size, value_size, key_kind)` for the upcoming map. `key_kind`
-    /// is 1 when the first key is a `TypeKind::String` (so the runtime knows to
-    /// DecRef string keys), 0 otherwise. Sizes fall back to pointer-size when the
-    /// literal has no concrete entries to measure.
-    fn map_aggregate_descriptor(
+    /// Returns `(key_size, value_size)` for the upcoming map. Sizes fall back to
+    /// pointer-size when the literal has no concrete entries to measure.
+    fn map_aggregate_sizes(
         builder: &FunctionBuilder,
         translated: &[Value],
-        operands: &[Operand],
-        type_ctx: &TypeCtx,
         ptr_type: cl_types::Type,
-    ) -> (i64, i64, i64) {
+    ) -> (i64, i64) {
         let ptr_size = ptr_type.bytes() as i64;
-        let (key_size, value_size) = if translated.len() >= 2 {
+        if translated.len() >= 2 {
             (
                 builder.func.dfg.value_type(translated[0]).bytes() as i64,
                 builder.func.dfg.value_type(translated[1]).bytes() as i64,
             )
         } else {
             (ptr_size, ptr_size)
-        };
-        let key_kind = match operands.first() {
-            Some(op)
-                if matches!(
-                    Self::first_operand_kind(op, type_ctx),
-                    Some(TypeKind::String)
-                ) =>
-            {
-                1
-            }
-            _ => 0,
-        };
-        (key_size, value_size, key_kind)
+        }
     }
 
-    /// Registers `key_drop_fn` for a map literal whose keys are managed, so the
-    /// runtime releases each key when the map drops it. The key type is read
-    /// from the first key operand, which a literal always carries.
-    fn register_map_key_drop(
+    /// Registers how a map literal matches its keys and, for managed keys, the
+    /// `key_drop_fn` that releases each key the map drops. The key type is read
+    /// from the first key operand, which a literal always carries; both run
+    /// before the first entry is stored.
+    fn register_map_key_callbacks_from_operand(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         operands: &[Operand],
@@ -603,6 +589,17 @@ impl<'a> FunctionTranslator<'a> {
         else {
             return Ok(());
         };
+        Self::emit_element_identity(
+            builder,
+            ctx,
+            key_kind,
+            map_ptr,
+            type_ctx,
+            ElementIdentitySetters {
+                set_kind: Self::call_rt_map_set_key_kind,
+                set_equals_fn: Self::call_rt_map_set_key_equals_fn,
+            },
+        )?;
         let Some(drop_fn_addr) =
             Self::key_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)?
         else {
@@ -654,28 +651,43 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let set_ptr = Self::call_rt_set_new(builder, ctx, elem_size_val)?;
+        let elem_kind = operands
+            .first()
+            .and_then(|op| Self::first_operand_kind(op, type_ctx));
+
+        // Everything the runtime needs to know about the elements is registered
+        // before the first add: the identity decides where each element lands,
+        // and the drop callback releases a literal's duplicate operand.
+        if let Some(elem_kind) = elem_kind {
+            Self::emit_element_identity(
+                builder,
+                ctx,
+                elem_kind,
+                set_ptr,
+                type_ctx,
+                ElementIdentitySetters {
+                    set_kind: Self::call_rt_set_set_elem_kind,
+                    set_equals_fn: Self::call_rt_set_set_elem_equals_fn,
+                },
+            )?;
+            Self::register_elem_drop_clone(
+                builder,
+                ctx,
+                elem_kind,
+                set_ptr,
+                ptr_type,
+                type_ctx,
+                ElementCallbackSetters {
+                    set_drop: Self::call_rt_set_set_elem_drop_fn,
+                    set_clone: Self::call_rt_set_set_elem_clone_fn,
+                    set_compare: None,
+                },
+            )?;
+        }
 
         for val in translated {
             let widened = Self::widen_to_ptr(builder, val, ptr_type);
             Self::call_rt_set_add(builder, ctx, set_ptr, widened)?;
-        }
-
-        if let Some(first_op) = operands.first() {
-            if let Some(elem_kind) = Self::first_operand_kind(first_op, type_ctx) {
-                Self::register_elem_drop_clone(
-                    builder,
-                    ctx,
-                    elem_kind,
-                    set_ptr,
-                    ptr_type,
-                    type_ctx,
-                    ElementCallbackSetters {
-                        set_drop: Self::call_rt_set_set_elem_drop_fn,
-                        set_clone: Self::call_rt_set_set_elem_clone_fn,
-                        set_compare: None,
-                    },
-                )?;
-            }
         }
         Ok(set_ptr)
     }

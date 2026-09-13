@@ -832,3 +832,33 @@ fn test_map_cow_immortal_returns_same_pointer() {
         miri_rt_map_free(map);
     }
 }
+
+/// A key equality that treats two boxed integers as equal when they hold the
+/// same number, standing in for a compiled `equals` thunk.
+unsafe extern "C" fn boxed_ints_equal(a: *const u8, b: *const u8) -> u8 {
+    u8::from(*(a as *const i64) == *(b as *const i64))
+}
+
+#[test]
+fn test_map_with_a_key_equals_callback_matches_keys_through_it() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set_key_equals_fn(map, boxed_ints_equal as usize);
+        let keys: Vec<Box<i64>> = (0..40).map(|i| Box::new(i % 10)).collect();
+        for (i, key) in keys.iter().enumerate() {
+            miri_rt_map_set(map, &**key as *const i64 as usize, i);
+        }
+        assert_eq!(miri_rt_map_len(map), 10);
+
+        let probe = Box::new(3i64);
+        assert_eq!(miri_rt_map_get(map, &*probe as *const i64 as usize), 33);
+        let copy = miri_rt_map_clone(map);
+        assert_eq!(
+            miri_rt_map_contains_key(copy, &*probe as *const i64 as usize),
+            1
+        );
+
+        miri_rt_map_free(map);
+        miri_rt_map_free(copy);
+    }
+}

@@ -6,6 +6,7 @@
 //! Provides fundamental runtime services for compiled Miri programs:
 //! - [`alloc`] — Memory allocation primitives wrapping the system allocator.
 //! - [`array`] — Fixed-size array type ([`MiriArray`]) with FFI interface.
+//! - [`element_identity`] — Deciding whether two container elements are the same.
 //! - [`element_order`] — Ordering the elements of a type-erased container.
 //! - [`io`] — Standard I/O operations (print, println, eprint, eprintln).
 //! - [`list`] — Dynamic list type ([`MiriList`]) with FFI interface.
@@ -21,6 +22,7 @@
 pub mod alloc;
 pub mod alloc_count;
 pub mod array;
+pub mod element_identity;
 pub mod element_order;
 pub mod fs;
 pub mod guard;

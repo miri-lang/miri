@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod class_keys;
 pub mod construction;
 pub mod edge_cases;
 pub mod function_integration;

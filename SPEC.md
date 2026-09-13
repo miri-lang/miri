@@ -321,6 +321,8 @@ Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, 
 
 The `get` method returns an option type (`V?`) — use pattern matching to handle missing keys safely.
 
+Two keys are the same key when `==` says so: strings match by content, a class that defines `equals` matches through that method, and a value type matches by value. A class without its own `equals` matches only the same instance.
+
 ### Set
 
 Unordered collection of unique elements. Type syntax: `{T}`.
@@ -336,6 +338,8 @@ if 2 in s
 Methods: `length`, `element_at`, `add`, `contains`, `remove`, `clear`, `is_empty`.
 
 The `in` operator checks set membership.
+
+Elements are matched the way map keys are: two elements are the same element when `==` says so, so adding a string whose content the set already holds leaves the set unchanged.
 
 ### Iteration
 

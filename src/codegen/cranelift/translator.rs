@@ -117,6 +117,12 @@ pub(crate) fn empty_module_ctx<'a>(
 /// calling the element type's own `compare`.
 pub(crate) const COMPARE_THUNK_PREFIX: &str = "__compare_";
 
+/// Symbol prefix of the per-type element equality a set or map matches through.
+///
+/// The thunk it names takes two element values and answers whether they are the
+/// same element by calling the element type's own `equals`.
+pub(crate) const EQUALS_THUNK_PREFIX: &str = "__equals_";
+
 /// Normalized element type for runtime decref/clone helper dispatch.
 ///
 /// Collapses canonical `TypeKind::{List,Array,Set,Map}` and the post-
@@ -1156,6 +1162,60 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_map_set_key_equals_fn(map_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_map_set_key_equals_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::MAP_SET_KEY_EQUALS_FN, map_ptr, fn_ptr)
+    }
+
+    /// Calls `miri_rt_set_set_elem_kind(set_ptr, kind)`.
+    pub(crate) fn call_rt_set_set_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        set_ptr: Value,
+        kind: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::SET_SET_ELEM_KIND, set_ptr, kind)
+    }
+
+    /// Calls `miri_rt_set_set_elem_equals_fn(set_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_set_set_elem_equals_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        set_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::SET_SET_ELEM_EQUALS_FN, set_ptr, fn_ptr)
+    }
+
+    /// Calls a runtime `name(container_ptr, value)` that records one
+    /// pointer-sized setting on a container and returns nothing.
+    fn call_rt_container_setter(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &'static str,
+        container_ptr: Value,
+        value: Value,
+    ) -> Result<(), CodegenError> {
+        let pt = builder.func.dfg.value_type(container_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name,
+                param_types: &[pt, pt],
+                return_types: &[],
+                args: &[container_ptr, value],
+            },
+        )?;
+        Ok(())
+    }
+
     /// Returns the address of `miri_rt_string_decref_element` as a ptr-sized integer.
     pub(crate) fn get_rt_string_decref_element_addr(
         builder: &mut FunctionBuilder,
@@ -1354,6 +1414,31 @@ impl<'a> FunctionTranslator<'a> {
             .module
             .declare_function(&compare_name, Linkage::Import, &sig)
             .map_err(|e| CodegenError::declare_function(compare_name.clone(), e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
+    }
+
+    /// Returns the address of `__equals_{type_name}` as a ptr-sized integer.
+    ///
+    /// Used as the element equality of a Set, or the key equality of a Map,
+    /// holding elements whose type defines `equals`. The function is generated
+    /// by `generate_equals_function` with Export linkage.
+    pub(crate) fn get_custom_equals_thunk_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        type_name: &str,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, CodegenError> {
+        let equals_name = format!("{EQUALS_THUNK_PREFIX}{type_name}");
+        let sig = Signature {
+            params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
+            returns: vec![AbiParam::new(cranelift_codegen::ir::types::I8)],
+            call_conv: builder.func.signature.call_conv,
+        };
+        let func_id = ctx
+            .module
+            .declare_function(&equals_name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::declare_function(equals_name.clone(), e.to_string()))?;
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         Ok(builder.ins().func_addr(ptr_type, local_func))
     }

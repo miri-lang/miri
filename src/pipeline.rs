@@ -1413,7 +1413,7 @@ impl Pipeline {
                         let mangled =
                             mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
                         let reached = called.contains(&mangled)
-                            || Self::is_element_comparator_body(result, class_name, &decl.name);
+                            || Self::is_element_method_body(result, class_name, &decl.name);
                         if lowered_names.contains(&mangled) || !reached {
                             continue;
                         }
@@ -1450,28 +1450,31 @@ impl Pipeline {
         }
     }
 
-    /// Whether this method is what a container's element comparator calls.
+    /// Whether this method is what a container calls on its elements.
     ///
-    /// The ordering method of a class that orders its values is reached through
-    /// the comparator codegen registers on a List or Array of that class, which
-    /// is a reference no MIR body carries — so scanning call sites never finds
-    /// it, and the instantiation it needs has to be emitted on the strength of
-    /// the class implementing the trait.
-    fn is_element_comparator_body(
+    /// A List or Array sorts through the ordering method of a class that orders
+    /// its values, and a Set or Map matches elements through the `equals` a class
+    /// defines. Both are reached through a thunk codegen registers on the
+    /// container, which is a reference no MIR body carries — so scanning call
+    /// sites never finds it, and the instantiation it needs has to be emitted on
+    /// the strength of the class declaring the capability.
+    fn is_element_method_body(
         result: &PipelineResult,
         class_name: &str,
         method_name: &str,
     ) -> bool {
-        use crate::ast::types::{ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME};
+        use crate::ast::types::{EQUALS_METHOD_NAME, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME};
         use crate::type_checker::context::TypeDefinition;
-        if method_name != ORDERING_METHOD_NAME {
+        let Some(TypeDefinition::Class(class_def)) =
+            result.type_checker.type_definitions().get(class_name)
+        else {
             return false;
+        };
+        match method_name {
+            ORDERING_METHOD_NAME => class_def.traits.iter().any(|t| t == ORDERING_TRAIT_NAME),
+            EQUALS_METHOD_NAME => class_def.methods.contains_key(EQUALS_METHOD_NAME),
+            _ => false,
         }
-        matches!(
-            result.type_checker.type_definitions().get(class_name),
-            Some(TypeDefinition::Class(class_def))
-                if class_def.traits.iter().any(|t| t == ORDERING_TRAIT_NAME)
-        )
     }
 
     /// The `{Collection}_{method}` symbols a built-in collection declares itself
