@@ -94,6 +94,23 @@ pub struct Body {
     /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
     /// during the post-lowering pipeline pass `stamp_kernel_workgroups`.
     pub kernel_workgroups: Vec<(String, [u32; 3])>,
+    /// Every generic function instantiation this body calls, in call order.
+    /// Recorded when the call is lowered, with the body's own instantiation
+    /// substitution already applied, so the pipeline can lower each callee
+    /// without recovering its type arguments from the mangled symbol.
+    pub generic_function_calls: Vec<GenericFunctionCall>,
+}
+
+/// One call to a generic function at concrete type arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericFunctionCall {
+    /// The mangled symbol the call targets, e.g. `smaller__String`.
+    pub symbol: String,
+    /// The generic function's declared name.
+    pub function: String,
+    /// Each of the callee's generic parameters, paired with the type it is
+    /// instantiated at.
+    pub type_args: Vec<(String, Type)>,
 }
 
 impl Body {
@@ -117,6 +134,7 @@ impl Body {
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
+            generic_function_calls: Vec::new(),
         }
     }
 

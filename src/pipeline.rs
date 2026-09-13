@@ -1294,12 +1294,7 @@ impl Pipeline {
             .map_err(|e| {
                 CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
             })?;
-        lowered_names.insert(mangled.clone());
-        bodies.push((mangled, mir_body));
-        for lambda in lambdas {
-            lowered_names.insert(lambda.name.clone());
-            bodies.push((lambda.name, lambda.body));
-        }
+        Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
         Ok(())
     }
 
@@ -1379,6 +1374,7 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
+        let generic_decls = Self::generic_function_declarations(result);
         loop {
             let called = called_function_names(bodies);
             let mut emitted = false;
@@ -1421,6 +1417,7 @@ impl Pipeline {
                         if lowered_names.contains(&mangled) || !reached {
                             continue;
                         }
+                        let first_new = bodies.len();
                         Self::lower_one_instantiation_method(
                             result,
                             class_name,
@@ -1429,6 +1426,15 @@ impl Pipeline {
                             is_release,
                             &subs,
                             &mangle_args,
+                            bodies,
+                            lowered_names,
+                            compilation_ids,
+                        )?;
+                        Self::lower_generic_functions_reached_from(
+                            result,
+                            is_release,
+                            first_new,
+                            &generic_decls,
                             bodies,
                             lowered_names,
                             compilation_ids,
@@ -2504,9 +2510,14 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Monomorphize generic functions: collect every call to a mangled generic name
-    /// in the already-lowered bodies, then re-lower the original generic for each
-    /// unique instantiation.
+    /// Monomorphize generic functions: collect every generic function call the
+    /// already-lowered bodies recorded, then re-lower the original generic for
+    /// each unique instantiation.
+    ///
+    /// An instantiation's body is scanned in turn, because a generic body that
+    /// calls another generic body names that callee at the type it was itself
+    /// instantiated at — an instantiation no call written in the source spells.
+    /// The worklist runs until no body calls a missing one.
     fn lower_monomorphized_generics(
         &self,
         result: &PipelineResult,
@@ -2515,181 +2526,220 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
+        // Residency specialization is scanned over the bodies lowered so far
+        // only: a specialized body cannot itself reach another specialization,
+        // because forwarding a buffer parameter to a further call is
+        // buffer-touching and the type checker rejects it.
+        let needed_residency = Self::residency_specializations_called(bodies, lowered_names);
+
+        let generic_decls = Self::generic_function_declarations(result);
+        Self::lower_generic_functions_reached_from(
+            result,
+            is_release,
+            0,
+            &generic_decls,
+            bodies,
+            lowered_names,
+            compilation_ids,
+        )?;
+
+        self.lower_residency_specializations(
+            result,
+            is_release,
+            needed_residency,
+            bodies,
+            lowered_names,
+            compilation_ids,
+        )
+    }
+
+    /// Lower every generic function instantiation the bodies from `first_new`
+    /// on call, and every one those instantiations call in turn.
+    // TODO: two gaps sit beside this worklist. A lambda written inside a
+    // generic function is emitted under the same symbol by every body lowered
+    // from that declaration, so codegen rejects the duplicate. And a generic
+    // class built at the caller's parameter (`Box<T>(a)`) inside an
+    // instantiation is never added to the class instantiation registry, which
+    // is filled before lowering, so its methods run against the shared body.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_generic_functions_reached_from(
+        result: &PipelineResult,
+        is_release: bool,
+        first_new: usize,
+        generic_decls: &std::collections::HashMap<&str, &Statement>,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        let mut pending = std::collections::VecDeque::new();
+        Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
+        while let Some(call) = pending.pop_front() {
+            if lowered_names.contains(&call.symbol) {
+                continue;
+            }
+            let Some(&ast_stmt) = generic_decls.get(call.function.as_str()) else {
+                continue;
+            };
+            let subs = call.type_args.into_iter().collect();
+            let (body, lambdas) = mir::lowering::lower_generic_instantiation_with_compilation_ids(
+                ast_stmt,
+                &result.type_checker,
+                is_release,
+                true,
+                &subs,
+                compilation_ids.clone(),
+            )
+            .map_err(|e| {
+                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", call.symbol, e))
+            })?;
+            let first_new = bodies.len();
+            Self::push_lowered_body(bodies, lowered_names, call.symbol, body, lambdas);
+            Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
+        }
+        Ok(())
+    }
+
+    /// Every generic function declaration by name, the program's own shadowing
+    /// an imported one of the same name.
+    fn generic_function_declarations(
+        result: &PipelineResult,
+    ) -> std::collections::HashMap<&str, &Statement> {
+        let mut decls = std::collections::HashMap::new();
+        for stmt in result
+            .ast
+            .body
+            .iter()
+            .chain(result.type_checker.imported_statements.iter())
         {
-            // Build a map from original function name → AST statement for quick lookup.
-            let mut ast_func_map: std::collections::HashMap<&str, &Statement> =
-                std::collections::HashMap::new();
-            for stmt in &result.ast.body {
-                if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                    if decl.generics.is_some() {
-                        ast_func_map.insert(decl.name.as_str(), stmt);
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                if decl.generics.is_some() {
+                    decls.entry(decl.name.as_str()).or_insert(stmt);
+                }
+            }
+        }
+        decls
+    }
+
+    /// Record a lowered body and the lambdas lowered with it.
+    fn push_lowered_body(
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        name: String,
+        body: mir::Body,
+        lambdas: Vec<mir::lambda::LambdaInfo>,
+    ) {
+        lowered_names.insert(name.clone());
+        bodies.push((name, body));
+        for lambda in lambdas {
+            lowered_names.insert(lambda.name.clone());
+            bodies.push((lambda.name, lambda.body));
+        }
+    }
+
+    /// The residency-specialized calls (`base__gpu_p…h…`) in `bodies` that have
+    /// no body yet, keyed by symbol, each with the original function and the
+    /// per-argument device handles read straight off the call terminator.
+    fn residency_specializations_called(
+        bodies: &[(String, mir::Body)],
+        lowered_names: &std::collections::HashSet<String>,
+    ) -> std::collections::BTreeMap<String, (String, Vec<Option<mir::body::DeviceHandleId>>)> {
+        bodies
+            .iter()
+            .flat_map(|(_, body)| body.basic_blocks.iter())
+            .filter_map(|block| match &block.terminator.as_ref()?.kind {
+                mir::TerminatorKind::Call {
+                    func: mir::Operand::Constant(c),
+                    arg_handles,
+                    ..
+                } => match &c.literal {
+                    crate::ast::literal::Literal::Identifier(fname)
+                        if fname.contains("__gpu_p") && !lowered_names.contains(fname) =>
+                    {
+                        let original = fname.split("__").next().unwrap_or("").to_string();
+                        Some((fname.clone(), (original, arg_handles.clone())))
                     }
-                }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Queue every generic function instantiation `bodies` call that has no
+    /// body yet, in call order.
+    ///
+    /// Each call carries its own type arguments, recorded when it was lowered
+    /// with the calling body's substitution applied, so a call inside an
+    /// instantiation names its callee at that instantiation's types.
+    fn queue_generic_instantiations(
+        bodies: &[(String, mir::Body)],
+        lowered_names: &std::collections::HashSet<String>,
+        pending: &mut std::collections::VecDeque<mir::body::GenericFunctionCall>,
+    ) {
+        let calls = bodies
+            .iter()
+            .flat_map(|(_, body)| body.generic_function_calls.iter());
+        for call in calls {
+            let already_queued = pending.iter().any(|queued| queued.symbol == call.symbol);
+            if !lowered_names.contains(&call.symbol) && !already_queued {
+                pending.push_back(call.clone());
             }
-            // Also consider imported generic functions (e.g. from stdlib)
-            for stmt in &result.type_checker.imported_statements {
-                if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                    if decl.generics.is_some() {
-                        ast_func_map.entry(decl.name.as_str()).or_insert(stmt);
-                    }
-                }
+        }
+    }
+
+    /// Lower each needed residency specialization. The parameter that received
+    /// a gpu-resident buffer is stamped with its device handle so the
+    /// specialized body's `forall` launches on that buffer.
+    fn lower_residency_specializations(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        needed: std::collections::BTreeMap<
+            String,
+            (String, Vec<Option<mir::body::DeviceHandleId>>),
+        >,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        // Residency specialization applies to any function (generic or not),
+        // so it needs every function declaration by name, not only generic
+        // ones.
+        let mut decls: std::collections::HashMap<&str, &Statement> =
+            std::collections::HashMap::new();
+        for stmt in result
+            .ast
+            .body
+            .iter()
+            .chain(result.type_checker.imported_statements.iter())
+        {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                decls.entry(decl.name.as_str()).or_insert(stmt);
             }
-
-            // Residency specialization applies to any function (generic or not),
-            // so it needs every function declaration by name, not only generic
-            // ones.
-            let mut residency_func_map: std::collections::HashMap<&str, &Statement> =
-                std::collections::HashMap::new();
-            for stmt in result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter())
-            {
-                if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                    residency_func_map.entry(decl.name.as_str()).or_insert(stmt);
-                }
+        }
+        for (mangled_name, (original_name, param_handles)) in needed {
+            if lowered_names.contains(&mangled_name) {
+                continue;
             }
-
-            // Collect all call-site generic mappings from the type checker.
-            // Build: mangled_name → (original_name, substitution_map)
-            let mut needed: std::collections::HashMap<
-                String,
-                (
-                    String,
-                    std::collections::HashMap<String, crate::ast::types::Type>,
-                ),
-            > = std::collections::HashMap::new();
-
-            for (call_id, type_args) in &result.type_checker.call_generic_mappings {
-                // Find which function this call corresponds to by looking up the call expr
-                // in the AST. We search all function bodies for Call exprs with this ID.
-                // More direct: we get the function name from the type_args key and scan
-                // all call terminators we already lowered.
-                let _ = call_id; // used below via body scan
-
-                let subs: std::collections::HashMap<String, crate::ast::types::Type> =
-                    type_args.iter().cloned().collect();
-                // We'll match this with terminators in the body scan below.
-                let _ = subs;
-            }
-
-            // Residency-specialized calls (base__gpu_p…h…): a gpu-resident buffer
-            // passed to a launch-safe callee, keyed mangled_name → (original,
-            // per-arg device handles read straight off the call terminator). A
-            // single scan suffices: a specialized body cannot itself reach
-            // another specialization, because forwarding a buffer parameter to a
-            // further call is buffer-touching and the type checker rejects it —
-            // so no transitive chain of specializations can form.
-            let mut needed_residency: std::collections::HashMap<
-                String,
-                (String, Vec<Option<mir::body::DeviceHandleId>>),
-            > = std::collections::HashMap::new();
-
-            // Scan all lowered bodies for calls to names containing "__" that look
-            // like mangled generics (base__type1__type2…) or residency
-            // specializations (base__gpu_p…h…).
-            for (_, body) in &*bodies {
-                for block in &body.basic_blocks {
-                    if let Some(term) = &block.terminator {
-                        if let mir::TerminatorKind::Call {
-                            func: mir::Operand::Constant(c),
-                            arg_handles,
-                            ..
-                        } = &term.kind
-                        {
-                            if let crate::ast::literal::Literal::Identifier(fname) = &c.literal {
-                                if !fname.contains("__") || lowered_names.contains(fname) {
-                                    continue;
-                                }
-                                let original = fname.split("__").next().unwrap_or("").to_string();
-                                if fname.contains("__gpu_p") {
-                                    needed_residency
-                                        .insert(fname.clone(), (original, arg_handles.clone()));
-                                    continue;
-                                }
-                                for type_args in result.type_checker.call_generic_mappings.values()
-                                {
-                                    let subs: std::collections::HashMap<
-                                        String,
-                                        crate::ast::types::Type,
-                                    > = type_args.iter().cloned().collect();
-                                    let candidate =
-                                        mir::lowering::control_flow::mangle_generic_name(
-                                            &original, type_args,
-                                        );
-                                    if candidate == *fname {
-                                        needed.insert(fname.clone(), (original.clone(), subs));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Lower each needed generic specialization.
-            for (mangled_name, (original_name, subs)) in needed {
-                if lowered_names.contains(&mangled_name) {
-                    continue;
-                }
-                if let Some(&ast_stmt) = ast_func_map.get(original_name.as_str()) {
-                    let (body, lambdas) =
-                        mir::lowering::lower_generic_instantiation_with_compilation_ids(
-                            ast_stmt,
-                            &result.type_checker,
-                            is_release,
-                            true,
-                            &subs,
-                            compilation_ids.clone(),
-                        )
-                        .map_err(|e| {
-                            CompilerError::Codegen(format!(
-                                "MIR lowering failed for {}: {}",
-                                mangled_name, e
-                            ))
-                        })?;
-                    lowered_names.insert(mangled_name.clone());
-                    bodies.push((mangled_name, body));
-                    for lambda in lambdas {
-                        lowered_names.insert(lambda.name.clone());
-                        bodies.push((lambda.name, lambda.body));
-                    }
-                }
-            }
-
-            // Lower each needed residency specialization. The parameter that
-            // received a gpu-resident buffer is stamped with its device handle
-            // so the specialized body's `forall` launches on that buffer.
-            for (mangled_name, (original_name, param_handles)) in needed_residency {
-                if lowered_names.contains(&mangled_name) {
-                    continue;
-                }
-                if let Some(&ast_stmt) = residency_func_map.get(original_name.as_str()) {
-                    let (body, lambdas) =
-                        mir::lowering::lower_residency_instantiation_with_compilation_ids(
-                            ast_stmt,
-                            &result.type_checker,
-                            is_release,
-                            true,
-                            &param_handles,
-                            compilation_ids.clone(),
-                        )
-                        .map_err(|e| {
-                            CompilerError::Codegen(format!(
-                                "MIR lowering failed for {}: {}",
-                                mangled_name, e
-                            ))
-                        })?;
-                    lowered_names.insert(mangled_name.clone());
-                    bodies.push((mangled_name, body));
-                    for lambda in lambdas {
-                        lowered_names.insert(lambda.name.clone());
-                        bodies.push((lambda.name, lambda.body));
-                    }
-                }
-            }
+            let Some(&ast_stmt) = decls.get(original_name.as_str()) else {
+                continue;
+            };
+            let (body, lambdas) =
+                mir::lowering::lower_residency_instantiation_with_compilation_ids(
+                    ast_stmt,
+                    &result.type_checker,
+                    is_release,
+                    true,
+                    &param_handles,
+                    compilation_ids.clone(),
+                )
+                .map_err(|e| {
+                    CompilerError::Codegen(format!(
+                        "MIR lowering failed for {}: {}",
+                        mangled_name, e
+                    ))
+                })?;
+            Self::push_lowered_body(bodies, lowered_names, mangled_name, body, lambdas);
         }
         Ok(())
     }

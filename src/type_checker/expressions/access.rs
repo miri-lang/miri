@@ -1142,7 +1142,7 @@ impl TypeChecker {
     ) -> Type {
         if self.orders_a_parameter_of(prop_name) {
             let pinned = self.build_class_method_mapping(def, name, type_args);
-            self.check_pinned_ordering_for_method(name, prop_name, &pinned, span);
+            self.check_pinned_ordering_for_method(name, prop_name, &pinned, span, context);
         }
 
         if let Some(ty) =

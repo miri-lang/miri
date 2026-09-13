@@ -132,13 +132,20 @@ impl TypeChecker {
     /// Report every parameter of `body` that `substitution` pins to a type
     /// carrying no ordering.
     ///
-    /// A parameter the substitution leaves open is skipped: one generic body
-    /// calling another passes its own parameter, which names no type to judge.
+    /// A parameter pinned to one of the checking body's own generic parameters
+    /// names no type to judge yet: one generic body calling another hands the
+    /// requirement on, so the delegating body is recorded as ordering that
+    /// parameter and the sites that pin it answer instead.
+    // TODO: a site is answered against the requirements recorded when it is
+    // checked, and bodies are checked in source order, so a call written above
+    // the generic body it calls is never refused. Pinning sites should be
+    // recorded during the body pass and answered once requirements settle.
     pub(crate) fn check_pinned_ordering(
         &mut self,
         body: &GenericBodyId,
         substitution: &HashMap<String, Type>,
         span: Span,
+        context: &Context,
     ) {
         let Some(parameters) = self.ordering_requirements.get(body).cloned() else {
             return;
@@ -147,6 +154,10 @@ impl TypeChecker {
             let Some(pinned) = substitution.get(&parameter) else {
                 continue;
             };
+            if generic_parameter_in_scope(pinned, context).is_some() {
+                self.record_ordering_requirement(pinned, context);
+                continue;
+            }
             if self.orders_its_values(pinned) {
                 continue;
             }
@@ -189,6 +200,7 @@ impl TypeChecker {
         method: &str,
         substitution: &HashMap<String, Type>,
         span: Span,
+        context: &Context,
     ) {
         if substitution.is_empty() || self.ordering_requirements.is_empty() {
             return;
@@ -197,11 +209,12 @@ impl TypeChecker {
             &(class_name.to_string(), method.to_string()),
             substitution,
             span,
+            context,
         );
         let bindings = self.class_trait_param_bindings(class_name);
         for declaring in self.declaring_types_above(class_name) {
             let rekeyed = self.rekeyed_into(&declaring, substitution, &bindings);
-            self.check_pinned_ordering(&(declaring, method.to_string()), &rekeyed, span);
+            self.check_pinned_ordering(&(declaring, method.to_string()), &rekeyed, span, context);
         }
     }
 

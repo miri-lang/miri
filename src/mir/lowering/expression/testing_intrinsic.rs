@@ -613,7 +613,7 @@ fn resolve_value_kind(
     expected_arg: &Expression,
     span: Span,
 ) -> Result<TypeKind, LoweringError> {
-    if let Some(args) = ctx.type_checker.call_generic_mappings.get(&call_expr.id) {
+    if let Some(args) = ctx.instantiated_call_mapping(call_expr.id) {
         if let Some((_, ty)) = args.iter().find(|(name, _)| name == "T") {
             return Ok(ty.kind.clone());
         }
