@@ -516,36 +516,25 @@ pub(crate) const COLLECTION_CTORS: &[(BuiltinCollectionKind, CollectionCtorFn)] 
     (BuiltinCollectionKind::Array, lower_array_constructor),
 ];
 
-/// Extracts the element size in bytes for a `List<T>` from its type definition.
-fn extract_list_elem_size(ctx: &LoweringContext, list_ty: &Type) -> i64 {
-    let elem_kind = match &list_ty.kind {
-        TypeKind::List(inner_expr) => {
-            if let Some(ty) = ctx.type_checker.get_type(inner_expr.id) {
-                Some(ty.kind.clone())
-            } else if let Some(inferred) = infer_type_from_generic_arg(inner_expr, ctx) {
-                Some(inferred.kind)
-            } else {
-                None
-            }
-        }
+/// Resolves the element type `T` of a `List<T>` or an `Array<T, N>` from its
+/// type definition.
+fn sequence_elem_kind(ctx: &LoweringContext, sequence_ty: &Type) -> Option<TypeKind> {
+    let inner_expr = match &sequence_ty.kind {
+        TypeKind::List(inner_expr) | TypeKind::Array(inner_expr, _) => inner_expr.as_ref(),
         TypeKind::Custom(name, Some(args))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List)
-                && !args.is_empty() =>
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+            ) && !args.is_empty() =>
         {
-            if let Some(ty) = ctx.type_checker.get_type(args[0].id) {
-                Some(ty.kind.clone())
-            } else if let Some(inferred) = infer_type_from_generic_arg(&args[0], ctx) {
-                Some(inferred.kind)
-            } else {
-                None
-            }
+            &args[0]
         }
-        _ => None,
+        _ => return None,
     };
-    if let Some(ref kind) = elem_kind {
-        compute_elem_size_from_type(kind)
+    if let Some(ty) = ctx.type_checker.get_type(inner_expr.id) {
+        Some(ty.kind.clone())
     } else {
-        8
+        infer_type_from_generic_arg(inner_expr, ctx).map(|inferred| inferred.kind)
     }
 }
 
@@ -553,8 +542,7 @@ fn extract_list_elem_size(ctx: &LoweringContext, list_ty: &Type) -> i64 {
 ///
 /// Two forms are supported:
 /// - `List()` — allocates an empty list with the element stride determined by `T`.
-/// - `List([...])` — converts an array literal into a list, choosing the
-///   managed-array variant when elements are heap-allocated so RC is correct.
+/// - `List(array)` — copies an array into a list; see [`lower_list_from_array`].
 pub(crate) fn lower_list_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -576,120 +564,114 @@ pub(crate) fn lower_list_constructor(
         (p.clone(), Operand::Copy(p))
     };
 
-    let target_bb = ctx.new_basic_block();
-    let elem_size = extract_list_elem_size(ctx, &list_ty);
+    let elem_kind = sequence_elem_kind(ctx, &list_ty);
+    let elem_size = elem_kind.as_ref().map_or(8, compute_elem_size_from_type);
 
-    if args.len() == 1 {
-        let array_op = lower_expression(ctx, &args[0], None)?;
-
-        // Track the temp array local so we can emit StorageDead after the call.
-        // Determine array length and whether elements are
-        // RC-managed (Option, List, Array, etc.) from the array literal.
-        let mut len_val = 0i64;
-        let mut elems_are_managed = false;
-        if let ExpressionKind::Array(elements, _) = &args[0].node {
-            len_val = elements.len() as i64;
-            if !elements.is_empty() {
-                if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
-                    elems_are_managed = ctx.is_perceus_managed(&ty.kind);
-                }
-            }
-        }
-
-        let len_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Int, *span),
-            literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I64(len_val),
-            ),
-        }));
-
-        let size_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Int, *span),
-            literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I64(elem_size),
-            ),
-        }));
-
-        // Use the managed-array variant when elements are heap-allocated so the
-        // list IncRefs them before the source array's element-drop loop releases
-        // its refs.
-        let rt_fn_name = if elems_are_managed {
-            rt::LIST_NEW_FROM_MANAGED_ARRAY
-        } else {
-            rt::LIST_NEW_FROM_RAW
-        };
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(rt_fn_name.to_string()),
-        }));
-
-        let temp_array_local = match &array_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
-            _ => None,
-        };
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: vec![array_op, len_op, size_op],
-                out_args: Vec::new(),
-                arg_handles: Vec::new(),
-                destination: destination.clone(),
-                target: Some(target_bb),
-            },
-            *span,
-        ));
-
-        // The temp array was consumed by the runtime (data copied).
-        // Emit StorageDead so Perceus inserts the matching DecRef.
-        ctx.set_current_block(target_bb);
-        if let Some(arr_place) = temp_array_local {
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::StorageDead(arr_place),
-                span: *span,
-            });
-        }
-
-        // Need a fresh block since we just added statements to target_bb.
-        let final_bb = ctx.new_basic_block();
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: final_bb },
-            *span,
-        ));
-        ctx.set_current_block(final_bb);
-        return Ok(result_op);
+    if let [array] = args {
+        let elem_kind = elem_kind.or_else(|| {
+            let array_ty = ctx.recorded_type(array.id)?;
+            sequence_elem_kind(ctx, &array_ty)
+        });
+        let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
+        lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
     } else {
-        // List() with no arguments: allocate an empty list with element stride elem_size.
-        let size_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Int, *span),
-            literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I64(elem_size),
-            ),
-        }));
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(rt::LIST_NEW.to_string()),
-        }));
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: vec![size_op],
-                out_args: Vec::new(),
-                arg_handles: Vec::new(),
-                destination: destination.clone(),
-                target: Some(target_bb),
-            },
-            *span,
-        ));
+        let size_op = int_constant(elem_size, span);
+        emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
     }
-
-    ctx.set_current_block(target_bb);
     Ok(result_op)
+}
+
+/// Lowers `List(array)`: the runtime copies the array's element words into a
+/// new list, leaving the array itself untouched.
+///
+/// The argument may be an array literal, a call result, or a variable the
+/// caller keeps reading — so the element type, not the argument's syntax,
+/// decides whether the managed-array variant is called, which takes the list's
+/// own reference to each element. Only a temporary the argument's lowering
+/// created is released afterwards; a local that already existed stays owned by
+/// its scope.
+fn lower_list_from_array(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    array: &Expression,
+    elem_size: i64,
+    elems_are_managed: bool,
+    destination: Place,
+) -> Result<(), LoweringError> {
+    let arg_watermark = ctx.body.local_decls.len();
+    let array_op = lower_expression(ctx, array, None)?;
+    let array_local = match &array_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        Operand::Constant(_) => None,
+    };
+
+    // The runtime reads the length from the array header; this word is advisory.
+    let literal_len = if let ExpressionKind::Array(elements, _) = &array.node {
+        elements.len() as i64
+    } else {
+        0
+    };
+    // TODO: the type checker also accepts a `List<T>` argument here, but both
+    // runtime entry points read their argument as a `MiriArray`, whose header
+    // differs from `MiriList`'s — so `List(list)` copies at the wrong stride
+    // (wrong integers, a crash on managed elements). A list argument needs its
+    // own copy path, or the type checker must refuse it.
+    let rt_fn_name = if elems_are_managed {
+        rt::LIST_NEW_FROM_MANAGED_ARRAY
+    } else {
+        rt::LIST_NEW_FROM_RAW
+    };
+    let args = vec![
+        array_op,
+        int_constant(literal_len, span),
+        int_constant(elem_size, span),
+    ];
+    emit_runtime_call(ctx, span, rt_fn_name, args, destination);
+
+    if let Some(local) = array_local {
+        ctx.emit_temp_drop(local, arg_watermark, *span);
+    }
+    Ok(())
+}
+
+/// Emits a call to the runtime function `name` storing into `destination`,
+/// and continues lowering in the call's successor block.
+fn emit_runtime_call(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    name: &str,
+    args: Vec<Operand>,
+    destination: Place,
+) {
+    let target_bb = ctx.new_basic_block();
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
+    }));
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args,
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination,
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+}
+
+/// An `int` constant operand holding `value`.
+fn int_constant(value: i64, span: &Span) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Int, *span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(
+            value,
+        )),
+    }))
 }
 
 /// Lowers a `Map()` / `Map(<map-literal>)` constructor call.
