@@ -35,7 +35,7 @@ If no argument is given, ask what to implement — do not guess scope.
    - **Trivial** → `make audit` + `miri-test-runner` only.
    All findings use the §10 severity rubric.
 6. **Loop (tight).** Route blockers back to the Lead Miri Engineer, re-implement, re-validate. **Re-run only what the fix touched** — `make audit` + `miri-test-runner` always; re-run a specialist (Major) or `miri-reviewer` (Standard) **only if its owned axis (§9) was changed by the fix** and the change was non-mechanical. No full re-panel for a mechanical fix. Repeat until the gate is green and no critical/major remains. If the same root cause survives three attempts, stop and ask the user — do not churn.
-7. **Update docs / plan.** If a module's core logic changed, update its local `README.md`. If scope came from a plan file, mark items done. Record any out-of-scope discoveries as follow-ups in `notes/PLAN.md`.
+7. **Update docs / plan.** If a module's core logic changed, update its local `README.md`. Mark the task `Done` in Notion and append what actually shipped to its page (AGENTS.md §0.1). Record any out-of-scope discovery as its own Notion task, never as a paragraph under the finished one.
 8. **Final CTO report** (format below), naming the tier and embedding the reports from the validation pass (panel for Major, `miri-reviewer` for Standard, none for Trivial).
 
 ## Final report format
@@ -68,7 +68,7 @@ Lead GPU Engineer:       <headline, or N/A>
 ...
 
 ## Decisions for the user to review
-## Follow-ups discovered but explicitly NOT done (recorded in notes/PLAN.md)
+## Follow-ups discovered but explicitly NOT done (each filed as its own Notion task)
 ```
 
 ## Hard rules

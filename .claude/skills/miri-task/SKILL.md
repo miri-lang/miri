@@ -45,7 +45,7 @@ Fall back to Grep/Glob/Read only for what the graph does not cover. Reach analog
 6. **Adversarial self-QA.** Switch hats and try to break your own work. For each suspect path write a minimal `.mi` snippet you predict fails (empty collection, single element, nested generics, boundary index, overflow input, multiple moves, mixed residency). Run it. Audit your own tests for green-washing: an `assert_runs(...)` with no output/state assertion proves compilation not behavior; a test that was green before the feature existed proves nothing; a name describing implementation (`test_lower_call_intercept`) not behavior (`test_list_push_extends_length`) is a finding. Add the missing assertions/edge cases.
 7. **Run the gate yourself — report exact counts.** In order: `make format` (empty diff) → `make lint` (clean) → `make build` → `make test` (`cargo test --test mod`, capture exact pass/fail/ignored) → `make audit` (clean for touched files: unwrap/expect, stdlib-name leaks, `_ =>` over Miri enums, oversized functions, banners, comment rot). **Do not infer success — read the actual output.** If any earlier subagent or note called a failure "pre-existing" or "out of scope", re-run that test yourself before trusting it.
 8. **Loop tight.** Fix → re-run only what the fix touched (`make audit` + the affected tests always; full suite before declaring done). If the same root cause survives three attempts, stop and surface it to the user — don't churn.
-9. **Docs / plan.** If a module's core logic changed, update its local `README.md`. If scope came from a plan file, mark items done. Record out-of-scope discoveries as `notes/PLAN.md` follow-ups (and TODO comments with context at the code site) — never silently widen scope.
+9. **Docs / plan.** If a module's core logic changed, update its local `README.md`. Mark the task `Done` in Notion and append what actually shipped to its page (AGENTS.md §0.1). Record out-of-scope discoveries as their own Notion tasks (and TODO comments with context at the code site) — never silently widen scope, and never leave a follow-up as prose under a finished task.
 10. **Final report** (format below).
 
 ## Final report format
@@ -65,7 +65,7 @@ Design <ok/notes> · Visitors <ok> · Perceus <ok> · ABI <ok> · Bounds <ok> ·
 ## Self-QA
 <edge cases exercised + any green-washing fixed>
 
-## Follow-ups recorded but NOT done (in notes/PLAN.md)
+## Follow-ups recorded but NOT done (each filed as its own Notion task)
 ```
 
 ## Hard rules

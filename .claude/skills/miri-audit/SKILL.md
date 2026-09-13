@@ -70,7 +70,7 @@ Lead GPU Engineer:       <headline, or N/A>
 
 ## Hard rules
 
-- **Critical and major findings must be fixed** before DONE (unless `--report-only`, which still names them as blockers). Minor may be deferred only with explicit reason and a `notes/PLAN.md` follow-up.
+- **Critical and major findings must be fixed** before DONE (unless `--report-only`, which still names them as blockers). Minor may be deferred only with explicit reason and a follow-up task filed in Notion (AGENTS.md §0.1).
 - **One axis, one owner (§9).** Each specialist checks only its owned axes; `make audit` owns the mechanical sweeps. Do not have two agents re-raise the same axis — re-raised duplicates at differing severities are noise, not conflict.
 - **Selective verification (§10).** Spot-check criticals and split-severity findings only; trust uncontested majors that cite a line. Don't re-read everything — that is the slow path you are avoiding. A finding you can't reproduce is dropped, not shipped.
 - **Use the §10 severity rubric** — no agent invents its own critical/major/minor.
