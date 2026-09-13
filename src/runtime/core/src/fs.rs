@@ -368,6 +368,15 @@ pub mod ffi {
 
         let path_str = (*path).as_str();
 
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            return -1;
+        }
+
         // Check if the path exists, fetching metadata once
         let metadata = fs::metadata(path_str);
         let already_exists = matches!(&metadata, Ok(m) if m.is_dir());
@@ -419,6 +428,15 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            return -1;
+        }
 
         // Check if the path exists, fetching metadata once
         match fs::metadata(path_str) {
