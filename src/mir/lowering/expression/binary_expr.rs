@@ -15,6 +15,8 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::method_dispatch::resolve_inherited_method;
+use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
 #[allow(clippy::too_many_arguments)]
 fn try_lower_binary_trait_method(
@@ -67,9 +69,9 @@ pub(crate) fn try_lower_operator_trait_call(
     let Some((method_name, result)) = binary_op_trait_method(op) else {
         return Ok(None);
     };
-    if !class_has_trait_method(ctx, class_name, method_name) {
+    let Some((owner, method)) = operator_method_body(ctx, class_name, method_name) else {
         return Ok(None);
-    }
+    };
 
     let call = BinTraitCall {
         lhs_op: operands.lhs_op,
@@ -77,7 +79,12 @@ pub(crate) fn try_lower_operator_trait_call(
         dest,
         arg_watermark,
     };
-    emit_binary_trait_call(ctx, class_name, method_name, result, call, expr).map(Some)
+    let body = OperatorBody {
+        owner: &owner,
+        method_name,
+        return_ty: method.return_type,
+    };
+    emit_binary_trait_call(ctx, body, result, call, expr).map(Some)
 }
 
 /// The class name implementing a binary operator trait for the lhs type
@@ -146,17 +153,44 @@ fn binary_op_trait_method(
     }
 }
 
-/// True when `class_name` is a type (class or enum) defining `method_name`.
-fn class_has_trait_method(ctx: &LoweringContext, class_name: &str, method_name: &str) -> bool {
-    match ctx.type_checker.type_definitions().get(class_name) {
-        Some(crate::type_checker::context::TypeDefinition::Class(cd)) => {
-            cd.methods.contains_key(method_name)
+/// The symbol owner and declaration of the body answering `method_name` for
+/// values of `class_name`, or None when the type has no such method.
+///
+/// An enum answers with its own method. A class answers with its own or with
+/// the one a class it extends declares, named the way every other call to an
+/// inherited method is. A trait's default body does not make an operator call
+/// it: the operator traits declare none, so only a class states the answer.
+pub(crate) fn operator_method_body(
+    ctx: &LoweringContext,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(String, MethodInfo)> {
+    let definitions = ctx.type_checker.type_definitions();
+    match definitions.get(class_name) {
+        Some(TypeDefinition::Class(_)) => {
+            class_method_declaration(class_name, method_name, definitions)?;
+            resolve_inherited_method(definitions, class_name, method_name)
         }
-        Some(crate::type_checker::context::TypeDefinition::Enum(ed)) => {
-            ed.methods.contains_key(method_name)
-        }
-        _ => false,
+        Some(TypeDefinition::Enum(ed)) => ed
+            .methods
+            .get(method_name)
+            .map(|method| (class_name.to_string(), method.clone())),
+        Some(
+            TypeDefinition::Struct(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => None,
     }
+}
+
+/// The body an operator calls: whose symbol it is, which method, and what it
+/// returns.
+struct OperatorBody<'a> {
+    owner: &'a str,
+    method_name: &'a str,
+    return_ty: Type,
 }
 
 /// The operands + bookkeeping for emitting a binary-operator trait call.
@@ -170,33 +204,18 @@ struct BinTraitCall {
 /// Emit `Class_method(lhs, rhs, alloc?)`, negating the boolean result for `!=`.
 fn emit_binary_trait_call(
     ctx: &mut LoweringContext,
-    class_name: &str,
-    method_name: &str,
+    body: OperatorBody,
     result: TraitResult,
     call: BinTraitCall,
     expr: &Expression,
 ) -> Result<Operand, LoweringError> {
     // Optimization: avoid format! overhead by allocating exact capacity.
-    let mut mangled_name = String::with_capacity(class_name.len() + 1 + method_name.len());
-    mangled_name.push_str(class_name);
+    let mut mangled_name = String::with_capacity(body.owner.len() + 1 + body.method_name.len());
+    mangled_name.push_str(body.owner);
     mangled_name.push('_');
-    mangled_name.push_str(method_name);
+    mangled_name.push_str(body.method_name);
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
-
-    let return_ty = match ctx
-        .type_checker
-        .type_table
-        .global_type_definitions
-        .get(class_name)
-    {
-        Some(crate::type_checker::context::TypeDefinition::Class(cd)) => {
-            cd.methods[method_name].return_type.clone()
-        }
-        Some(crate::type_checker::context::TypeDefinition::Enum(ed)) => {
-            ed.methods[method_name].return_type.clone()
-        }
-        _ => unreachable!(),
-    };
+    let return_ty = body.return_ty;
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),

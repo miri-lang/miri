@@ -306,6 +306,62 @@ pub fn collect_class_fields_all<'a>(
         .collect()
 }
 
+/// The class `class_name` names followed by every class it extends, nearest
+/// first.
+///
+/// The walk stops at the first name that is not a class, and after as many
+/// steps as there are type definitions: a circular `extends` is reported where
+/// the class is declared, and the definitions it leaves behind must not hang
+/// whatever asks about them afterwards.
+pub fn class_ancestry<'a>(
+    class_name: &str,
+    type_defs: &'a HashMap<String, TypeDefinition>,
+) -> impl Iterator<Item = (&'a str, &'a ClassDefinition)> {
+    let first = match type_defs.get_key_value(class_name) {
+        Some((name, TypeDefinition::Class(def))) => Some((name.as_str(), def)),
+        _ => None,
+    };
+    std::iter::successors(first, move |(_, def)| {
+        let base = def.base_class.as_deref()?;
+        match type_defs.get_key_value(base) {
+            Some((name, TypeDefinition::Class(base_def))) => Some((name.as_str(), base_def)),
+            _ => None,
+        }
+    })
+    .take(type_defs.len())
+}
+
+/// Returns `true` if `class_name` or any class it extends lists `trait_name`
+/// among the traits it implements.
+pub fn class_implements_trait(
+    class_name: &str,
+    trait_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    class_ancestry(class_name, type_defs).any(|(_, def)| def.traits.iter().any(|t| t == trait_name))
+}
+
+/// Returns `true` if `class_name` is `ancestor` or extends it, directly or
+/// through other classes.
+pub fn class_is_or_extends(
+    class_name: &str,
+    ancestor: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    class_ancestry(class_name, type_defs).any(|(name, _)| name == ancestor)
+}
+
+/// The nearest class, starting at `class_name` itself, that declares
+/// `method_name`, with that declaration.
+pub fn class_method_declaration<'a>(
+    class_name: &str,
+    method_name: &str,
+    type_defs: &'a HashMap<String, TypeDefinition>,
+) -> Option<(&'a str, &'a MethodInfo)> {
+    class_ancestry(class_name, type_defs)
+        .find_map(|(name, def)| def.methods.get(method_name).map(|method| (name, method)))
+}
+
 /// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract,
 /// or if the class (or any ancestor) implements at least one trait.
 ///

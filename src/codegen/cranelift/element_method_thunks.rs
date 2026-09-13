@@ -19,7 +19,7 @@ use crate::codegen::cranelift::translator::{
     FunctionTranslator, COMPARE_THUNK_PREFIX, EQUALS_THUNK_PREFIX,
 };
 use crate::error::CodegenError;
-use crate::type_checker::context::{MethodInfo, TypeDefinition};
+use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
@@ -77,7 +77,7 @@ impl ElementMethod {
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {
-        let Some(TypeDefinition::Class(class_def)) = type_definitions.get(type_name) else {
+        let Some(TypeDefinition::Class(_)) = type_definitions.get(type_name) else {
             return false;
         };
         match self {
@@ -93,33 +93,29 @@ impl ElementMethod {
                 )
                 .is_some_and(|(_, method)| !method.is_abstract)
             }
-            ElementMethod::Equals => class_def
-                .methods
-                .get(EQUALS_METHOD_NAME)
-                .is_some_and(|method| is_element_equality(type_name, method)),
+            ElementMethod::Equals => {
+                class_method_declaration(type_name, EQUALS_METHOD_NAME, type_definitions)
+                    .is_some_and(|(declaring, method)| is_element_equality(declaring, method))
+            }
         }
     }
 
     /// The symbol of the method body this question calls for `type_name`.
     ///
-    /// `compare` is resolved through the class chain, the same rule the clone
-    /// thunk applies. `equals` is the class's own, because that is the method
-    /// `==` dispatches to — an inherited one does not make `==` call it.
+    /// Both are resolved through the class chain, the same rule the clone thunk
+    /// applies and the one `==` and the ordering operators dispatch by.
     fn method_symbol(
         self,
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> String {
         let method_name = self.method_name();
-        let owner = match self {
-            ElementMethod::Compare => crate::mir::lowering::dispatch::resolve_inherited_method(
-                type_definitions,
-                type_name,
-                method_name,
-            )
-            .map_or_else(|| type_name.to_string(), |(defining, _)| defining),
-            ElementMethod::Equals => type_name.to_string(),
-        };
+        let owner = crate::mir::lowering::dispatch::resolve_inherited_method(
+            type_definitions,
+            type_name,
+            method_name,
+        )
+        .map_or_else(|| type_name.to_string(), |(defining, _)| defining);
         format!("{owner}_{method_name}")
     }
 }

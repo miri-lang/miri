@@ -45,7 +45,8 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
-    ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
+    class_method_declaration, ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo,
+    TypeDefinition,
 };
 use crate::type_checker::statements::declarations::struct_def::is_drop_method;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
@@ -230,8 +231,16 @@ impl TypeChecker {
                 self.check_class_abstract_methods(name, base_name, methods, name_expr);
             }
         }
+        let lineage = ClassLineage {
+            name,
+            base_name: base_class_name.as_deref(),
+            methods,
+        };
         for trait_name in trait_names {
-            self.check_class_trait_methods(name, trait_name, methods, trait_direct_args, name_expr);
+            self.check_class_trait_methods(&lineage, trait_name, trait_direct_args, name_expr);
+        }
+        if let Some(ref base_name) = base_class_name {
+            self.check_inherited_self_returns(name, base_name, trait_names, methods, name_expr);
         }
     }
 
@@ -855,6 +864,11 @@ impl TypeChecker {
         let mut current_args: Option<Vec<Type>> = base_direct_args.clone();
         let mut current_subst: HashMap<String, Type> = HashMap::new();
 
+        let lineage = ClassLineage {
+            name,
+            base_name: Some(base_name),
+            methods,
+        };
         let mut current_base_owned: Option<String> = Some(base_name.to_string());
         while let Some(class_name) = current_base_owned.take() {
             if !visited.insert(class_name.clone()) {
@@ -885,9 +899,9 @@ impl TypeChecker {
                 }
                 if let Some(parent_method) = base_methods.get(method_name) {
                     self.check_class_method_signature_compat(
+                        &lineage,
                         method_name,
-                        child_method,
-                        parent_method,
+                        (child_method, parent_method),
                         &ancestor_subst,
                         name_expr,
                     );
@@ -903,12 +917,17 @@ impl TypeChecker {
         }
     }
 
-    /// Check signature compatibility for a single method override
+    /// Check signature compatibility for a single method override.
+    ///
+    /// Parameters must match exactly: a call made through the parent's type may
+    /// pass any value the parent accepts. A return may narrow to a class the
+    /// parent's return class is extended by, since every caller of the parent
+    /// still receives a value of the class it expects.
     fn check_class_method_signature_compat(
         &mut self,
+        lineage: &ClassLineage,
         method_name: &str,
-        child_method: &MethodInfo,
-        parent_method: &MethodInfo,
+        (child_method, parent_method): (&MethodInfo, &MethodInfo),
         ancestor_subst: &HashMap<String, Type>,
         name_expr: &Expression,
     ) {
@@ -966,7 +985,13 @@ impl TypeChecker {
 
         let parent_return_substituted =
             self.substitute_type(&parent_method.return_type, ancestor_subst);
-        if child_method.return_type.kind != parent_return_substituted.kind {
+        if child_method.return_type.kind != parent_return_substituted.kind
+            && !self.returns_narrower_class(
+                lineage,
+                &child_method.return_type,
+                &parent_return_substituted,
+            )
+        {
             self.report_error(
                 DiagnosticCode::TypClassInheritance,
                 format!(
@@ -1089,15 +1114,20 @@ impl TypeChecker {
         }
     }
 
-    /// Validate class implements all required trait methods
+    /// Validate class implements all required trait methods, with its own
+    /// declarations or with those it inherits from the classes it extends.
+    ///
+    /// An inherited method whose return names `Self` is not compared here: the
+    /// body it would inherit builds the ancestor, which
+    /// [`TypeChecker::check_inherited_self_returns`] refuses on its own terms.
     fn check_class_trait_methods(
         &mut self,
-        name: &str,
+        lineage: &ClassLineage,
         trait_name: &str,
-        methods: &BTreeMap<String, MethodInfo>,
         trait_direct_args: &HashMap<String, Vec<Type>>,
         name_expr: &Expression,
     ) {
+        let name = lineage.name;
         let mut trait_substitutions: HashMap<String, HashMap<String, Type>> = HashMap::new();
         let all_trait_methods = self.collect_trait_methods_resolved(
             trait_name,
@@ -1109,21 +1139,29 @@ impl TypeChecker {
         let mut mismatched_methods: Vec<(String, String, String)> = Vec::new();
 
         for (method_name, (method_info, origin_trait)) in &all_trait_methods {
-            if method_info.is_abstract && !methods.contains_key(method_name) {
-                missing_methods.push((method_name.clone(), origin_trait.clone()));
+            let own = lineage.methods.get(method_name);
+            let inherited = own
+                .is_none()
+                .then(|| self.inherited_method(lineage, method_name))
+                .flatten();
+            let Some(class_method) = own.or(inherited.as_ref()) else {
+                if method_info.is_abstract {
+                    missing_methods.push((method_name.clone(), origin_trait.clone()));
+                }
+                continue;
+            };
+            if own.is_none() && self.return_names_trait_self(method_info, origin_trait) {
+                continue;
             }
-
-            if let Some(class_method) = methods.get(method_name) {
-                self.check_class_trait_method_compat(
-                    method_name,
-                    method_info,
-                    class_method,
-                    name,
-                    origin_trait,
-                    &trait_substitutions,
-                    &mut mismatched_methods,
-                );
-            }
+            self.check_class_trait_method_compat(
+                method_name,
+                method_info,
+                class_method,
+                lineage,
+                origin_trait,
+                &trait_substitutions,
+                &mut mismatched_methods,
+            );
         }
 
         for (method_name, origin_trait) in missing_methods {
@@ -1224,11 +1262,12 @@ impl TypeChecker {
         method_name: &str,
         method_info: &MethodInfo,
         class_method: &MethodInfo,
-        class_name: &str,
+        lineage: &ClassLineage,
         origin_trait: &str,
         trait_substitutions: &HashMap<String, HashMap<String, Type>>,
         mismatched_methods: &mut Vec<(String, String, String)>,
     ) {
+        let class_name = lineage.name;
         let class_type_kind = TypeKind::Custom(class_name.to_string(), None);
         let trait_self_kind = TypeKind::Custom(origin_trait.to_string(), None);
 
@@ -1265,12 +1304,22 @@ impl TypeChecker {
             types_match(&substituted.kind, &class_ty.kind)
         };
 
+        // A parameter the trait types `Self` may be declared as a class the
+        // implementing class extends: that method accepts every value of the
+        // implementing class, which is all the trait asks of it.
+        let accepts_self = |trait_ty: &Type, class_ty: &Type| -> bool {
+            substitute(trait_ty).kind == trait_self_kind
+                && matches!(&class_ty.kind, TypeKind::Custom(ancestor, None)
+                if self.declared_class_is_or_extends(
+                    class_name, ancestor, class_name, lineage.base_name,
+                ))
+        };
         let params_match = method_info.params.len() == class_method.params.len()
             && method_info
                 .params
                 .iter()
                 .zip(class_method.params.iter())
-                .all(|((_, t1), (_, t2))| kinds_compatible(t1, t2));
+                .all(|((_, t1), (_, t2))| kinds_compatible(t1, t2) || accepts_self(t1, t2));
         // `out` is an ABI-affecting modifier (scalar copy-in/copy-out via stack
         // slot). A mismatch between the trait signature and the implementing
         // class would cause a vtable caller and callee to disagree on whether
@@ -1431,5 +1480,42 @@ impl TypeChecker {
              Consider using a top-level generic function instead.",
             method_name, generic_name
         )
+    }
+}
+
+/// The class whose declaration is being checked, before it is registered: its
+/// name, the class it extends, and the methods it declares itself.
+struct ClassLineage<'a> {
+    name: &'a str,
+    base_name: Option<&'a str>,
+    methods: &'a BTreeMap<String, MethodInfo>,
+}
+
+impl TypeChecker {
+    /// The declaration of `method_name` the class inherits from the nearest
+    /// class it extends that declares one.
+    fn inherited_method(&self, lineage: &ClassLineage, method_name: &str) -> Option<MethodInfo> {
+        let base_name = lineage.base_name?;
+        class_method_declaration(
+            base_name,
+            method_name,
+            &self.type_table.global_type_definitions,
+        )
+        .map(|(_, method)| method.clone())
+    }
+
+    /// True when `child` names a class that is, or extends, the class `parent`
+    /// names — both without type arguments, where substitution cannot move them.
+    fn returns_narrower_class(&self, lineage: &ClassLineage, child: &Type, parent: &Type) -> bool {
+        match (&child.kind, &parent.kind) {
+            (TypeKind::Custom(child_class, None), TypeKind::Custom(parent_class, None)) => self
+                .declared_class_is_or_extends(
+                    child_class,
+                    parent_class,
+                    lineage.name,
+                    lineage.base_name,
+                ),
+            _ => false,
+        }
     }
 }
