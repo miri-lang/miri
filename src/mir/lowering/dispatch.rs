@@ -1050,6 +1050,22 @@ fn try_lower_constructor_call(
     Ok(None)
 }
 
+/// Lower the callee expression of a call.
+///
+/// A bare name is resolved to its symbol rather than to a value: a global
+/// function stays a linkable constant so the call is emitted directly, and a
+/// local keeps its ordinary read. Reading it as a value would instead wrap it in
+/// a closure over a forwarding thunk — correct for `let f = foo`, pointless
+/// indirection for `foo(1)`.
+fn lower_callee(ctx: &mut LoweringContext, func: &Expression) -> Result<Operand, LoweringError> {
+    if matches!(func.node, ExpressionKind::Identifier(_, _)) {
+        return crate::mir::lowering::expression::identifier_expr::lower_identifier_symbol(
+            ctx, func, None,
+        );
+    }
+    lower_expression(ctx, func, None)
+}
+
 /// Lower a direct function call (global function, lambda, or generic instantiation).
 fn lower_direct_call(
     ctx: &mut LoweringContext,
@@ -1060,7 +1076,7 @@ fn lower_direct_call(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let func_watermark = ctx.body.local_decls.len();
-    let mut func_op = lower_expression(ctx, func, None)?;
+    let mut func_op = lower_callee(ctx, func)?;
 
     apply_generic_mangling(ctx, &func.node, call_expr_id, &mut func_op, func.span);
 
@@ -1314,39 +1330,43 @@ fn fill_default_args(
     Ok(())
 }
 
+/// Whether a call to the function named `name` carries the implicit trailing
+/// allocator parameter every Miri-defined function is lowered with.
+///
+/// Runtime C functions and math intrinsics are declared without it: the first is
+/// a foreign symbol with a fixed signature, the second never reaches a call at
+/// all because it lowers to a `MathIntrinsic` rvalue.
+pub(super) fn callee_takes_allocator(ctx: &LoweringContext, name: &str) -> bool {
+    if name.starts_with("miri_") {
+        return false;
+    }
+    let is_math_fn = MathIntrinsic::from_name(name).is_some()
+        && ctx
+            .type_checker
+            .get_variable_module(name)
+            .map(|m| m == "system.math")
+            .unwrap_or(false);
+    !is_math_fn
+}
+
 fn inject_allocator_arg(
     ctx: &mut LoweringContext,
     func_node: &ExpressionKind,
     func_op: &Operand,
     arg_ops: &mut Vec<Operand>,
 ) {
-    let is_runtime_fn = if let ExpressionKind::Identifier(name, _) = func_node {
-        name.starts_with("miri_")
-    } else {
-        false
-    };
     let is_indirect_call = !matches!(
         func_op,
         Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
     );
-
-    if is_runtime_fn || is_indirect_call {
+    if is_indirect_call {
         return;
     }
 
-    let is_math_fn = if let ExpressionKind::Identifier(name, _) = func_node {
-        MathIntrinsic::from_name(name.as_str()).is_some()
-            && ctx
-                .type_checker
-                .get_variable_module(name.as_str())
-                .map(|m| m == "system.math")
-                .unwrap_or(false)
-    } else {
-        false
-    };
-
-    if is_math_fn {
-        return;
+    if let ExpressionKind::Identifier(name, _) = func_node {
+        if !callee_takes_allocator(ctx, name.as_str()) {
+            return;
+        }
     }
 
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {

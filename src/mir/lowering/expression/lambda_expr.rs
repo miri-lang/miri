@@ -255,6 +255,11 @@ pub(crate) fn lower_lambda_expr(
         .map(|cap| ctx.body.local_decls[cap.outer_local.0].ty.clone())
         .collect();
 
+    // A body lowered inside this one — a nested lambda, or the thunk a function
+    // reference needs — was registered against the inner context and would be
+    // discarded with it, leaving codegen a call to a symbol nothing defines.
+    ctx.lambda_bodies.append(&mut lambda_ctx.lambda_bodies);
+
     let lambda_info = LambdaInfo {
         name: lambda_name.to_string(),
         body: lambda_ctx.body,
