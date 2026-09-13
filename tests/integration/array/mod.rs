@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod bounds_checked;
+pub mod chained_transforms;
 pub mod creation;
 pub mod edge_cases;
 pub mod errors;

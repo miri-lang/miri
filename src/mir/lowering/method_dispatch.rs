@@ -52,37 +52,196 @@ pub(crate) fn mangle_generic_name(
     path
 }
 
+/// The mangled name of one instantiation of a generic class, e.g. `Box` at
+/// `[String]` → `Box__String`. The parameter names play no part in the symbol,
+/// so only the arguments are needed.
+pub(crate) fn mangle_instantiation_name(class_name: &str, type_args: &[Type]) -> String {
+    let pairs: Vec<(String, Type)> = type_args
+        .iter()
+        .map(|ty| (String::new(), ty.clone()))
+        .collect();
+    mangle_generic_name(class_name, &pairs)
+}
+
+/// The token [`type_kind_to_mangle_str`] yields for a type it cannot name.
+///
+/// It is the one answer callers test against: a type that spells this has no
+/// per-instantiation symbol, so whatever needs one has to fall back to the
+/// shared generic body. Every caller that decides whether a body can be named
+/// asks [`crate::mir::lowering::has_a_monomorphized_spelling`], which is this
+/// comparison — so the spelling and the decision can never drift apart. The
+/// leading underscores keep it out of reach of a user type that spells itself
+/// the same way, which would otherwise lose its own body to this answer.
+pub(crate) const UNSPELLABLE_TYPE_TOKEN: &str = "__unspellable";
+
+/// How deep [`type_kind_to_mangle_str`] descends into a type's components
+/// before giving up on naming it.
+///
+/// A type nested past this is spelled [`UNSPELLABLE_TYPE_TOKEN`], which costs
+/// it a per-instantiation body and nothing else — the shared generic one still
+/// compiles, and the verifier's exemption reads the same answer. Bounding the
+/// descent keeps a deeply nested type in a source file from being a way to
+/// exhaust the compiler's stack.
+const MAX_TOKEN_DEPTH: usize = 64;
+
 /// The token one type argument contributes to a mangled name.
 ///
 /// A built-in kind spells itself. A user-defined type spells its own name, so
 /// two instantiations of the same generic at two different classes get two
 /// symbols: sharing one would make the second instantiation run the first one's
-/// body against its own field layout. Only the built-in tokens are borrowed;
-/// a named type has to own its string.
+/// body against its own field layout.
+///
+/// A type built out of others — an instantiated generic class, an optional, a
+/// tuple — spells its own token followed by its components', because those
+/// components are what a body compiled for it addresses. A `List<String>`
+/// element and a `List<int>` element that shared the token `List` would share a
+/// body, and the one holding strings would then be filled without taking a
+/// reference to any of them.
+///
+/// A component that has no token of its own makes the whole type unspellable:
+/// a name built from [`UNSPELLABLE_TYPE_TOKEN`] would be the same name for
+/// every type that contains one.
 fn type_kind_to_mangle_str(kind: &TypeKind) -> Cow<'static, str> {
+    type_kind_token(kind, 0)
+}
+
+/// [`type_kind_to_mangle_str`] one level into a type, carrying how far the
+/// descent has already gone.
+fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
+    if depth >= MAX_TOKEN_DEPTH {
+        return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+    }
+    if let Some(value_expr) = crate::type_checker::generics::extract_value_generic_kind(kind) {
+        return expression_token(value_expr, depth + 1);
+    }
     let token: &'static str = match kind {
         TypeKind::Int => "int",
         TypeKind::Float | TypeKind::F64 => "float",
         TypeKind::F32 => "f32",
+        TypeKind::F16 => "f16",
         TypeKind::Boolean => "bool",
         TypeKind::String => STRING_TYPE_NAME,
         TypeKind::Void => "void",
-        TypeKind::Custom(name, _) => return Cow::Owned(name.clone()),
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-            unreachable!("collection types are normalized to Custom before this point")
+        TypeKind::Custom(name, None) => return Cow::Owned(name.clone()),
+        TypeKind::Custom(name, Some(args)) => return compound_token(name, args.iter(), depth),
+        TypeKind::List(inner) => {
+            return compound_token(
+                BuiltinCollectionKind::List.name(),
+                std::iter::once(&**inner),
+                depth,
+            )
         }
-        TypeKind::Option(_) => "option",
+        TypeKind::Set(inner) => {
+            return compound_token(
+                BuiltinCollectionKind::Set.name(),
+                std::iter::once(&**inner),
+                depth,
+            )
+        }
+        TypeKind::Array(inner, size) => {
+            return compound_token(
+                BuiltinCollectionKind::Array.name(),
+                [&**inner, &**size].into_iter(),
+                depth,
+            )
+        }
+        TypeKind::Map(key, value) => {
+            return compound_token(
+                BuiltinCollectionKind::Map.name(),
+                [&**key, &**value].into_iter(),
+                depth,
+            )
+        }
+        TypeKind::Option(inner) => {
+            return join_tokens(
+                "option",
+                std::iter::once(type_kind_token(&inner.kind, depth + 1)),
+            )
+        }
+        TypeKind::Tuple(elements) => return compound_token("tuple", elements.iter(), depth),
         TypeKind::I8 => "i8",
         TypeKind::I16 => "i16",
         TypeKind::I32 => "i32",
         TypeKind::I64 => "i64",
+        TypeKind::I128 => "i128",
         TypeKind::U8 => "u8",
         TypeKind::U16 => "u16",
         TypeKind::U32 => "u32",
         TypeKind::U64 => "u64",
-        _ => "unknown",
+        TypeKind::U128 => "u128",
+        TypeKind::Generic(_, _, _)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Meta(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Error => UNSPELLABLE_TYPE_TOKEN,
     };
     Cow::Borrowed(token)
+}
+
+/// The token for a type written as `head` applied to `args`, e.g. `Map<String,
+/// int>` → `Map_String_int`.
+fn compound_token<'a>(
+    head: &str,
+    args: impl Iterator<Item = &'a Expression>,
+    depth: usize,
+) -> Cow<'static, str> {
+    join_tokens(head, args.map(|arg| expression_token(arg, depth + 1)))
+}
+
+/// Join `head` and each component token with `_`, collapsing to
+/// [`UNSPELLABLE_TYPE_TOKEN`] as soon as a component has no token of its own.
+fn join_tokens(head: &str, parts: impl Iterator<Item = Cow<'static, str>>) -> Cow<'static, str> {
+    let mut out = String::from(head);
+    for part in parts {
+        if part == UNSPELLABLE_TYPE_TOKEN {
+            return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+        }
+        out.push('_');
+        out.push_str(&part);
+    }
+    Cow::Owned(out)
+}
+
+/// The token a generic argument expression contributes to a mangled name.
+///
+/// A type argument spells its type. A value generic — the `3` in `Array<T, 3>`
+/// — spells the constant itself, so two sizes of the same element type get two
+/// symbols instead of sharing one body between them. Anything else has no
+/// token: a size that is still an unfolded expression names no single
+/// instantiation.
+fn expression_mangle_token(arg: &Expression) -> Cow<'static, str> {
+    expression_token(arg, 0)
+}
+
+/// [`expression_mangle_token`] one level into a type, carrying how far the
+/// descent has already gone.
+fn expression_token(arg: &Expression, depth: usize) -> Cow<'static, str> {
+    if depth >= MAX_TOKEN_DEPTH {
+        return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+    }
+    match &arg.node {
+        ExpressionKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(value)) => {
+            Cow::Owned(value.to_i128().to_string())
+        }
+        _ => Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN),
+    }
+}
+
+/// Whether the symbol mangler has a token for `kind`. See
+/// [`UNSPELLABLE_TYPE_TOKEN`].
+pub(crate) fn kind_has_a_mangled_token(kind: &TypeKind) -> bool {
+    type_kind_to_mangle_str(kind) != UNSPELLABLE_TYPE_TOKEN
+}
+
+/// Whether the symbol mangler has a token for the generic argument `arg`. See
+/// [`expression_mangle_token`].
+pub(crate) fn argument_has_a_mangled_token(arg: &Expression) -> bool {
+    expression_mangle_token(arg) != UNSPELLABLE_TYPE_TOKEN
 }
 
 /// Residency-mangled name for a call that passes gpu-resident buffers into a
@@ -708,10 +867,28 @@ fn builtin_collection_needs_its_own_body(
     if BuiltinCollectionKind::from_name(class_name).is_none() {
         return true;
     }
-    resolved.iter().any(|arg| {
-        differs_from_pointer_width_fallback(&arg.kind)
-            || inherited_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
-    })
+    resolved
+        .iter()
+        // A value generic occupies a parameter slot but describes no storage:
+        // an `Array`'s size neither changes the width of a type-parameter
+        // position nor holds an element anyone has to release. Both questions
+        // below are about a type argument, and asking them of a size would
+        // answer from the marker's own spelling.
+        .filter(|arg| crate::type_checker::generics::extract_value_generic(arg).is_none())
+        .any(|arg| {
+            differs_from_pointer_width_fallback(&arg.kind)
+                || inherited_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
+        })
+}
+
+/// One argument of a generic-class reference as the instantiation registry
+/// records it: the argument's type, or the marker standing for a value generic.
+/// `None` when the argument is neither.
+pub(crate) fn resolve_generic_argument(tc: &TypeChecker, arg: &Expression) -> Option<Type> {
+    match tc.extract_type_from_expression(arg) {
+        Ok(ty) => Some(ty),
+        Err(_) => crate::type_checker::generics::value_generic_slot(arg),
+    }
 }
 
 /// Resolve a generic-class method call to its per-instantiation monomorphized
@@ -732,9 +909,8 @@ fn resolve_generic_class_monomorph(
     let gens = class_def.generics.as_ref()?;
     let resolved: Vec<Type> = arg_exprs
         .iter()
-        .map(|e| ctx.type_checker.extract_type_from_expression(e))
-        .collect::<Result<_, _>>()
-        .ok()?;
+        .map(|e| resolve_generic_argument(ctx.type_checker, e))
+        .collect::<Option<_>>()?;
     if resolved.len() != gens.len()
         || !resolved
             .iter()
@@ -888,4 +1064,134 @@ pub(super) fn emit_cow_check(
         span,
     });
     Operand::Move(Place::new(self_local))
+}
+
+#[cfg(test)]
+mod mangled_token_tests {
+    use super::*;
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::types::FunctionTypeData;
+    use crate::ast::IdNode;
+    use crate::error::syntax::Span;
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, span())
+    }
+
+    fn type_arg(kind: TypeKind) -> Expression {
+        IdNode::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+    }
+
+    fn size_arg(value: i64) -> Expression {
+        IdNode::new(
+            0,
+            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I64(value))),
+            span(),
+        )
+    }
+
+    fn class_ref(name: &str, args: Vec<Expression>) -> TypeKind {
+        TypeKind::Custom(name.to_string(), Some(args))
+    }
+
+    fn token(kind: TypeKind) -> String {
+        type_kind_to_mangle_str(&kind).into_owned()
+    }
+
+    /// The size decides which body a call reaches, so two sizes of one element
+    /// type must not share a symbol.
+    #[test]
+    fn two_array_sizes_mangle_to_two_symbols() {
+        let three = class_ref("Array", vec![type_arg(TypeKind::String), size_arg(3)]);
+        let four = class_ref("Array", vec![type_arg(TypeKind::String), size_arg(4)]);
+        assert_eq!(token(three.clone()), "Array_String_3");
+        assert_ne!(token(three), token(four));
+    }
+
+    /// A value generic reaches the mangler through the instantiation registry as
+    /// a marker type; it must spell the same constant the class reference does.
+    #[test]
+    fn a_value_generic_marker_spells_its_constant() {
+        let marker = crate::type_checker::generics::value_generic_marker_type(size_arg(3));
+        assert_eq!(token(marker.kind), "3");
+    }
+
+    /// Two lists that differ only in their element are two different types, and
+    /// a body compiled for one reads the other's elements at the wrong
+    /// ownership.
+    #[test]
+    fn two_list_elements_mangle_to_two_symbols() {
+        let ints = class_ref("List", vec![type_arg(TypeKind::Int)]);
+        let strings = class_ref("List", vec![type_arg(TypeKind::String)]);
+        assert_eq!(token(ints.clone()), "List_int");
+        assert_ne!(token(ints), token(strings));
+    }
+
+    #[test]
+    fn an_optional_spells_its_payload() {
+        let strings = TypeKind::Option(Box::new(ty(TypeKind::String)));
+        let ints = TypeKind::Option(Box::new(ty(TypeKind::Int)));
+        assert_eq!(token(strings.clone()), "option_String");
+        assert_ne!(token(strings), token(ints));
+    }
+
+    #[test]
+    fn a_tuple_spells_every_component() {
+        let pair = TypeKind::Tuple(vec![type_arg(TypeKind::Int), type_arg(TypeKind::String)]);
+        assert_eq!(token(pair), "tuple_int_String");
+    }
+
+    /// A closure type has no token, and neither has anything built around one:
+    /// a name assembled from the unspellable token would be one name for every
+    /// such type.
+    #[test]
+    fn a_component_without_a_token_makes_the_whole_type_unspellable() {
+        let closure = TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: Vec::new(),
+            return_type: None,
+        }));
+        assert!(!kind_has_a_mangled_token(&closure));
+        assert!(!kind_has_a_mangled_token(&class_ref(
+            "List",
+            vec![type_arg(closure)]
+        )));
+    }
+
+    /// The verifier stays quiet about a receiver no per-instantiation body
+    /// could be named for, so what it exempts is exactly what this predicate
+    /// declines. A sized array and a list of structural elements are both
+    /// nameable now, which is what puts them back inside the check.
+    #[test]
+    fn a_sized_array_and_a_structural_element_can_both_be_named() {
+        assert!(crate::mir::lowering::can_be_monomorphized_at(&class_ref(
+            "Array",
+            vec![type_arg(TypeKind::String), size_arg(3)]
+        )));
+        let pair = TypeKind::Tuple(vec![type_arg(TypeKind::Int), type_arg(TypeKind::String)]);
+        assert!(crate::mir::lowering::can_be_monomorphized_at(&class_ref(
+            "List",
+            vec![type_arg(pair)]
+        )));
+        assert!(crate::mir::lowering::can_be_monomorphized_at(&class_ref(
+            "List",
+            vec![type_arg(class_ref("List", vec![type_arg(TypeKind::Int)]))]
+        )));
+    }
+
+    /// A size still written as an expression names no single instantiation, so
+    /// the receiver holding it gets no per-instantiation body.
+    #[test]
+    fn an_unfolded_size_has_no_token() {
+        let unfolded = IdNode::new(0, ExpressionKind::Identifier("N".to_string(), None), span());
+        assert!(!argument_has_a_mangled_token(&unfolded));
+        assert!(!crate::mir::lowering::can_be_monomorphized_at(&class_ref(
+            "Array",
+            vec![type_arg(TypeKind::String), unfolded]
+        )));
+    }
 }

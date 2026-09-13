@@ -551,6 +551,84 @@ fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::Ha
     called
 }
 
+/// How deep [`collect_generic_instantiations`] descends through a type's own
+/// arguments. Matches the depth the symbol mangler names a type to.
+const MAX_INSTANTIATION_NESTING: usize = 64;
+
+/// Fill the generic-class instantiation registry with everything the program
+/// needs a per-instantiation body for, whether or not it names it.
+fn complete_generic_instantiation_registry(type_checker: &mut TypeChecker) {
+    record_inferred_generic_instantiations(type_checker);
+    expand_nested_generic_instantiations(type_checker);
+}
+
+/// Record the instantiations a program reaches only through a return type.
+///
+/// The registry is filled where a program writes a type argument down, and a
+/// collection's inherited transforms are declared to return `[T]` — so
+/// `rows.reversed()` on an `Array<W, 3>` produces a `List<W>` that appears
+/// nowhere in the source. Without it recorded, every call on that value falls
+/// back to the shared generic body, which stores each element without taking a
+/// reference while the call site releases every one of them. The types the
+/// checker inferred are where such an instantiation does appear.
+///
+/// Discoveries are recorded in a fixed order: they come out of a hash map, and
+/// the registry's order decides the order bodies are emitted in, which a
+/// byte-reproducible build depends on.
+fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
+    let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
+    for ty in type_checker.inferred_types() {
+        collect_generic_instantiations(type_checker, &ty.kind, 0, &mut discovered);
+    }
+    discovered.sort_by_cached_key(|(name, args)| {
+        mir::lowering::dispatch::mangle_instantiation_name(name, args)
+    });
+    for (name, args) in discovered {
+        type_checker.record_generic_class_instantiation(&name, args);
+    }
+}
+
+/// Append every generic-class instantiation written inside `kind`, including
+/// the ones nested in its own arguments (`List<List<W>>` yields both).
+///
+/// The descent stops at [`MAX_INSTANTIATION_NESTING`], past which the symbol
+/// mangler has no name for the type anyway, so nothing below it could be given
+/// a body.
+fn collect_generic_instantiations(
+    type_checker: &TypeChecker,
+    kind: &TypeKind,
+    depth: usize,
+    out: &mut Vec<(String, Vec<Type>)>,
+) {
+    if depth >= MAX_INSTANTIATION_NESTING {
+        return;
+    }
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return;
+    };
+    let Some(TypeDefinition::Class(def)) = type_checker.type_definitions().get(name.as_str())
+    else {
+        return;
+    };
+    let Some(generics) = def.generics.as_ref() else {
+        return;
+    };
+    let resolved: Option<Vec<Type>> = args
+        .iter()
+        .map(|arg| mir::lowering::dispatch::resolve_generic_argument(type_checker, arg))
+        .collect();
+    let Some(resolved) = resolved else {
+        return;
+    };
+    if resolved.len() != generics.len() {
+        return;
+    }
+    for arg in &resolved {
+        collect_generic_instantiations(type_checker, &arg.kind, depth + 1, out);
+    }
+    out.push((name.clone(), resolved));
+}
+
 fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
     loop {
         let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
@@ -681,7 +759,7 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
-        expand_nested_generic_instantiations(&mut type_checker);
+        complete_generic_instantiation_registry(&mut type_checker);
 
         Ok(PipelineResult { ast, type_checker })
     }
@@ -708,7 +786,7 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
-        expand_nested_generic_instantiations(&mut type_checker);
+        complete_generic_instantiation_registry(&mut type_checker);
 
         // Reported after checking, so a file that also has real errors reports
         // those instead: a module whose imports collide should say so, not that

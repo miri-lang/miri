@@ -573,15 +573,20 @@ pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
 /// spelling carries a generic parameter still awaiting substitution (`T` reaches
 /// here as `Custom("T", None)`), and monomorphizing at a placeholder would name
 /// a body no call site can reach.
+///
+/// A type built out of others — an instantiated generic class, a nested
+/// collection, an optional, a tuple — is admitted on its spelling alone. Its
+/// components are what the body addresses, and the mangler now names each of
+/// them, so two such arguments that differ anywhere get two symbols.
 pub(crate) fn is_monomorphizable_type_argument(
     kind: &TypeKind,
     type_definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
 ) -> bool {
-    if is_monomorphizable_scalar(kind) || matches!(kind, TypeKind::String) {
-        return true;
+    if !has_a_monomorphized_spelling(kind) {
+        return false;
     }
     let TypeKind::Custom(name, None) = kind else {
-        return false;
+        return true;
     };
     matches!(
         type_definitions.get(name),
@@ -596,13 +601,12 @@ pub(crate) fn is_monomorphizable_type_argument(
 /// Whether the symbol mangler has a spelling for `kind` at all.
 ///
 /// A necessary condition for [`is_monomorphizable_type_argument`], and the part
-/// of it that needs no type table: a nested collection, an `Option` and a tuple
-/// have no spelling, so no per-instantiation body can be named for them and the
-/// shared generic one is the only body there is. Whether a name that *has* a
-/// spelling also denotes a type worth monomorphizing is the table's answer, not
-/// this one's.
+/// of it that needs no type table: a closure type and an unresolved generic
+/// parameter have no token, and neither does anything built out of one.
+/// Whether a name that *has* a spelling also denotes a type worth
+/// monomorphizing is the table's answer, not this one's.
 pub(crate) fn has_a_monomorphized_spelling(kind: &TypeKind) -> bool {
-    is_monomorphizable_scalar(kind) || matches!(kind, TypeKind::String | TypeKind::Custom(_, None))
+    method_dispatch::kind_has_a_mangled_token(kind)
 }
 
 /// Whether a per-instantiation body can be named for a receiver typed `kind`.
@@ -610,18 +614,13 @@ pub(crate) fn has_a_monomorphized_spelling(kind: &TypeKind) -> bool {
 /// Only the class-reference spelling (`Custom("List", Some([...]))`) carries the
 /// arguments a mangled symbol is built from; the canonical variants
 /// (`TypeKind::List(...)`) name no arguments to mangle. Every argument must have
-/// a spelling too, which is what leaves `Array<T, Size>` out: its size is a
-/// value, not a type.
+/// a token too — a type argument's type, or a value generic's constant.
 pub(crate) fn can_be_monomorphized_at(kind: &TypeKind) -> bool {
     let TypeKind::Custom(_, Some(args)) = kind else {
         return false;
     };
-    args.iter().all(|arg| match &arg.node {
-        crate::ast::expression::ExpressionKind::Type(ty, _) => {
-            has_a_monomorphized_spelling(&ty.kind)
-        }
-        _ => false,
-    })
+    args.iter()
+        .all(method_dispatch::argument_has_a_mangled_token)
 }
 
 /// Lower a generic function with concrete type substitutions to produce a

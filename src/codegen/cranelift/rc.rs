@@ -34,11 +34,7 @@ use std::sync::Arc;
 /// and the thunk-generation site agree byte-for-byte; the parameter names are
 /// irrelevant to the mangling, so an empty placeholder name is used.
 pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
-    let pairs: Vec<(String, Type)> = type_args
-        .iter()
-        .map(|ty| (String::new(), ty.clone()))
-        .collect();
-    crate::mir::lowering::dispatch::mangle_generic_name(class_name, &pairs)
+    crate::mir::lowering::dispatch::mangle_instantiation_name(class_name, type_args)
 }
 
 impl<'a> FunctionTranslator<'a> {

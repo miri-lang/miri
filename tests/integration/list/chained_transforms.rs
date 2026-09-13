@@ -296,3 +296,110 @@ fn enumerate_chained_onto_a_transform_result() {
         "bb,aa,cc\n0:cc\n1:aa\n2:bb",
     );
 }
+
+/// An element type the symbol mangler once had no token for: a nested
+/// collection, a tuple. Each needed a spelling of its own before a
+/// per-instantiation body could be named for the list that holds it, and until
+/// then every chain over one handed back borrowed elements.
+///
+/// An optional element is covered nowhere here: reading one back out of a list
+/// faults before any transform is reached, so it has no working baseline a
+/// chain could be measured against.
+mod structural_elements {
+    use super::*;
+
+    #[test]
+    fn chain_over_a_nested_list_element_keeps_the_inner_lists() {
+        assert_runs_with_output(
+            r#"
+use system.collections.list
+use system.collections.transformable
+use system.collections.sequenced
+
+fn main()
+    var outer = List<[int]>()
+    var i = 0
+    while i < 3
+        var inner = List<int>()
+        inner.push(i + 10)
+        inner.push(i + 20)
+        outer.push(inner)
+        i = i + 1
+    let got = outer.reversed().take(2)
+    for row in got
+        println(f"{row.length()}:{row[0]}")
+    println(f"{outer.length()}")
+"#,
+            "2:12\n2:11\n3",
+        );
+    }
+
+    #[test]
+    fn chain_over_a_nested_list_element_touches_no_freed_block() {
+        assert_heap_guard_ok(
+            r#"
+use system.collections.list
+use system.collections.transformable
+use system.collections.sequenced
+
+fn main()
+    var outer = List<[int]>()
+    var i = 0
+    while i < 3
+        var inner = List<int>()
+        inner.push(i + 10)
+        inner.push(i + 20)
+        outer.push(inner)
+        i = i + 1
+    let got = outer.reversed().take(2)
+    for row in got
+        println(f"{row.length()}")
+    for row in outer
+        println(f"{row.first()}")
+"#,
+        );
+    }
+
+    #[test]
+    fn chain_over_a_tuple_element_keeps_both_components() {
+        assert_runs_with_output(
+            r#"
+use system.collections.list
+use system.collections.transformable
+use system.collections.sequenced
+
+fn main()
+    var xs = List<(int, String)>()
+    xs.push((1, "a" + "a"))
+    xs.push((2, "b" + "b"))
+    let out = xs.reversed().take(2)
+    for v in out
+        println(f"{v.0}:{v.1}")
+    for v in xs
+        println(f"{v.0}:{v.1}")
+"#,
+            "2:bb\n1:aa\n1:aa\n2:bb",
+        );
+    }
+
+    #[test]
+    fn chain_over_a_tuple_element_touches_no_freed_block() {
+        assert_heap_guard_ok(
+            r#"
+use system.collections.list
+use system.collections.transformable
+use system.collections.sequenced
+
+fn main()
+    var xs = List<(int, String)>()
+    xs.push((1, "a" + "a"))
+    xs.push((2, "b" + "b"))
+    let out = xs.reversed().take(2)
+    for v in out
+        println(f"{v.1}")
+    for v in xs
+        println(f"{v.1}")
+"#,
+        );
+    }
+}
