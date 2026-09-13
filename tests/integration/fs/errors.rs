@@ -53,6 +53,45 @@ fn main()
 }
 
 #[test]
+fn test_delete_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+    let target_file = temp_dir.path().join("target.txt");
+    std::fs::write(&target_file, "secret").expect("failed to write target file");
+
+    let traversal_path = sub_dir
+        .join("..")
+        .join("target.txt")
+        .to_string_lossy()
+        .to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_delete_error(e FsError)
+    match e
+        FsError.PermissionDenied(_): println("PermissionDenied")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.delete("{}")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_delete_error(e)
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "PermissionDenied");
+    assert!(
+        target_file.exists(),
+        "Target file should not have been deleted"
+    );
+}
+
+#[test]
 fn test_delete_missing_file_returns_notfound() {
     assert_runs_with_output(
         r#"
