@@ -23,6 +23,7 @@ pub mod cast_expr;
 pub mod conditional_expr;
 pub mod enumvalue_expr;
 pub mod formattedstring_expr;
+pub mod function_reference;
 pub mod guard_expr;
 pub mod identifier_expr;
 pub mod index_expr;

@@ -511,6 +511,10 @@ fn lower_nested_function_decl(
         ));
     }
 
+    // Carry over anything lowered inside this body — a lambda, or the thunk a
+    // function reference needs — before the inner context is dropped.
+    ctx.lambda_bodies.append(&mut nested_ctx.lambda_bodies);
+
     ctx.lambda_bodies.push(LambdaInfo {
         name: name.clone(),
         body: nested_ctx.body,

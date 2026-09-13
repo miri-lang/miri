@@ -10,7 +10,37 @@ use crate::mir::{Constant, Operand, Place, Rvalue, StatementKind as MirStatement
 
 use crate::mir::lowering::context::LoweringContext;
 
+/// Lower an identifier in value position.
+///
+/// A global function name is a value here, not a call target, so it becomes a
+/// closure over a forwarding thunk — see [`super::function_reference`]. Callee
+/// position wants the bare symbol instead and uses
+/// [`lower_identifier_symbol`].
 pub(crate) fn lower_identifier_expr(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Identifier(name, _) = &expr.node else {
+        unreachable!()
+    };
+    if let Some(&local) = ctx.variable_map.get(name.as_str()) {
+        return lower_local_identifier(ctx, local, expr, dest);
+    }
+    if let Some(value) = super::function_reference::try_lower_function_reference(
+        ctx,
+        expr,
+        name.as_str(),
+        dest.clone(),
+    ) {
+        return Ok(value);
+    }
+    lower_identifier_symbol(ctx, expr, dest)
+}
+
+/// Lower an identifier to a local read, or to the bare symbol constant a direct
+/// call needs as its callee.
+pub(crate) fn lower_identifier_symbol(
     ctx: &mut LoweringContext,
     expr: &Expression,
     dest: Option<Place>,

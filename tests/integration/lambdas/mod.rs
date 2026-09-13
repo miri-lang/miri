@@ -4,3 +4,4 @@
 pub mod arg_count;
 pub mod basic;
 pub mod capturing;
+pub mod function_reference;
