@@ -999,25 +999,25 @@ fn local_display_name(body: &Body, local: Local) -> String {
 /// Report every call that hands a reference-counted element to a shared generic
 /// body.
 ///
-/// A sequence's trait defaults are lowered once per receiver class with the
-/// element type left as the trait's own parameter. Such a body reads an element
-/// as a borrow and stores it without taking a reference, while the call site —
-/// which knows the concrete element — releases every element of the collection
-/// it gets back. The source sequence is then left holding pointers to freed
-/// objects. Giving the body the concrete element makes both sides agree, and the
-/// per-instantiation symbol is what says it has one.
+/// A collection method written in ordinary Miri code — a trait default, or a
+/// method the collection declares that takes a function value — is lowered once
+/// per receiver class with the element type left as a type parameter. Such a
+/// body reads an element as a borrow and stores it without taking a reference,
+/// and never releases what its function argument hands back, while the call
+/// site — which knows the concrete element — releases every element of the
+/// collection it gets back. The source collection is then left holding pointers
+/// to freed objects, and every value the function produced leaks. Giving the
+/// body the concrete element makes both sides agree, and the per-instantiation
+/// symbol is what says it has one.
 ///
 /// The rule reads the *receiver*: a method that builds tuples of its own
 /// (`zip`, `enumerate`) returns a reference-counted element from a sequence of
 /// plain integers, and the shared body owns those tuples correctly because it
-/// can see they are tuples.
+/// can see they are tuples. A `Map` is covered when either its key or its value
+/// is reference-counted.
 ///
-/// `Map` and `Set` are outside the rule. They implement only `Iterable` and
-/// `Cloneable`, so they inherit no default that reads an element, and every
-/// transform they offer they declare themselves.
-///
-/// `intrinsic_backed` names the symbols exempt from the rule: a sequence's own
-/// methods settle element ownership by calling the runtime (`miri_rt_list_clone`
+/// `intrinsic_backed` names the symbols exempt from the rule: those methods
+/// settle element ownership by calling the runtime (`miri_rt_list_clone`
 /// retains what it copies, `miri_rt_list_take_at` hands the container's own
 /// reference over), and none of that is visible as an RC operation in MIR.
 pub fn verify_collection_element_ownership(
@@ -1082,18 +1082,26 @@ fn called_symbol(func: &Operand) -> Option<&str> {
     }
 }
 
-/// Whether `kind` is a sequence whose elements the drop site releases one by
-/// one — the release that a borrowed element cannot survive — and that a
-/// per-instantiation body could be named for.
+/// Whether `kind` is a built-in collection whose elements — or, for a `Map`,
+/// whose keys or values — the drop site releases one by one, the release that a
+/// borrowed element cannot survive, and that a per-instantiation body could be
+/// named for.
 ///
 /// A receiver the symbol mangler cannot spell has no such body to be given, so
 /// the shared generic one is the only body there is and reporting it would name
 /// a defect nothing in the compiler can act on. That covers a nested collection
-/// or `Option` element, an `Array` (whose size argument is a value), and a
-/// receiver written as a canonical variant rather than a class reference.
+/// or `Option` element, and a receiver written as a canonical variant rather than
+/// a class reference. An `Array`'s size argument is a value, not a type, so it is
+/// never mistaken for an element.
 fn holds_reference_counted_elements(kind: &crate::ast::types::TypeKind) -> bool {
-    kind.sequence_element_kind()
-        .is_some_and(crate::mir::rc::is_field_managed)
+    use crate::ast::expression::ExpressionKind;
+    let crate::ast::types::TypeKind::Custom(name, Some(args)) = kind else {
+        return false;
+    };
+    BuiltinCollectionKind::from_name(name).is_some()
+        && args.iter().any(|arg| {
+            matches!(&arg.node, ExpressionKind::Type(ty, _) if crate::mir::rc::is_field_managed(&ty.kind))
+        })
         && crate::mir::lowering::can_be_monomorphized_at(kind)
 }
 

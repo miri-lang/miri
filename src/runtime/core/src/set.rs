@@ -187,6 +187,19 @@ impl MiriSet {
         }
     }
 
+    /// Raises the count of an element the set is about to hand to a caller.
+    ///
+    /// Everything a set returns is owned by whoever receives it: the caller
+    /// releases it when its binding goes out of scope, the same as any other
+    /// value a function returns. Handing out the set's own reference instead
+    /// would let one pass of a loop free an element the set still holds.
+    unsafe fn hand_out_element(&self, elem_ptr: usize) -> usize {
+        if self.elem_drop_fn != 0 && elem_ptr != 0 {
+            crate::rc::incref(elem_ptr as *mut u8);
+        }
+        elem_ptr
+    }
+
     fn contains_key(&self, elem: *const u8) -> bool {
         unsafe { self.find_slot(elem).is_some() }
     }
@@ -378,7 +391,11 @@ pub mod ffi {
     /// Returns the element at the given sequential index (skipping empty/tombstone slots).
     ///
     /// This enables iteration via `element_at` in for-loops.
-    /// Returns the element value as a usize.
+    /// Returns the element value as a usize, or 0 if the index is out of bounds.
+    ///
+    /// A managed element is handed out with its count already raised: the
+    /// caller owns what it receives and releases it when the binding goes out of
+    /// scope.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_element_at(ptr: *const MiriSet, index: usize) -> usize {
@@ -392,7 +409,7 @@ pub mod ffi {
             if *set.states.add(i) == SLOT_OCCUPIED {
                 if count == index {
                     let elem_ptr = set.data.add(i * set.elem_size);
-                    return *(elem_ptr as *const usize);
+                    return set.hand_out_element(*(elem_ptr as *const usize));
                 }
                 count += 1;
             }

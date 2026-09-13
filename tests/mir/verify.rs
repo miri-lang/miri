@@ -17,11 +17,15 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::{BindingResidency, DeviceHandleId};
-use miri::mir::verify::{verify_body, verify_cross_residency_readback, VerificationViolation};
+use miri::mir::verify::{
+    verify_body, verify_collection_element_ownership, verify_cross_residency_readback,
+    VerificationViolation,
+};
 use miri::mir::{
     Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
+use std::collections::HashSet;
 
 fn span() -> Span {
     Span::new(0, 0)
@@ -1240,6 +1244,113 @@ fn a_gpu_to_gpu_copy_needs_no_readback() {
     assert!(
         violations.is_empty(),
         "a gpu-to-gpu copy must verify clean, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A built-in collection class reference, e.g. `Set<String>`, spelled the way
+/// the type checker records an instantiated receiver.
+fn collection_ty(class_name: &str, args: &[TypeKind]) -> Type {
+    let args = args
+        .iter()
+        .map(|kind| miri::ast::factory::type_expr_non_null(Type::new(kind.clone(), span())))
+        .collect();
+    Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span())
+}
+
+/// Locals: 0 the return slot, 1 a receiver typed `receiver`, 2 the call's result.
+/// The body's one call hands the receiver to `symbol`.
+fn collection_call_body(receiver: Type, symbol: &str) -> Body {
+    body_of(
+        &[void_ty(), receiver.clone(), receiver],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(symbol, vec![Operand::Copy(place(1))], 2, 1),
+            ),
+            block(Vec::new(), ret()),
+        ],
+    )
+}
+
+/// `Set.map` is declared on `Set` and takes a function value, so its shared body
+/// never releases what that function returns: a `Set<String>` receiver has to
+/// reach the per-instantiation symbol instead.
+#[test]
+fn a_shared_set_transform_over_reference_counted_elements_is_reported() {
+    let body = collection_call_body(collection_ty("Set", &[TypeKind::String]), "Set_map");
+
+    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert!(
+        violations[0].message.contains("Set_map"),
+        "the finding must name the shared symbol, got: {}",
+        messages(&violations)
+    );
+}
+
+#[test]
+fn a_per_instantiation_set_transform_verifies_clean() {
+    let body = collection_call_body(collection_ty("Set", &[TypeKind::String]), "Set_map__String");
+
+    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    assert!(
+        violations.is_empty(),
+        "a per-instantiation body must verify clean, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A map's values are released one by one as surely as its keys, so a
+/// reference-counted value alone puts the receiver under the rule.
+#[test]
+fn a_shared_map_transform_over_reference_counted_values_is_reported() {
+    let body = collection_call_body(
+        collection_ty("Map", &[TypeKind::Int, TypeKind::String]),
+        "Map_filter",
+    );
+
+    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+}
+
+#[test]
+fn a_shared_set_transform_over_plain_integers_verifies_clean() {
+    let body = collection_call_body(collection_ty("Set", &[TypeKind::Int]), "Set_map");
+
+    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    assert!(
+        violations.is_empty(),
+        "nothing reference-counted is handed over, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A method that settles element ownership through the runtime is correct in
+/// its shared body, and the caller's exemption says so.
+#[test]
+fn a_runtime_backed_map_method_verifies_clean() {
+    let body = collection_call_body(
+        collection_ty("Map", &[TypeKind::String, TypeKind::Int]),
+        "Map_get",
+    );
+    let exempt = HashSet::from(["Map_get".to_string()]);
+
+    let violations = verify_collection_element_ownership(&body, &exempt);
+    assert!(
+        violations.is_empty(),
+        "an exempt symbol must verify clean, got: {}",
         messages(&violations)
     );
 }

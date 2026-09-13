@@ -805,7 +805,7 @@ fn call_result_type(
 /// disagree with the call site. `int` matches the fallback exactly, and every
 /// managed type is passed as a pointer, so both agree on layout — a managed
 /// argument needs its own body for a different reason, spelled out in
-/// [`inherited_body_would_borrow_a_managed_element`].
+/// [`shared_body_would_borrow_a_managed_element`].
 fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
     matches!(
         kind,
@@ -825,27 +825,50 @@ fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
     )
 }
 
-/// Whether `method_name` is inherited from a trait and would read `elem_kind` as
-/// a borrow the resulting value does not own.
+/// Whether a built-in collection's `method_name` settles the ownership of the
+/// elements it touches by calling the runtime, which makes its shared generic
+/// body correct at every element type.
 ///
-/// A trait default is ordinary Miri code: it reaches an element only through
-/// `element_at`, and stores it in a new collection or returns it. Lowered once
-/// per receiver class, its element type stays the trait's own parameter, so
-/// Perceus reads it as unmanaged and takes no reference — while the call site,
-/// which knows the concrete element, releases every element of the collection it
-/// gets back. Giving the body the concrete element makes both sides agree.
+/// A method the collection declares itself pairs each element read with the
+/// runtime call that hands the container's own reference over (`pop` and
+/// `remove_at` do), and only a body that can name the intrinsic can pair with
+/// it; re-lowering one against an owning read would leave that donated reference
+/// with no one to release it.
 ///
-/// A method the collection declares itself keeps the shared body. Those pair
-/// each element read with the runtime call that hands the container's own
-/// reference over (`pop` and `remove_at` do), and only a body that can name the
-/// intrinsic can pair with it; re-lowering one against an owning read would
-/// leave that donated reference with no one to release it.
-fn inherited_body_would_borrow_a_managed_element(
+/// A declared method that takes a function value does not. It builds its result
+/// from what that function hands back and from the collection's own element
+/// reads — ordinary Miri code, like a trait default — so no intrinsic accounts
+/// for either, and neither does a method the collection only inherits.
+pub(crate) fn is_settled_by_the_runtime(
+    class_def: &crate::type_checker::context::ClassDefinition,
+    method_name: &str,
+) -> bool {
+    class_def.methods.get(method_name).is_some_and(|method| {
+        !method
+            .params
+            .iter()
+            .any(|(_, param_ty)| matches!(param_ty.kind, TypeKind::Function(_)))
+    })
+}
+
+/// Whether the shared generic body of `method_name` would read `elem_kind` as a
+/// borrow the resulting value does not own.
+///
+/// A method written in ordinary Miri code reaches an element only through
+/// `element_at`, and stores it in a new collection, returns it, or hands it to a
+/// function value. Lowered once per receiver class, its element type stays a
+/// type parameter, so Perceus reads it as unmanaged: it takes no reference to
+/// what it stores and releases nothing a function value returns — while the call
+/// site, which knows the concrete element, releases every element of the
+/// collection it gets back. Giving the body the concrete element makes both
+/// sides agree.
+fn shared_body_would_borrow_a_managed_element(
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,
     elem_kind: &TypeKind,
 ) -> bool {
-    !class_def.methods.contains_key(method_name) && crate::mir::rc::is_field_managed(elem_kind)
+    !is_settled_by_the_runtime(class_def, method_name)
+        && crate::mir::rc::is_field_managed(elem_kind)
 }
 
 /// Whether a built-in collection instantiated at `resolved` needs a
@@ -853,9 +876,9 @@ fn inherited_body_would_borrow_a_managed_element(
 ///
 /// Two things ask for one. The shared body types every type-parameter position
 /// at the pointer-width integer fallback, so a differently-laid-out argument
-/// makes its signature disagree with the call site. And an inherited body that
-/// reads a managed element takes no reference to it, while the call site
-/// releases every element of the collection it gets back.
+/// makes its signature disagree with the call site. And a body written in
+/// ordinary Miri code that reads a managed element takes no reference to it,
+/// while the call site releases every element of the collection it gets back.
 ///
 /// Every other class always needs one, so it passes straight through.
 fn builtin_collection_needs_its_own_body(
@@ -877,7 +900,7 @@ fn builtin_collection_needs_its_own_body(
         .filter(|arg| crate::type_checker::generics::extract_value_generic(arg).is_none())
         .any(|arg| {
             differs_from_pointer_width_fallback(&arg.kind)
-                || inherited_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
+                || shared_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
         })
 }
 

@@ -660,6 +660,12 @@ fn emit_loop_body_element_load(
     }
 
     if let Some(idx_local) = idx_loop_var {
+        // TODO: a map's value binding is not released pass by pass. The key
+        // above is made live here and dropped in the increment block, but the
+        // value is made live once before the loop and released once after it,
+        // so every managed value `Map_value_at` hands out except the last one
+        // leaks (`for k, v in m` over a `Map<String, String>`), and
+        // `--verify-mir` rejects the body. Give it the key's per-pass lifetime.
         emit_secondary_loop_var(ctx, idx_local, list_local, idx_var, is_map, span);
     }
 

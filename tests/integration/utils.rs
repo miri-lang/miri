@@ -304,6 +304,31 @@ pub fn assert_heap_guard_ok(code: &str) {
     }
 }
 
+/// Assert that `code` prints `expected` under `MIRI_HEAP_GUARD=1` with the guard
+/// silent: no read of a freed block, and no allocation left behind at exit.
+///
+/// [`assert_heap_guard_ok`] proves the guard stays quiet but not that the
+/// program computed anything; a read of freed memory that happens to print the
+/// right bytes and one that prints garbage look the same to it.
+pub fn assert_heap_guard_output(code: &str, expected: &str) {
+    use crate::utils::miri_run_with_env;
+
+    let result = miri_run_with_env(code, "MIRI_HEAP_GUARD", "1");
+
+    if !result.success || result.stderr.contains("MIRI_HEAP_GUARD:") {
+        panic!(
+            "Expected a clean run under the heap guard, but got:\n{}",
+            result.output()
+        );
+    }
+    assert_eq!(
+        result.stdout.trim(),
+        expected.trim(),
+        "output under the heap guard differs:\n{}",
+        result.output()
+    );
+}
+
 /// Assert that running `code` under `MIRI_HEAP_GUARD=1` trips the guard, and
 /// that its report contains every fragment in `expected_fragments`.
 ///

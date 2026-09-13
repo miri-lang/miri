@@ -37,3 +37,32 @@ println(f"{count}")
         "0",
     );
 }
+
+/// Every read of a set's element hands the reader a reference of its own, so a
+/// loop that releases its binding each pass leaves the set holding what it held.
+/// The strings are built at runtime — a pooled literal is immortal and would
+/// survive the over-release this guards against — and the set is read three
+/// times over, because the first pass is the one that frees and the later ones
+/// are the ones that notice.
+#[test]
+fn set_of_runtime_strings_survives_repeated_reads() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+
+fn main()
+    var s = Set<String>()
+    s.add("a" + "a")
+    s.add("b" + "bb")
+    var total = 0
+    for x in s
+        total += x.length()
+    for x in s
+        total += x.length()
+    let first = s.element_at(0)
+    let second = s.element_at(1)
+    println(f"{total} {first.length() + second.length()}")
+"#,
+        "10 5",
+    );
+}
