@@ -1,11 +1,11 @@
 ---
 name: miri-task
-description: Fast single-agent end-to-end execution of a Miri compiler task — no subagents. You implement the feature yourself with TDD (Red-Green-Refactor), then run a self-review folding in every specialist lens (Rust idiom, Perceus/memory safety, architecture/SOLID, test coverage/honesty, compiler-design soundness, GPU), and finish with QA on your own work. Done ONLY when format, lint, build, the full test suite, and `make audit` are all green and the self-QA pass finds no open critical/major issue. Use for everyday features and fixes. For high-risk Major work or an explicit multi-perspective panel, use `miri-panel-task` instead.
+description: Fast single-agent end-to-end execution of a Miri compiler task — no subagents. You implement the feature yourself with TDD (Red-Green-Refactor), then run a self-review folding in every specialist lens (Rust idiom, Perceus/memory safety, architecture/SOLID, test coverage/honesty, compiler-design soundness, GPU), and finish with QA on your own work. Done ONLY when format, lint, build, the full test suite, and `make audit` are all green, the self-QA pass finds no open critical/major issue, and the work is committed to `main` and pushed. Use for everyday features and fixes. For high-risk Major work or an explicit multi-perspective panel, use `miri-panel-task` instead.
 ---
 
 # Miri task — single-agent fast path
 
-**You do the whole task yourself, in the main thread. No subagents.** This is the fast path: one focused engineer who implements, reviews their own work through every specialist lens, QAs it, and refuses to declare done until the gate is green. It exists because delegating everyday features to a subagent panel is slow and the subagents over-report progress, miss real failures, and run out of context. You keep the context; you own the result.
+**You do the whole task yourself, in the main thread. No subagents.** This is the fast path: one focused engineer who implements, reviews their own work through every specialist lens, QAs it, and refuses to declare done until the gate is green and the work is committed to `main` and pushed. It exists because delegating everyday features to a subagent panel is slow and the subagents over-report progress, miss real failures, and run out of context. You keep the context; you own the result.
 
 **Binding standard: `PRINCIPLES.md` at the repo root.** Read it before writing code. Also honor `AGENTS.md`.
 
@@ -46,7 +46,8 @@ Fall back to Grep/Glob/Read only for what the graph does not cover. Reach analog
 7. **Run the gate yourself — report exact counts.** In order: `make format` (empty diff) → `make lint` (clean) → `make build` → `make test` (`cargo test --test mod`, capture exact pass/fail/ignored) → `make audit` (clean for touched files: unwrap/expect, stdlib-name leaks, `_ =>` over Miri enums, oversized functions, banners, comment rot). **Do not infer success — read the actual output.** If any earlier subagent or note called a failure "pre-existing" or "out of scope", re-run that test yourself before trusting it.
 8. **Loop tight.** Fix → re-run only what the fix touched (`make audit` + the affected tests always; full suite before declaring done). If the same root cause survives three attempts, stop and surface it to the user — don't churn.
 9. **Docs / plan.** If a module's core logic changed, update its local `README.md`. Mark the task `Done` in Notion and append what actually shipped to its page (AGENTS.md §0.1). Record out-of-scope discoveries as their own Notion tasks (and TODO comments with context at the code site) — never silently widen scope, and never leave a follow-up as prose under a finished task.
-10. **Final report** (format below).
+10. **Land it.** Gate green → stage the files you touched → commit → push to `main` (see Hard rules). Only then is the task DONE.
+11. **Final report** (format below).
 
 ## Final report format
 
@@ -55,6 +56,7 @@ Fall back to Grep/Glob/Read only for what the graph does not cover. Reach analog
 Status: DONE | NOT DONE (blockers open)
 Scope delivered: <bullets>
 Gate: format <clean> | lint <clean> | build <clean> | test <was N → now M passing / K ignored> | audit <clean>
+Landed: <commit SHA> pushed to main <old..new>   (DONE requires this line)
 
 ## Implementation
 <diff summary + RED/GREEN/REFACTOR log per criterion>
@@ -70,10 +72,10 @@ Design <ok/notes> · Visitors <ok> · Perceus <ok> · ABI <ok> · Bounds <ok> ·
 
 ## Hard rules
 
-- **Done only when format, lint, build, the full `cargo test --test mod` suite, and `make audit` are all green, and the self-QA pass leaves no open critical/major.** Run the gate yourself and report exact counts — never claim DONE on inference.
+- **Done only when format, lint, build, the full `cargo test --test mod` suite, and `make audit` are all green, the self-QA pass leaves no open critical/major, and the work is committed to `main` and pushed.** Run the gate yourself and report exact counts — never claim DONE on inference, and never call a green-but-uncommitted tree done.
 - **Never** skip the TDD RED/GREEN/REFACTOR gate per criterion.
 - **Never** use `unwrap()`/`expect()`/`panic!` in library code — propagate via `Result<T, MiriError>`. Never `panic(...)` in `src/stdlib/**`.
 - **Never** hardcode a stdlib type name in compiler dispatch. Always `cargo test --test mod` — never `--test integration`.
 - **Never** widen scope beyond what was confirmed — record discoveries as follow-ups.
-- **Never commit, stage, push, or touch git** (`git add`/`commit`/`push`/`stash`, branch creation, rebase). Leave all changes in the working tree for the user to review and commit.
+- **Land the work yourself: commit to `main` and push.** A task is not DONE while its changes sit in the working tree. Once the gate is green, stage **exactly the files you touched, named explicitly** (never `git add -A`/`git add .`), commit in this repo's style (emoji + conventional prefix; a body saying *why*; the `Claude-Session:` trailer when the session gives one), push, and report the SHA. Do not open PRs unless asked. **`git stash` is forbidden here** — stashing a path with no changes creates no entry, so the next `pop` pops the user's stash.
 - If the change trips a §8.1 Major-risk trigger and warrants independent review, recommend `miri-panel-task`.

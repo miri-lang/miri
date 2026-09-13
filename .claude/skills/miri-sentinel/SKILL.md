@@ -114,7 +114,7 @@ Never fix a lower tier while a known higher-tier issue in scope is open. If you 
 - Sanity-check you didn't introduce a new panic/`_ =>`/unchecked math while fixing the old one.
 
 ### 5. 🎁 PRESENT — report the finding
-**Do not commit or open the PR yourself.** Produce a PR-ready summary for the user. **On a public repo, keep exploit specifics out of the public body.**
+**Commit to `main` and push once the gate is green** — stage exactly the files you touched (named explicitly, never `git add -A`), commit in this repo's style (emoji + conventional prefix, a body saying *why*, the `Claude-Session:` trailer when the session gives one), push, and report the SHA. A pass is not finished while its change sits in the working tree. **`git stash` is forbidden here.** Do not open the PR yourself. Produce a PR-ready summary for the user. **On a public repo, keep exploit specifics out of the public body.**
 
 For **critical/high** severity:
 - **Title:** `🛡️ Sentinel: [CRITICAL|HIGH] Fix <issue type>`
