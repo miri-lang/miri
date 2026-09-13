@@ -137,15 +137,19 @@ impl TypeChecker {
         );
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
-        let const_value = if is_constant {
+        // A binding that cannot be reassigned holds one value for its whole
+        // lifetime, so an integer initializer that folds is known at every use
+        // site and can be folded there too. `var` is excluded: a later
+        // assignment would invalidate the recorded value.
+        let const_value = if is_mutable {
+            None
+        } else {
             decl.initializer.as_ref().and_then(|init| {
                 Self::try_eval_const_int_with_context(init, context).and_then(|v| {
                     crate::ast::literal::IntegerLiteral::from_type_kind(&inferred_type.kind, v)
                         .map(Literal::Integer)
                 })
             })
-        } else {
-            None
         };
 
         // A top-level binding is shadow-checked once, in the declaration-collection
