@@ -165,6 +165,18 @@ impl<'a> LoweringContext<'a> {
         Some(super::apply_generic_sub(ty, &self.generic_subs))
     }
 
+    /// The type arguments the type checker inferred for a call to a generic
+    /// function, with the active instantiation substitution applied.
+    ///
+    /// A call written inside a generic body is inferred once, against that
+    /// body's own parameters, so read raw it pins its callee to the caller's
+    /// parameter rather than to the type the caller was instantiated at. The
+    /// callee would then be named — and compiled — for a type no value has.
+    pub fn instantiated_call_mapping(&self, call_id: usize) -> Option<Vec<(String, Type)>> {
+        let mapping = self.type_checker.call_generic_mappings.get(&call_id)?;
+        Some(super::substitute_call_mapping(mapping, &self.generic_subs))
+    }
+
     /// The type a written type expression names, with `Self` and the active
     /// instantiation substitution both resolved.
     ///

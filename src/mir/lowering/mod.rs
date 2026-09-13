@@ -314,6 +314,18 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
     }
 }
 
+/// Apply a generic substitution to each type argument of a call's recorded
+/// mapping, keeping the callee's parameter names.
+pub(crate) fn substitute_call_mapping(
+    mapping: &[(String, Type)],
+    subs: &HashMap<String, Type>,
+) -> Vec<(String, Type)> {
+    mapping
+        .iter()
+        .map(|(name, ty)| (name.clone(), apply_generic_sub(ty, subs)))
+        .collect()
+}
+
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters
 /// with their concrete counterparts. Exhaustively handles all `TypeKind` variants
 /// that can contain nested types: recursively substitutes in `Option<T>`, `List<T>`,

@@ -296,10 +296,8 @@ fn lower_aliased_function_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mangled = match ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
-        Some(generic_args) => mangle_generic_name(func_name, generic_args),
-        None => func_name.to_string(),
-    };
+    let mangled = generic_function_symbol(ctx, func_name, call_expr_id)
+        .unwrap_or_else(|| func_name.to_string());
     let func_op = runtime_fn_operand(&mangled, *span);
 
     let mut arg_ops = lower_plain_args(ctx, args)?;
@@ -538,8 +536,8 @@ pub(super) fn resolve_kernel_operand(
         ));
     };
 
-    let kernel_name = match ctx.type_checker.call_generic_mappings.get(&callee.id) {
-        Some(generic_args) => mangle_generic_name(func_name, generic_args),
+    let kernel_name = match ctx.instantiated_call_mapping(callee.id) {
+        Some(generic_args) => mangle_generic_name(func_name, &generic_args),
         None => func_name.clone(),
     };
 
@@ -1211,8 +1209,7 @@ fn apply_generic_mangling(
     func_span: Span,
 ) {
     if let ExpressionKind::Identifier(func_name, _) = func_node {
-        if let Some(generic_args) = ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
-            let mangled = mangle_generic_name(func_name, generic_args);
+        if let Some(mangled) = generic_function_symbol(ctx, func_name, call_expr_id) {
             *func_op = Operand::Constant(Box::new(crate::mir::Constant {
                 span: func_span,
                 ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
@@ -1220,6 +1217,27 @@ fn apply_generic_mangling(
             }));
         }
     }
+}
+
+/// The symbol of the generic function instantiation a call targets, recorded
+/// on the body so the pipeline lowers that instantiation.
+///
+/// `None` when the call pins no generic parameter.
+fn generic_function_symbol(
+    ctx: &mut LoweringContext,
+    func_name: &str,
+    call_expr_id: usize,
+) -> Option<String> {
+    let type_args = ctx.instantiated_call_mapping(call_expr_id)?;
+    let symbol = mangle_generic_name(func_name, &type_args);
+    ctx.body
+        .generic_function_calls
+        .push(crate::mir::body::GenericFunctionCall {
+            symbol: symbol.clone(),
+            function: func_name.to_string(),
+            type_args,
+        });
+    Some(symbol)
 }
 
 fn resolve_param_types(

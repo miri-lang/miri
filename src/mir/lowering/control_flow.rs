@@ -10,5 +10,4 @@
 
 pub use super::constructors::{lower_class_constructor, lower_struct_constructor};
 pub use super::dispatch::lower_call;
-pub(crate) use super::dispatch::mangle_generic_name;
 pub use super::loops::{lower_break, lower_continue, lower_for, lower_if, lower_while};
