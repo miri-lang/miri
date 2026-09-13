@@ -466,3 +466,129 @@ fn test_set_cow_immortal_returns_same_pointer() {
         miri_rt_set_free(set);
     }
 }
+
+/// Builds a runtime string holding `text` in an allocation of its own.
+unsafe fn owned_string(text: &str) -> usize {
+    miri_runtime_core::miri_rt_string_from_raw(text.as_ptr(), text.len()) as usize
+}
+
+unsafe fn release_string(ptr: usize) {
+    miri_runtime_core::miri_rt_string_free(ptr as *mut miri_runtime_core::MiriString);
+}
+
+#[test]
+fn test_set_of_strings_matches_equal_content_in_separate_allocations() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(set, miri_runtime_core::element_identity::BY_STRING_CONTENT);
+        let stored = owned_string("pear");
+        let probe = owned_string("pear");
+        let other = owned_string("fig");
+        assert_ne!(stored, probe, "the probe must be a separate allocation");
+
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(
+            miri_rt_set_add(set, probe),
+            0,
+            "equal content is a duplicate"
+        );
+        assert_eq!(miri_rt_set_len(set), 1);
+        assert_eq!(miri_rt_set_contains(set, probe), 1);
+        assert_eq!(miri_rt_set_contains(set, other), 0);
+        assert_eq!(miri_rt_set_remove(set, probe), 1);
+        assert_eq!(miri_rt_set_len(set), 0);
+
+        miri_rt_set_free(set);
+        release_string(stored);
+        release_string(probe);
+        release_string(other);
+    }
+}
+
+#[test]
+fn test_set_clone_keeps_matching_strings_by_content() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(set, miri_runtime_core::element_identity::BY_STRING_CONTENT);
+        let stored = owned_string("pear");
+        let probe = owned_string("pear");
+        miri_rt_set_add(set, stored);
+
+        let copy = miri_rt_set_clone(set);
+        assert_eq!(miri_rt_set_contains(copy, probe), 1);
+        assert_eq!(miri_rt_set_add(copy, probe), 0);
+
+        miri_rt_set_free(set);
+        miri_rt_set_free(copy);
+        release_string(stored);
+        release_string(probe);
+    }
+}
+
+/// An element equality that treats two boxed integers as equal when they hold
+/// the same number, standing in for a compiled `equals` thunk.
+unsafe extern "C" fn boxed_ints_equal(a: *const u8, b: *const u8) -> u8 {
+    u8::from(*(a as *const i64) == *(b as *const i64))
+}
+
+#[test]
+fn test_set_with_an_equals_callback_matches_through_it() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_equals_fn(set, boxed_ints_equal as usize);
+        let values: Vec<Box<i64>> = (0..40).map(|i| Box::new(i % 10)).collect();
+        for value in &values {
+            miri_rt_set_add(set, &**value as *const i64 as usize);
+        }
+        assert_eq!(
+            miri_rt_set_len(set),
+            10,
+            "equal values across growth stay one element"
+        );
+
+        let probe = Box::new(7i64);
+        let missing = Box::new(70i64);
+        assert_eq!(miri_rt_set_contains(set, &*probe as *const i64 as usize), 1);
+        assert_eq!(
+            miri_rt_set_contains(set, &*missing as *const i64 as usize),
+            0
+        );
+        assert_eq!(miri_rt_set_remove(set, &*probe as *const i64 as usize), 1);
+        assert_eq!(miri_rt_set_len(set), 9);
+
+        miri_rt_set_free(set);
+    }
+}
+
+static RELEASED_DUPLICATES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "C" fn count_release(_elem: *mut u8) {
+    RELEASED_DUPLICATES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[test]
+fn test_set_add_releases_the_reference_a_rejected_duplicate_donated() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_drop_fn(set, count_release as usize);
+        RELEASED_DUPLICATES.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        assert_eq!(miri_rt_set_add(set, 0x1000), 1);
+        assert_eq!(
+            RELEASED_DUPLICATES.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(miri_rt_set_add(set, 0x1000), 0);
+        assert_eq!(
+            RELEASED_DUPLICATES.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the duplicate's donated reference is released, the stored one kept"
+        );
+        miri_rt_set_clear(set);
+        assert_eq!(
+            RELEASED_DUPLICATES.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        miri_rt_set_free(set);
+    }
+}

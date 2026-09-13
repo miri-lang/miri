@@ -122,6 +122,8 @@ pub mod rt {
     pub const MAP_SET_VAL_CLONE_FN: &str = "miri_rt_map_set_val_clone_fn";
     /// Compiler-internal: selects how keys are hashed and compared, not in stdlib.
     pub const MAP_SET_KEY_KIND: &str = "miri_rt_map_set_key_kind";
+    /// Compiler-internal: matches keys through the key type's `equals`, not in stdlib.
+    pub const MAP_SET_KEY_EQUALS_FN: &str = "miri_rt_map_set_key_equals_fn";
     pub const MAP_CLONE: &str = "miri_rt_map_clone";
     /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
     pub const MAP_COW: &str = "miri_rt_map_cow";
@@ -145,6 +147,10 @@ pub mod rt {
     pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
     /// Compiler-internal: registers the element clone function, not in stdlib.
     pub const SET_SET_ELEM_CLONE_FN: &str = "miri_rt_set_set_elem_clone_fn";
+    /// Compiler-internal: selects how elements are hashed and compared, not in stdlib.
+    pub const SET_SET_ELEM_KIND: &str = "miri_rt_set_set_elem_kind";
+    /// Compiler-internal: matches elements through the element type's `equals`, not in stdlib.
+    pub const SET_SET_ELEM_EQUALS_FN: &str = "miri_rt_set_set_elem_equals_fn";
     /// Compiler-internal: decrements the RC of a set element, not in stdlib.
     pub const SET_DECREF_ELEMENT: &str = "miri_rt_set_decref_element";
 
@@ -335,6 +341,7 @@ pub mod rt {
         MAP_SET_KEY_DROP_FN,
         MAP_SET_VAL_CLONE_FN,
         MAP_SET_KEY_KIND,
+        MAP_SET_KEY_EQUALS_FN,
         MAP_DECREF_ELEMENT,
         // Set
         SET_NEW,
@@ -350,6 +357,8 @@ pub mod rt {
         SET_COW,
         SET_SET_ELEM_DROP_FN,
         SET_SET_ELEM_CLONE_FN,
+        SET_SET_ELEM_KIND,
+        SET_SET_ELEM_EQUALS_FN,
         SET_DECREF_ELEMENT,
         // IO
         PRINT,

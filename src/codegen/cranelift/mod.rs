@@ -7,6 +7,7 @@
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
 mod closure;
+mod element_method_thunks;
 mod gpu_launch;
 pub mod layout;
 mod predicates;
@@ -20,6 +21,7 @@ mod vtable;
 
 use crate::ast::types::{BuiltinCollectionKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
+use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
 use crate::mir::Body;
@@ -234,7 +236,7 @@ impl Backend for CraneliftBackend {
         self.declare_runtime_imports(&mut module)?;
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
         self.generate_structural_element_decref_functions(&mut module, &mut ctx, &isa, bodies)?;
-        self.generate_element_compare_functions(&mut module, &mut ctx, &isa)?;
+        self.generate_element_method_thunks(&mut module, &mut ctx, &isa)?;
         self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
         let kernel_registry =
             crate::codegen::cranelift::gpu_launch::build_kernel_registry(&mut module, bodies)?;
@@ -664,7 +666,8 @@ impl CraneliftBackend {
     }
 
     /// Generate `__compare_TypeName` for every type whose values carry an
-    /// order, so a List or Array of them can be sorted by that order.
+    /// order, and `__equals_TypeName` for every type that defines its own
+    /// equality, so a container of them can sort or match its elements.
     ///
     /// Kept apart from the drop-thunk pass: that one skips the built-in classes
     /// whose drop path routes through a runtime helper, and one of those —
@@ -673,9 +676,9 @@ impl CraneliftBackend {
     /// build.
     ///
     /// A generic class also gets one thunk per recorded instantiation, so a
-    /// `Box<String>` element is compared by the body compiled for `String`
+    /// `Box<String>` element is asked through the body compiled for `String`
     /// rather than by the shared one, which reads its own parameter.
-    fn generate_element_compare_functions(
+    fn generate_element_method_thunks(
         &self,
         module: &mut ObjectModule,
         ctx: &mut Context,
@@ -688,25 +691,34 @@ impl CraneliftBackend {
             .filter(|name| BuiltinCollectionKind::from_name(name).is_none())
             .collect();
         names.sort_unstable();
-        for type_name in names {
-            FunctionTranslator::generate_compare_function(
-                module,
-                ctx,
-                isa,
-                type_name,
-                None,
-                &self.type_definitions,
-            )?;
-            self.generate_instantiation_compare_functions(module, ctx, isa, type_name)?;
+        for method in ElementMethod::ALL {
+            for type_name in &names {
+                FunctionTranslator::generate_element_method_thunk(
+                    method,
+                    module,
+                    ctx,
+                    isa,
+                    type_name,
+                    None,
+                    &self.type_definitions,
+                )?;
+                self.generate_instantiation_method_thunks(method, module, ctx, isa, type_name)?;
+            }
         }
         Ok(())
     }
 
-    /// Generate `__compare_TypeName__Args` for each recorded instantiation of a
-    /// generic class that orders its values, deduplicated by mangled name so the
-    /// same symbol is never defined twice.
-    fn generate_instantiation_compare_functions(
+    /// Generate the `method` thunk for each recorded instantiation of a generic
+    /// class that answers it, deduplicated by mangled name so the same symbol is
+    /// never defined twice.
+    ///
+    /// A thunk calls a method body the pipeline lowered for that instantiation,
+    /// so an instantiation whose arguments the pipeline does not monomorphize —
+    /// `Box<T>` recorded inside `Box`'s own body — gets none: its thunk would
+    /// name a symbol nothing defines.
+    fn generate_instantiation_method_thunks(
         &self,
+        method: ElementMethod,
         module: &mut ObjectModule,
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,
@@ -723,12 +735,19 @@ impl CraneliftBackend {
         };
         let mut emitted: Vec<String> = Vec::new();
         for args in tuples {
+            let monomorphized = args.iter().all(|arg| {
+                crate::mir::lowering::is_monomorphizable_type_argument(
+                    &arg.kind,
+                    &self.type_definitions,
+                )
+            });
             let mangled =
                 crate::codegen::cranelift::rc::mangle_class_instantiation(type_name, args);
-            if emitted.contains(&mangled) {
+            if !monomorphized || emitted.contains(&mangled) {
                 continue;
             }
-            FunctionTranslator::generate_compare_function(
+            FunctionTranslator::generate_element_method_thunk(
+                method,
                 module,
                 ctx,
                 isa,
