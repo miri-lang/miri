@@ -1,0 +1,6 @@
+add alpha
+add beta
+add gamma
+prio 3 1
+prio 1 7
+list

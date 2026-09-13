@@ -1,0 +1,75 @@
+/// Report account balances from a ledger file.
+
+use system.fs
+use system.os
+use system.collections.map
+use system.collections.list
+
+struct Entry
+    account String
+    balance int
+
+fn to_cents(amount String) int
+    let whole_only = amount.split(".").element_at(0).to_int() ?? 0
+    return whole_only * 100
+
+fn format_cents(cents int) String
+    var sign = ""
+    var value = cents
+    if value < 0
+        sign = "-"
+        value = 0 - value
+    let fraction = value % 100
+    var fraction_text = f"{fraction}"
+    if fraction < 10
+        fraction_text = f"0{fraction}"
+    let whole = value / 100
+    return f"{sign}{whole}.{fraction_text}"
+
+fn by_account(left Entry, right Entry) int
+    return left.account.compare(right.account)
+
+fn read_ledger(path String) [String]
+    let fs = Fs()
+    let contents = match fs.read_file(path)
+        Result.Ok(text): text
+        Result.Err(_error): ""
+    return contents.trim_end().split("\n")
+
+fn main()
+    let args = Args()
+    let lines = read_ledger(args.element_at(0))
+    let n = lines.element_at(0).split(" ").element_at(1).to_int() ?? 0
+    if n == 0
+        return 0
+
+    let debit_sign = 1
+    var balances = Map<String, int>()
+    var skipped = 0
+    for index in 0..n - 1
+        let fields = lines.element_at(1 + index).split(" ")
+        let account = fields.element_at(0)
+        let kind = fields.element_at(1)
+        let amount_cents = to_cents(fields.element_at(2))
+        var signed = amount_cents
+        if kind == "debit"
+            signed = amount_cents * debit_sign
+        else if kind != "credit"
+            skipped = skipped + 1
+            continue
+        let current = balances.get(account) ?? 0
+        balances.set(account, current + signed)
+
+    var entries = List<Entry>()
+    for index in 0..balances.length()
+        let account = balances.element_at(index)
+        let balance = balances.value_at(index)
+        entries.push(Entry(account, balance))
+
+    var total = 0
+    for entry in entries.sorted_by(by_account)
+        println(f"{entry.account} {format_cents(entry.balance)}")
+        total = total + entry.balance
+    println(f"TOTAL {format_cents(total)}")
+    if skipped > 0
+        eprintln(f"skipped {skipped}")

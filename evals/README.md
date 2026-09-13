@@ -5,6 +5,12 @@ The agent contract — stable diagnostic codes, a JSON envelope, `explain`, `fix
 work. This directory is the measuring device, and `evals/results/baseline.md` is
 what it currently measures.
 
+This is the deterministic instrument, and it is the one that gates a commit.
+The live-model benchmark beside it — `evals/field/` — launches real agents on
+real jobs and is run by hand. Neither substitutes for the other: a change that
+moves the numbers here has not been shown to move an agent's cost, and a round
+there is far too expensive and too noisy to gate anything.
+
 ## What a task is
 
 Each directory here is one recorded transcript: the ordered sequence of

@@ -1,0 +1,4 @@
+id = "04-data-edges"
+title = "Keyed totals, at the edges a hurried program skips"
+turn_cap = 40
+time_cap_seconds = 1800

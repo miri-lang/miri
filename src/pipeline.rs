@@ -437,6 +437,13 @@ fn wrap_script_in_main(program: &mut Program) {
 
 /// Ensures that a user-defined `main()` function returns `Int` with an
 /// implicit `return 0` at the end, so the process exits cleanly.
+///
+/// TODO: a bare `return` written inside `main` is not rewritten here, so it is
+/// checked against the `Int` signature this installs and reported as a type
+/// mismatch — while `miri check` runs the frontend without this patch and
+/// accepts the same file. A program is therefore clean to `check` and rejected
+/// by `build` and `run`. Either the bare returns of `main` are rewritten to
+/// `return 0` alongside the appended one, or both paths patch alike.
 fn patch_main_return(program: &mut Program) {
     use crate::ast::factory::stmt_with_span;
 
