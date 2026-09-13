@@ -5,6 +5,7 @@ pub mod class_def;
 pub mod enum_def;
 pub mod func;
 pub mod generics;
+pub mod inherited_traits;
 pub mod struct_def;
 pub mod trait_def;
 

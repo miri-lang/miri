@@ -1464,15 +1464,20 @@ impl Pipeline {
         method_name: &str,
     ) -> bool {
         use crate::ast::types::{EQUALS_METHOD_NAME, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME};
-        use crate::type_checker::context::TypeDefinition;
-        let Some(TypeDefinition::Class(class_def)) =
-            result.type_checker.type_definitions().get(class_name)
-        else {
-            return false;
+        use crate::type_checker::context::{
+            class_implements_trait, class_method_declaration, TypeDefinition,
         };
+        let definitions = result.type_checker.type_definitions();
+        if !matches!(definitions.get(class_name), Some(TypeDefinition::Class(_))) {
+            return false;
+        }
         match method_name {
-            ORDERING_METHOD_NAME => class_def.traits.iter().any(|t| t == ORDERING_TRAIT_NAME),
-            EQUALS_METHOD_NAME => class_def.methods.contains_key(EQUALS_METHOD_NAME),
+            ORDERING_METHOD_NAME => {
+                class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions)
+            }
+            EQUALS_METHOD_NAME => {
+                class_method_declaration(class_name, EQUALS_METHOD_NAME, definitions).is_some()
+            }
             _ => false,
         }
     }

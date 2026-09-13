@@ -689,9 +689,7 @@ fn reject_class_without_equality(
         Some(crate::type_checker::context::TypeDefinition::Class(_))
     );
     if is_class
-        && !crate::mir::lowering::expression::structural_equality::type_defines_own_equality(
-            ctx, name,
-        )
+        && !crate::mir::lowering::expression::structural_equality::type_supplies_equality(ctx, name)
     {
         return Err(LoweringError::unsupported_expression(
             format!(

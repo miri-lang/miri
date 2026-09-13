@@ -400,9 +400,11 @@ fn emit_named_type_equality(
     rhs_op: Operand,
     is_eq: bool,
 ) -> Result<crate::mir::Local, LoweringError> {
-    if type_defines_own_equality(ctx, name) {
+    if let Some((owner, _)) =
+        super::binary_expr::operator_method_body(ctx, name, EQUALS_METHOD_NAME)
+    {
         return Ok(emit_equals_method_call(
-            ctx, span, name, lhs_op, rhs_op, is_eq,
+            ctx, span, &owner, lhs_op, rhs_op, is_eq,
         ));
     }
     if matches!(
@@ -414,20 +416,13 @@ fn emit_named_type_equality(
     emit_enum_or_struct_equality(ctx, span, name, args, lhs_op, rhs_op, is_eq)
 }
 
-/// True when the named type supplies its own `equals`.
-pub(super) fn type_defines_own_equality(ctx: &LoweringContext, name: &str) -> bool {
-    match ctx.type_checker.type_definitions().get(name) {
-        Some(crate::type_checker::context::TypeDefinition::Class(class_def)) => {
-            class_def.methods.contains_key(EQUALS_METHOD_NAME)
-        }
-        Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) => {
-            enum_def.methods.contains_key(EQUALS_METHOD_NAME)
-        }
-        _ => false,
-    }
+/// True when the named type supplies an `equals`: its own, or for a class one
+/// a class it extends declares.
+pub(super) fn type_supplies_equality(ctx: &LoweringContext, name: &str) -> bool {
+    super::binary_expr::operator_method_body(ctx, name, EQUALS_METHOD_NAME).is_some()
 }
 
-/// Emit `{Type}_equals(lhs, rhs)`, negating the result for `!=`.
+/// Emit `{Owner}_equals(lhs, rhs)`, negating the result for `!=`.
 fn emit_equals_method_call(
     ctx: &mut LoweringContext,
     span: Span,

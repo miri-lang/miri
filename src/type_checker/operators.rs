@@ -6,7 +6,7 @@
 //! This module handles type validation for binary and unary operators,
 //! ensuring operands have compatible types for the requested operations.
 
-use super::context::{Context, TypeDefinition};
+use super::context::{class_implements_trait, class_method_declaration, Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{
     vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, ORDERING_TRAIT_NAME,
@@ -515,25 +515,27 @@ impl TypeChecker {
         }
     }
 
-    /// Checks whether a type implements a given trait by looking up its class
-    /// definition and inspecting the `traits` list.
+    /// Checks whether a type implements a given trait: its class, or a class
+    /// it extends, lists the trait.
     ///
     /// Maps `TypeKind::String` to class `"String"`, `TypeKind::Custom(name, _)` to `name`,
     /// and returns `false` for primitive types.
+    // TODO: a trait's parent traits are not consulted, so a class implementing
+    // `trait Ranked extends Comparable` is refused under `<` even though
+    // conformance made it declare `compare`. The walk has to expand each listed
+    // trait through `parent_traits`, and the MIR and codegen checks that ask the
+    // same question (`class_implements_trait`) have to agree with it.
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
         let class_name = match &ty.kind {
             TypeKind::String => STRING_TYPE_NAME,
             TypeKind::Custom(name, _) => name.as_str(),
             _ => return false,
         };
-
-        if let Some(TypeDefinition::Class(class_def)) =
-            self.type_table.global_type_definitions.get(class_name)
-        {
-            class_def.traits.iter().any(|t| t == trait_name)
-        } else {
-            false
-        }
+        class_implements_trait(
+            class_name,
+            trait_name,
+            &self.type_table.global_type_definitions,
+        )
     }
 
     /// Rejects a type whose shape cannot be compared structurally.
@@ -592,7 +594,7 @@ impl TypeChecker {
         visiting: &mut Vec<String>,
         depth: usize,
     ) -> Result<(), String> {
-        if self.type_defines_own_equality(name) {
+        if self.type_supplies_equality(name) {
             return Ok(());
         }
         if visiting.iter().any(|seen| seen == name) {
@@ -634,12 +636,14 @@ impl TypeChecker {
         result
     }
 
-    /// True when the named type supplies its own `equals`, which the operator
-    /// lowering dispatches to in place of a derived structural comparison.
-    fn type_defines_own_equality(&self, name: &str) -> bool {
-        match self.type_table.global_type_definitions.get(name) {
-            Some(TypeDefinition::Class(class_def)) => {
-                class_def.methods.contains_key(EQUALS_METHOD_NAME)
+    /// True when the named type supplies an `equals` — its own, or for a class
+    /// one a class it extends declares — which the operator lowering dispatches
+    /// to in place of a derived structural comparison.
+    fn type_supplies_equality(&self, name: &str) -> bool {
+        let definitions = &self.type_table.global_type_definitions;
+        match definitions.get(name) {
+            Some(TypeDefinition::Class(_)) => {
+                class_method_declaration(name, EQUALS_METHOD_NAME, definitions).is_some()
             }
             Some(TypeDefinition::Enum(enum_def)) => {
                 enum_def.methods.contains_key(EQUALS_METHOD_NAME)

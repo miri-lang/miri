@@ -321,7 +321,7 @@ Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, 
 
 The `get` method returns an option type (`V?`) — use pattern matching to handle missing keys safely.
 
-Two keys are the same key when `==` says so: strings match by content, a class that defines `equals` matches through that method, and a value type matches by value. A class without its own `equals` matches only the same instance.
+Two keys are the same key when `==` says so: strings match by content, a class that defines or inherits `equals` matches through that method, and a value type matches by value. A class with no `equals` of its own or from a class it extends matches only the same instance.
 
 ### Set
 
@@ -650,6 +650,35 @@ A class can extend a base class and implement traits simultaneously:
 class Fish extends Animal implements Swimmer
     fn swim()
         println("swimming")
+```
+
+### Traits a Base Class Implements
+
+A trait a class implements is implemented by every class that extends it, whether or not the subclass names it again. A trait method the base declares answers for the subclass: a `Length` orders, compares equal, and sorts through the `compare` or `equals` a `Measure` declares, unless `Length` declares its own.
+
+A method that overrides one taking `Self` keeps the base's parameter type — it may be handed any `Measure` — so the override spells it `other Measure`. Its return may narrow to the subclass.
+
+A trait method whose return names `Self` (`clone`, `concat`, `repeat`) is the exception. The body a subclass would inherit builds the base class, not the subclass, so every class extending such a declaration declares the method itself — with a body, or `abstract` to leave it to its own descendants. A subclass that does not is refused (`MER_TYP_057`).
+
+```miri
+class Measure implements Cloneable
+    value int
+
+    fn init(value int)
+        self.value = value
+
+    public fn clone() Self
+        return Measure(self.value)
+
+class Length extends Measure
+    unit String
+
+    fn init(value int, unit String)
+        super.init(value)
+        self.unit = unit
+
+    public fn clone() Self
+        return Length(self.value, self.unit)
 ```
 
 ### Trait Inheritance

@@ -2038,27 +2038,10 @@ impl<'a> FunctionTranslator<'a> {
         trait_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {
-        let mut current = type_name.to_string();
-        loop {
-            match type_definitions.get(&current) {
-                Some(TypeDefinition::Class(cd)) => {
-                    if cd.traits.iter().any(|t| t == trait_name) {
-                        return true;
-                    }
-                    match &cd.base_class {
-                        Some(base) => current = base.clone(),
-                        None => return false,
-                    }
-                }
-                Some(
-                    TypeDefinition::Struct(_)
-                    | TypeDefinition::Enum(_)
-                    | TypeDefinition::Generic(_)
-                    | TypeDefinition::Alias(_)
-                    | TypeDefinition::Trait(_),
-                )
-                | None => return false,
-            }
-        }
+        crate::type_checker::context::class_implements_trait(
+            type_name,
+            trait_name,
+            type_definitions,
+        )
     }
 }
