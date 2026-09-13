@@ -1477,13 +1477,17 @@ impl TypeChecker {
         }
     }
 
-    /// Resolves a generic class's type-argument expressions to concrete types
-    /// for the instantiation registry. Returns `None` (recording nothing) if any
-    /// argument is not a type expression — value-generic slots (e.g. the `3` in
-    /// `Wrap<int, 3>`) are sizes, not types, so such a tuple is not a pure
-    /// type-argument instantiation. Resolution is non-reporting: each argument is
-    /// confirmed to be a type expression before it is resolved, so this scan never
-    /// injects a spurious error for a value-generic argument.
+    /// Resolves a generic class's argument expressions to concrete types for the
+    /// instantiation registry.
+    ///
+    /// A value-generic slot (the `3` in `Wrap<int, 3>`) is a size, not a type,
+    /// and is recorded as the marker
+    /// [`crate::type_checker::generics::value_generic_slot`] builds, so the
+    /// tuple stays one `Vec<Type>` and the size still reaches the symbol
+    /// mangler. Returns `None` (recording nothing) if any argument is neither a
+    /// type expression nor a folded constant. Resolution is non-reporting: each
+    /// argument is confirmed to be a type expression before it is resolved, so
+    /// this scan never injects a spurious error for a value-generic argument.
     pub(crate) fn resolve_type_arg_tuple(
         &mut self,
         args: &[Expression],
@@ -1492,7 +1496,8 @@ impl TypeChecker {
         let mut resolved = Vec::with_capacity(args.len());
         for arg in args {
             if self.extract_type_from_expression(arg).is_err() {
-                return None;
+                resolved.push(crate::type_checker::generics::value_generic_slot(arg)?);
+                continue;
             }
             resolved.push(self.resolve_type_expression(arg, context));
         }

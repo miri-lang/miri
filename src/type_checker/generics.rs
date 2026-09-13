@@ -114,9 +114,33 @@ pub(crate) fn value_generic_marker_type(expr: Expression) -> Type {
 /// If `ty` is a value-generic marker wrapping a stored expression, return
 /// a borrow of that expression. Otherwise `None`.
 pub(crate) fn extract_value_generic(ty: &Type) -> Option<&Expression> {
-    match &ty.kind {
+    extract_value_generic_kind(&ty.kind)
+}
+
+/// [`extract_value_generic`] against a bare kind, for callers that hold one
+/// without the surrounding [`Type`] — the symbol mangler reads kinds.
+pub(crate) fn extract_value_generic_kind(kind: &TypeKind) -> Option<&Expression> {
+    match kind {
         TypeKind::Custom(name, Some(args)) if name == VALUE_GENERIC_MARKER && args.len() == 1 => {
             Some(&args[0])
+        }
+        _ => None,
+    }
+}
+
+/// The instantiation-registry slot a generic argument fills when it is a value
+/// rather than a type.
+///
+/// A class can declare either kind of parameter, and an instantiation is
+/// recorded as one `Vec<Type>` regardless — so the `3` in `Array<T, 3>` rides
+/// in the same tuple as a value-generic marker. Only a folded integer constant
+/// qualifies: a size still written as an expression names no single
+/// instantiation, and wrapping it would mangle two different sizes to one
+/// symbol.
+pub(crate) fn value_generic_slot(arg: &Expression) -> Option<Type> {
+    match &arg.node {
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => {
+            Some(value_generic_marker_type(arg.clone()))
         }
         _ => None,
     }

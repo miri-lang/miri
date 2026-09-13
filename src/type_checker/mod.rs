@@ -246,6 +246,15 @@ impl TypeChecker {
         self.type_table.types.get(&id)
     }
 
+    /// Every type the checker inferred for an expression, in no fixed order.
+    ///
+    /// A type a program reaches but never writes down — the `List<W>` an
+    /// `Array<W, 3>.reversed()` hands back — appears only here, so the
+    /// monomorphization registry is completed from this.
+    pub fn inferred_types(&self) -> impl Iterator<Item = &Type> {
+        self.type_table.types.values()
+    }
+
     /// Returns the type of a global variable by name.
     pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
         self.type_table.global_scope.get(name).map(|info| &info.ty)
