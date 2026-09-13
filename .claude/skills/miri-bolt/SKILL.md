@@ -98,7 +98,7 @@ If nothing clears that bar, **stop** (see § "No win"). Do not force a change.
 - Delete any throwaway benchmark file from the tree before finishing (keep the numbers in your report).
 
 ### 5. 🎁 PRESENT — share the speed boost
-**Do not commit or open the PR yourself.** Produce a PR-ready summary for the user:
+**Commit to `main` and push once the gate is green** — stage exactly the files you touched (named explicitly, never `git add -A`), commit in this repo's style (emoji + conventional prefix, a body saying *why*, the `Claude-Session:` trailer when the session gives one), push, and report the SHA. A pass is not finished while its change sits in the working tree. **`git stash` is forbidden here.** Do not open the PR yourself. Produce a PR-ready summary for the user:
 - **Title:** `⚡ Bolt: <performance improvement>`
 - **Body:**
   - 💡 **What** — the optimization implemented (`file:line`).

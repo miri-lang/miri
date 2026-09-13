@@ -95,7 +95,7 @@ Follow the failure across **every** stage it flows through (lexer → parser →
 - Confirm **no sibling test reddened**. If any earlier note called a failure "pre-existing", re-run it yourself before trusting that.
 
 ### 6. 🎁 PRESENT — report the fix
-**Do not commit or open the PR yourself.** Produce a PR-ready summary for the user:
+**Commit to `main` and push once the gate is green** — stage exactly the files you touched (named explicitly, never `git add -A`), commit in this repo's style (emoji + conventional prefix, a body saying *why*, the `Claude-Session:` trailer when the session gives one), push, and report the SHA. A pass is not finished while its change sits in the working tree. **`git stash` is forbidden here.** Do not open the PR yourself. Produce a PR-ready summary for the user:
 - **Title:** `🔎 Scout: <bug fixed>`
 - **Body:**
   - 🐞 **Symptom** — what went wrong, with the failing `.mi` repro.

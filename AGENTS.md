@@ -142,7 +142,7 @@ Work is **not done** until each acceptance criterion has passed all three phases
     2. **`make lint`**: Fix all clippy warnings.
     3. **`make build`**: Ensure both compiler and runtimes compile.
     4. **`make test`**: Run the full suite.
-- **Definition of Done**: Never claim a task DONE until format, lint, build, and the full test suite all pass green. Run the gate yourself and report exact pass/fail counts — do not infer success. If a subagent reports a failure as "pre-existing" or "out of scope", re-run that test yourself before trusting the verdict.
+- **Definition of Done**: Never claim a task DONE until format, lint, build, and the full test suite all pass green **and the work is committed to `main` and pushed** (§5.10). Green-but-uncommitted is not done: changes left in the working tree are invisible to everyone else and one `git checkout` away from gone. Run the gate yourself and report exact pass/fail counts — do not infer success. If a subagent reports a failure as "pre-existing" or "out of scope", re-run that test yourself before trusting the verdict.
 
 ---
 
@@ -222,7 +222,12 @@ To work efficiently and hit fewer roadblocks:
 7. **Temporary Files**: Use `/tmp/` for scripts or backups.
 8. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, **create a task for it in Notion** (§0.1) — with the repro, the key files and acceptance criteria — and leave a TODO comment at the relevant code location pointing at what is missing and why. Never record a discovery only as prose under the task you were doing, and never commit one without context.
 9. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
-10. Never commit changes yourself, never create PRs.
+10. **Land the work: commit to `main` and push.** This is the last step of every task, done without being asked — a task whose changes sit in the working tree is not finished. The order is fixed: gate green first, then stage **exactly the files you touched, named explicitly** (never `git add -A` or `git add .` — an unrelated file swept into the commit is its own defect), then commit, then push. Report the pushed SHA and range.
+    - **Commit message**: this repo's style is an emoji plus a conventional prefix on the subject (`🐛 fix:`, `📋 docs:`), and a body that explains *why* the change is right rather than restating the diff. Close with the `Claude-Session:` trailer when the session provides one.
+    - **Do not open pull requests** unless asked. Work lands on `main` directly.
+    - **`git stash` is forbidden in this repository.** Stashing a path that has no changes creates no stash entry, so the next `git stash pop` pops whatever the *user* had stashed. Copy to a scratchpad if you need to set work aside.
+    - **Subagents still never touch git** — see §5.11. Only the orchestrating thread commits.
+11. **No subagent runs a git write command.** A dispatched agent may run `git diff`, `git status` and `git log` and nothing else: never `add`, `commit`, `push`, `stash`, `checkout`, `restore`, `reset` or `clean`. Write-capable subagents have repeatedly destroyed uncommitted work by reverting their way out of a compile error, then reported test counts from before their own wipe. Put the prohibition in the dispatch prompt explicitly, and after every subagent completes check `git status --short` yourself against the expected file set — a *shrinking* diff means a wipe. Committing early (§5.10) is the strongest mitigation there is: a committed tree cannot be wiped.
 
 ---
 
