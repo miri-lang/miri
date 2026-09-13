@@ -33,41 +33,12 @@ pub fn lower_struct_constructor(
 ) -> Result<Operand, LoweringError> {
     // Check if this is a vector type (Vec2, Vec3, Vec4, etc.)
     let is_vec = types::vec_dim(struct_name).is_some();
-    // Separate positional and named arguments
     let arg_watermark = ctx.body.local_decls.len();
-    let mut positional_args = Vec::with_capacity(args.len());
-    let mut named_args: std::collections::HashMap<&str, Operand> =
-        std::collections::HashMap::with_capacity(args.len());
-
-    for arg in args {
-        match &arg.node {
-            ExpressionKind::NamedArgument(name, value) => {
-                let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name, op);
-            }
-            _ => {
-                let op = lower_expression(ctx, arg, None)?;
-                positional_args.push(op);
-            }
-        }
-    }
+    let (positional_args, mut named_args) = partition_constructor_args(ctx, args)?;
 
     // Extract concrete element type for vectors from the type_args
     let concrete_elem_type = if is_vec && !def.fields.is_empty() {
-        // For vectors, the type_args should contain Type(concrete_elem, _) expressions
-        if let Some(args) = type_args {
-            if let Some(first_arg) = args.first() {
-                if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
-                    Some(elem_ty.as_ref().clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        extract_vec_concrete_elem_type(type_args)
     } else {
         None
     };
@@ -78,13 +49,10 @@ pub fn lower_struct_constructor(
 
     for (field_name, field_ty, _visibility) in &def.fields {
         let op = if let Some(op) = pos_iter.next() {
-            // Positional argument
             op
         } else if let Some(op) = named_args.remove(field_name.as_str()) {
-            // Named argument
             op
         } else {
-            // Missing field - this should have been caught by type checker
             return Err(LoweringError::missing_struct_field(
                 field_name.clone(),
                 struct_name.to_string(),
@@ -92,11 +60,7 @@ pub fn lower_struct_constructor(
             ));
         };
 
-        // Cast if types don't match
         let op_ty = op.ty(&ctx.body).clone();
-
-        // For vectors: if field is Generic(T) and we have a concrete element type,
-        // coerce to the concrete type instead of the field type.
         let target_ty = if is_vec {
             if let TypeKind::Generic(_, _, _) = &field_ty.kind {
                 if let Some(ref concrete) = concrete_elem_type {
@@ -125,28 +89,9 @@ pub fn lower_struct_constructor(
         operands.push(op);
     }
 
-    // Create the struct type
-    // For vectors, build the type with the concrete element type wrapped as an Expression
-    let struct_ty = if is_vec {
-        if let Some(ref concrete_elem) = concrete_elem_type {
-            // Build a synthetic Type(concrete_elem, false) expression for type_args
-            let synthetic_args = vec![Expression {
-                id: 0,
-                span: *span,
-                node: ExpressionKind::Type(Box::new(concrete_elem.clone()), false),
-            }];
-            Type::new(
-                TypeKind::Custom(struct_name.to_string(), Some(synthetic_args)),
-                *span,
-            )
-        } else {
-            Type::new(TypeKind::Custom(struct_name.to_string(), None), *span)
-        }
-    } else {
-        Type::new(TypeKind::Custom(struct_name.to_string(), None), *span)
-    };
+    let struct_ty =
+        build_struct_constructor_type(struct_name, is_vec, concrete_elem_type.as_ref(), *span);
 
-    // Assign aggregate to destination
     let destination = if let Some(d) = dest {
         d
     } else {
@@ -155,8 +100,6 @@ pub fn lower_struct_constructor(
 
     let dest_local = destination.local;
 
-    // For vectors: override the destination local's declared type to the concrete struct type
-    // so that both WGSL backend and narrow-int CPU field load get the concrete element type.
     if is_vec {
         ctx.body.local_decls[dest_local.0].ty = struct_ty.clone();
     }
@@ -171,9 +114,6 @@ pub fn lower_struct_constructor(
 
     let result_op = Operand::Copy(destination);
 
-    // Release managed temporaries created while lowering the constructor arguments.
-    // After the Aggregate assignment, Perceus has IncRef'd them (the struct now owns
-    // the references). The caller's temporary locals are no longer needed.
     for op in &operands {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             if place.local != dest_local {
@@ -183,6 +123,67 @@ pub fn lower_struct_constructor(
     }
 
     Ok(result_op)
+}
+
+/// Separates positional and named arguments for a constructor call.
+fn partition_constructor_args<'a>(
+    ctx: &mut LoweringContext,
+    args: &'a [Expression],
+) -> Result<(Vec<Operand>, HashMap<&'a str, Operand>), LoweringError> {
+    let mut positional_args = Vec::with_capacity(args.len());
+    let mut named_args = HashMap::with_capacity(args.len());
+
+    for arg in args {
+        match &arg.node {
+            ExpressionKind::NamedArgument(name, value) => {
+                let op = lower_expression(ctx, value, None)?;
+                named_args.insert(name.as_str(), op);
+            }
+            _ => {
+                let op = lower_expression(ctx, arg, None)?;
+                positional_args.push(op);
+            }
+        }
+    }
+    Ok((positional_args, named_args))
+}
+
+/// Extracts concrete element type for vector type instantiation arguments if present.
+fn extract_vec_concrete_elem_type(type_args: Option<&[Expression]>) -> Option<Type> {
+    if let Some(args) = type_args {
+        if let Some(first_arg) = args.first() {
+            if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                return Some(elem_ty.as_ref().clone());
+            }
+        }
+    }
+    None
+}
+
+/// Builds the struct Type for a struct constructor result, embedding vector element type if applicable.
+fn build_struct_constructor_type(
+    struct_name: &str,
+    is_vec: bool,
+    concrete_elem_type: Option<&Type>,
+    span: Span,
+) -> Type {
+    if is_vec {
+        if let Some(concrete_elem) = concrete_elem_type {
+            let synthetic_args = vec![Expression {
+                id: 0,
+                span,
+                node: ExpressionKind::Type(Box::new(concrete_elem.clone()), false),
+            }];
+            Type::new(
+                TypeKind::Custom(struct_name.to_string(), Some(synthetic_args)),
+                span,
+            )
+        } else {
+            Type::new(TypeKind::Custom(struct_name.to_string(), None), span)
+        }
+    } else {
+        Type::new(TypeKind::Custom(struct_name.to_string(), None), span)
+    }
 }
 
 /// Lowers a class constructor call to an Aggregate rvalue,
