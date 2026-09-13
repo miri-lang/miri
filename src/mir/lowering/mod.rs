@@ -979,7 +979,7 @@ fn lower_class_method_impl(
             ast_method.span,
         ));
     };
-    let params = &decl.params;
+    let params = decl.explicit_params();
     let ret_type_expr = &decl.return_type;
     let body_stmt = &decl.body;
     let props = &decl.properties;

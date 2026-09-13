@@ -169,9 +169,10 @@ impl TypeChecker {
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(methods.len());
         for method_stmt in methods {
             if let StatementKind::FunctionDeclaration(decl) = &method_stmt.node {
-                let mut params = Vec::with_capacity(decl.params.len());
-                let mut is_out_flags = Vec::with_capacity(decl.params.len());
-                for param in &decl.params {
+                let explicit_params = decl.explicit_params();
+                let mut params = Vec::with_capacity(explicit_params.len());
+                let mut is_out_flags = Vec::with_capacity(explicit_params.len());
+                for param in explicit_params {
                     let param_ty = self.resolve_type_expression(&param.typ, context);
                     params.push((param.name.clone(), param_ty));
                     is_out_flags.push(param.is_out);
@@ -214,7 +215,7 @@ impl TypeChecker {
                         continue;
                     }
                     // Reject `self` as a parameter in static methods
-                    if !decl.params.is_empty() && decl.params[0].name == "self" {
+                    if decl.declares_receiver() {
                         self.report_error(
                             DiagnosticCode::TypStaticMethodRestriction,
                             "Static methods cannot have a 'self' parameter".to_string(),
@@ -292,7 +293,7 @@ impl TypeChecker {
                     FunctionDeclarationInfo {
                         name: &decl.name,
                         generics: &decl.generics,
-                        params: &decl.params,
+                        params: decl.explicit_params(),
                         return_type: &decl.return_type,
                         body: decl.body.as_ref().map(|b| b.as_ref()),
                         properties: &decl.properties,

@@ -231,7 +231,7 @@ impl TypeChecker {
                     };
 
                     let param_types: Vec<(String, Type)> = decl
-                        .params
+                        .explicit_params()
                         .iter()
                         .map(|p| {
                             (
@@ -240,7 +240,8 @@ impl TypeChecker {
                             )
                         })
                         .collect();
-                    let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
+                    let is_out_flags: Vec<bool> =
+                        decl.explicit_params().iter().map(|p| p.is_out).collect();
 
                     // Trait methods are abstract if they have no body
                     let method_is_abstract = decl.body.is_none();
@@ -321,7 +322,7 @@ impl TypeChecker {
                     FunctionDeclarationInfo {
                         name: &decl.name,
                         generics: &decl.generics,
-                        params: &decl.params,
+                        params: decl.explicit_params(),
                         return_type: &decl.return_type,
                         body: decl.body.as_ref().map(|b| b.as_ref()),
                         properties: &decl.properties,

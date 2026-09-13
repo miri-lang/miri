@@ -193,3 +193,42 @@ fn main()
         "7",
     );
 }
+
+#[test]
+fn test_class_method_declaring_self_is_called_without_it() {
+    assert_runs_with_output(
+        r#"
+class Counter
+    public var count int
+
+    public fn doubled(self) int
+        return self.count * 2
+
+    public fn plus(self, n int) int
+        return self.count + n
+
+fn main()
+    let c = Counter(count: 5)
+    println(f"{c.doubled()} {c.plus(3)}")
+"#,
+        "10 8",
+    );
+}
+
+#[test]
+fn test_class_method_declaring_self_still_counts_its_arguments() {
+    assert_compiler_error(
+        r#"
+class Counter
+    public var count int
+
+    public fn plus(self, n int) int
+        return self.count + n
+
+fn main()
+    let c = Counter(count: 5)
+    println(f"{c.plus()}")
+"#,
+        "Argument Count Mismatch",
+    );
+}

@@ -351,3 +351,226 @@ fn main()
 "#,
     );
 }
+
+/// Runs `code` and requires its standard output to be exactly `expected`, so a
+/// hook that fires twice, or not at all, cannot pass on a substring match.
+fn assert_stdout_is(code: &str, expected: &str) {
+    let result = crate::utils::miri_run(code);
+    assert!(
+        result.success,
+        "expected the program to run: {}",
+        result.output()
+    );
+    assert_eq!(result.stdout.trim(), expected, "{}", result.output());
+}
+
+#[test]
+fn test_class_drop_hook_runs_once_at_scope_exit() {
+    assert_stdout_is(
+        r#"
+class Handle
+    public var id int
+
+    public fn init(id int)
+        self.id = id
+
+    public fn drop(self)
+        println("dropped")
+
+fn main()
+    var h = Handle(1)
+    println(f"{h.id}")
+"#,
+        "1\ndropped",
+    );
+}
+
+#[test]
+fn test_class_drop_hook_reads_the_instance_it_releases() {
+    assert_stdout_is(
+        r#"
+class Handle
+    public var id int
+
+    public fn drop(self)
+        println(f"closing {self.id}")
+
+fn open(id int)
+    let h = Handle(id: id)
+    println(f"opened {h.id}")
+
+fn main()
+    open(7)
+    open(8)
+    println("done")
+"#,
+        "opened 7\nclosing 7\nopened 8\nclosing 8\ndone",
+    );
+}
+
+#[test]
+fn test_class_field_holding_a_resource_runs_its_drop_hook() {
+    assert_stdout_is(
+        r#"
+class Handle
+    public var id int
+
+    public fn drop(self)
+        println(f"handle {self.id} dropped")
+
+class Owner
+    public var handle Handle
+
+fn main()
+    var owner = Owner(handle: Handle(id: 3))
+    println(f"owns {owner.handle.id}")
+"#,
+        "owns 3\nhandle 3 dropped",
+    );
+}
+
+#[test]
+fn test_class_inherits_drop_hook_from_its_base() {
+    assert_stdout_is(
+        r#"
+class Base
+    public var id int
+
+    public fn drop(self)
+        println(f"base drop {self.id}")
+
+class Child extends Base
+    public var extra int
+
+fn main()
+    var c = Child(id: 4, extra: 5)
+    println(f"child {c.extra}")
+"#,
+        "child 5\nbase drop 4",
+    );
+}
+
+#[test]
+fn test_class_declared_before_its_base_inherits_drop_hook() {
+    assert_stdout_is(
+        r#"
+class Child extends Base
+    public var extra int
+
+class Base
+    public var id int
+
+    public fn drop(self)
+        println("base drop")
+
+fn main()
+    var c = Child(id: 1, extra: 2)
+    println(f"child {c.extra}")
+"#,
+        "child 2\nbase drop",
+    );
+}
+
+#[test]
+fn test_class_inherits_drop_hook_from_abstract_base() {
+    assert_stdout_is(
+        r#"
+abstract class Resource
+    public var id int
+
+    abstract fn label() String
+
+    public fn drop(self)
+        println(f"release {self.label()}")
+
+class File extends Resource
+    public fn label() String
+        return "file"
+
+fn main()
+    var f = File(id: 1)
+    println(f"id {f.id}")
+"#,
+        "id 1\nrelease file",
+    );
+}
+
+#[test]
+fn test_overriding_drop_hook_runs_only_the_override() {
+    assert_stdout_is(
+        r#"
+class Base
+    public var id int
+
+    public fn drop(self)
+        println("base drop")
+
+class Child extends Base
+    public fn drop(self)
+        println("child drop")
+
+fn main()
+    var c = Child(id: 1)
+    println(f"id {c.id}")
+"#,
+        "id 1\nchild drop",
+    );
+}
+
+#[test]
+fn test_class_with_drop_hook_is_a_resource() {
+    assert_compiler_warning(
+        r#"
+class Conn
+    public var handle int
+
+    public fn drop(self)
+        return
+
+fn main()
+    let conn = Conn(handle: 1)
+    println("working")
+"#,
+        "resource 'conn' of type 'Conn' was not consumed before scope exit",
+    );
+}
+
+#[test]
+fn test_class_drop_hook_runs_for_each_list_element() {
+    assert_stdout_is(
+        r#"
+use system.collections.list
+
+class Handle
+    public var id int
+
+    public fn drop(self)
+        println(f"drop {self.id}")
+
+fn main()
+    var handles = List<Handle>()
+    handles.push(Handle(id: 1))
+    handles.push(Handle(id: 2))
+    println(f"{handles.length()}")
+"#,
+        "2\ndrop 1\ndrop 2",
+    );
+}
+
+#[test]
+fn test_generic_class_drop_hook_runs_for_a_managed_instantiation() {
+    assert_stdout_is(
+        r#"
+class Box<T>
+    public var value T
+
+    public fn drop(self)
+        println("box dropped")
+
+fn main()
+    var b = Box<String>(value: "held")
+    println(b.value)
+"#,
+        "held\nbox dropped",
+    );
+}

@@ -230,7 +230,8 @@ pub struct ClassDefinition {
     pub module: String,
     /// Whether this class is abstract.
     pub is_abstract: bool,
-    /// True if this class defines `fn drop(self)` (makes it a resource type).
+    /// True if this class itself declares `fn drop(self)`. A class also runs a
+    /// hook it inherits; ask [`crate::type_checker::utils::has_drop_hook`].
     pub has_drop: bool,
 }
 

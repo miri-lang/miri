@@ -49,13 +49,8 @@ use crate::type_checker::context::{
 use crate::type_checker::TypeChecker;
 
 /// Returns true if a function declaration statement is `fn drop(self)`.
-fn is_drop_method(stmt: &Statement) -> bool {
-    if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-        if decl.name == "drop" && decl.params.len() == 1 && decl.params[0].name == "self" {
-            return true;
-        }
-    }
-    false
+pub(crate) fn is_drop_method(stmt: &Statement) -> bool {
+    matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.is_drop_hook())
 }
 
 impl TypeChecker {

@@ -861,3 +861,29 @@ fn main()
         "true false",
     );
 }
+
+#[test]
+fn test_trait_method_declaring_self_is_implemented_with_or_without_it() {
+    // A leading `self` names the receiver every method already has, so it does
+    // not change the signature a class must match.
+    assert_runs_with_output(
+        r#"
+trait Describe
+    fn describe(self) String
+
+class Cat implements Describe
+    public fn describe() String
+        return "cat"
+
+class Dog implements Describe
+    public fn describe(self) String
+        return "dog"
+
+fn main()
+    let c = Cat()
+    let d = Dog()
+    println(f"{c.describe()} {d.describe()}")
+    "#,
+        "cat dog",
+    );
+}

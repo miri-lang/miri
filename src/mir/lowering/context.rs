@@ -676,26 +676,21 @@ impl<'a> LoweringContext<'a> {
         unmanaged
     }
 
-    /// Builds the set of type names that declare a `fn drop(self)` destructor.
+    /// Builds the set of type names whose release runs a `fn drop(self)` hook,
+    /// declared on the type or inherited from a base class.
     ///
-    /// Only struct and class types can carry a user-defined destructor (`has_drop`).
+    /// Only struct and class types can carry a user-defined destructor.
     /// This set is used by RC elision to skip optimization for destructor-carrying types,
     /// ensuring DecRef operations that trigger destructors are never removed.
     fn compute_has_drop_types(
         type_checker: &crate::type_checker::TypeChecker,
     ) -> std::collections::HashSet<String> {
-        let mut has_drop = std::collections::HashSet::new();
-        for (name, def) in type_checker.type_definitions() {
-            let drop = match def {
-                crate::type_checker::context::TypeDefinition::Struct(sd) => sd.has_drop,
-                crate::type_checker::context::TypeDefinition::Class(cd) => cd.has_drop,
-                _ => false,
-            };
-            if drop {
-                has_drop.insert(name.clone());
-            }
-        }
-        has_drop
+        let type_definitions = type_checker.type_definitions();
+        type_definitions
+            .keys()
+            .filter(|name| crate::type_checker::utils::has_drop_hook(name, type_definitions))
+            .cloned()
+            .collect()
     }
 
     /// Builds a map from struct/class type names to their ordered field types.

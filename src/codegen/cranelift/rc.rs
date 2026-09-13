@@ -6,6 +6,7 @@
 //! `translator.rs`; this module dispatches into them.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME,
 };
@@ -1472,11 +1473,11 @@ impl<'a> FunctionTranslator<'a> {
             generic_class_instantiations,
         };
 
-        if Self::type_has_user_drop(type_name, type_definitions) {
+        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, type_definitions) {
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,
-                type_name,
+                &hook_name,
                 ptr,
                 ptr_type,
                 call_conv,
@@ -1501,27 +1502,25 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit a call to the user-defined `{TypeName}_drop(self, allocator)` hook
-    /// declared by `fn drop(self)`. ABI mirrors `lower_class_method`:
-    /// `(self: ptr, allocator: ptr) -> void`, with a null allocator placeholder.
+    /// Emit a call to the user-defined drop hook `hook_name(self, allocator)`
+    /// declared by `fn drop(self)`. ABI mirrors a method body lowered with its
+    /// receiver and no explicit parameters: `(self: ptr, allocator: ptr) -> void`,
+    /// with a null allocator placeholder.
     fn call_user_drop_hook(
         builder: &mut FunctionBuilder,
         module_ctx: &mut ModuleCtx,
-        type_name: &str,
+        hook_name: &str,
         self_ptr: Value,
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
-        let mut user_drop_name = String::with_capacity(type_name.len() + 5);
-        user_drop_name.push_str(type_name);
-        user_drop_name.push_str("_drop");
         let mut user_sig = Signature::new(call_conv);
-        user_sig.params.push(AbiParam::new(ptr_type));
-        user_sig.params.push(AbiParam::new(ptr_type));
+        user_sig.params.push(AbiParam::new(ptr_type)); // self
+        user_sig.params.push(AbiParam::new(ptr_type)); // allocator
         let user_drop_id = module_ctx
             .module
-            .declare_function(&user_drop_name, Linkage::Import, &user_sig)
-            .map_err(|e| CodegenError::declare_function(user_drop_name, e.to_string()))?;
+            .declare_function(hook_name, Linkage::Import, &user_sig)
+            .map_err(|e| CodegenError::declare_function(hook_name.to_string(), e.to_string()))?;
         let local_user_drop = module_ctx
             .module
             .declare_func_in_func(user_drop_id, builder.func);
@@ -2078,6 +2077,29 @@ impl<'a> FunctionTranslator<'a> {
         )
         .map(|(defining, _)| format!("{defining}_{ORDERING_METHOD_NAME}"))
         .unwrap_or_else(|| format!("{type_name}_{ORDERING_METHOD_NAME}"))
+    }
+
+    /// Resolves the symbol of the drop hook that releasing a `type_name` value
+    /// runs, or `None` when the type has none.
+    ///
+    /// The owner is found by the same resolution a `value.drop()` call uses, so
+    /// a subclass reaches its base's hook (or its own copy, when the base is
+    /// abstract) and the hook this thunk declares is the method body lowered for
+    /// it. A struct is not a class chain and names its own hook.
+    pub fn resolve_drop_hook_name(
+        type_name: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Option<String> {
+        if !crate::type_checker::utils::has_drop_hook(type_name, type_definitions) {
+            return None;
+        }
+        let owner = crate::mir::lowering::dispatch::resolve_inherited_method(
+            type_definitions,
+            type_name,
+            DROP_HOOK_NAME,
+        )
+        .map_or_else(|| type_name.to_string(), |(defining, _)| defining);
+        Some(format!("{owner}_{DROP_HOOK_NAME}"))
     }
 
     /// Resolves the mangled name of the `clone()` method for `type_name`.

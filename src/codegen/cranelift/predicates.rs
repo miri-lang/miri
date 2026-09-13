@@ -463,20 +463,13 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// Used to decide whether to call `__drop_TypeName` (when there are managed
     /// fields to clean up) or just `libc::free` (when all fields are primitives).
-    /// Returns true if the type defines `fn drop(self)` (user-controlled teardown).
+    /// Returns true if releasing the type runs a `fn drop(self)` hook, declared
+    /// on the type itself or inherited from a base class.
     pub(crate) fn type_has_user_drop(
         name: &str,
         type_defs: &HashMap<String, TypeDefinition>,
     ) -> bool {
-        match type_defs.get(name) {
-            Some(TypeDefinition::Struct(def)) => def.has_drop,
-            Some(TypeDefinition::Class(def)) => def.has_drop,
-            None
-            | Some(TypeDefinition::Enum(_))
-            | Some(TypeDefinition::Generic(_))
-            | Some(TypeDefinition::Alias(_))
-            | Some(TypeDefinition::Trait(_)) => false,
-        }
+        crate::type_checker::utils::has_drop_hook(name, type_defs)
     }
 
     pub(crate) fn has_managed_fields(
