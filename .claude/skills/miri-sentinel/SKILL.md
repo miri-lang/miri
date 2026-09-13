@@ -98,7 +98,7 @@ Select the **highest-priority** issue that fits cleanly in < ~50 lines, needs no
 3. **Medium** — info leak in error messages (internal path/panic text), missing input-length/recursion-depth limits, a `_ =>` masking an unhandled hostile variant.
 4. **Enhancement** — defense-in-depth: an added bounds assert, a safer idiom, a security-explaining comment at a subtle boundary.
 
-Never fix a lower tier while a known higher-tier issue in scope is open. If you find multiple, fix the single highest-priority one you can land cleanly and record the rest as `notes/PLAN.md` follow-ups / TODOs (with context, no exploit detail).
+Never fix a lower tier while a known higher-tier issue in scope is open. If you find multiple, fix the single highest-priority one you can land cleanly and record the rest as their own Notion tasks (AGENTS.md §0.1) plus TODO comments (with context, no exploit detail).
 
 ### 3. 🔧 SECURE — implement the fix
 - Write defensive, fail-secure code: pattern-match instead of `unwrap()` (`if let Some(...)`, `while let Some(...)`), break loops cleanly on `None`/EOF, validate index/size **before** touching a buffer, use `checked_*`/`saturating_*`, propagate via `Result<T, MiriError>`.
