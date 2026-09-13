@@ -846,7 +846,7 @@ fn collect_function_defs<'a>(
                 let params = match class_name {
                     Some(_) => {
                         let mut p = vec![synthetic_self_param()];
-                        p.extend_from_slice(&decl.params);
+                        p.extend_from_slice(decl.explicit_params());
                         p
                     }
                     None => decl.params.clone(),

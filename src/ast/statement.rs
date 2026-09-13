@@ -54,6 +54,43 @@ impl Hash for FunctionDeclarationData {
     }
 }
 
+/// The parameter name that spells out a method's receiver.
+pub const RECEIVER_PARAM_NAME: &str = "self";
+
+/// The method name a type declares to run code when its last reference is released.
+pub const DROP_HOOK_NAME: &str = "drop";
+
+impl FunctionDeclarationData {
+    /// Whether the parameter list opens with the receiver, as in `fn size(self) int`.
+    pub fn declares_receiver(&self) -> bool {
+        self.params
+            .first()
+            .is_some_and(|p| p.name == RECEIVER_PARAM_NAME)
+    }
+
+    /// The parameters a caller supplies. A method of a class, trait or enum
+    /// receives its instance implicitly, so a leading `self` names that receiver
+    /// rather than adding an argument; counting it again would give the method
+    /// one more parameter than any call site passes.
+    pub fn explicit_params(&self) -> &[Parameter] {
+        if self.declares_receiver() {
+            &self.params[1..]
+        } else {
+            &self.params
+        }
+    }
+
+    /// Whether this is the drop hook `fn drop(self)`: the receiver and nothing else.
+    ///
+    /// TODO: on a class the hook is also callable as `value.drop()`, and the call
+    /// does not release the value, so the hook runs again when the last reference
+    /// goes. Either the call must consume the value or calling the hook directly
+    /// must be refused.
+    pub fn is_drop_hook(&self) -> bool {
+        self.name == DROP_HOOK_NAME && self.declares_receiver() && self.params.len() == 1
+    }
+}
+
 /// Data for a class declaration, boxed to reduce `StatementKind` enum size.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClassData {

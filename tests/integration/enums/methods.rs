@@ -66,6 +66,26 @@ fn main()
 }
 
 #[test]
+fn test_enum_method_declaring_self_is_called_without_it() {
+    assert_runs_with_output(
+        r#"
+
+enum Counter
+    Value(int)
+
+    fn add(self, n int) int
+        match self
+            Counter.Value(v): v + n
+
+fn main()
+    let c = Counter.Value(10)
+    println(f"{c.add(5)}")
+"#,
+        "15",
+    );
+}
+
+#[test]
 fn test_must_use_user_defined_enum_discarded() {
     assert_compiler_error(
         r#"

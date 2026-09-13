@@ -26,6 +26,47 @@ use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 
+/// Whether releasing the last reference to a `type_name` value runs a drop hook.
+///
+/// A struct runs the hook it declares. A class runs the `drop` its inheritance
+/// chain resolves to, so a subclass inherits its base's hook and an override
+/// replaces it. The chain is walked through the definitions rather than read off
+/// a flag stored at declaration, because a subclass may be declared before its
+/// base.
+///
+/// TODO: a class method spelled `fn drop()` (receiver left implicit) and a trait
+/// default `fn drop(self)` are both silently not hooks — neither fires when the
+/// last reference goes. Resolving them needs a decision on which spellings name
+/// a hook, followed by the trait walk `resolve_inherited_method` already does.
+pub fn has_drop_hook(
+    type_name: &str,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    let mut visited = std::collections::HashSet::new();
+    let mut current = type_name;
+    while visited.insert(current) {
+        match type_definitions.get(current) {
+            Some(TypeDefinition::Struct(def)) => return def.has_drop,
+            Some(TypeDefinition::Class(def)) => {
+                // A `drop` that is not the hook still shadows the base's hook.
+                if def.has_drop || def.methods.contains_key(DROP_HOOK_NAME) {
+                    return def.has_drop;
+                }
+                match &def.base_class {
+                    Some(base) => current = base.as_str(),
+                    None => return false,
+                }
+            }
+            None
+            | Some(TypeDefinition::Enum(_))
+            | Some(TypeDefinition::Generic(_))
+            | Some(TypeDefinition::Alias(_))
+            | Some(TypeDefinition::Trait(_)) => return false,
+        }
+    }
+    false
+}
+
 /// Determines whether a type is a resource — i.e., it defines `fn drop(self)` or
 /// transitively contains a field whose type is a resource.
 ///
@@ -75,7 +116,7 @@ fn is_resource_inner<'a>(
                         .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited))
                 }
                 Some(TypeDefinition::Class(def)) => {
-                    if def.has_drop {
+                    if has_drop_hook(name, type_definitions) {
                         return true;
                     }
                     def.fields

@@ -795,9 +795,10 @@ impl TypeChecker {
         let (methods, base_direct_args) =
             self.scan_class_body(&name, base_class_name.as_deref(), class_data, context);
 
-        let has_drop = methods
-            .get("drop")
-            .is_some_and(|m| m.params.len() == 1 && m.params[0].0 == "self");
+        let has_drop = class_data
+            .body
+            .iter()
+            .any(statements::declarations::struct_def::is_drop_method);
         self.register_type_definition(
             name.clone(),
             TypeDefinition::Class(context::ClassDefinition {
@@ -898,7 +899,7 @@ impl TypeChecker {
                 make_type(TypeKind::Void)
             };
             let params: Vec<(String, crate::ast::types::Type)> = decl
-                .params
+                .explicit_params()
                 .iter()
                 .map(|p| {
                     (
@@ -907,7 +908,7 @@ impl TypeChecker {
                     )
                 })
                 .collect();
-            let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
+            let is_out_flags: Vec<bool> = decl.explicit_params().iter().map(|p| p.is_out).collect();
             let is_abstract = decl.body.as_ref().is_none_or(|b| {
                 matches!(&b.node, StatementKind::Empty)
                     || matches!(&b.node, StatementKind::Block(stmts) if stmts.is_empty())

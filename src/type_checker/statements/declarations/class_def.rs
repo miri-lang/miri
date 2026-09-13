@@ -47,6 +47,7 @@ use crate::error::syntax::Span;
 use crate::type_checker::context::{
     ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::struct_def::is_drop_method;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
@@ -116,6 +117,7 @@ impl TypeChecker {
             trait_direct_args,
             fields,
             methods,
+            body.iter().any(is_drop_method),
             is_abstract,
             visibility,
             context,
@@ -244,13 +246,11 @@ impl TypeChecker {
         trait_args: HashMap<String, Vec<Type>>,
         fields: Vec<(String, FieldInfo)>,
         methods: BTreeMap<String, MethodInfo>,
+        has_drop: bool,
         is_abstract: bool,
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let has_drop = methods
-            .get("drop")
-            .is_some_and(|m| m.params.len() == 1 && m.params[0].0 == "self");
         let class_def = ClassDefinition {
             name: name.to_string(),
             generics: generic_defs,
@@ -660,7 +660,7 @@ impl TypeChecker {
                 );
             }
             // Reject `self` as a parameter in static methods
-            if !decl.params.is_empty() && decl.params[0].name == "self" {
+            if decl.declares_receiver() {
                 self.report_error(
                     DiagnosticCode::TypStaticMethodRestriction,
                     "Static methods cannot have a 'self' parameter".to_string(),
@@ -671,7 +671,7 @@ impl TypeChecker {
 
         // Resolve all parameter and return types once, for both validation and MethodInfo building
         let param_types: Vec<(String, Type)> = decl
-            .params
+            .explicit_params()
             .iter()
             .map(|p| {
                 (
@@ -685,7 +685,7 @@ impl TypeChecker {
         } else {
             make_type(TypeKind::Void)
         };
-        let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
+        let is_out_flags: Vec<bool> = decl.explicit_params().iter().map(|p| p.is_out).collect();
 
         // Check if static method references class generic parameters
         if decl.properties.is_static {
@@ -695,7 +695,7 @@ impl TypeChecker {
                         class_gens.iter().map(|g| g.name.as_str()).collect();
 
                     // Check parameter types for generic references (use resolved types from above)
-                    for (i, param) in decl.params.iter().enumerate() {
+                    for (i, param) in decl.explicit_params().iter().enumerate() {
                         if let Some(gen_name) =
                             self.find_generic_in_resolved_type(&param_types[i].1, &class_gen_names)
                         {
@@ -1315,7 +1315,7 @@ impl TypeChecker {
                     FunctionDeclarationInfo {
                         name: &decl.name,
                         generics: &decl.generics,
-                        params: &decl.params,
+                        params: decl.explicit_params(),
                         return_type: &decl.return_type,
                         body: decl.body.as_ref().map(|b| b.as_ref()),
                         properties: &decl.properties,

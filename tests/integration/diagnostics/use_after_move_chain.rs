@@ -134,6 +134,30 @@ println(f"{xs.length()}")
 }
 
 #[test]
+fn test_chain_field_store_by_method_declaring_self() {
+    // A leading `self` names the receiver, so `items` is still the first
+    // argument the escape summary describes.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+class Cache
+    var data [int]
+    fn init()
+        self.data = List<int>()
+    fn store(self, items [int])
+        self.data = items
+
+let c = Cache()
+let xs = List([1, 2, 3])
+c.store(xs)
+println(f"{xs.length()}")
+"#,
+        "stores its argument into field 'data' (escape sink)",
+    );
+}
+
+#[test]
 fn test_chain_aggregate_escape() {
     // wrap bundles xs into a tuple — the escape analysis detects Tuple
     // construction as an aggregate escape and emits the "in an aggregate" chain.
