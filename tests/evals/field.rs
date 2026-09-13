@@ -586,3 +586,81 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// Where the prompt that drives a round names a file, relative to `evals/field/`.
+const PROMPT_PATHS: [&str; 4] = ["README.md", "LOG.md", "bench.py", "report.py"];
+
+/// Spellings of an internal planning identifier, as a committed file must never
+/// carry one. A reader of this directory has no access to the planning board,
+/// so a number from it is a reference they cannot resolve.
+///
+/// Each spelling anchors on the word that makes it an identifier rather than a
+/// quantity. A bare decimal is not listed: a round's log entry reports measured
+/// numbers, and a gate that rejected `15.42 seconds` would block the one file
+/// every round has to append to.
+const PLANNING_NUMBERS: [&str; 7] = [
+    "M6.7",
+    "T15.",
+    "task 15.",
+    "tasks 15.",
+    "milestone 6",
+    "task 16",
+    "task 17",
+];
+
+#[test]
+fn test_the_prompt_that_drives_a_round_is_committed_and_self_sufficient() {
+    let prompt = read(&field_dir().join("PROMPT.md"));
+    for path in PROMPT_PATHS {
+        assert!(
+            prompt.contains(path),
+            "PROMPT.md does not point the operator at {}",
+            path
+        );
+        assert!(
+            field_dir().join(path).exists(),
+            "PROMPT.md names {}, which is not in this directory",
+            path
+        );
+    }
+    assert!(
+        prompt.contains("Do not design a new experiment"),
+        "PROMPT.md drops the instruction that makes a re-run a re-run"
+    );
+    assert!(
+        prompt.contains("per-tool verdict"),
+        "PROMPT.md does not carry the no-per-tool-verdicts rule into the run"
+    );
+    assert!(
+        prompt.contains("counted separately"),
+        "PROMPT.md does not carry the defect-cornering rule into the run"
+    );
+    assert!(
+        prompt.contains("baseline.md") && prompt.contains("never"),
+        "PROMPT.md does not say that the superseded numbers are never rewritten"
+    );
+}
+
+#[test]
+fn test_the_benchmark_carries_no_internal_planning_numbers() {
+    let mut committed = String::new();
+    for entry in fs::read_dir(field_dir()).expect("cannot read the benchmark directory") {
+        let path = entry.expect("cannot read a benchmark entry").path();
+        if path.file_name().is_some_and(|name| name == "runs") {
+            continue;
+        }
+        if path.is_dir() {
+            collect_sources(&path, &mut committed);
+        } else if let Ok(contents) = fs::read_to_string(&path) {
+            committed.push_str(&contents);
+        }
+    }
+    for number in PLANNING_NUMBERS {
+        assert!(
+            !committed.contains(number),
+            "a committed benchmark file carries the planning identifier {}, \
+             which a reader of this directory cannot resolve",
+            number
+        );
+    }
+}

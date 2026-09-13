@@ -285,6 +285,11 @@ def record_for(arguments, arm, model, job, outcome):
         "turns": outcome["turns"],
         "toolInvocations": outcome["tools"],
         "toolchainInvocations": outcome["toolchainCalls"],
+        # TODO: no field splits the invocations a subject spent cornering a
+        # compiler defect from the ones it spent on the job. The rules require
+        # that split, and the exit criterion is stated in terms of it, so today
+        # it is a hand pass over the transcript recorded in the round log rather
+        # than a number this runner observes.
         "outcome": outcome["outcome"],
         "hiddenTests": outcome["hiddenTests"],
         "silentWrongAnswer": outcome["silentWrongAnswer"],
@@ -346,6 +351,10 @@ def parse_arguments(argv):
     parser.add_argument("--scratch", default=str(Path.home() / ".cache" / "miri-field"))
     parser.add_argument("--dry-run", action="store_true", help="prepare and report, launch nothing")
     parser.add_argument("--score-only", help="score an existing workspace and report")
+    # TODO: an unmeasured opinion probe has no flag here. Per-tool ratings are
+    # collected after a round and one of the three exit conditions is stated in
+    # terms of them, but a probe run today is launched by hand and its records
+    # would land in the round if it used the measured path.
     return parser.parse_args(argv)
 
 
