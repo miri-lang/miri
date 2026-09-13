@@ -1468,13 +1468,16 @@ impl Pipeline {
         )
     }
 
-    /// The `{Collection}_{method}` symbols a built-in collection declares itself.
+    /// The `{Collection}_{method}` symbols a built-in collection declares itself
+    /// and settles element ownership for by calling the runtime.
     ///
-    /// Those bodies settle element ownership by calling the runtime rather than
-    /// by any RC operation MIR can see, so the shared generic one is correct at
-    /// every element type and [`mir::verify::verify_collection_element_ownership`]
-    /// exempts them. A method the collection inherits from a trait has no
-    /// intrinsic to lean on, and needs the concrete element type instead.
+    /// Those bodies do it through the runtime rather than by any RC operation MIR
+    /// can see, so the shared generic one is correct at every element type and
+    /// [`mir::verify::verify_collection_element_ownership`] exempts them. A method
+    /// the collection inherits from a trait, or declares taking a function value,
+    /// has no intrinsic to lean on, and needs the concrete element type instead —
+    /// [`mir::lowering::method_dispatch::is_settled_by_the_runtime`] is the one
+    /// definition dispatch and this exemption share.
     fn collection_methods_backed_by_intrinsics(
         result: &PipelineResult,
     ) -> std::collections::HashSet<String> {
@@ -1489,7 +1492,10 @@ impl Pipeline {
                 continue;
             };
             for method_name in class_def.methods.keys() {
-                symbols.insert(Self::mangle_method_name(class_name, method_name));
+                if mir::lowering::method_dispatch::is_settled_by_the_runtime(class_def, method_name)
+                {
+                    symbols.insert(Self::mangle_method_name(class_name, method_name));
+                }
             }
         }
         symbols

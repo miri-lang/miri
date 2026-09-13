@@ -11,6 +11,7 @@ pub mod index_read;
 pub mod index_write;
 pub mod iteration;
 pub mod length;
+pub mod managed_element_transforms;
 pub mod methods;
 pub mod rc_aliasing;
 pub mod scalar_widths;
