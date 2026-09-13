@@ -20,6 +20,7 @@ an agent harness with no human turn in it, in a scratch directory outside this
 repository, followed by the hidden tests.
 
 ```
+PROMPT.md                  the text a round is launched from, unedited
 jobs/<job>/BRIEF.md        the job, with three substitutions
 jobs/<job>/job.toml        its caps and title
 jobs/<job>/cases/*.in,.out the hidden tests
@@ -133,6 +134,12 @@ toolchain, and a `miri` on the path for the Miri arms. A model column whose
 model that ran: a round whose model moved under it is not a round.
 
 ## The claims
+
+`PROMPT.md` holds the text a round is launched from. A round is started by
+handing an agent that block unedited, never by typing a fresh instruction: the
+rounds that predate this instrument each drifted into a different experiment,
+and a prompt under version control cannot drift without the drift showing in a
+diff.
 
 `CLAIMS.md` holds the four pre-registered claims, and `report.py` computes each
 verdict from the records — no verdict is typed by hand. `baseline.md` holds the
