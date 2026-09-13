@@ -119,3 +119,40 @@ enum MyEnum
         "not valid on",
     );
 }
+
+/// An index read out of a binding that can never be reassigned is as knowable
+/// as the literal it was initialized from, including when the initializer is a
+/// call to a function whose body is a constant. Both forms are rejected at
+/// compile time rather than trapping at runtime.
+#[test]
+fn test_index_through_immutable_binding_of_constant_call() {
+    assert_compiler_error(
+        r#"
+fn get_index() int
+    5
+
+var a = [1, 2, 3]
+let i = get_index()
+a[i] = 99
+println(f"{a[0]}")
+"#,
+        "Index out of bounds: index 5 but collection has 3 elements",
+    );
+}
+
+/// A `var` can be assigned after its declaration, so its initializer says
+/// nothing about the value at the index site and no compile-time verdict is
+/// possible. The runtime check is what catches this one.
+#[test]
+fn test_index_through_mutable_binding_is_not_rejected_at_compile_time() {
+    assert_runs_with_output(
+        r#"
+var a = [1, 2, 3]
+var i = 5
+i = 1
+a[i] = 99
+println(f"{a[1]}")
+"#,
+        "99",
+    );
+}

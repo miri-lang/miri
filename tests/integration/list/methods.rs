@@ -210,7 +210,9 @@ fn main()
 }
 
 /// A negative index is out of range in the same way, and must not be
-/// reinterpreted as an offset from the end.
+/// reinterpreted as an offset from the end. The index is held in a `var` so it
+/// is not compile-time known: a constant negative index is rejected by the type
+/// checker and would never reach the runtime behavior under test here.
 #[test]
 fn list_remove_at_negative_index_is_none() {
     assert_runs_with_output(
@@ -219,7 +221,8 @@ use system.collections.list
 
 fn main()
     var l = List([1, 2])
-    let i = 0 - 1
+    var i = 0
+    i = 0 - 1
     match l.remove_at(i)
         Some(v)
             println(f"unexpected {v}")

@@ -469,6 +469,11 @@ impl TypeChecker {
         const_value
     }
 
+    /// TODO: only a bare literal body is recognized. A body that is a constant
+    /// expression (`2 + 3`, `-1`) holds an equally knowable value but is not
+    /// folded, so a call to such a function is opaque to every check that reads
+    /// a constant index — an out-of-range index written that way still traps at
+    /// runtime instead of being reported at the call site.
     fn extract_const_value(&self, body: &Statement) -> Option<Literal> {
         if let StatementKind::Expression(expr) = &body.node {
             if let ExpressionKind::Literal(lit) = &expr.node {

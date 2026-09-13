@@ -343,3 +343,90 @@ for x in a
 ",
     );
 }
+
+#[test]
+fn test_index_bound_to_immutable_binding_is_checked() {
+    type_checker_error_test(
+        "
+let a = [1, 2, 3]
+let i = 5
+let x = a[i]
+",
+        "Index out of bounds: index 5 but collection has 3 elements",
+    );
+}
+
+#[test]
+fn test_index_bound_to_immutable_binding_of_call_is_checked() {
+    type_checker_error_test(
+        "
+fn get_index() int
+    5
+
+let a = [1, 2, 3]
+let i = get_index()
+let x = a[i]
+",
+        "Index out of bounds: index 5 but collection has 3 elements",
+    );
+}
+
+#[test]
+fn test_negative_index_bound_to_immutable_binding_is_checked() {
+    type_checker_error_test(
+        "
+let a = [1, 2, 3]
+let i = -1
+let x = a[i]
+",
+        "Index must be a non-negative integer",
+    );
+}
+
+#[test]
+fn test_index_bound_to_mutable_binding_is_not_checked() {
+    type_checker_test(
+        "
+let a = [1, 2, 3]
+var i = 0
+i = 5
+let x = a[i]
+",
+    );
+}
+
+#[test]
+fn test_in_bounds_immutable_binding_index_is_accepted() {
+    type_checker_test(
+        "
+let a = [1, 2, 3]
+let i = 2
+let x = a[i]
+",
+    );
+}
+
+#[test]
+fn test_set_method_index_bound_to_immutable_binding_is_checked() {
+    type_checker_error_test(
+        "
+var a = [1, 2, 3]
+let i = 5
+a.set(i, 99)
+",
+        "Index out of bounds: index 5 but collection has 3 elements",
+    );
+}
+
+#[test]
+fn test_inner_immutable_binding_shadows_outer_for_bounds_check() {
+    type_checker_test(
+        "
+let a = [1, 2, 3]
+let i = 99
+for n in [0, 1]
+    let i = 1
+    let x = a[i]
+",
+    );
+}

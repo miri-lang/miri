@@ -2403,12 +2403,17 @@ impl TypeChecker {
     }
 
     /// Resolves a named binding to its constant integer value, or `None` when
-    /// the name is unbound, non-constant, or non-integer. Shared by the bare
+    /// the name is unbound, reassignable, or non-integer. Shared by the bare
     /// identifier and value-generic type-slot (`Array<T, SIZE>`) arms so both
-    /// fold a named `const` the same way.
+    /// fold a named binding the same way.
+    ///
+    /// A `const` and an immutable `let` both hold a single value for the whole
+    /// lifetime of the binding, so either folds. A `var` can be assigned after
+    /// its declaration, so the recorded initializer says nothing about the
+    /// value at a later use site and never folds.
     fn resolve_const_int(name: &str, context: Option<&Context>) -> Option<i128> {
         let info = context?.resolve_info(name)?;
-        if !info.is_constant {
+        if !info.is_constant && info.mutable {
             return None;
         }
         match &info.value {
