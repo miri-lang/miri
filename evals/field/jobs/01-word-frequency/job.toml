@@ -1,0 +1,4 @@
+id = "01-word-frequency"
+title = "Word frequency, from an empty directory"
+turn_cap = 40
+time_cap_seconds = 1800

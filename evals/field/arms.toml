@@ -1,0 +1,54 @@
+# The five arms every job is run under.
+#
+# The brief is one text with three substitutions. `language` and `toolchain`
+# are the only sentences that differ between arms, and `entry_point` is the
+# path the subject writes its program to. Everything else a subject reads is
+# byte-identical across the five.
+#
+# `run` is how the harness runs the finished program. The path of a hidden
+# test's input is appended to it as one more argument.
+
+[[arm]]
+id = "miri-pack"
+language = "Miri"
+toolchain = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`"
+entry_point = "main.mi"
+run = ["miri", "run", "main.mi", "--"]
+install_pack = true
+notes = "The release binary with the skill pack installed into the workspace."
+
+[[arm]]
+id = "miri-bare"
+language = "Miri"
+toolchain = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`"
+entry_point = "main.mi"
+run = ["miri", "run", "main.mi", "--"]
+install_pack = false
+notes = "The release binary and `miri --help`. No prose file of any kind."
+
+[[arm]]
+id = "python"
+language = "Python"
+toolchain = "`uv` and `pytest`"
+entry_point = "main.py"
+run = ["python3", "main.py"]
+install_pack = false
+notes = "A baseline language. Baselines get no skill file: their guidance is in the weights, and that asymmetry is the experiment."
+
+[[arm]]
+id = "rust"
+language = "Rust"
+toolchain = "`cargo` and `clippy`"
+entry_point = "src/main.rs"
+run = ["cargo", "run", "--quiet", "--release", "--"]
+install_pack = false
+notes = "A baseline language."
+
+[[arm]]
+id = "typescript"
+language = "TypeScript"
+toolchain = "Deno — `deno run`, `deno check` and `deno test`"
+entry_point = "main.ts"
+run = ["deno", "run", "--quiet", "--allow-read", "main.ts"]
+install_pack = false
+notes = "A baseline language."

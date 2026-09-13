@@ -29,6 +29,8 @@
 //! the load on the machine that happened to run the suite, not the cost of the
 //! loop.
 
+mod field;
+
 use crate::utils::miri_cmd;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

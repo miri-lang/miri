@@ -1,0 +1,4 @@
+id = "02-ledger-repair"
+title = "Repair a ledger report carrying six planted faults"
+turn_cap = 40
+time_cap_seconds = 1800

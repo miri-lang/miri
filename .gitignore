@@ -17,3 +17,5 @@ target
 notes
 .syntax
 .mcp.json
+# Python bytecode from the benchmark harness
+__pycache__

@@ -1,0 +1,65 @@
+/// A small task tracker.
+
+use system.fs
+use system.os
+use system.collections.list
+
+public class Task
+    public var id int
+    public var title String
+    public var done bool
+
+    public fn init(id int, title String)
+        self.id = id
+        self.title = title
+        self.done = false
+
+fn find(tasks [Task], id int) Task?
+    for task in tasks
+        if task.id == id
+            return Some(task)
+    return None
+
+fn read_commands(path String) [String]
+    let fs = Fs()
+    let contents = match fs.read_file(path)
+        Result.Ok(text): text
+        Result.Err(_error): ""
+    return contents.trim_end().split("\n")
+
+fn first_word(line String) String
+    return line.split(" ").element_at(0)
+
+fn rest_of(line String) String
+    let head = first_word(line)
+    if line.length() == head.length()
+        return ""
+    return line.substring(head.length() + 1, line.length())
+
+fn main()
+    let args = Args()
+    var tasks = List<Task>()
+    var next_id = 1
+
+    for line in read_commands(args.element_at(0))
+        if line == ""
+            continue
+        let command = first_word(line)
+        let rest = rest_of(line)
+
+        if command == "add"
+            tasks.push(Task(next_id, rest))
+            println(f"added {next_id}")
+            next_id = next_id + 1
+        else if command == "done"
+            let id = rest.to_int() ?? 0
+            match find(tasks, id)
+                Some(found):
+                    var task = found
+                    task.done = true
+                    println(f"done {id}")
+                None: println(f"no such task {id}")
+        else if command == "list"
+            for task in tasks
+                if not task.done
+                    println(f"{task.id} {task.title}")

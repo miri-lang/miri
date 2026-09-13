@@ -1,0 +1,4 @@
+id = "03-tracker-extension"
+title = "Extend a working task tracker"
+turn_cap = 40
+time_cap_seconds = 1800
