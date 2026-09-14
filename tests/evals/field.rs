@@ -527,8 +527,14 @@ impl SyntheticRun {
     }
 }
 
-/// A cell of a synthetic round, written where the folder will read it.
+/// The first run of a cell of a synthetic round.
 fn write_synthetic_record(root: &Path, job: &str, arm: &str, run: SyntheticRun) {
+    write_synthetic_run(root, job, arm, 1, run);
+}
+
+/// One numbered run of a cell of a synthetic round, written where the folder
+/// will read it.
+fn write_synthetic_run(root: &Path, job: &str, arm: &str, index: u32, run: SyntheticRun) {
     let directory = root
         .join("synthetic")
         .join(job)
@@ -537,7 +543,7 @@ fn write_synthetic_record(root: &Path, job: &str, arm: &str, run: SyntheticRun) 
     fs::create_dir_all(&directory).expect("cannot create a synthetic round");
     let passed = if run.green { 6 } else { 3 };
     let record = format!(
-        r#"{{"schemaVersion":1,"round":"synthetic","job":"{job}","arm":"{arm}","run":1,
+        r#"{{"schemaVersion":1,"round":"synthetic","job":"{job}","arm":"{arm}","run":{index},
             "model":"claude-sonnet","modelId":"x","harness":{{"name":"claude","version":"1"}},
             "compilerCommit":"0","compilerVersion":"0","packInstalled":false,
             "caps":{{"turns":1,"timeSeconds":1}},"startedAt":"now","wallClockSeconds":{seconds}.0,
@@ -551,8 +557,10 @@ fn write_synthetic_record(root: &Path, job: &str, arm: &str, run: SyntheticRun) 
         seconds = run.seconds,
         invocations = run.invocations,
         passed = passed,
+        index = index,
     );
-    fs::write(directory.join("1.json"), record).expect("cannot write a synthetic record");
+    fs::write(directory.join(format!("{}.json", index)), record)
+        .expect("cannot write a synthetic record");
 }
 
 /// A synthetic round over every CPU job: the pack at one cost, every baseline
@@ -621,6 +629,37 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
         claim_held(&held, "C4"),
         "the judge does not report C4 as held on data that satisfies it:\n{}",
         held
+    );
+
+    // Both arms finish every run and the pack is cheaper. A bare arm that
+    // already finishes everything leaves no finish rate to beat, so a claim
+    // that demanded a strictly higher one could never hold.
+    let _ = fs::remove_dir_all(&scratch);
+    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1000, 1, 1));
+    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(3000, 1, 1));
+    let both_finish = fold(&scratch);
+    assert!(
+        claim_held(&both_finish, "C4"),
+        "the judge refuses C4 when both arms finish every run and the pack is cheaper:\n{}",
+        both_finish
+    );
+
+    // The pack is cheaper on its green run but finishes half as often.
+    let _ = fs::remove_dir_all(&scratch);
+    write_synthetic_run(
+        &scratch,
+        job,
+        "miri-pack",
+        1,
+        SyntheticRun::green(1000, 1, 1),
+    );
+    write_synthetic_run(&scratch, job, "miri-pack", 2, unfinished);
+    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(3000, 1, 1));
+    let finishes_less = fold(&scratch);
+    assert!(
+        !claim_held(&finishes_less, "C4"),
+        "the judge reports C4 as held when the pack finishes less often than bare:\n{}",
+        finishes_less
     );
 
     // The same shape with the pack dearer than the bare arm must fail C4, or

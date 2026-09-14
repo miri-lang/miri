@@ -208,7 +208,9 @@ def judge_pack_against_bare(cells, models, jobs):
                 detail.append(note(job, model, False, "a cell of the pair was not run"))
                 continue
             cheaper = pack is not None and (bare is None or pack < bare)
-            finishes = pack_cell["finishRate"] > bare_cell["finishRate"]
+            # No lower, rather than higher: a bare arm that finishes every run
+            # leaves no rate to beat, and the claim must stay reachable.
+            finishes = pack_cell["finishRate"] >= bare_cell["finishRate"]
             detail.append(
                 note(job, model, cheaper and finishes, f"cost {pack} against {bare}, finish rate {pack_cell['finishRate']} against {bare_cell['finishRate']}")
             )
