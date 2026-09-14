@@ -84,6 +84,10 @@ pub fn is_managed_type(
 /// on drop). Vector types (Vec2/3/4) are value types stored inline — when held
 /// as a collection element or aggregate field they are raw bytes, not a managed
 /// pointer, so they must never be DecRef'd here.
+///
+/// A function value is a closure allocation of its own wherever it is held: a
+/// closure's capture, a collection element, and an aggregate field all release
+/// it the same way.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, _) = kind {
         // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
@@ -119,6 +123,7 @@ pub fn is_field_managed(kind: &TypeKind) -> bool {
             | TypeKind::Map(_, _)
             | TypeKind::Set(_)
             | TypeKind::Tuple(_)
+            | TypeKind::Function(_)
             | TypeKind::Custom(_, _)
     )
 }

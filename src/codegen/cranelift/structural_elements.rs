@@ -7,20 +7,23 @@
 //! A collection releases the entries it discards through a drop callback — a
 //! map's `key_drop_fn` and `val_drop_fn`, a list's or set's `elem_drop_fn` —
 //! each of which needs the address of a decref function. An entry that is a
-//! named type already has one (`__decref_TypeName`); a tuple or an option does
-//! not, because there is no declaration whose name could be mangled into a
-//! symbol. This module encodes such a type's structure into a symbol suffix, and
-//! finds every structural entry type a program uses so the matching thunk can be
-//! emitted before any body that references it is compiled.
+//! named type already has one (`__decref_TypeName`); a tuple, an option or a
+//! function value does not, because there is no declaration whose name could be
+//! mangled into a symbol. This module encodes such a type's structure into a
+//! symbol suffix, and finds every structural entry type a program uses so the
+//! matching thunk can be emitted before any body that references it is compiled.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::Body;
 
-/// Symbol suffix naming the decref thunk for a structural type — a tuple or an
-/// option, the two managed shapes carrying no declared name. `None` for every
-/// other kind, each of which already reaches a named thunk or a per-shape
-/// runtime helper.
+/// Symbol suffix naming the decref thunk for a structural type — a tuple, an
+/// option or a function value, the managed shapes carrying no declared name.
+/// `None` for every other kind, each of which already reaches a named thunk or
+/// a per-shape runtime helper.
+///
+/// Every function value releases alike whatever its signature: the closure
+/// carries its own capture destructor, so one thunk serves them all.
 ///
 /// The encoding is a prefix code: `t<arity>.` introduces a tuple's elements,
 /// `o` an option's payload, `c<count>.` a generic instantiation's arguments,
@@ -30,7 +33,7 @@ use crate::mir::Body;
 /// identifier, so the suffix also cannot collide with a user type's.
 pub fn structural_thunk_symbol(kind: &TypeKind) -> Option<String> {
     match kind {
-        TypeKind::Tuple(_) | TypeKind::Option(_) => {
+        TypeKind::Tuple(_) | TypeKind::Option(_) | TypeKind::Function(_) => {
             let mut encoded = String::from(".");
             encode(kind, &mut encoded);
             Some(encoded)
@@ -61,7 +64,6 @@ pub fn structural_thunk_symbol(kind: &TypeKind) -> Option<String> {
         | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
-        | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
         | TypeKind::Meta(_)
         | TypeKind::Void

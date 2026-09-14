@@ -10,7 +10,6 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
-use crate::mir::rc::is_field_managed;
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::TypeDefinition;
@@ -2113,10 +2112,4 @@ pub(crate) fn inline_vec_element_layout(
     let stride = crate::ast::types::inline_element_stride(name, &scalar.kind)?;
     let component = crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, ptr_type);
     Some((stride, dim, component))
-}
-
-/// Returns true if a closure capture type is managed and needs DecRef when the closure drops.
-/// Like `is_field_managed` but also includes `Function` (closures can capture other closures).
-pub fn is_capture_managed(kind: &TypeKind) -> bool {
-    matches!(kind, TypeKind::Function(_)) || is_field_managed(kind)
 }

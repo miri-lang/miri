@@ -23,5 +23,6 @@ pub mod option_coercion;
 pub mod out_parameter;
 pub mod rc_elision;
 pub mod reassignment;
+pub mod stored_closures;
 pub mod temporaries;
 pub mod use_after_move;
