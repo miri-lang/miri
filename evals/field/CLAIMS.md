@@ -21,9 +21,9 @@ record does not carry could only be judged by hand, so the gate refuses one.
   where at least one baseline abandons or hits the turn cap, or its median cost
   is under half the cheapest baseline's. Measured from `tokens`, `outcome`,
   `hiddenTests`; judged as `C3`.
-- **C4 — The pack substitutes for pretraining.** `miri-pack` beats `miri-bare`
-  on cost and on finish rate in every job. Measured from `tokens`, `outcome`,
-  `hiddenTests`; judged as `C4`.
+- **C4 — The pack substitutes for pretraining.** In every job, `miri-pack` is
+  cheaper than `miri-bare` and finishes at least as often. Measured from
+  `tokens`, `outcome`, `hiddenTests`; judged as `C4`.
 - **C5 — Faster than the agent's native languages.** On every CPU job, the
   median wall-clock-to-green for `miri-pack` is below that of `python`, of
   `typescript` and of `rust`, per model. Measured from `wallClockSeconds`,
@@ -44,6 +44,11 @@ the programme reads when deciding whether a lead is out of reach.
   knows; a parity claim could hold in a round that shows neither, and speed was
   recorded but judged by nothing. Both changes make the claims harder to hold,
   and no record existed that either could have been fitted to.
+- **2026-09-14, before any round had run** — C4's finish-rate half relaxed from
+  strictly higher than `miri-bare` to no lower. A bare arm that finishes every
+  run leaves no rate to beat, so the strict form could fail every round on the
+  bare arm's success rather than the pack's shortfall, and the article gate
+  would never open. The cost half stays strict.
 
 ## What may not change between rounds
 
