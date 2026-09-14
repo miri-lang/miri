@@ -208,6 +208,29 @@ impl Body {
             .filter(|i| !reachable.contains(i))
             .collect()
     }
+
+    /// Every local the body stores into: the destination of an assignment or
+    /// of a call.
+    pub fn written_locals(&self) -> HashSet<Local> {
+        use crate::mir::{StatementKind, TerminatorKind};
+
+        let mut written = HashSet::new();
+        for block in &self.basic_blocks {
+            for stmt in &block.statements {
+                if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
+                    &stmt.kind
+                {
+                    written.insert(place.local);
+                }
+            }
+            if let Some(TerminatorKind::Call { destination, .. }) =
+                block.terminator.as_ref().map(|term| &term.kind)
+            {
+                written.insert(destination.local);
+            }
+        }
+        written
+    }
 }
 
 /// Specifies the execution context for a function body.

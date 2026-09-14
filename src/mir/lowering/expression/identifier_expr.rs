@@ -25,6 +25,9 @@ pub(crate) fn lower_identifier_expr(
         unreachable!()
     };
     if let Some(&local) = ctx.variable_map.get(name.as_str()) {
+        if ctx.self_references.contains_key(&local) {
+            return Ok(lower_self_reference_value(ctx, local, expr.span, dest));
+        }
         return lower_local_identifier(ctx, local, expr, dest);
     }
     if let Some(value) = super::function_reference::try_lower_function_reference(
@@ -36,6 +39,34 @@ pub(crate) fn lower_identifier_expr(
         return Ok(value);
     }
     lower_identifier_symbol(ctx, expr, dest)
+}
+
+/// Lower a nested function's own name, used as a value inside its body, into
+/// `dest` (a fresh temporary of the function's type when `None`).
+///
+/// The local holds the function's closure pointer, borrowed from the
+/// environment. The value escapes as an owned closure, so it takes its own
+/// reference, released like any other closure value.
+pub(crate) fn lower_self_reference_value(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    span: crate::error::syntax::Span,
+    dest: Option<Place>,
+) -> Operand {
+    let source = Place::new(local);
+    let target = dest.unwrap_or_else(|| {
+        let ty = ctx.self_references[&local].clone();
+        Place::new(ctx.push_temp(ty, span))
+    });
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::IncRef(source.clone()),
+        span,
+    });
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(target.clone(), Rvalue::Use(Operand::Copy(source))),
+        span,
+    });
+    Operand::Copy(target)
 }
 
 /// Lower an identifier to a local read, or to the bare symbol constant a direct
