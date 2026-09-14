@@ -286,10 +286,12 @@ def record_for(arguments, arm, model, job, outcome):
         "toolInvocations": outcome["tools"],
         "toolchainInvocations": outcome["toolchainCalls"],
         # TODO: no field splits the invocations a subject spent cornering a
-        # compiler defect from the ones it spent on the job. The rules require
-        # that split, and the exit criterion is stated in terms of it, so today
-        # it is a hand pass over the transcript recorded in the round log rather
-        # than a number this runner observes.
+        # compiler defect from the ones it spent on the job. No verdict reads
+        # that split — claims and the exit criterion are judged on gross cost —
+        # but it tells a round what to fix, and today it is a hand count in the
+        # round log. Recording it wants either crash signatures read from the
+        # transcript, which miss silent wrong answers, or an attribution ledger
+        # whose defects are re-run against the compiler before they count.
         "outcome": outcome["outcome"],
         "hiddenTests": outcome["hiddenTests"],
         "silentWrongAnswer": outcome["silentWrongAnswer"],
