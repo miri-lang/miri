@@ -237,17 +237,58 @@ pub fn lower_while(
     Ok(())
 }
 
-/// Helper to extract element and secondary-variable types for a for-loop.
-fn extract_loop_types(
+/// The variables a for-loop over an iterable binds.
+struct LoopBindings {
+    /// The element each pass reads.
+    element: crate::mir::Local,
+    /// The map value or list index, when the loop names a second variable.
+    secondary: Option<crate::mir::Local>,
+    is_map: bool,
+    /// Bindings holding a reference-counted value. Each pass reads a fresh
+    /// reference into them, so each pass owns and releases them.
+    per_pass: Vec<crate::mir::Local>,
+    /// Names of the `per_pass` bindings, which no scope unbinds on its own.
+    per_pass_names: Vec<String>,
+}
+
+/// Bind the loop's element and, when declared, its second variable.
+///
+/// The second variable is bound first so an unmanaged one keeps the local it
+/// has always had.
+fn bind_loop_variables(
     ctx: &mut LoweringContext,
     span: &Span,
     decls: &[VariableDeclaration],
     iterable_ty: &Option<Type>,
-) -> (Type, bool, Option<crate::mir::Local>) {
+) -> LoopBindings {
     let is_map = iterable_is_map(iterable_ty);
     let elem_ty = resolve_loop_elem_type(ctx, span, iterable_ty);
-    let idx_loop_var = resolve_loop_index_var(ctx, span, decls, is_map, iterable_ty);
-    (elem_ty, is_map, idx_loop_var)
+    let mut per_pass = Vec::new();
+    let mut per_pass_names = Vec::new();
+    let mut bind = |ctx: &mut LoweringContext, decl: &VariableDeclaration, ty: Type| {
+        let is_managed = ctx.is_perceus_managed(&ty.kind);
+        let local = setup_loop_variable(ctx, decl, ty, is_managed, span);
+        if is_managed {
+            per_pass.push(local);
+            per_pass_names.push(decl.name.clone());
+        }
+        local
+    };
+    let secondary = match decls.get(1) {
+        Some(decl) => {
+            let ty = resolve_secondary_type(ctx, span, is_map, iterable_ty);
+            Some(bind(ctx, decl, ty))
+        }
+        None => None,
+    };
+    let element = bind(ctx, &decls[0], elem_ty);
+    LoopBindings {
+        element,
+        secondary,
+        is_map,
+        per_pass,
+        per_pass_names,
+    }
 }
 
 /// True when the iterable is a `Map` (normalized to `Custom("Map", ..)`).
@@ -341,23 +382,18 @@ fn resolve_iterable_trait_element_type(ctx: &LoweringContext, class_ty: &Type) -
     Some(elem_ty)
 }
 
-/// Allocate the optional second loop variable (index, or map value), if present.
-fn resolve_loop_index_var(
+/// The type of the second loop variable: a map's value, else a list index.
+fn resolve_secondary_type(
     ctx: &mut LoweringContext,
     span: &Span,
-    decls: &[VariableDeclaration],
     is_map: bool,
     iterable_ty: &Option<Type>,
-) -> Option<crate::mir::Local> {
-    if decls.len() <= 1 {
-        return None;
-    }
-    let var_ty = if is_map {
+) -> Type {
+    if is_map {
         resolve_map_value_type(ctx, span, iterable_ty)
     } else {
         Type::new(TypeKind::Int, *span)
-    };
-    Some(ctx.push_local(decls[1].name.clone(), var_ty, *span))
+    }
 }
 
 /// Resolve a map's value type for the second loop variable, else default Int.
@@ -394,19 +430,7 @@ fn setup_loop_variable(
             ctx.body.local_decls[local.0].name = Some(Rc::from(decl.name.as_str()));
         }
         ctx.body.local_decls[local.0].is_user_variable = true;
-        let name_rc: Rc<str> = Rc::from(decl.name.as_str());
-        match ctx.variable_map.entry(name_rc) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let old_local = *entry.get();
-                if let Some(scope) = ctx.scope_stack.last_mut() {
-                    scope.shadowed.insert(entry.key().clone(), old_local);
-                }
-                entry.insert(local);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(local);
-            }
-        }
+        ctx.bind_local_name(decl.name.clone(), local);
         local
     } else {
         ctx.push_local(decl.name.clone(), elem_ty, *span)
@@ -624,25 +648,16 @@ fn emit_secondary_loop_var(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Load the pass's element, and its map value or list index when bound.
 fn emit_loop_body_element_load(
     ctx: &mut LoweringContext,
-    loop_var: crate::mir::Local,
+    bindings: &LoopBindings,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
     iterable_class: &Option<String>,
-    elem_is_managed: bool,
-    idx_loop_var: Option<crate::mir::Local>,
-    is_map: bool,
     span: &Span,
-) -> Result<(), LoweringError> {
-    if elem_is_managed {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::StorageLive(Place::new(loop_var)),
-            span: *span,
-        });
-    }
-
+) {
+    let loop_var = bindings.element;
     if let Some(ref class_name) = iterable_class {
         emit_element_at_call(ctx, loop_var, list_local, idx_var, class_name, span);
     } else {
@@ -659,36 +674,49 @@ fn emit_loop_body_element_load(
         });
     }
 
-    if let Some(idx_local) = idx_loop_var {
-        // TODO: a map's value binding is not released pass by pass. The key
-        // above is made live here and dropped in the increment block, but the
-        // value is made live once before the loop and released once after it,
-        // so every managed value `Map_value_at` hands out except the last one
-        // leaks (`for k, v in m` over a `Map<String, String>`), and
-        // `--verify-mir` rejects the body. Give it the key's per-pass lifetime.
-        emit_secondary_loop_var(ctx, idx_local, list_local, idx_var, is_map, span);
+    if let Some(secondary) = bindings.secondary {
+        emit_secondary_loop_var(ctx, secondary, list_local, idx_var, bindings.is_map, span);
     }
+}
 
+/// Lower one pass of the loop: load its bindings, then run the body.
+///
+/// The pass opens a scope of its own, inside the loop, that owns every managed
+/// binding. Falling off the end of the body releases them through that scope,
+/// and `break`, `continue` and `return` release them through the same scope's
+/// early-exit cleanup, so each reference a pass reads is released exactly once
+/// whichever way the pass ends.
+fn lower_loop_pass(
+    ctx: &mut LoweringContext,
+    bindings: &LoopBindings,
+    list_local: crate::mir::Local,
+    idx_var: crate::mir::Local,
+    iterable_class: &Option<String>,
+    body: &Statement,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    ctx.push_scope();
+    for &local in &bindings.per_pass {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageLive(Place::new(local)),
+            span: *span,
+        });
+        ctx.register_scope_temp(local);
+    }
+    emit_loop_body_element_load(ctx, bindings, list_local, idx_var, iterable_class, span);
+    lower_statement(ctx, body)?;
+    ctx.pop_scope(*span);
     Ok(())
 }
 
-/// Emit element cleanup and index increment at loop increment block.
+/// Emit the index increment and the jump back to the loop header.
 fn emit_loop_increment(
     ctx: &mut LoweringContext,
-    loop_var: crate::mir::Local,
-    elem_is_managed: bool,
     idx_var: crate::mir::Local,
     idx_ty: &Type,
     header_bb: crate::mir::BasicBlock,
     span: &Span,
 ) {
-    if elem_is_managed {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::StorageDead(Place::new(loop_var)),
-            span: *span,
-        });
-    }
-
     let one = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: idx_ty.clone(),
@@ -723,20 +751,9 @@ fn lower_for_over_iterable(
 ) -> Result<(), LoweringError> {
     ctx.push_scope();
 
-    let decl = &decls[0];
     let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
-    let (elem_ty, is_map, idx_loop_var) = extract_loop_types(ctx, span, decls, &iterable_ty);
-    let elem_is_managed = ctx.is_perceus_managed(&elem_ty.kind);
-
-    let loop_var = setup_loop_variable(ctx, decl, elem_ty, elem_is_managed, span);
-
-    let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
-        ty.clone()
-    } else {
-        Type::new(TypeKind::Void, *span)
-    };
-    let list_local = ctx.push_temp(list_ty, *span);
-    lower_expression(ctx, iterable, Some(Place::new(list_local)))?;
+    let bindings = bind_loop_variables(ctx, span, decls, &iterable_ty);
+    let list_local = lower_loop_iterable(ctx, iterable, iterable_ty, span)?;
 
     let idx_ty = Type::new(TypeKind::Int, *span);
     let idx_var = ctx.push_temp(idx_ty.clone(), *span);
@@ -777,51 +794,45 @@ fn lower_for_over_iterable(
 
     ctx.enter_loop(exit_bb, increment_bb);
     ctx.set_current_block(body_bb);
-    emit_loop_body_element_load(
+    lower_loop_pass(
         ctx,
-        loop_var,
+        &bindings,
         list_local,
         idx_var,
         &iterable_class,
-        elem_is_managed,
-        idx_loop_var,
-        is_map,
+        body,
         span,
     )?;
-
-    lower_statement(ctx, body)?;
-
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto {
-                target: increment_bb,
-            },
-            *span,
-        ));
-    }
+    lower_branch_into_join(ctx, None, increment_bb, *span)?;
     ctx.exit_loop();
 
     ctx.set_current_block(increment_bb);
-    emit_loop_increment(
-        ctx,
-        loop_var,
-        elem_is_managed,
-        idx_var,
-        &idx_ty,
-        header_bb,
-        span,
-    );
+    emit_loop_increment(ctx, idx_var, &idx_ty, header_bb, span);
 
     ctx.set_current_block(exit_bb);
-    ctx.emit_temp_drop(list_local, 0, *span);
-    if elem_is_managed {
-        ctx.variable_map.remove(decl.name.as_str());
+    for name in &bindings.per_pass_names {
+        ctx.variable_map.remove(name.as_str());
     }
     ctx.pop_scope(*span);
     Ok(())
+}
+
+/// Evaluate the loop's iterable into a temp the loop's scope owns, so the
+/// reference is released when the loop ends — including by a `return` from
+/// inside it.
+fn lower_loop_iterable(
+    ctx: &mut LoweringContext,
+    iterable: &Expression,
+    iterable_ty: Option<Type>,
+    span: &Span,
+) -> Result<crate::mir::Local, LoweringError> {
+    let list_ty = iterable_ty.unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let list_local = ctx.push_temp(list_ty, *span);
+    lower_expression(ctx, iterable, Some(Place::new(list_local)))?;
+    if !ctx.borrowed_temps.contains(&list_local) && !ctx.is_owned_by_a_scope(list_local) {
+        ctx.register_scope_temp(list_local);
+    }
+    Ok(list_local)
 }
 
 pub fn lower_for(

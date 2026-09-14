@@ -207,6 +207,11 @@ impl TypeChecker {
         context.enter_scope();
         context.enter_loop();
 
+        // TODO: a loop that gives both of its variables the same name
+        // (`for k, k in m`) is accepted. The name type-checks as the second
+        // variable but MIR lowering resolves it to the first, so a method of the
+        // second variable's type runs on the element and the program crashes.
+        // Refuse the repeated name here with a diagnostic.
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
 
         self.check_statement(body, context);

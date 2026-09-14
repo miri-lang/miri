@@ -153,3 +153,187 @@ fn main()
         "20",
     );
 }
+
+/// Each pass of `for k, v in m` holds its own reference to the value it reads,
+/// so the value has to be released before the next pass reads another one.
+/// Releasing it only once after the loop frees the last value and leaks the rest.
+#[test]
+fn test_iterating_heap_values_releases_every_pass() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, String>()
+    m.set("a" + "a", "x" + "y")
+    m.set("b" + "b", "z" + "w")
+    m.set("c" + "c", "q" + "r")
+    var total = 0
+    for k, v in m
+        total += k.length() + v.length()
+    println(f"{total}")
+"#,
+        "12",
+    );
+}
+
+#[test]
+fn test_iterating_string_to_string_map_parameter_by_size() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn filled(count int) Map<String, String>
+    var m = Map<String, String>()
+    var i = 0
+    while i < count
+        m.set(f"key_{i}", f"value_{i}")
+        i = i + 1
+    m
+
+fn measured(m Map<String, String>) int
+    var total = 0
+    for k, v in m
+        total += k.length() + v.length()
+    total
+
+fn main()
+    let empty = filled(0)
+    let single = filled(1)
+    let three = filled(3)
+    println(f"{measured(empty)} {measured(single)} {measured(three)}")
+"#,
+        "0 12 36",
+    );
+}
+
+#[test]
+fn test_iterating_int_to_string_map_parameter_by_size() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn filled(count int) Map<int, String>
+    var m = Map<int, String>()
+    var i = 0
+    while i < count
+        m.set(i, f"value_{i}")
+        i = i + 1
+    m
+
+fn measured(m Map<int, String>) int
+    var total = 0
+    for k, v in m
+        total += k + v.length()
+    total
+
+fn main()
+    let empty = filled(0)
+    let single = filled(1)
+    let three = filled(3)
+    println(f"{measured(empty)} {measured(single)} {measured(three)}")
+"#,
+        "0 7 24",
+    );
+}
+
+#[test]
+fn test_iterating_string_to_int_map_parameter_by_size() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn filled(count int) Map<String, int>
+    var m = Map<String, int>()
+    var i = 0
+    while i < count
+        m.set(f"key_{i}", i * 10)
+        i = i + 1
+    m
+
+fn measured(m Map<String, int>) int
+    var total = 0
+    for k, v in m
+        total += k.length() + v
+    total
+
+fn main()
+    let empty = filled(0)
+    let single = filled(1)
+    let three = filled(3)
+    println(f"{measured(empty)} {measured(single)} {measured(three)}")
+"#,
+        "0 5 45",
+    );
+}
+
+/// `break` leaves the loop in the middle of a pass, skipping the release at
+/// the end of it; the key and value that pass read are released on the way out
+/// instead, exactly once.
+#[test]
+fn test_break_out_of_map_iteration_releases_the_pass_once() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, String>()
+    m.set("a" + "a", "x" + "y")
+    m.set("b" + "b", "z" + "w")
+    m.set("c" + "c", "q" + "r")
+    var passes = 0
+    var total = 0
+    for k, v in m
+        passes += 1
+        total += k.length() + v.length()
+        if passes == 2
+            break
+    println(f"{passes} {total}")
+"#,
+        "2 8",
+    );
+}
+
+#[test]
+fn test_return_out_of_map_iteration_releases_the_pass() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn value_length_of(m Map<String, String>, wanted String) int
+    for k, v in m
+        if k == wanted
+            return v.length()
+    -1
+
+fn main()
+    var m = Map<String, String>()
+    m.set("a" + "a", "x" + "yz")
+    m.set("b" + "b", "z" + "w")
+    let bb = "b" + "b"
+    let zz = "z" + "z"
+    println(f"{value_length_of(m, bb)} {value_length_of(m, zz)}")
+"#,
+        "2 -1",
+    );
+}
+
+/// A value copied out of the pass survives the pass's release of its own
+/// reference.
+#[test]
+fn test_value_kept_beyond_its_pass_stays_alive() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, String>()
+    m.set("only" + "", "kept" + "!")
+    var last = ""
+    for k, v in m
+        last = v
+    println(last)
+"#,
+        "kept!",
+    );
+}
