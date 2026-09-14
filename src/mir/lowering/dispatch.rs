@@ -17,7 +17,7 @@ use crate::type_checker::context::{MethodInfo, TypeDefinition};
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{
     coerce_rvalue, gpu_math_return_type, release_coerced_source, resolve_arg_type,
-    spellings_of_one_value,
+    spellings_of_one_value, wrap_for_optional_slot,
 };
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
@@ -550,7 +550,6 @@ pub(super) fn resolve_kernel_operand(
     Ok((kernel_op, kernel_name))
 }
 
-/// Lower list.push(item) to miri_rt_list_push.
 /// The source local backing a place operand, if any.
 fn operand_src_local(op: &Operand) -> Option<Local> {
     match op {
@@ -577,6 +576,7 @@ fn store_operand_temp(ctx: &mut LoweringContext, op: Operand, ty: Type, span: Sp
     local
 }
 
+/// Lower list.push(item) to miri_rt_list_push.
 fn lower_list_push(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -587,12 +587,10 @@ fn lower_list_push(
     let item_watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
-    let item_op = lower_expression(ctx, item_arg, None)?;
+    let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let item_copy = move_to_copy(item_op);
-    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
-    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
     let func_op = runtime_fn_operand(rt::LIST_PUSH, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
@@ -621,21 +619,70 @@ fn lower_list_push(
 /// the value is then released, so the net effect is one reference handed over:
 /// the caller keeps releasing whatever it already owned, and the container
 /// releases the donated one through its drop callback.
-///
-/// The `arg_expr` is required to resolve the operand's actual type when it has
-/// projections (e.g., a field access), using the type checker's recorded type
-/// instead of the base local's type.
 fn donate_operand_to_container(
     ctx: &mut LoweringContext,
     op: Operand,
-    arg_expr: &Expression,
+    ty: Type,
     span: Span,
 ) -> (Operand, Option<Local>) {
     let src = operand_src_local(&op);
-    let copied = move_to_copy(op);
-    let ty = resolve_arg_type(ctx, arg_expr, &copied);
-    let local = store_operand_temp(ctx, copied, ty, span);
+    let local = store_operand_temp(ctx, move_to_copy(op), ty, span);
     (Operand::Copy(Place::new(local)), src)
+}
+
+/// The type argument naming a `List`/`Array`/`Set` element or a `Map` key.
+pub(super) const ELEMENT_SLOT: usize = 0;
+/// The type argument naming a `Map` value.
+pub(super) const MAP_VALUE_SLOT: usize = 1;
+
+/// Lower a value a collection is about to store in the slot its `slot`-th type
+/// argument declares, returning the operand and the type it is stored as.
+///
+/// The type is the one the type checker recorded for the expression rather than
+/// the operand's base local, so a projected value (a field read) keeps its own
+/// type. A bare value headed for an optional slot is wrapped as `Some` here,
+/// because the store writes exactly the operand it receives.
+pub(super) fn lower_stored_value(
+    ctx: &mut LoweringContext,
+    value_arg: &Expression,
+    collection_ty: &Type,
+    slot: usize,
+) -> Result<(Operand, Type), LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let op = lower_expression(ctx, value_arg, None)?;
+    let op_ty = resolve_arg_type(ctx, value_arg, &op);
+    let Some(slot_ty) = collection_slot_type(ctx, collection_ty, slot) else {
+        return Ok((op, op_ty));
+    };
+    Ok(wrap_for_optional_slot(
+        ctx,
+        op,
+        op_ty,
+        &slot_ty,
+        watermark,
+        value_arg.span,
+    ))
+}
+
+/// The type a collection declares for the slot named by its `slot`-th type
+/// argument, resolved against the enclosing generic substitution.
+///
+/// Only a built-in collection answers: a user class's type arguments say
+/// nothing about what its own index operator stores.
+fn collection_slot_type(ctx: &LoweringContext, collection_ty: &Type, slot: usize) -> Option<Type> {
+    collection_ty.kind.as_builtin_collection()?;
+    let arg = if let TypeKind::Custom(_, args) = &collection_ty.kind {
+        args.as_ref()?.get(slot)?
+    } else if let TypeKind::Map(key, value) = &collection_ty.kind {
+        [key, value].get(slot).copied()?
+    } else if let TypeKind::List(elem) | TypeKind::Set(elem) | TypeKind::Array(elem, _) =
+        &collection_ty.kind
+    {
+        (slot == ELEMENT_SLOT).then_some(elem)?
+    } else {
+        return None;
+    };
+    Some(ctx.resolved_type(arg))
 }
 
 /// Lower map.set(key, value) to miri_rt_map_set.
@@ -656,11 +703,11 @@ fn lower_map_set(
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::MAP_COW, *span);
 
-    let key_op = lower_expression(ctx, key_arg, None)?;
-    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_arg, key_arg.span);
-    let value_op = lower_expression(ctx, value_arg, None)?;
+    let (key_op, key_ty) = lower_stored_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
+    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, key_arg.span);
+    let (value_op, value_ty) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
     let (value_op, value_src) =
-        donate_operand_to_container(ctx, value_op, value_arg, value_arg.span);
+        donate_operand_to_container(ctx, value_op, value_ty, value_arg.span);
 
     let func_op = runtime_fn_operand(rt::MAP_SET, *span);
     let target_bb = ctx.new_basic_block();
@@ -702,8 +749,8 @@ fn lower_set_add(
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::SET_COW, *span);
 
-    let elem_op = lower_expression(ctx, elem_arg, None)?;
-    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_arg, elem_arg.span);
+    let (elem_op, elem_ty) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
+    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_ty, elem_arg.span);
 
     // The intrinsic reports whether the element was newly inserted, so the
     // result has to land in the caller's destination when it asked for one.
@@ -742,12 +789,10 @@ fn lower_list_insert(
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
     let index_op = lower_expression(ctx, index_arg, None)?;
-    let item_op = lower_expression(ctx, item_arg, None)?;
+    let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let item_copy = move_to_copy(item_op);
-    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
-    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
     let func_op = runtime_fn_operand(rt::LIST_INSERT, *span);
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
@@ -788,7 +833,7 @@ fn lower_collection_set(
     };
     let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, index_arg, None)?;
-    let item_op = lower_expression(ctx, item_arg, None)?;
+    let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let item_op_src = operand_src_local(&item_op);
 
     let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), obj_ty.clone(), *span);
@@ -798,9 +843,7 @@ fn lower_collection_set(
         .projection
         .push(crate::mir::PlaceElem::Index(index_local));
 
-    let item_copy = move_to_copy(item_op);
-    let item_ty = resolve_arg_type(ctx, item_arg, &item_copy);
-    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(

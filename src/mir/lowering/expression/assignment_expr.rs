@@ -15,10 +15,10 @@ use crate::runtime_fns::rt;
 
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::dispatch::{lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT};
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, resolve_type,
-    spellings_of_one_value,
+    coerce_rvalue, ensure_place, release_coerced_source, resolve_type, spellings_of_one_value,
 };
 
 fn assign_to_identifier(
@@ -396,6 +396,10 @@ fn resolve_member_field_index(
     }
 }
 
+// TODO: the right-hand operand is stored as it is, so a bare value assigned to
+// an optional field (`h.v = 5` where `v int?`) leaves the raw payload in the
+// field. The collection stores wrap it through `wrap_for_optional_slot`; the
+// field store needs the same against the field's declared type.
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
@@ -544,19 +548,20 @@ fn lower_index_assign_receiver(
 fn assign_to_index_map(
     ctx: &mut LoweringContext,
     obj: &Expression,
+    obj_ty: &Type,
     idx: &Expression,
-    val: Operand,
-    rhs: &Expression,
+    (val, val_ty): (Operand, Type),
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
-    let key_op = lower_expression(ctx, idx, None)?;
+    let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
 
-    let val_ty = resolve_arg_type(ctx, rhs, &val);
     inc_ref_if_managed(ctx, &val, &val_ty, expr);
-
-    let key_ty = resolve_arg_type(ctx, idx, &key_op);
+    // TODO: a key built for this write (`m["a" + "b"] = 1`, or a bare key
+    // wrapped as `Some` for an optional key type) is retained here and never
+    // released, so it leaks. `lower_map_set` donates the key and then drops the
+    // temp that produced it; this path should do the same.
     inc_ref_if_managed(ctx, &key_op, &key_ty, expr);
 
     let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr);
@@ -794,13 +799,18 @@ pub(crate) fn lower_assignment_expr(
         }
         crate::ast::expression::LeftHandSideExpression::Index(index_expr) => {
             if let ExpressionKind::Index(obj, idx) = &index_expr.node {
-                if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
+                let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
+                if let Some(obj_ty) = &obj_ty {
                     if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
-                        let val = lower_expression(ctx, rhs, None)?;
-                        return assign_to_index_map(ctx, obj, idx, val, rhs, expr, dest);
+                        let val = lower_stored_value(ctx, rhs, obj_ty, MAP_VALUE_SLOT)?;
+                        return assign_to_index_map(ctx, obj, obj_ty, idx, val, expr, dest);
                     }
                 }
-                let val = lower_expression(ctx, rhs, None)?;
+                let is_plain_write = matches!(op, crate::ast::operator::AssignmentOp::Assign);
+                let val = match obj_ty.as_ref().filter(|_| is_plain_write) {
+                    Some(obj_ty) => lower_stored_value(ctx, rhs, obj_ty, ELEMENT_SLOT)?.0,
+                    None => lower_expression(ctx, rhs, None)?,
+                };
                 assign_to_index_array(ctx, obj, idx, op, val, expr, dest)
             } else {
                 Err(LoweringError::unsupported_lhs(
