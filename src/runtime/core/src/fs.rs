@@ -30,6 +30,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::guard;
 use crate::string::{into_raw_ptr, MiriString};
 
 thread_local! {
@@ -106,6 +107,9 @@ pub mod ffi {
     /// The caller must ensure that `path` is a valid pointer to a MiriString.
     #[no_mangle]
     pub unsafe extern "C" fn miri_rt_fs_exists(path: *const MiriString) -> i64 {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+
         if path.is_null() {
             set_status(0, String::new());
             return 0;
@@ -146,6 +150,9 @@ pub mod ffi {
     /// The returned pointer must be DecRef'd by the caller when no longer needed.
     #[no_mangle]
     pub unsafe extern "C" fn miri_rt_fs_read_file(path: *const MiriString) -> *mut MiriString {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+
         if path.is_null() {
             set_status(6, "null path pointer".to_string());
             return into_raw_ptr(MiriString::from_str(""));
@@ -198,6 +205,10 @@ pub mod ffi {
         path: *const MiriString,
         contents: *const MiriString,
     ) -> i64 {
+        // Defense in depth: validate managed pointers on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+        guard::guard_check(contents as *mut u8);
+
         if path.is_null() || contents.is_null() {
             set_status(6, "null pointer".to_string());
             return -1;
@@ -253,6 +264,10 @@ pub mod ffi {
         path: *const MiriString,
         contents: *const MiriString,
     ) -> i64 {
+        // Defense in depth: validate managed pointers on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+        guard::guard_check(contents as *mut u8);
+
         if path.is_null() || contents.is_null() {
             set_status(6, "null pointer".to_string());
             return -1;
@@ -322,6 +337,9 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_fs_list_dir(
         path: *const MiriString,
     ) -> *mut crate::list::MiriList {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+
         if path.is_null() {
             set_status(6, "null path pointer".to_string());
             let list = crate::miri_rt_list_new(std::mem::size_of::<*mut u8>());
@@ -410,6 +428,9 @@ pub mod ffi {
     /// The caller must ensure that `path` is a valid pointer to a MiriString.
     #[no_mangle]
     pub unsafe extern "C" fn miri_rt_fs_create_dir(path: *const MiriString) -> i64 {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+
         if path.is_null() {
             set_status(6, "null path pointer".to_string());
             return -1;
@@ -471,6 +492,9 @@ pub mod ffi {
     /// The caller must ensure that `path` is a valid pointer to a MiriString.
     #[no_mangle]
     pub unsafe extern "C" fn miri_rt_fs_delete(path: *const MiriString) -> i64 {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(path as *mut u8);
+
         if path.is_null() {
             set_status(6, "null path pointer".to_string());
             return -1;
