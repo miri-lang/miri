@@ -245,3 +245,53 @@ print(f"{sum}")
         "10", // 1+2+3+4, never breaks
     );
 }
+
+/// `break` skips the release at the end of the pass, so the element the pass
+/// read is released on the way out of the loop instead.
+#[test]
+fn test_break_out_of_for_over_heap_elements_releases_the_element() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var words = List<String>()
+    words.push("a" + "a")
+    words.push("b" + "bb")
+    words.push("c" + "c")
+    var total = 0
+    for word in words
+        total += word.length()
+        if word.length() == 3
+            break
+    println(f"{total}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn test_return_out_of_for_over_heap_elements_releases_the_element() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn position_of(words List<String>, wanted String) int
+    var index = 0
+    for word in words
+        if word == wanted
+            return index
+        index += 1
+    -1
+
+fn main()
+    var words = List<String>()
+    words.push("a" + "a")
+    words.push("b" + "b")
+    let bb = "b" + "b"
+    let cc = "c" + "c"
+    println(f"{position_of(words, bb)} {position_of(words, cc)}")
+"#,
+        "1 -1",
+    );
+}
