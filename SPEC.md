@@ -789,6 +789,22 @@ let double = fn(x int) int: x * 2
 println(f"{apply(double, 7)}")   // 14
 ```
 
+### Nested Functions
+
+A function declared inside another function's body is a closure bound to its name. It captures the enclosing locals it reads, can call any function in scope, and can call itself. It is visible from its declaration to the end of the enclosing block, and shadows a top-level function of the same name there.
+
+```miri
+fn main()
+    let offset = 10
+    fn shifted_sum(n int) int
+        if n == 0
+            return offset
+        return n + shifted_sum(n - 1)
+    println(f"{shifted_sum(3)}")   // 16
+```
+
+Captures are copies: assigning to a captured variable inside the body changes the closure's copy, not the enclosing variable.
+
 ---
 
 ## Generics

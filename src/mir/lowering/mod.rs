@@ -1093,7 +1093,9 @@ fn lower_class_method_impl(
 }
 
 /// Resolve execution model from function properties.
-fn resolve_execution_model(props: &crate::ast::common::FunctionProperties) -> ExecutionModel {
+pub(super) fn resolve_execution_model(
+    props: &crate::ast::common::FunctionProperties,
+) -> ExecutionModel {
     if props.is_gpu {
         ExecutionModel::GpuKernel
     } else if props.is_async {

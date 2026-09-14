@@ -106,9 +106,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             Ok(())
         }
         StatementKind::Empty => Ok(()),
-        StatementKind::FunctionDeclaration(decl) => {
-            lower_nested_function_decl(ctx, decl, stmt.span)
-        }
+        StatementKind::FunctionDeclaration(decl) => lower_nested_function_decl(ctx, decl, stmt),
         StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(..) => Ok(()),
     }
@@ -457,78 +455,53 @@ fn lower_use_stmt(
     ctx.imports.push(import);
 }
 
+/// Lower a function declared inside another function's body.
+///
+/// It lowers exactly like a lambda bound to its name: a closure whose body
+/// reads enclosing locals — the enclosing `allocator` among them — through its
+/// environment. The body is emitted under a symbol unique to this declaration,
+/// so two functions may each declare a nested function of the same name, and a
+/// nested function may shadow a top-level one. Inside its body the name calls
+/// the function itself.
+// TODO: a nested `gpu fn` is refused by the type checker today, so it never
+// reaches here; supporting it needs a kernel lowering path, because a kernel
+// body cannot take the environment pointer a closure body is given.
 fn lower_nested_function_decl(
     ctx: &mut LoweringContext,
     decl: &crate::ast::statement::FunctionDeclarationData,
-    span: Span,
+    stmt: &Statement,
 ) -> Result<(), LoweringError> {
-    use crate::mir::lambda::LambdaInfo;
-    use crate::mir::{Body, ExecutionModel, LocalDecl};
+    use super::expression::lambda_expr::{lower_closure, ClosureSource};
 
-    let name = &decl.name;
-    let params = &decl.params;
-    let ret_type_expr = &decl.return_type;
-    let body_stmt = &decl.body;
-    let props = &decl.properties;
-
-    let execution_model = if props.is_gpu {
-        ExecutionModel::GpuKernel
-    } else if props.is_async {
-        ExecutionModel::Async
-    } else {
-        ExecutionModel::Cpu
-    };
-
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        super::resolve_type(ctx.type_checker, ret_expr)
-    } else {
-        Type::new(TypeKind::Void, span)
-    };
-
-    let mut nested_body = Body::new(params.len(), span, execution_model);
-    nested_body.new_local(LocalDecl::new(ret_ty.clone(), span));
-
-    let mut nested_ctx = super::LoweringContext::new(nested_body, ctx.type_checker, ctx.is_release);
-    // Inherit the compilation-wide kernel-name allocator so any kernel lowered
-    // inside this nested body stays deterministic and collision-free.
-    nested_ctx.use_compilation_ids(ctx.compilation_ids.clone());
-    for param in params.iter() {
-        let param_ty = super::resolve_type(ctx.type_checker, &param.typ);
-        nested_ctx.push_local(param.name.clone(), param_ty, param.typ.span);
-    }
-
-    if let Some(body_box) = body_stmt {
-        super::lower_as_return(&mut nested_ctx, body_box, &ret_ty)?;
-    }
-
-    if nested_ctx.body.basic_blocks[nested_ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        nested_ctx.set_terminator(crate::mir::Terminator::new(
-            crate::mir::TerminatorKind::Return,
-            span,
+    let Some(body) = decl.body.as_deref() else {
+        return Err(LoweringError::unsupported_statement(
+            format!("nested function '{}' has no body", decl.name),
+            stmt.span,
         ));
-    }
-
-    // Carry over anything lowered inside this body — a lambda, or the thunk a
-    // function reference needs — before the inner context is dropped.
-    ctx.lambda_bodies.append(&mut nested_ctx.lambda_bodies);
-
-    ctx.lambda_bodies.push(LambdaInfo {
-        name: name.clone(),
-        body: nested_ctx.body,
-        captures: vec![],
-    });
-
-    let func_ty = Type::new(
+    };
+    let ty = Type::new(
         TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
             generics: None,
-            params: params.to_vec(),
-            return_type: ret_type_expr.clone(),
+            params: decl.params.clone(),
+            return_type: decl.return_type.clone(),
         })),
-        span,
+        stmt.span,
     );
-    ctx.push_local(name.clone(), func_ty, span);
+    let closure = ClosureSource {
+        name: format!("__nested_{}_{}", decl.name, stmt.id).into(),
+        self_name: Some(&decl.name),
+        params: &decl.params,
+        return_type: decl.return_type.as_deref(),
+        body,
+        properties: &decl.properties,
+        ty: ty.clone(),
+        span: stmt.span,
+    };
+
+    // The name is bound only once the closure is stored, so the body cannot
+    // capture the not-yet-initialized local it is about to be stored in.
+    let local = ctx.alloc_local(decl.name.clone(), ty, stmt.span);
+    lower_closure(ctx, &closure, Some(Place::new(local)))?;
+    ctx.bind_local_name(decl.name.clone(), local);
     Ok(())
 }

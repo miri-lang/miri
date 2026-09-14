@@ -1086,7 +1086,7 @@ fn lower_direct_call(
     let param_types = resolve_param_types(ctx, func.id, is_generic_call);
 
     let arg_watermark = ctx.body.local_decls.len();
-    let mut arg_ops = lower_and_coerce_args(ctx, args, &param_types);
+    let mut arg_ops = lower_and_coerce_args(ctx, args, &param_types)?;
 
     fill_default_args(ctx, &mut arg_ops, &param_types)?;
 
@@ -1292,17 +1292,11 @@ fn lower_and_coerce_args(
     ctx: &mut LoweringContext,
     args: &[Expression],
     param_types: &Option<Vec<crate::ast::common::Parameter>>,
-) -> Vec<Operand> {
+) -> Result<Vec<Operand>, LoweringError> {
     let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let watermark = ctx.body.local_decls.len();
-        let mut op = lower_expression(ctx, arg, None).unwrap_or_else(|_| {
-            Operand::Constant(Box::new(crate::mir::Constant {
-                span: arg.span,
-                ty: Type::new(TypeKind::Void, arg.span),
-                literal: crate::ast::literal::Literal::None,
-            }))
-        });
+        let mut op = lower_expression(ctx, arg, None)?;
 
         if let Some(params) = param_types {
             if i < params.len() {
@@ -1330,7 +1324,7 @@ fn lower_and_coerce_args(
         };
         arg_ops.push(op);
     }
-    arg_ops
+    Ok(arg_ops)
 }
 
 fn fill_default_args(

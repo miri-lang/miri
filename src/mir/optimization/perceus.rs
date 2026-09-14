@@ -33,7 +33,38 @@ struct PerceusContext<'a> {
     /// `handle_aggregate` can IncRef managed captures when building a closure aggregate.
     closure_capture_types:
         &'a std::collections::HashMap<crate::mir::Local, Vec<crate::ast::types::Type>>,
+    borrowed: &'a BorrowedLocals,
+}
+
+/// The locals a body reads but does not own, so never releases: its parameters,
+/// which the caller owns, and the closure captures it only reads, which the
+/// closure's environment owns and its destructor releases.
+///
+/// A capture the body assigns is not borrowed. Its value is replaced by one the
+/// body owns, so it takes its own reference on entry and is then released like
+/// any other local — see [`Perceus::retain_written_captures`].
+struct BorrowedLocals {
     arg_count: usize,
+    read_only_captures: std::collections::HashSet<crate::mir::Local>,
+}
+
+impl BorrowedLocals {
+    fn of(body: &Body) -> Self {
+        let written = body.written_locals();
+        BorrowedLocals {
+            arg_count: body.arg_count,
+            read_only_captures: body
+                .env_capture_locals
+                .iter()
+                .copied()
+                .filter(|local| !written.contains(local))
+                .collect(),
+        }
+    }
+
+    fn contains(&self, local: crate::mir::Local) -> bool {
+        (1..=self.arg_count).contains(&local.0) || self.read_only_captures.contains(&local)
+    }
 }
 
 impl OptimizationPass for Perceus {
@@ -53,10 +84,11 @@ impl OptimizationPass for Perceus {
         // stored in the closure struct.  This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
         // destructor and Perceus decremented the same capture on drop.
-        let managed_locals = self.identify_managed_locals(body);
+        let borrowed = BorrowedLocals::of(body);
+        let managed_locals = self.identify_managed_locals(body, &borrowed);
+        let mut changed = self.retain_written_captures(body, &managed_locals);
 
         // Step 2: Iterate through every block of code and inject RC instructions.
-        let mut changed = false;
 
         // Split the borrow: we need mutable access to basic_blocks, but only
         // immutable access to the rest of the metadata.
@@ -67,7 +99,6 @@ impl OptimizationPass for Perceus {
             ref field_types,
             ref type_params,
             ref closure_capture_types,
-            arg_count,
             ..
         } = *body;
 
@@ -77,7 +108,7 @@ impl OptimizationPass for Perceus {
             field_types,
             type_params,
             closure_capture_types,
-            arg_count,
+            borrowed: &borrowed,
         };
 
         for block_data in basic_blocks.iter_mut() {
@@ -97,21 +128,51 @@ impl OptimizationPass for Perceus {
 impl Perceus {
     /// Identifies all locals that are managed (heap-allocated) and owned by this function.
     ///
-    /// Excludes function parameters and "Auto-copy" types (which are small enough
-    /// to be copied byte-for-byte without reference counting).
-    fn identify_managed_locals(&self, body: &Body) -> std::collections::HashSet<crate::mir::Local> {
+    /// Excludes borrowed locals — parameters and closure captures — and
+    /// "Auto-copy" types (which are small enough to be copied byte-for-byte
+    /// without reference counting).
+    fn identify_managed_locals(
+        &self,
+        body: &Body,
+        borrowed: &BorrowedLocals,
+    ) -> std::collections::HashSet<crate::mir::Local> {
         body.local_decls
             .iter()
             .enumerate()
             .filter(|(i, decl)| {
-                // Indices 1..=arg_count are function parameters; they are owned by the caller.
-                *i > body.arg_count
+                *i != 0
+                    && !borrowed.contains(crate::mir::Local(*i))
                     && decl
                         .mir_ty
                         .is_managed(&body.unmanaged_type_names, &body.type_params)
             })
             .map(|(i, _)| crate::mir::Local(i))
             .collect()
+    }
+
+    /// Give each managed capture the body assigns its own reference on entry,
+    /// so the body owns the value it later overwrites or drops rather than
+    /// releasing the one its closure's environment holds.
+    fn retain_written_captures(
+        &self,
+        body: &mut Body,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+    ) -> bool {
+        let Some(entry) = body.basic_blocks.first_mut() else {
+            return false;
+        };
+        let retains: Vec<Statement> = body
+            .env_capture_locals
+            .iter()
+            .filter(|local| managed_locals.contains(local))
+            .map(|&local| Statement {
+                kind: StatementKind::IncRef(Place::new(local)),
+                span: body.span,
+            })
+            .collect();
+        let changed = !retains.is_empty();
+        entry.statements.splice(0..0, retains);
+        changed
     }
 
     /// Processes a single basic block, rebuilding its statement list with RC ops.
@@ -261,7 +322,7 @@ impl Perceus {
         rvalue: &Rvalue,
         lhs: &Place,
     ) -> Option<Place> {
-        let param_place = get_move_from_param_place(rvalue, ctx.arg_count)?;
+        let param_place = get_move_from_borrowed_place(rvalue, ctx.borrowed)?;
         let is_managed = |place: &Place| {
             is_place_managed(
                 place,
@@ -381,8 +442,10 @@ impl Perceus {
 
     /// Determines if a reassignment destination needs a DecRef.
     fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
-        // Parameters (1..=arg_count) are caller-owned; callee must not DecRef them.
-        lhs.local.0 > ctx.arg_count
+        // A borrowed local's value belongs to the caller or the closure
+        // environment; overwriting it must not release that value.
+        lhs.local.0 != 0
+            && !ctx.borrowed.contains(lhs.local)
             && is_place_managed(
                 lhs,
                 ctx.local_decls,
@@ -406,14 +469,15 @@ fn get_copy_source_place(rvalue: &Rvalue) -> Option<Place> {
     }
 }
 
-/// Extract the source place from a Move whose source is a function parameter.
+/// Extract the source place from a Move whose source is a borrowed local.
 ///
 /// When a callee moves from a parameter (e.g. `_4 = move _1 as String`),
 /// it creates a new managed local that Perceus will DecRef at StorageDead.
 /// Since callers use borrow semantics (no IncRef before the call), the
 /// move must IncRef to prevent the StorageDead DecRef from prematurely
-/// freeing the caller's allocation.
-fn get_move_from_param_place(rvalue: &Rvalue, arg_count: usize) -> Option<Place> {
+/// freeing the caller's allocation. A closure capture is borrowed from the
+/// closure's environment the same way.
+fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> Option<Place> {
     let place = match rvalue {
         Rvalue::Use(Operand::Move(place)) => Some(place),
         Rvalue::Cast(operand, _) => match operand.as_ref() {
@@ -422,7 +486,7 @@ fn get_move_from_param_place(rvalue: &Rvalue, arg_count: usize) -> Option<Place>
         },
         _ => None,
     }?;
-    if place.local.0 >= 1 && place.local.0 <= arg_count {
+    if borrowed.contains(place.local) {
         Some(place.clone())
     } else {
         None

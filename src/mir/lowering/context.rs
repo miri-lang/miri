@@ -67,6 +67,11 @@ pub struct LoweringContext<'a> {
     /// Temps that hold a value another local owns and must therefore never be
     /// released. A coercion re-spelling a live value's type produces one.
     pub borrowed_temps: std::collections::HashSet<Local>,
+    /// The environment pointer a nested function's name resolves to inside its
+    /// own body, mapped to the function's type. The pointer is the function's
+    /// closure, borrowed; reading it as a value, or capturing it, must take its
+    /// own reference.
+    pub self_references: HashMap<Local, Type>,
     /// Lambda bodies collected during lowering
     pub lambda_bodies: Vec<LambdaInfo>,
     /// Type declarations collected during lowering
@@ -136,6 +141,7 @@ impl<'a> LoweringContext<'a> {
             scope_pool: Vec::with_capacity(8), // Pool for reusing scopes
             loop_stack: Vec::new(),
             borrowed_temps: std::collections::HashSet::new(),
+            self_references: HashMap::new(),
             lambda_bodies: Vec::new(),
             declarations: Vec::new(),
             imports: Vec::new(),

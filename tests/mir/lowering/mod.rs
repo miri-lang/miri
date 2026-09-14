@@ -19,6 +19,7 @@ pub mod if_statement;
 pub mod literal;
 pub mod r#loop;
 pub mod match_expression;
+pub mod nested_function;
 pub mod shared_memory;
 pub mod unary;
 pub mod variable;
