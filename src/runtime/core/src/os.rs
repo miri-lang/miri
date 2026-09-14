@@ -17,6 +17,7 @@
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
+use crate::guard;
 use crate::string::{into_raw_ptr, MiriString};
 
 /// Global lock to synchronize environment variable access (`std::env::var`, `std::env::set_var`)
@@ -80,6 +81,9 @@ pub mod ffi {
             return 0;
         }
 
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(name as *mut u8);
+
         let name_str = (*name).as_str();
         set_env_status(0, String::new());
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -107,6 +111,9 @@ pub mod ffi {
             set_env_status(0, String::new());
             return into_raw_ptr(MiriString::from_str(""));
         }
+
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(name as *mut u8);
 
         let name_str = (*name).as_str();
         set_env_status(0, String::new());
@@ -136,6 +143,10 @@ pub mod ffi {
             set_env_status(3, "null pointer".to_string());
             return 0;
         }
+
+        // Defense in depth: validate managed pointers on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(name as *mut u8);
+        guard::guard_check(value as *mut u8);
 
         let name_str = (*name).as_str();
         let value_str = (*value).as_str();
