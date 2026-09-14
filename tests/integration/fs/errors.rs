@@ -92,6 +92,180 @@ fn main()
 }
 
 #[test]
+fn test_write_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+    let target_file = temp_dir.path().join("target.txt");
+    std::fs::write(&target_file, "original content").expect("failed to write target file");
+
+    let traversal_path = sub_dir
+        .join("..")
+        .join("target.txt")
+        .to_string_lossy()
+        .to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_write_error(e FsError)
+    match e
+        FsError.PermissionDenied(_): println("PermissionDenied")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.write_file("{}", "overwritten")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_write_error(e)
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "PermissionDenied");
+    assert_eq!(
+        std::fs::read_to_string(&target_file).expect("read target file"),
+        "original content",
+        "Target file content should not have been modified"
+    );
+}
+
+#[test]
+fn test_append_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+    let target_file = temp_dir.path().join("target.txt");
+    std::fs::write(&target_file, "original content").expect("failed to write target file");
+
+    let traversal_path = sub_dir
+        .join("..")
+        .join("target.txt")
+        .to_string_lossy()
+        .to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_append_error(e FsError)
+    match e
+        FsError.PermissionDenied(_): println("PermissionDenied")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.append_file("{}", " appended")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_append_error(e)
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "PermissionDenied");
+    assert_eq!(
+        std::fs::read_to_string(&target_file).expect("read target file"),
+        "original content",
+        "Target file content should not have been appended"
+    );
+}
+
+#[test]
+fn test_read_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+    let target_file = temp_dir.path().join("target.txt");
+    std::fs::write(&target_file, "secret").expect("failed to write target file");
+
+    let traversal_path = sub_dir
+        .join("..")
+        .join("target.txt")
+        .to_string_lossy()
+        .to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_read_error(e FsError)
+    match e
+        FsError.PermissionDenied(_): println("PermissionDenied")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.read_file("{}")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_read_error(e)
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "PermissionDenied");
+}
+
+#[test]
+fn test_list_dir_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+
+    let traversal_path = sub_dir.join("..").to_string_lossy().to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_list_error(e FsError)
+    match e
+        FsError.PermissionDenied(_): println("PermissionDenied")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.list_dir("{}")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_list_error(e)
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "PermissionDenied");
+}
+
+#[test]
+fn test_exists_path_traversal_rejected() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let sub_dir = temp_dir.path().join("subdir");
+    std::fs::create_dir(&sub_dir).expect("failed to create subdir");
+    let target_file = temp_dir.path().join("target.txt");
+    std::fs::write(&target_file, "secret").expect("failed to write target file");
+
+    let traversal_path = sub_dir
+        .join("..")
+        .join("target.txt")
+        .to_string_lossy()
+        .to_string();
+
+    let code = format!(
+        r#"
+use system.fs
+
+fn main()
+    let fs = Fs()
+    if fs.exists("{}")
+        println("exists: yes")
+    else
+        println("exists: no")
+"#,
+        traversal_path
+    );
+    assert_runs_with_output(&code, "exists: no");
+}
+
+#[test]
 fn test_delete_missing_file_returns_notfound() {
     assert_runs_with_output(
         r#"
