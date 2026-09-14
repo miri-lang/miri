@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) Viacheslav Shynkarenko
 
-"""Fold a round's records into `summary.json` and judge the four claims.
+"""Fold a round's records into `summary.json` and judge the claims.
 
 The records under `runs/<round>/` are the raw data; this is the only thing that
 reads them, and `summary.json` is the only thing the article quotes. A verdict
@@ -27,7 +27,9 @@ BASELINES = ("python", "rust", "typescript")
 PACK = "miri-pack"
 BARE = "miri-bare"
 
-# C1's threshold, fixed on 2026-09-11 and not loosened between rounds.
+# How far above a baseline a result still reads as parity rather than behind.
+# It was C1's threshold until C1 was tightened to a lead on 2026-09-14; it now
+# labels a result and never decides a verdict, so a tie cannot pass for a win.
 PARITY_FACTOR = 1.25
 
 
@@ -82,6 +84,8 @@ def summarize_cell(runs):
         "green": len(green_runs),
         "finishRate": round(len(green_runs) / len(runs), 3) if runs else 0.0,
         "tokensToGreen": spread(green),
+        "wallClockToGreen": spread([run["wallClockSeconds"] for run in green_runs]),
+        "invocationsToGreen": spread([run["toolInvocations"] for run in green_runs]),
         "toolchainInvocations": spread([run["toolchainInvocations"] for run in runs]),
         "wallClockSeconds": spread([run["wallClockSeconds"] for run in runs]),
         "costUnobserved": sum(1 for run in green_runs if tokens(run) is None),
@@ -101,9 +105,10 @@ def spread(values):
     }
 
 
-def median_green(cells, job, arm, model):
+def median_green(cells, job, arm, model, metric="tokensToGreen"):
+    """The median of one to-green metric over a cell's green runs, if it has any."""
     cell = cells.get((job, arm, model))
-    return cell["tokensToGreen"]["median"] if cell and cell["tokensToGreen"] else None
+    return cell[metric]["median"] if cell and cell[metric] else None
 
 
 def build_cells(records):
@@ -120,28 +125,40 @@ def build_cells(records):
     return cells, jobs, models
 
 
-def judge_cost_parity(cells, models):
-    """C1 — the pack's cost is near the languages the agent already knows."""
+def judge_lead(cells, models, metric):
+    """Whether the pack leads every baseline on one to-green metric, per CPU job.
+
+    Each comparison carries a standing — `beats`, `parity` or `behind` — so a
+    round that fails the claim still shows how far it is from holding it.
+    """
     detail = []
     for model in models:
         for job in CPU_JOBS:
-            pack = median_green(cells, job, PACK, model)
+            pack = median_green(cells, job, PACK, model, metric)
             if pack is None:
-                detail.append(note(job, model, False, "miri-pack reached no green run"))
+                detail.append(note(job, model, False, "miri-pack reached no green run", "behind"))
                 continue
             for baseline in BASELINES:
-                other = median_green(cells, job, baseline, model)
-                detail.append(parity_note(job, model, baseline, pack, other))
+                if (job, baseline, model) not in cells:
+                    detail.append(note(job, model, False, f"{baseline} was not run"))
+                    continue
+                other = median_green(cells, job, baseline, model, metric)
+                detail.append(lead_note(job, model, baseline, pack, other))
     return verdict(detail)
 
 
-def parity_note(job, model, baseline, pack, other):
+def lead_note(job, model, baseline, pack, other):
     if other is None:
-        return note(job, model, True, f"{baseline} reached no green run; miri-pack did")
-    if baseline == "rust":
-        return note(job, model, pack < other, f"miri-pack {pack} against rust {other}")
-    bound = other * PARITY_FACTOR
-    return note(job, model, pack <= bound, f"miri-pack {pack} against {baseline} {other} (bound {bound:.0f})")
+        return note(job, model, True, f"{baseline} reached no green run; miri-pack did", "beats")
+    return note(job, model, pack < other, f"miri-pack {pack} against {baseline} {other}", standing(pack, other))
+
+
+def standing(pack, other):
+    if pack < other:
+        return "beats"
+    if pack <= other * PARITY_FACTOR:
+        return "parity"
+    return "behind"
 
 
 def judge_wrong_answers(cells, models):
@@ -163,6 +180,10 @@ def judge_gpu(cells, models):
     """C3 — the GPU job is in reach where a baseline's is not, or is half the cost."""
     detail = []
     for model in models:
+        unrun = [name for name in BASELINES if (GPU_JOB, name, model) not in cells]
+        if unrun:
+            detail.append(note(GPU_JOB, model, False, f"{', '.join(unrun)} not run"))
+            continue
         pack = median_green(cells, GPU_JOB, PACK, model)
         others = {name: median_green(cells, GPU_JOB, name, model) for name in BASELINES}
         finished = [name for name, value in others.items() if value is not None]
@@ -194,8 +215,31 @@ def judge_pack_against_bare(cells, models, jobs):
     return verdict(detail)
 
 
-def note(job, model, held, reason):
-    return {"job": job, "model": model, "held": bool(held), "reason": reason}
+def judge_pack_loop(cells, models, jobs):
+    """The exit criterion's loop condition — the pack costs no more invocations than bare.
+
+    Measured gross. Both Miri arms run on the same compiler, so a defect falls
+    on either arm alike, and netting it out would add a hand-typed number to a
+    verdict that needs none.
+    """
+    detail = []
+    for model in models:
+        for job in jobs:
+            if (job, PACK, model) not in cells or (job, BARE, model) not in cells:
+                detail.append(note(job, model, False, "a cell of the pair was not run"))
+                continue
+            pack = median_green(cells, job, PACK, model, "invocationsToGreen")
+            bare = median_green(cells, job, BARE, model, "invocationsToGreen")
+            held = pack is not None and (bare is None or pack <= bare)
+            detail.append(note(job, model, held, f"invocations to green {pack} against {bare}"))
+    return verdict(detail)
+
+
+def note(job, model, held, reason, rank=None):
+    entry = {"job": job, "model": model, "held": bool(held), "reason": reason}
+    if rank is not None:
+        entry["standing"] = rank
+    return entry
 
 
 def verdict(detail):
@@ -215,10 +259,14 @@ def summarize(round_name, records):
             for (job, arm, model), values in sorted(cells.items())
         ],
         "claims": {
-            "C1": judge_cost_parity(cells, models),
+            "C1": judge_lead(cells, models, "tokensToGreen"),
             "C2": judge_wrong_answers(cells, models),
             "C3": judge_gpu(cells, models),
             "C4": judge_pack_against_bare(cells, models, jobs),
+            "C5": judge_lead(cells, models, "wallClockToGreen"),
+        },
+        "exitCriterion": {
+            "packLoop": judge_pack_loop(cells, models, jobs),
         },
     }
 
@@ -241,7 +289,8 @@ def main(argv):
     destination.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
     held = [name for name, claim in summary["claims"].items() if claim["held"]]
-    print(f"{destination}: {len(records)} records, claims held: {', '.join(held) or 'none'}")
+    loop = "holds" if summary["exitCriterion"]["packLoop"]["held"] else "fails"
+    print(f"{destination}: {len(records)} records, claims held: {', '.join(held) or 'none'}; pack loop {loop}")
     return 0
 
 

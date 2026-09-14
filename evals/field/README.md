@@ -92,7 +92,9 @@ of them.
 - **Invocations lost to compiler defects are counted separately** from the
   clean loop. A defect is a fact about the compiler, not about the surface
   wrapped around it, and folding the two together is what made two earlier
-  rounds disagree with each other.
+  rounds disagree with each other. The count is a diagnostic: every verdict is
+  computed from gross numbers, because a user of the language pays for its
+  defects as well.
 - **Caps are identical across arms** and live in each `job.toml`.
 
 ## What is measured
@@ -141,7 +143,10 @@ rounds that predate this instrument each drifted into a different experiment,
 and a prompt under version control cannot drift without the drift showing in a
 diff.
 
-`CLAIMS.md` holds the four pre-registered claims, and `report.py` computes each
-verdict from the records — no verdict is typed by hand. `baseline.md` holds the
+`CLAIMS.md` holds the pre-registered claims, and `report.py` computes each
+verdict from the records — no verdict is typed by hand. It also computes the
+exit criterion's loop condition, and labels every comparison a lead claim loses
+as `parity` or `behind`, so a failing round still shows its distance from the
+claim. `baseline.md` holds the
 2026-09-09 numbers that predate this instrument, with the reasons they are not
 comparable to anything produced here. `LOG.md` carries one entry per round.

@@ -43,8 +43,10 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
    whether the run was a silent wrong answer.
 
    Invocations lost to compiler defects are counted separately from the clean
-   loop, and bench.py cannot see that split — it is a hand pass over each
-   transcript under runs/, and the count goes in the round's log entry. A
+   loop, as a diagnostic: a hand pass over each transcript under runs/, with
+   the count in the round's log entry. It tells the next round what to fix and
+   decides no verdict — every claim and the exit criterion are computed from
+   gross numbers, because a user of the language pays for its defects too. A
    defect is a fact about the compiler, not about the surface wrapped around
    it; folding the two together is what made two earlier rounds disagree.
 
@@ -77,17 +79,24 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
    round, and the verdict per claim as report.py computed it.
 
 7. Then state plainly, in that same entry, whether the testing loop ends and
-   publication starts. It ends on the first round in which all three hold:
+   the skill pack is published. It ends on the first round in which all three
+   hold:
 
    - no new silent wrong-answer compiler defect was found;
-   - the packed Miri arm's clean-loop cost, net of the defect-cornering
-     counted separately in step 3, is no worse than the bare Miri arm's in
-     every job;
+   - the packed Miri arm needs no more tool invocations to reach green than
+     the bare Miri arm, in every job. Measured from `toolInvocations`,
+     `outcome`, `hiddenTests`; judged as `packLoop`;
    - no surface the published page recommends was rated 2 out of 5 or lower
      by the unmeasured opinion probe.
 
-   If any of the three fails, say which, and say that publication stays shut.
-   Findings below the silent-wrong-answer bar do not restart the loop.
+   If any of the three fails, say which, and say that the pack stays
+   unpublished. Findings below the silent-wrong-answer bar do not restart the
+   loop.
+
+8. Say, in the same entry, whether the article can be written: it reports the
+   first round in which report.py holds every claim in CLAIMS.md, and links
+   every round before it. For each claim that fails, quote the standings
+   report.py gives, so the entry shows how far the round is from a lead.
 ```
 
 ## What the operator provides

@@ -496,29 +496,74 @@ fn run_seed(seed: &Path, input: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The jobs the CPU claims are judged over. The GPU job has a claim of its own.
+const CPU_JOBS: [&str; 4] = [
+    "01-word-frequency",
+    "02-ledger-repair",
+    "03-tracker-extension",
+    "04-data-edges",
+];
+
+/// The languages a Miri arm is compared against.
+const BASELINE_ARMS: [&str; 3] = ["python", "rust", "typescript"];
+
+/// What one synthetic run cost and whether it reached green.
+#[derive(Clone, Copy)]
+struct SyntheticRun {
+    tokens: u32,
+    seconds: u32,
+    invocations: u32,
+    green: bool,
+}
+
+impl SyntheticRun {
+    fn green(tokens: u32, seconds: u32, invocations: u32) -> Self {
+        SyntheticRun {
+            tokens,
+            seconds,
+            invocations,
+            green: true,
+        }
+    }
+}
+
 /// A cell of a synthetic round, written where the folder will read it.
-fn write_synthetic_record(root: &Path, arm: &str, tokens: u32, green: bool) {
+fn write_synthetic_record(root: &Path, job: &str, arm: &str, run: SyntheticRun) {
     let directory = root
         .join("synthetic")
-        .join("01-word-frequency")
+        .join(job)
         .join(arm)
         .join("claude-sonnet");
     fs::create_dir_all(&directory).expect("cannot create a synthetic round");
-    let passed = if green { 6 } else { 3 };
+    let passed = if run.green { 6 } else { 3 };
     let record = format!(
-        r#"{{"schemaVersion":1,"round":"synthetic","job":"01-word-frequency","arm":"{arm}","run":1,
+        r#"{{"schemaVersion":1,"round":"synthetic","job":"{job}","arm":"{arm}","run":1,
             "model":"claude-sonnet","modelId":"x","harness":{{"name":"claude","version":"1"}},
             "compilerCommit":"0","compilerVersion":"0","packInstalled":false,
-            "caps":{{"turns":1,"timeSeconds":1}},"startedAt":"now","wallClockSeconds":1.0,
-            "tokens":{{"in":{half},"out":{half}}},"turns":1,"toolInvocations":1,
+            "caps":{{"turns":1,"timeSeconds":1}},"startedAt":"now","wallClockSeconds":{seconds}.0,
+            "tokens":{{"in":{half},"out":{half}}},"turns":1,"toolInvocations":{invocations},
             "toolchainInvocations":1,"outcome":"finished",
             "hiddenTests":{{"passed":{passed},"total":6,"failures":[]}},
             "silentWrongAnswer":false,"workspace":"/tmp"}}"#,
+        job = job,
         arm = arm,
-        half = tokens / 2,
+        half = run.tokens / 2,
+        seconds = run.seconds,
+        invocations = run.invocations,
         passed = passed,
     );
     fs::write(directory.join("1.json"), record).expect("cannot write a synthetic record");
+}
+
+/// A synthetic round over every CPU job: the pack at one cost, every baseline
+/// at another.
+fn write_pack_against_baselines(root: &Path, pack: SyntheticRun, baseline: SyntheticRun) {
+    for job in CPU_JOBS {
+        write_synthetic_record(root, job, "miri-pack", pack);
+        for arm in BASELINE_ARMS {
+            write_synthetic_record(root, job, arm, baseline);
+        }
+    }
 }
 
 /// Fold a synthetic round and report whether each claim held.
@@ -564,8 +609,13 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     let _ = fs::remove_dir_all(&scratch);
 
     // The pack is cheaper than the bare arm and finishes where it does not.
-    write_synthetic_record(&scratch, "miri-pack", 1000, true);
-    write_synthetic_record(&scratch, "miri-bare", 3000, false);
+    let job = "01-word-frequency";
+    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1000, 1, 1));
+    let unfinished = SyntheticRun {
+        green: false,
+        ..SyntheticRun::green(3000, 1, 1)
+    };
+    write_synthetic_record(&scratch, job, "miri-bare", unfinished);
     let held = fold(&scratch);
     assert!(
         claim_held(&held, "C4"),
@@ -576,8 +626,8 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     // The same shape with the pack dearer than the bare arm must fail C4, or
     // the verdict is a constant and the article would publish on a constant.
     let _ = fs::remove_dir_all(&scratch);
-    write_synthetic_record(&scratch, "miri-pack", 4000, true);
-    write_synthetic_record(&scratch, "miri-bare", 1000, true);
+    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(4000, 1, 1));
+    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1000, 1, 1));
     let refused = fold(&scratch);
     assert!(
         !claim_held(&refused, "C4"),
@@ -585,6 +635,197 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
         refused
     );
     let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_the_pack_must_beat_every_baseline_on_cost_and_on_speed() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    let scratch = std::env::temp_dir().join("miri-field-lead-claims");
+    let _ = fs::remove_dir_all(&scratch);
+
+    // Cheaper and faster than every language in every CPU job.
+    write_pack_against_baselines(
+        &scratch,
+        SyntheticRun::green(1000, 100, 1),
+        SyntheticRun::green(1100, 110, 1),
+    );
+    let leads = fold(&scratch);
+    for claim in ["C1", "C5"] {
+        assert!(
+            claim_held(&leads, claim),
+            "the judge does not report {} as held when the pack leads every baseline:\n{}",
+            claim,
+            leads
+        );
+    }
+
+    // Within a tenth of every baseline, but behind it. Parity is reported as
+    // parity and is not a win, or the article would call a tie a lead.
+    let _ = fs::remove_dir_all(&scratch);
+    write_pack_against_baselines(
+        &scratch,
+        SyntheticRun::green(1100, 110, 1),
+        SyntheticRun::green(1000, 100, 1),
+    );
+    let tied = fold(&scratch);
+    for claim in ["C1", "C5"] {
+        assert!(
+            !claim_held(&tied, claim),
+            "the judge reports {} as held when the pack only matches the baselines:\n{}",
+            claim,
+            tied
+        );
+    }
+    assert!(
+        tied.contains("\"standing\": \"parity\""),
+        "the judge does not report a result inside the parity band as parity:\n{}",
+        tied
+    );
+
+    // A baseline that was never run is not a baseline the pack beat.
+    let _ = fs::remove_dir_all(&scratch);
+    for job in CPU_JOBS {
+        write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 1));
+    }
+    write_synthetic_record(
+        &scratch,
+        "05-gpu-heat",
+        "miri-pack",
+        SyntheticRun::green(1, 1, 1),
+    );
+    let alone = fold(&scratch);
+    for claim in ["C1", "C3", "C5"] {
+        assert!(
+            !claim_held(&alone, claim),
+            "the judge reports {} as held against baselines that were never run:\n{}",
+            claim,
+            alone
+        );
+    }
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_the_exit_criterion_compares_the_pack_loop_against_the_bare_loop() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    let scratch = std::env::temp_dir().join("miri-field-pack-loop");
+    let _ = fs::remove_dir_all(&scratch);
+    let job = "01-word-frequency";
+
+    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 10));
+    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1, 1, 12));
+    let held = fold(&scratch);
+    assert!(
+        claim_held(&held, "packLoop"),
+        "the judge does not report the pack loop as no worse than the bare loop:\n{}",
+        held
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 14));
+    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1, 1, 12));
+    let refused = fold(&scratch);
+    assert!(
+        !claim_held(&refused, "packLoop"),
+        "the judge reports the pack loop as held when it costs more invocations:\n{}",
+        refused
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// A condition a verdict is computed from, as a document states it: the record
+/// fields it reads and the key `report.py` publishes its verdict under.
+struct MeasuredCondition {
+    fields: Vec<String>,
+    verdict: String,
+}
+
+/// Every `Measured from `a`, `b`; judged as `X`.` sentence in a document.
+///
+/// Whitespace is collapsed first, so a sentence the formatter wrapped across
+/// lines reads the same as one that fits on a line.
+fn measured_conditions(document: &str) -> Vec<MeasuredCondition> {
+    let flat = document.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.split("Measured from ")
+        .skip(1)
+        .map(|sentence| {
+            let sentence = sentence.split(". ").next().unwrap_or(sentence);
+            let (fields, verdict) = sentence
+                .split_once("judged as")
+                .unwrap_or_else(|| panic!("a measured condition names no verdict: {}", sentence));
+            MeasuredCondition {
+                fields: backticked(fields),
+                verdict: backticked(verdict).into_iter().next().unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+fn backticked(text: &str) -> Vec<String> {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The keys `bench.py` writes into a run record.
+fn record_fields() -> BTreeSet<String> {
+    let runner = read(&field_dir().join("bench.py"));
+    let body = runner
+        .split_once("def record_for(")
+        .and_then(|(_, rest)| rest.split("\ndef ").next())
+        .expect("bench.py no longer builds its record in record_for");
+    body.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn test_every_measured_condition_is_one_the_record_carries_and_the_folder_judges() {
+    let fields = record_fields();
+    let folder = read(&field_dir().join("report.py"));
+    let claims = read(&field_dir().join("CLAIMS.md"));
+    let prompt = read(&field_dir().join("PROMPT.md"));
+
+    let claim_count = (1..=9)
+        .filter(|n| claims.contains(&format!("**C{} —", n)))
+        .count();
+    let stated = measured_conditions(&claims);
+    assert_eq!(
+        stated.len(),
+        claim_count,
+        "every claim in CLAIMS.md must say what it is measured from and what judges it"
+    );
+    let exit = measured_conditions(&prompt);
+    assert!(
+        !exit.is_empty(),
+        "the exit criterion in PROMPT.md names no measured condition"
+    );
+
+    for condition in stated.iter().chain(exit.iter()) {
+        for field in &condition.fields {
+            assert!(
+                fields.contains(field),
+                "a condition is stated in terms of `{}`, which bench.py never records, \
+                 so its verdict could only be typed by hand",
+                field
+            );
+        }
+        assert!(
+            folder.contains(&format!("\"{}\":", condition.verdict)),
+            "a condition is judged as `{}`, which report.py never computes",
+            condition.verdict
+        );
+    }
 }
 
 /// Where the prompt that drives a round names a file, relative to `evals/field/`.
