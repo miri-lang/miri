@@ -23,7 +23,7 @@ use miri::codegen::cranelift::{mangle_class_instantiation, FunctionTranslator};
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, MethodInfo,
-    StructDefinition, TypeDefinition,
+    StructDefinition, TraitDefinition, TypeDefinition,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -41,12 +41,12 @@ fn custom(name: &str) -> TypeKind {
 
 /// `name<component>` — the form a compiler-known inline value type is always
 /// written in, and what tells it apart from a user type reusing the name.
+fn type_expr(kind: TypeKind) -> Expression {
+    Expression::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+}
+
 fn custom_of(name: &str, component: TypeKind) -> TypeKind {
-    let arg = Expression::new(
-        0,
-        ExpressionKind::Type(Box::new(ty(component)), false),
-        span(),
-    );
+    let arg = type_expr(component);
     TypeKind::Custom(name.to_string(), Some(vec![arg]))
 }
 
@@ -241,19 +241,111 @@ fn test_builtin_collection_element_is_resolved_without_a_definition() {
 #[test]
 fn test_concrete_element_kinds_are_resolved() {
     for kind in [
-        TypeKind::String,
         TypeKind::Int,
+        TypeKind::I8,
+        TypeKind::I16,
         TypeKind::I32,
+        TypeKind::I64,
+        TypeKind::I128,
+        TypeKind::U8,
+        TypeKind::U16,
+        TypeKind::U32,
+        TypeKind::U64,
+        TypeKind::U128,
+        TypeKind::Float,
+        TypeKind::F16,
+        TypeKind::F32,
         TypeKind::F64,
+        TypeKind::String,
         TypeKind::Boolean,
-        TypeKind::Option(Box::new(ty(TypeKind::String))),
+        TypeKind::Identifier,
+        TypeKind::RawPtr,
+        TypeKind::List(Box::new(type_expr(TypeKind::Int))),
+        TypeKind::Array(
+            Box::new(type_expr(TypeKind::Int)),
+            Box::new(type_expr(TypeKind::Int)),
+        ),
+        TypeKind::Map(
+            Box::new(type_expr(TypeKind::String)),
+            Box::new(type_expr(TypeKind::Int)),
+        ),
         TypeKind::Tuple(Vec::new()),
+        TypeKind::Set(Box::new(type_expr(TypeKind::Int))),
+        TypeKind::Result(
+            Box::new(type_expr(TypeKind::Int)),
+            Box::new(type_expr(TypeKind::String)),
+        ),
+        TypeKind::Future(Box::new(type_expr(TypeKind::Int))),
+        TypeKind::Function(Box::new(miri::ast::types::FunctionTypeData {
+            generics: None,
+            params: Vec::new(),
+            return_type: Some(Box::new(type_expr(TypeKind::Void))),
+        })),
+        TypeKind::Meta(Box::new(ty(TypeKind::Int))),
+        TypeKind::Option(Box::new(ty(TypeKind::String))),
+        TypeKind::Void,
+        TypeKind::Error,
+        TypeKind::Linear(Box::new(ty(TypeKind::Int))),
     ] {
         assert!(
             !FunctionTranslator::is_unresolved_generic_elem(&kind, &HashMap::new()),
             "{kind:?} must resolve"
         );
     }
+}
+
+#[test]
+fn test_all_type_definition_variants_are_resolved_for_custom_kind() {
+    let struct_def = TypeDefinition::Struct(StructDefinition {
+        generics: None,
+        traits: Vec::new(),
+        fields: Vec::new(),
+        module: String::new(),
+        has_drop: false,
+    });
+    let enum_d = TypeDefinition::Enum(enum_def([("A", vec![])]));
+    let alias_d = alias_to(TypeKind::Int);
+    let trait_d = TypeDefinition::Trait(TraitDefinition {
+        name: "MyTrait".to_string(),
+        generics: None,
+        parent_traits: Vec::new(),
+        parent_trait_args: BTreeMap::new(),
+        methods: BTreeMap::new(),
+        module: String::new(),
+    });
+
+    let table = defs([
+        ("MyStruct", struct_def),
+        ("MyEnum", enum_d),
+        ("MyAlias", alias_d),
+        ("MyTrait", trait_d),
+    ]);
+
+    for name in ["MyStruct", "MyEnum", "MyAlias", "MyTrait"] {
+        assert!(
+            !FunctionTranslator::is_unresolved_generic_elem(&custom(name), &table),
+            "custom type '{name}' defined in type_definitions must resolve"
+        );
+    }
+}
+
+#[test]
+fn test_custom_type_with_generic_args_resolves_if_definition_known() {
+    let mut class_d = class("Container");
+    class_d.generics = Some(vec![generic_param("T")]);
+    let table = defs([("Container", TypeDefinition::Class(class_d))]);
+
+    let custom_with_args = custom_of("Container", TypeKind::Int);
+    assert!(
+        !FunctionTranslator::is_unresolved_generic_elem(&custom_with_args, &table),
+        "Container<Int> must resolve if Container is defined"
+    );
+
+    let unknown_with_args = custom_of("UnknownContainer", TypeKind::Int);
+    assert!(
+        FunctionTranslator::is_unresolved_generic_elem(&unknown_with_args, &table),
+        "UnknownContainer<Int> must be unresolved when UnknownContainer is absent from definitions"
+    );
 }
 
 /// The kind a field of `class_def` has for one instantiation: the declared type
