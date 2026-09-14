@@ -112,6 +112,16 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(0, String::new());
+            return 0;
+        }
+
         set_status(0, String::new());
         if Path::new(path_str).exists() {
             1
@@ -142,6 +152,15 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            return into_raw_ptr(MiriString::from_str(""));
+        }
 
         // Check if it's a directory
         if is_dir(path_str) {
@@ -185,6 +204,16 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            return -1;
+        }
+
         let contents_str = (*contents).as_str();
         let byte_count = contents_str.len() as i64;
 
@@ -230,6 +259,16 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            return -1;
+        }
+
         let contents_str = (*contents).as_str();
         let byte_count = contents_str.len() as i64;
 
@@ -290,6 +329,16 @@ pub mod ffi {
         }
 
         let path_str = (*path).as_str();
+
+        // Reject path traversal attempts containing '..'
+        if Path::new(path_str)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            set_status(2, path_str.to_string());
+            let list = crate::miri_rt_list_new(std::mem::size_of::<*mut u8>());
+            return list;
+        }
 
         // Check if the path exists
         if !Path::new(path_str).exists() {
