@@ -417,6 +417,12 @@ pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
 /// Wrapping a bare `T` into an `Option` builds an aggregate, and Perceus retains
 /// every managed place an aggregate reads. A value a callee has just donated
 /// lives in a temp no scope releases, so that retain has to be answered.
+// TODO: the test is "the source is not an Option", not "the source is one
+// optional layer shallower than the target", so an `int?` coerced into an
+// `Option<int?>` gets no outer `Some` box and the consumer reads the inner
+// payload as an optional's address. `mir_types_structurally_match` treats any
+// two `Option`s as one value too, so the callers skip coercion before reaching
+// this test; both have to compare nesting depth.
 pub fn coercion_retains_source(op_ty: &Type, target_ty: &Type) -> bool {
     matches!(target_ty.kind, TypeKind::Option(_)) && !matches!(op_ty.kind, TypeKind::Option(_))
 }
@@ -440,6 +446,37 @@ pub fn release_coerced_source(
     if let Operand::Copy(place) | Operand::Move(place) = operand {
         ctx.emit_temp_drop(place.local, watermark, span);
     }
+}
+
+/// Wrap a bare value about to be stored into an optional slot as `Some(value)`.
+///
+/// The type checker lets a `T` stand where a `T?` is declared, and a
+/// collection's element slot is such a declaration. A collection store writes
+/// the operand it is handed, so a value kept bare would leave the slot holding
+/// the raw payload, and the next read would take that payload for the address
+/// of an optional. Returns the operand to store together with its type; a value
+/// that is already optional, or a slot that is not, passes through unchanged.
+pub fn wrap_for_optional_slot(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    op_ty: Type,
+    slot_ty: &Type,
+    watermark: usize,
+    span: Span,
+) -> (Operand, Type) {
+    if !coercion_retains_source(&op_ty, slot_ty) {
+        return (operand, op_ty);
+    }
+    let wrapped = ctx.push_temp(slot_ty.clone(), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(wrapped),
+            coerce_rvalue(operand.clone(), &op_ty, slot_ty),
+        ),
+        span,
+    });
+    release_coerced_source(ctx, &operand, &op_ty, slot_ty, watermark, span);
+    (Operand::Copy(Place::new(wrapped)), slot_ty.clone())
 }
 
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.

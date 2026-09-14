@@ -14,6 +14,7 @@ pub mod iteration;
 pub mod length;
 pub mod managed_element_transforms;
 pub mod methods;
+pub mod optional_values;
 pub mod rc_aliasing;
 pub mod scalar_widths;
 pub mod string_keys;

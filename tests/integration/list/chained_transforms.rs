@@ -301,10 +301,6 @@ fn enumerate_chained_onto_a_transform_result() {
 /// collection, a tuple. Each needed a spelling of its own before a
 /// per-instantiation body could be named for the list that holds it, and until
 /// then every chain over one handed back borrowed elements.
-///
-/// An optional element is covered nowhere here: reading one back out of a list
-/// faults before any transform is reached, so it has no working baseline a
-/// chain could be measured against.
 mod structural_elements {
     use super::*;
 
@@ -400,6 +396,29 @@ fn main()
     for v in xs
         println(f"{v.1}")
 "#,
+        );
+    }
+
+    #[test]
+    fn chain_over_an_optional_element_keeps_each_payload() {
+        assert_heap_guard_output(
+            r#"
+use system.collections.list
+use system.collections.transformable
+use system.collections.sequenced
+
+fn main()
+    var xs = List<String?>()
+    xs.push("a" + "a")
+    xs.push(None)
+    xs.push("c" + "c")
+    let out = xs.reversed().take(2)
+    for v in out
+        println(f"{v}")
+    for v in xs
+        println(f"{v}")
+"#,
+            "Some(cc)\nNone\nSome(aa)\nNone\nSome(cc)",
         );
     }
 }

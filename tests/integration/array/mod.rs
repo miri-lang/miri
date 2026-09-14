@@ -12,5 +12,6 @@ pub mod float_assignment;
 pub mod indexing;
 pub mod integration;
 pub mod methods;
+pub mod optional_elements;
 pub mod rc;
 pub mod transformable;
