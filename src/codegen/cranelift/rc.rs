@@ -89,10 +89,10 @@ impl<'a> FunctionTranslator<'a> {
     /// A recorded generic-class instantiation (`Box<String>`) routes to its
     /// per-instantiation `__decref_Box__String` wrapper so the concrete managed
     /// field is released when the runtime drops an element (`clear`, `remove_at`,
-    /// `pop`). A structural element — a tuple, an option — routes to the thunk
-    /// generated for its structure, since it has no declaration to name. All
-    /// other shapes — including non-generic classes and unrecorded
-    /// instantiations — fall back to the shared per-shape helper.
+    /// `pop`). A structural element — a tuple, an option, a function value —
+    /// routes to the thunk generated for its structure, since it has no
+    /// declaration to name. All other shapes — including non-generic classes
+    /// and unrecorded instantiations — fall back to the shared per-shape helper.
     pub(crate) fn elem_decref_addr_for_kind(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1287,11 +1287,12 @@ impl<'a> FunctionTranslator<'a> {
     /// so that overwriting an existing slot does not leak the old value.
     ///
     /// Routing: built-in collections / String use their per-shape runtime decref
-    /// helper (the fast path); user classes call `__decref_TypeName`; Tuple /
-    /// Option (the only `ElementShape::Other` variants that `is_field_managed`
-    /// reports as managed) inline through `emit_decref_value`, which dispatches
-    /// to `emit_type_drop` and recursively releases nested managed fields.
-    /// Primitive `Other` shapes are the explicit no-op branch.
+    /// helper (the fast path); user classes call `__decref_TypeName`; Tuple,
+    /// Option and function values (the only `ElementShape::Other` variants that
+    /// `is_field_managed` reports as managed) inline through
+    /// `emit_decref_value`, which dispatches to `emit_type_drop` and
+    /// recursively releases nested managed fields. Primitive `Other` shapes are
+    /// the explicit no-op branch.
     pub(crate) fn emit_managed_elem_decref(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1350,7 +1351,8 @@ impl<'a> FunctionTranslator<'a> {
             builder.ins().call(local_func, &[old_val]);
             return Ok(());
         }
-        // `Other` shapes that `is_field_managed` flags as managed (Tuple, Option)
+        // `Other` shapes that `is_field_managed` flags as managed (Tuple, Option,
+        // function values)
         // are heap-allocated with an RC header. Route through the inline
         // decref-and-drop emitter so nested managed payloads are released.
         if is_field_managed(elem_type_kind) {
@@ -1412,6 +1414,13 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(rc_block);
 
+        // TODO: the heap guard learns of a release only at the eventual free, so
+        // releasing an already-freed block reads freed memory here first and
+        // then crashes, skips silently (poison reads as an immortal count), or
+        // frees again depending on those bytes. Reporting the release to the
+        // guard before this load turns each outcome into a double-free report,
+        // but doing so exposes existing double releases the nightly guarded run
+        // does not see today, which have to be fixed before the check lands.
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
         let rc = builder.ins().load(
             ptr_type,
@@ -1676,9 +1685,9 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Generates `__decref_{symbol}(ptr)` for a structural type — a tuple or an
-    /// option, which carries managed payload but has no declaration whose name
-    /// could be mangled into a symbol. `symbol` comes from
+    /// Generates `__decref_{symbol}(ptr)` for a structural type — a tuple, an
+    /// option or a function value, which carries managed payload but has no
+    /// declaration whose name could be mangled into a symbol. `symbol` comes from
     /// [`crate::codegen::cranelift::structural_keys::structural_thunk_symbol`],
     /// which encodes the type's structure so distinct types get distinct thunks.
     ///

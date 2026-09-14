@@ -27,6 +27,19 @@ fn is_field_managed_classifies_heap_types() {
     assert!(!is_field_managed(&TypeKind::Boolean));
 }
 
+/// A function value is a closure allocation of its own, so a field or element
+/// holding one must release it.
+#[test]
+fn is_field_managed_includes_function_values() {
+    use miri::ast::types::FunctionTypeData;
+    let fn_kind = TypeKind::Function(Box::new(FunctionTypeData {
+        generics: None,
+        params: Vec::new(),
+        return_type: None,
+    }));
+    assert!(is_field_managed(&fn_kind));
+}
+
 /// A vector element is stored inline in the collection's buffer, so the drop
 /// path must not read its bytes as a pointer and release them.
 #[test]

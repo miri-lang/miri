@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::{BuiltinCollectionKind, TypeKind};
-use miri::codegen::cranelift::translator::{is_capture_managed, needs_out_pointer, ElementShape};
+use miri::codegen::cranelift::translator::{needs_out_pointer, ElementShape};
 use miri::codegen::cranelift::FunctionTranslator;
 
 use miri::ast::expression::{Expression, ExpressionKind};
@@ -122,20 +122,6 @@ fn classify_element_shape_primitives_are_other() {
             ElementShape::Other
         ));
     }
-}
-
-#[test]
-fn is_capture_managed_includes_functions() {
-    use miri::ast::types::FunctionTypeData;
-    let fn_kind = TypeKind::Function(Box::new(FunctionTypeData {
-        generics: None,
-        params: Vec::new(),
-        return_type: None,
-    }));
-    assert!(is_capture_managed(&fn_kind));
-    // Reuses is_field_managed for everything else.
-    assert!(is_capture_managed(&TypeKind::String));
-    assert!(!is_capture_managed(&TypeKind::Int));
 }
 
 #[test]

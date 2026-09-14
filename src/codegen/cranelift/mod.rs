@@ -357,9 +357,7 @@ impl CraneliftBackend {
                 continue;
             }
             let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
-                crate::codegen::cranelift::translator::is_capture_managed(
-                    &body.local_decls[cap_local.0].ty.kind,
-                )
+                crate::mir::rc::is_field_managed(&body.local_decls[cap_local.0].ty.kind)
             });
             if has_managed {
                 FunctionTranslator::generate_closure_destructor(
@@ -765,8 +763,9 @@ impl CraneliftBackend {
     ///
     /// A collection releases the entries it discards through a drop callback,
     /// which takes the address of a decref function. An entry that is a named
-    /// type already has one; a tuple or an option has no declaration to name, so
-    /// its thunk is generated here, keyed by the entry type's structure.
+    /// type already has one; a tuple, an option or a function value has no
+    /// declaration to name, so its thunk is generated here, keyed by the entry
+    /// type's structure.
     fn generate_structural_element_decref_functions(
         &self,
         module: &mut ObjectModule,

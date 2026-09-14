@@ -1874,7 +1874,7 @@ impl<'a> FunctionTranslator<'a> {
         let has_managed = capture_ops.iter().any(|op| match op {
             Operand::Copy(p) | Operand::Move(p) => {
                 let kind = &type_ctx.local_types[p.local.0].kind;
-                super::translator::is_capture_managed(kind)
+                crate::mir::rc::is_field_managed(kind)
             }
             Operand::Constant(_) => false,
         });

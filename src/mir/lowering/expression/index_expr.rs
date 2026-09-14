@@ -171,6 +171,14 @@ fn lower_map_index_read(
     // Indexing reads through to the entry the map still owns, so the result is a
     // borrow: the intrinsic does not raise the count, and releasing it would take
     // a reference away from the map that is still holding the value.
+    //
+    // TODO: only the temp path is marked borrowed. When a destination is
+    // supplied — `let v = m[k]` — the borrowed pointer is written straight into
+    // a binding that releases it at scope end, and the map releases the entry
+    // again: a double release of a managed value. Calling into a borrowed temp
+    // and copying that into the destination, as a list index read does, raises
+    // the count for the binding. Its tests only fail under the heap guard once
+    // the guard can see a release before the release reads the freed block.
     let borrows = ctx.is_perceus_managed(&result_ty.kind);
     let (destination, op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))

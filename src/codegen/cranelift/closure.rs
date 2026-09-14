@@ -8,10 +8,9 @@
 //! without needing static knowledge of capture types at the drop site.
 
 use crate::ast::types::Type;
-use crate::codegen::cranelift::translator::{
-    empty_module_ctx, is_capture_managed, FunctionTranslator, TypeCtx,
-};
+use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
+use crate::mir::rc::is_field_managed;
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
 
@@ -116,7 +115,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
             let cap_ty = &body.local_decls[cap_local.0].ty;
-            if is_capture_managed(&cap_ty.kind) {
+            if is_field_managed(&cap_ty.kind) {
                 let offset = (2 + i as i64) * ptr_size;
                 let cap_ptr = builder
                     .ins()
