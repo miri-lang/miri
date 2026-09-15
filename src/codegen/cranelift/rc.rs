@@ -1413,14 +1413,8 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
 
         builder.switch_to_block(rc_block);
+        Self::emit_release_check(builder, ctx, ptr)?;
 
-        // TODO: the heap guard learns of a release only at the eventual free, so
-        // releasing an already-freed block reads freed memory here first and
-        // then crashes, skips silently (poison reads as an immortal count), or
-        // frees again depending on those bytes. Reporting the release to the
-        // guard before this load turns each outcome into a double-free report,
-        // but doing so exposes existing double releases the nightly guarded run
-        // does not see today, which have to be fixed before the check lands.
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
         let rc = builder.ins().load(
             ptr_type,
@@ -1775,8 +1769,9 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit the body of `__decref_TypeName`: null guard → immortal guard →
-    /// decrement RC → when RC hits zero call `__drop_TypeName(ptr)` → return.
+    /// Emit the body of `__decref_TypeName`: null guard → heap-guard release
+    /// check → immortal guard → decrement RC → when RC hits zero call
+    /// `__drop_TypeName(ptr)` → return.
     fn emit_decref_body(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
@@ -1794,6 +1789,10 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(entry_block);
         let ptr = builder.block_params(entry_block)[0];
 
+        let mut string_literals = BTreeMap::new();
+        let empty_kernel_registry = HashMap::new();
+        let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
+
         // Null guard.
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder
@@ -1803,9 +1802,11 @@ impl<'a> FunctionTranslator<'a> {
         let merge_block = builder.create_block();
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
 
-        // Load RC + check immortal flag (high bit set).
+        // Report the release to the heap guard, then load RC + check immortal
+        // flag (high bit set).
         builder.switch_to_block(rc_block);
         builder.seal_block(rc_block);
+        Self::emit_release_check(&mut builder, &mut module_ctx, ptr)?;
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
         let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
         let is_immortal = builder.ins().icmp_imm(
@@ -1833,9 +1834,28 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .brif(is_zero, free_block, &[], merge_block, &[]);
 
-        // `__drop_TypeName(ptr)` call site.
         builder.switch_to_block(free_block);
         builder.seal_block(free_block);
+        Self::call_type_drop(&mut builder, module_ctx.module, type_name, sig, ptr)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.switch_to_block(merge_block);
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize();
+        Ok(())
+    }
+
+    /// Emit the call `__drop_{type_name}(ptr)`, which runs the type's drop hook,
+    /// releases its managed fields and frees it. `sig` is the drop thunk's
+    /// `(ptr) -> void` signature.
+    fn call_type_drop(
+        builder: &mut FunctionBuilder,
+        module: &mut ObjectModule,
+        type_name: &str,
+        sig: &Signature,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
         let mut drop_name = String::with_capacity(7 + type_name.len());
         drop_name.push_str("__drop_");
         drop_name.push_str(type_name);
@@ -1844,12 +1864,6 @@ impl<'a> FunctionTranslator<'a> {
             .map_err(|e| CodegenError::declare_function(drop_name.clone(), e.to_string()))?;
         let local_drop = module.declare_func_in_func(drop_func_id, builder.func);
         builder.ins().call(local_drop, &[ptr]);
-        builder.ins().jump(merge_block, &[]);
-
-        builder.switch_to_block(merge_block);
-        builder.seal_block(merge_block);
-        builder.ins().return_(&[]);
-        builder.finalize();
         Ok(())
     }
 

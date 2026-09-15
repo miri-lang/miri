@@ -1341,6 +1341,22 @@ fn retain_still_held_value(ctx: &mut LoweringContext, op: &Operand, op_ty: &Type
     });
 }
 
+/// The type of the value `op` carries for the argument `arg`.
+///
+/// A local holds exactly its declared type, but a projected place — an element
+/// or a field read in place — does not: [`Operand::ty`] reports the base local's
+/// type, a collection or an aggregate, which would make every such argument look
+/// like it needs converting. The type checker's type for the argument is the
+/// element's own.
+fn argument_type(ctx: &LoweringContext, op: &Operand, arg: &Expression) -> Type {
+    match op {
+        Operand::Copy(place) | Operand::Move(place) if !place.projection.is_empty() => {
+            ctx.resolved_type(arg)
+        }
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => op.ty(&ctx.body).clone(),
+    }
+}
+
 fn lower_and_coerce_args(
     ctx: &mut LoweringContext,
     args: &[Expression],
@@ -1354,7 +1370,7 @@ fn lower_and_coerce_args(
         if let Some(params) = param_types {
             if i < params.len() {
                 let target_ty = ctx.resolved_type(&params[i].typ);
-                let op_ty = op.ty(&ctx.body).clone();
+                let op_ty = argument_type(ctx, &op, arg);
                 if op_ty.kind != target_ty.kind && !spellings_of_one_value(&op_ty, &target_ty) {
                     let temp = ctx.push_temp(target_ty.clone(), arg.span);
                     retain_still_held_value(ctx, &op, &op_ty, arg.span);

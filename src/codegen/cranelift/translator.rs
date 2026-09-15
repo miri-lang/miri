@@ -2030,6 +2030,32 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_release_check(ptr)`, while the runtime is tracking, so the
+    /// heap guard sees a release of `ptr` before compiled code reads the
+    /// reference count below it — which, on a block already freed, is a read
+    /// of freed memory.
+    pub(crate) fn emit_release_check(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        Self::emit_tracked(builder, ctx, |builder, ctx| {
+            Self::call_cached_func(
+                builder,
+                ctx.module,
+                &mut ctx.cached_funcs,
+                CallSite {
+                    name: rt::RELEASE_CHECK,
+                    param_types: &[ptr_type],
+                    return_types: &[],
+                    args: &[ptr],
+                },
+            )?;
+            Ok(())
+        })
+    }
+
     /// Calls `miri_rt_class_free_track(ptr)` so the heap guard witnesses an
     /// inline `free` before compiled code performs it.
     pub(crate) fn call_rt_class_free_track(

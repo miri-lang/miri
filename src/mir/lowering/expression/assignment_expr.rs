@@ -107,7 +107,7 @@ fn handle_managed_place_assign(
     rhs_watermark: &usize,
 ) -> Result<Operand, LoweringError> {
     if matches!(lhs_ty.kind, TypeKind::Function(_)) {
-        sync_closure_captures(ctx, local, &rhs_place, expr.span);
+        sync_closure_captures(ctx, local, &rhs_place);
     }
 
     // Check for cross-residency upload: gpu-resident LHS assigned from host-resident RHS array.
@@ -146,28 +146,12 @@ fn handle_managed_place_assign(
     }
 }
 
-fn sync_closure_captures(
-    ctx: &mut LoweringContext,
-    local: crate::mir::Local,
-    rhs_place: &Place,
-    span: crate::error::syntax::Span,
-) {
-    if let Some(old_caps) = ctx.body.closure_capture_types.get(&local).cloned() {
-        for (cap_idx, cap_ty) in old_caps.iter().enumerate() {
-            if crate::mir::types::MirType::from_type_kind(&cap_ty.kind)
-                .is_managed(&ctx.body.unmanaged_type_names, &ctx.body.type_params)
-            {
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::DecRef(Place {
-                        local,
-                        projection: vec![PlaceElem::Field(cap_idx)],
-                    }),
-                    span,
-                });
-            }
-        }
-    }
-
+/// Moves the capture types recorded for `rhs_place` onto `local`, so the closure
+/// `local` now holds is described by its own captures.
+///
+/// The closure `local` held before is released by the reassignment itself, and
+/// its destructor releases that closure's captures, so none are released here.
+fn sync_closure_captures(ctx: &mut LoweringContext, local: crate::mir::Local, rhs_place: &Place) {
     match ctx.body.closure_capture_types.remove(&rhs_place.local) {
         Some(new_caps) => {
             ctx.body.closure_capture_types.insert(local, new_caps);

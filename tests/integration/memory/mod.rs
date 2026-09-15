@@ -8,6 +8,7 @@ pub mod closures;
 pub mod collections;
 pub mod drop_call;
 pub mod edge_cases;
+pub mod element_call_arguments;
 pub mod enums;
 pub mod escape_analysis;
 pub mod field_projections;

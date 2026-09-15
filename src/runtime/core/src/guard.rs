@@ -404,7 +404,44 @@ impl GuardState {
             },
         }
     }
+
+    /// The key of the freed block that releasing `payload_ptr` would reach, or
+    /// `None` when the release is sound as far as the table knows.
+    ///
+    /// Compiled code releases two layouts through one inline sequence: a
+    /// runtime allocation, recorded under its payload, and a block compiled
+    /// code allocated itself, recorded under its base [`INLINE_PAYLOAD_OFFSET`]
+    /// below the payload. Records outlive their blocks, so a stale record of
+    /// either layout can sit at the other's key once an address is reused; a
+    /// live record at either key therefore settles the pointer as live.
+    pub fn freed_release_target(&self, payload_ptr: usize) -> Option<usize> {
+        if payload_ptr == 0 {
+            return None;
+        }
+        let runtime_block = self
+            .table
+            .get(&payload_ptr)
+            .filter(|record| !record.raw_block)
+            .map(|record| (payload_ptr, record));
+        let inline_block = payload_ptr
+            .checked_sub(INLINE_PAYLOAD_OFFSET)
+            .and_then(|base| self.table.get(&base).map(|record| (base, record)))
+            .filter(|(_, record)| record.raw_block);
+        let candidates = [runtime_block, inline_block];
+        if candidates
+            .iter()
+            .flatten()
+            .any(|(_, record)| record.state == AllocState::Live)
+        {
+            return None;
+        }
+        candidates.into_iter().flatten().map(|(key, _)| key).next()
+    }
 }
+
+/// Distance from the base of a block compiled code allocates to the payload
+/// it hands out: the base lays out `[malloc pointer][RC][payload]`.
+pub const INLINE_PAYLOAD_OFFSET: usize = 2 * std::mem::size_of::<usize>();
 
 /// Guard enabled flag, cached from environment variable.
 static GUARD_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -956,6 +993,31 @@ pub unsafe fn guard_check(ptr: *mut u8) {
     }
 }
 
+/// Reports a double free when compiled code is about to release a block the
+/// guard has already seen freed, before the release reads anything of it.
+///
+/// An inline release loads the reference count below the payload to decide
+/// whether to free. On a freed block that count is whatever the allocator or
+/// the poison left there, so the release crashes, skips silently, or frees a
+/// second time depending on the bytes; checking first makes every one of those
+/// the same report. A no-op when the guard is disabled; treats null as live.
+pub fn guard_check_release(payload: *mut u8) {
+    if !is_guard_enabled() || payload.is_null() {
+        return;
+    }
+    let freed = {
+        let guard = GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard
+            .as_ref()
+            .and_then(|state| state.freed_release_target(payload as usize))
+    };
+    if let Some(key) = freed {
+        report_and_abort(FreeVerdict::DoubleFree, key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1313,6 +1375,81 @@ mod tests {
         unsafe {
             dealloc(base_ptr, layout);
         }
+    }
+
+    /// Releasing a block compiled code allocated, after it was freed, names the
+    /// block by the base it was recorded under. Raw records are never read
+    /// through, so plain addresses stand in for real blocks.
+    #[test]
+    fn release_of_freed_inline_block_names_its_base() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        let site = Location::caller();
+        let base = 0x10_0000;
+        let payload = base + INLINE_PAYLOAD_OFFSET;
+
+        state.record_alloc_raw(base, AllocKind::Class, site);
+        assert_eq!(state.freed_release_target(payload), None);
+
+        state.record_free_raw(base, site);
+        assert_eq!(state.freed_release_target(payload), Some(base));
+    }
+
+    /// Releasing a runtime allocation after it was freed names its payload.
+    #[test]
+    fn release_of_freed_runtime_block_names_its_payload() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        let site = Location::caller();
+        let (payload, layout) = alloc_block(64);
+
+        state.record_alloc(payload, 64, AllocKind::String, site);
+        assert_eq!(state.freed_release_target(payload), None);
+
+        state.record_free(payload, site);
+        assert_eq!(state.freed_release_target(payload), Some(payload));
+
+        unsafe { dealloc((payload - RC_HEADER_SIZE) as *mut u8, layout) };
+    }
+
+    /// A stale freed record left at a live block's other key is not a double
+    /// free: the live record at the block's own key decides.
+    #[test]
+    fn release_of_live_block_ignores_stale_record_at_other_key() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        let site = Location::caller();
+
+        let (runtime_payload, runtime_layout) = alloc_block(64);
+        let stale_base = runtime_payload - INLINE_PAYLOAD_OFFSET;
+        state.record_alloc_raw(stale_base, AllocKind::Class, site);
+        state.record_free_raw(stale_base, site);
+        state.record_alloc(runtime_payload, 64, AllocKind::String, site);
+        assert_eq!(state.freed_release_target(runtime_payload), None);
+
+        let (stale_payload, stale_layout) = alloc_block(64);
+        state.record_alloc(stale_payload, 64, AllocKind::String, site);
+        state.record_free(stale_payload, site);
+        state.record_alloc_raw(
+            stale_payload - INLINE_PAYLOAD_OFFSET,
+            AllocKind::Class,
+            site,
+        );
+        assert_eq!(state.freed_release_target(stale_payload), None);
+
+        unsafe {
+            dealloc(
+                (runtime_payload - RC_HEADER_SIZE) as *mut u8,
+                runtime_layout,
+            );
+            dealloc((stale_payload - RC_HEADER_SIZE) as *mut u8, stale_layout);
+        }
+    }
+
+    /// A pointer the guard never saw is not reported.
+    #[test]
+    fn release_of_untracked_pointer_is_not_reported() {
+        let state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        assert_eq!(state.freed_release_target(0x30_0000), None);
+        assert_eq!(state.freed_release_target(0), None);
+        assert_eq!(state.freed_release_target(1), None);
     }
 
     #[test]

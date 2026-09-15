@@ -8,6 +8,7 @@
 // them on intrinsic entry.
 
 use super::super::utils::*;
+use crate::utils::miri_run_with_env;
 
 /// A normal program using lists, maps, strings runs clean under MIRI_HEAP_GUARD=1.
 /// The most important test: a sanitizer that false-positives on correct code is worthless.
@@ -59,6 +60,73 @@ fn main()
             "first freed at",
             "freed again at",
         ],
+    );
+}
+
+/// A closure released after it was already freed is reported as a double free,
+/// rather than the release reading the freed closure's reference count and
+/// crashing, skipping, or freeing it again depending on what that memory holds.
+///
+/// The list holds a second reference, so dropping it releases the closure the
+/// hook already freed.
+#[test]
+fn test_heap_guard_traps_closure_released_twice() {
+    assert_heap_guard_detects(
+        r#"
+use system.collections.list
+use system.testing
+
+fn main()
+    let tag = f"cap{1}"
+    let f = fn() int: tag.length()
+    let owners = List([f])
+    simulate_closure_over_release(f)
+    println(f"{owners.length()}")
+"#,
+        &["double-free detected", "allocated at", "first freed at"],
+    );
+}
+
+/// A class element a list releases through its drop callback after the element
+/// was already freed is reported by that callback, before it reads the freed
+/// instance's reference count.
+///
+/// The program must stop at `clear`: a report only at the binding's later scope
+/// exit would come from a different release and leave the callback unchecked,
+/// so the output after `clear` is asserted absent.
+#[test]
+fn test_heap_guard_traps_class_element_released_twice_by_drop_callback() {
+    let result = miri_run_with_env(
+        r#"
+use system.collections.list
+
+class Box
+    var n int
+
+runtime "core" fn miri_rt_test_simulate_inline_over_release(b Box)
+
+fn main()
+    let b = Box(n: 7)
+    var owners = List<Box>()
+    owners.push(b)
+    miri_rt_test_simulate_inline_over_release(b)
+    println("released")
+    owners.clear()
+    println("cleared")
+"#,
+        "MIRI_HEAP_GUARD",
+        "1",
+    );
+    assert!(
+        !result.success && result.stderr.contains("double-free detected"),
+        "expected a double-free report, got:\n{}",
+        result.output()
+    );
+    assert_eq!(
+        result.stdout.trim(),
+        "released",
+        "the report must come from `clear`:\n{}",
+        result.output()
     );
 }
 

@@ -125,18 +125,9 @@ fn finish_index_read(
         ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
         Ok(Operand::Copy(Place::new(elem_temp)))
     } else {
-        // obj accessed via Move — no IncRef, no drop. Return the projected place.
-        //
-        // TODO: a struct read this way and passed straight to a function is
-        // freed in place, and the collection is left holding a zeroed element.
-        // `List([Item("bolt", 4)])` then `takes_item(items[0])` leaves
-        // `items[0].qty` reading 0; binding it first (`let it = items[0]`) or
-        // iterating with `for` is unaffected, and an `int` or `String` element
-        // is unaffected. The place handed back here is a borrow by design, so
-        // either this path must raise the count when the element is managed, or
-        // the call lowering must stop releasing an argument that is one. Which
-        // of the two is wrong has not been established; do not fix one on the
-        // guess.
+        // obj accessed via Move — no IncRef, no drop. The projected place is a
+        // borrow of the element the collection still holds; a consumer that
+        // keeps it copies it, which raises the count.
         Ok(Operand::Copy(indexed_place))
     }
 }
@@ -170,25 +161,20 @@ fn lower_map_index_read(
 
     // Indexing reads through to the entry the map still owns, so the result is a
     // borrow: the intrinsic does not raise the count, and releasing it would take
-    // a reference away from the map that is still holding the value.
-    //
-    // TODO: only the temp path is marked borrowed. When a destination is
-    // supplied — `let v = m[k]` — the borrowed pointer is written straight into
-    // a binding that releases it at scope end, and the map releases the entry
-    // again: a double release of a managed value. Calling into a borrowed temp
-    // and copying that into the destination, as a list index read does, raises
-    // the count for the binding. Its tests only fail under the heap guard once
-    // the guard can see a release before the release reads the freed block.
+    // a reference away from the map that is still holding the value. A borrowed
+    // result therefore always lands in a borrowed temp; a destination that owns
+    // what it holds, such as a `let` binding, takes a copy of it, which raises
+    // the count for the binding to release.
     let borrows = ctx.is_perceus_managed(&result_ty.kind);
-    let (destination, op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        let temp = ctx.push_temp(result_ty, expr.span);
-        if borrows {
-            ctx.mark_borrowed_temp(temp);
+    let destination = match &dest {
+        Some(d) if !borrows => d.clone(),
+        Some(_) | None => {
+            let temp = ctx.push_temp(result_ty, expr.span);
+            if borrows {
+                ctx.mark_borrowed_temp(temp);
+            }
+            Place::new(temp)
         }
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
     };
 
     let target_bb = ctx.new_basic_block();
@@ -198,12 +184,21 @@ fn lower_map_index_read(
             args: vec![obj_op, key_op],
             out_args: Vec::new(),
             arg_handles: Vec::new(),
-            destination,
+            destination: destination.clone(),
             target: Some(target_bb),
         },
         expr.span,
     ));
     ctx.set_current_block(target_bb);
 
-    Ok(op)
+    match dest {
+        Some(d) if borrows => {
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(destination))),
+                span: expr.span,
+            });
+            Ok(Operand::Copy(d))
+        }
+        Some(_) | None => Ok(Operand::Copy(destination)),
+    }
 }

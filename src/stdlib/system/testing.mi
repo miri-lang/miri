@@ -62,3 +62,14 @@ runtime "core" fn miri_rt_test_simulate_double_free()
 /// heap guard fires; without the guard this really does corrupt the heap.
 public fn simulate_double_free()
     miri_rt_test_simulate_double_free()
+
+runtime "core" fn miri_rt_test_simulate_closure_over_release(f fn() int)
+
+/// Frees the closure `f` outright, as a spurious extra release would.
+///
+/// The next release of `f` is then a double release. Under MIRI_HEAP_GUARD it
+/// is trapped and the process aborts with a double-free report before the
+/// release reads the freed closure. Use in tests that verify the heap guard
+/// fires; without the guard this really does use freed memory.
+public fn simulate_closure_over_release(f fn() int)
+    miri_rt_test_simulate_closure_over_release(f)

@@ -402,3 +402,83 @@ fn main()
         "ok",
     );
 }
+
+/// A map value bound by indexing is a reference of the binding's own: the map
+/// still holds the entry, so both release it without either releasing it twice.
+#[test]
+fn test_map_index_bound_string_value_is_released_once() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, String>()
+    m.set("a", f"x{1}")
+    let v = m['a']
+    println(v)
+    println(m['a'])
+"#,
+        "x1\nx1",
+    );
+}
+
+/// The same holds for a class instance: the binding going out of scope leaves
+/// the map's entry live and readable.
+#[test]
+fn test_map_index_bound_class_value_outlives_binding() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+class Box
+    var n int
+
+fn peek(m Map<String, Box>) int
+    let b = m['a']
+    return b.n
+
+fn main()
+    var m = Map<String, Box>()
+    m.set("a", Box(n: 4))
+    println(f"{peek(m)}")
+    println(f"{peek(m)}")
+    let again = m['a']
+    println(f"{again.n}")
+"#,
+        "4\n4\n4",
+    );
+}
+
+/// A map value read by indexing into a struct field, a tuple slot, a list
+/// element, a return value and a method receiver each keeps a reference of its
+/// own, and the map's entry survives all of them.
+#[test]
+fn test_map_index_read_into_every_holder_is_released_once() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+use system.collections.list
+use system.memory
+
+struct Holder
+    s String
+
+fn give(m Map<String, String>) String
+    return m["a"]
+
+fn main()
+    var m = Map<String, String>()
+    m.set("a", f"x{4}")
+    var v = m["a"]
+    v = m["a"]
+    let h = Holder(m["a"])
+    let t = (m["a"], 1)
+    let r = give(m.clone())
+    var l = List([f"y{0}"])
+    l[0] = m["a"]
+    let w = m["a"].length()
+    println(f"{v} {h.s} {t.0} {r} {l[0]} {w}")
+"#,
+        "x4 x4 x4 x4 x4 2",
+    );
+}

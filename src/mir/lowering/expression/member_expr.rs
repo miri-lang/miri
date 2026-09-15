@@ -48,18 +48,14 @@ fn lower_tuple_field_access(
     ctx: &mut LoweringContext,
     mut obj_place: Place,
     idx: usize,
-    elements: &[Expression],
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     obj_place.projection.push(PlaceElem::Field(idx));
-    let element_ty = resolve_type(ctx.type_checker, &elements[idx]);
 
-    let operand = if ctx.is_type_auto_copy(&element_ty) {
-        Operand::Copy(obj_place.clone())
-    } else {
-        Operand::Move(obj_place.clone())
-    };
+    // Reading an element leaves it in the tuple, which still releases it, so the
+    // read is a copy: a binding that takes it gets a reference of its own.
+    let operand = Operand::Copy(obj_place);
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -472,12 +468,12 @@ pub(crate) fn lower_member_expr(
     };
 
     // Handle Tuple Member Access
-    if let TypeKind::Tuple(elements) = &obj_ty.kind {
+    if let TypeKind::Tuple(_) = &obj_ty.kind {
         if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) = &prop.node {
             let idx = extract_integer_index(val);
             let obj_place = ensure_place(ctx, obj_operand, obj.span);
             let base = obj_place.local;
-            let result = lower_tuple_field_access(ctx, obj_place, idx, elements, expr, dest)?;
+            let result = lower_tuple_field_access(ctx, obj_place, idx, expr, dest)?;
             release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
             return Ok(result);
         }
