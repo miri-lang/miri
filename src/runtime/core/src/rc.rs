@@ -260,6 +260,59 @@ pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
     crate::guard::guard_free_raw(ptr);
 }
 
+/// Witnesses that compiled code is about to release a managed value, so the
+/// heap guard can report a release of a block that was already freed before
+/// the release reads that block's reference count.
+///
+/// `ptr` is the value's payload pointer, whichever layout it was allocated
+/// with; nothing behind it is read.
+#[no_mangle]
+pub extern "C" fn miri_rt_release_check(ptr: *mut u8) {
+    crate::guard::resolve_tracking_state();
+    crate::guard::guard_check_release(ptr);
+}
+
+/// Frees a closure outright, as a spurious extra release would, so a test can
+/// prove the heap guard reports the release compiled code makes afterwards.
+///
+/// The closure's own capture destructor is not run: this stands in for the
+/// defect, not for a correct drop.
+///
+/// # Safety
+/// For testing only. `closure` must be a live closure payload compiled code
+/// allocated, or null. Without the heap guard the later release is a genuine
+/// use after free.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_closure_over_release(closure: *mut u8) {
+    if closure.is_null() {
+        return;
+    }
+    miri_rt_closure_free_track();
+    miri_rt_test_simulate_inline_over_release(closure);
+}
+
+/// Frees a block compiled code allocated inline — a class instance, a tuple,
+/// an option — outright, as a spurious extra release would, so a test can
+/// prove the heap guard reports the release compiled code makes afterwards.
+///
+/// Nothing the block holds is released: this stands in for the defect, not for
+/// a correct drop. The block's layout is `[malloc pointer][RC][payload]`, so its
+/// base sits [`crate::guard::INLINE_PAYLOAD_OFFSET`] below `payload`.
+///
+/// # Safety
+/// For testing only. `payload` must be the payload of a live block compiled
+/// code allocated, or null. Without the heap guard the later release is a
+/// genuine use after free.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_inline_over_release(payload: *mut u8) {
+    if payload.is_null() {
+        return;
+    }
+    let base = payload.sub(crate::guard::INLINE_PAYLOAD_OFFSET);
+    miri_rt_class_free_track(base);
+    libc::free(base as *mut libc::c_void);
+}
+
 /// Frees the same allocation twice, to verify the heap guard's double-free trap.
 ///
 /// With `MIRI_HEAP_GUARD=1` the second release is caught and the process aborts

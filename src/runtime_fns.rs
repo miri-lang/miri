@@ -33,6 +33,13 @@ pub mod rt {
     /// Test-only: frees one allocation twice to verify the heap guard's
     /// double-free trap.
     pub const SIMULATE_DOUBLE_FREE: &str = "miri_rt_test_simulate_double_free";
+    /// Test-only: frees a closure outright so the release compiled code makes
+    /// afterwards is a double release the heap guard must report.
+    pub const SIMULATE_CLOSURE_OVER_RELEASE: &str = "miri_rt_test_simulate_closure_over_release";
+    /// Test-only: frees a block compiled code allocated inline — a class
+    /// instance, a tuple, an option — outright, so the release compiled code
+    /// makes afterwards is a double release the heap guard must report.
+    pub const SIMULATE_INLINE_OVER_RELEASE: &str = "miri_rt_test_simulate_inline_over_release";
     /// Compiler-internal: registers an inline `malloc` with the heap guard, not
     /// in stdlib. Covers class instances, tuples, Options, enum payloads and
     /// closure environments, which codegen allocates without the runtime.
@@ -40,6 +47,9 @@ pub mod rt {
     /// Compiler-internal: witnesses an inline `free` for the heap guard, not in
     /// stdlib. Paired with [`CLASS_ALLOC_TRACK`].
     pub const CLASS_FREE_TRACK: &str = "miri_rt_class_free_track";
+    /// Compiler-internal: lets the heap guard see an inline release before it
+    /// reads the released block, not in stdlib. Paired with [`CLASS_FREE_TRACK`].
+    pub const RELEASE_CHECK: &str = "miri_rt_release_check";
     /// Compiler-internal: runtime byte telling compiled code whether either
     /// tracking hook above is worth calling. A data symbol, not a function —
     /// codegen loads it and branches, so an unobserved allocation pays a load
@@ -282,8 +292,11 @@ pub mod rt {
         CLOSURE_FREE_TRACK,
         CLOSURE_SIMULATE_LEAK,
         SIMULATE_DOUBLE_FREE,
+        SIMULATE_CLOSURE_OVER_RELEASE,
+        SIMULATE_INLINE_OVER_RELEASE,
         CLASS_ALLOC_TRACK,
         CLASS_FREE_TRACK,
+        RELEASE_CHECK,
         TRACKING_STATE,
         // Array
         ARRAY_NEW,

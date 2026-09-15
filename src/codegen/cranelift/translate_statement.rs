@@ -195,6 +195,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
 
         builder.switch_to_block(rc_block);
+        Self::emit_release_check(builder, ctx, ptr)?;
         let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size));
         let rc = builder.ins().load(
             ptr_type,

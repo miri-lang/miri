@@ -452,3 +452,43 @@ fn main()
         "6",
     );
 }
+
+/// Reassigning a variable that holds a capturing closure releases that closure,
+/// and the closure's own destructor releases its captures: the capture is not
+/// released a second time on top of that, whether the new closure captures or
+/// not.
+#[test]
+fn test_reassigning_a_capturing_closure_releases_its_capture_once() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let data = List([1, 2, 3])
+    var f = fn() int: data.length()
+    println(f"{f()}")
+    f = fn() int: 99
+    println(f"{f()}")
+    f = fn() int: data.length() + 10
+    println(f"{f()} {data.length()}")
+"#,
+        "3\n99\n13 3",
+    );
+}
+
+/// A closure still held elsewhere keeps its captures when the variable it was
+/// read from is reassigned.
+#[test]
+fn test_reassigning_a_shared_capturing_closure_keeps_its_capture_alive() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let tag = f"tag{1}"
+    var f = fn() int: tag.length()
+    let keep = f
+    f = fn() int: 0
+    println(f"{keep()} {f()} {tag}")
+"#,
+        "4 0 tag1",
+    );
+}
