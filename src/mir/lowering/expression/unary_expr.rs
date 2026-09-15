@@ -65,8 +65,7 @@ pub(crate) fn lower_unary_expr(
         crate::ast::operator::UnaryOp::Plus => {
             return Ok(op_val);
         }
-        // BitwiseNot - similar to Not
-        crate::ast::operator::UnaryOp::BitwiseNot => UnOp::Not,
+        crate::ast::operator::UnaryOp::BitwiseNot => UnOp::BitwiseNot,
     };
 
     // Use the type-checker's resolved type for the unary expression.

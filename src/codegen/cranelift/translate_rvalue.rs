@@ -2489,13 +2489,12 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
             UnOp::Not => {
-                if ty == cl_types::I8 {
-                    // Logical not for booleans (I8): flip 0↔1 via XOR
-                    builder.ins().bxor_imm(val, 1)
-                } else {
-                    // Bitwise not for integers
-                    builder.ins().bnot(val)
-                }
+                // Logical not for booleans (I8): flip 0↔1 via XOR
+                builder.ins().bxor_imm(val, 1)
+            }
+            UnOp::BitwiseNot => {
+                // Bitwise not for integer types
+                builder.ins().bnot(val)
             }
             UnOp::Await => {
                 return Err(CodegenError::Internal(
