@@ -479,7 +479,7 @@ fn lower_nested_function_decl(
             stmt.span,
         ));
     };
-    let ty = Type::new(
+    let written_ty = Type::new(
         TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
             generics: None,
             params: decl.params.clone(),
@@ -487,8 +487,9 @@ fn lower_nested_function_decl(
         })),
         stmt.span,
     );
+    let ty = super::apply_generic_sub(&written_ty, &ctx.generic_subs);
     let closure = ClosureSource {
-        name: format!("__nested_{}_{}", decl.name, stmt.id).into(),
+        name: ctx.closure_symbol(format!("__nested_{}_{}", decl.name, stmt.id)),
         self_name: Some(&decl.name),
         params: &decl.params,
         return_type: decl.return_type.as_deref(),

@@ -34,7 +34,7 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::identifier_expr::lower_self_reference_value;
 use crate::mir::lowering::helpers::{lower_as_return, resolve_type};
-use crate::mir::lowering::resolve_execution_model;
+use crate::mir::lowering::{apply_generic_sub, resolve_execution_model};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -146,13 +146,13 @@ pub(crate) fn lower_lambda_expr(
         unreachable!()
     };
     let closure = ClosureSource {
-        name: format!("__lambda_{}", expr.id).into(),
+        name: ctx.closure_symbol(format!("__lambda_{}", expr.id)),
         self_name: None,
         params: &lambda.params,
         return_type: lambda.return_type.as_deref(),
         body: &lambda.body,
         properties: &lambda.properties,
-        ty: resolve_type(ctx.type_checker, expr),
+        ty: apply_generic_sub(&resolve_type(ctx.type_checker, expr), &ctx.generic_subs),
         span: expr.span,
     };
     lower_closure(ctx, &closure, dest)
@@ -201,47 +201,10 @@ fn lower_closure_body(
 ) -> Result<(Body, Vec<CapturedVar>), LoweringError> {
     let span = closure.span;
     let ret_ty = match closure.return_type {
-        Some(ret_expr) => resolve_type(ctx.type_checker, ret_expr),
+        Some(ret_expr) => ctx.resolved_type(ret_expr),
         None => Type::new(TypeKind::Void, span),
     };
-    let execution_model = resolve_execution_model(closure.properties);
-
-    // arg_count = 1 (env_ptr) + user params. Captures are loaded from the
-    // environment, not passed, so they do not count.
-    let mut lambda_body = Body::new(1 + closure.params.len(), span, execution_model);
-
-    // Local 0: return value — allocated directly in body before context creation.
-    lambda_body.new_local(LocalDecl::new(ret_ty.clone(), span));
-
-    // NOTE: all param locals (1, 2, ...) are allocated via push_param, NOT new_local,
-    // so the LoweringContext sees them as proper parameters.
-    let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker, ctx.is_release);
-    // Inherit the compilation-wide kernel-name allocator so a kernel lowered
-    // inside the lambda body stays deterministic and collision-free.
-    lambda_ctx.use_compilation_ids(ctx.compilation_ids.clone());
-
-    // Local 1: env_ptr (implicit first parameter — pointer to the closure struct payload).
-    // We use push_param so it does NOT emit StorageLive.
-    let env_ptr = lambda_ctx.push_param(
-        "__env_ptr".to_string(),
-        Type::new(TypeKind::RawPtr, span),
-        span,
-    );
-
-    // The environment pointer is the closure itself, so a call through it is a
-    // call to this body. A parameter of the same name, bound next, shadows it.
-    if let Some(self_name) = closure.self_name {
-        lambda_ctx.bind_local_name(self_name.to_string(), env_ptr);
-        lambda_ctx
-            .self_references
-            .insert(env_ptr, closure.ty.clone());
-    }
-
-    // Locals 2..N+1: user parameters.
-    for param in closure.params {
-        let param_ty = resolve_type(ctx.type_checker, &param.typ);
-        lambda_ctx.push_param(param.name.clone(), param_ty, param.typ.span);
-    }
+    let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
 
     let tentative_captures = declare_tentative_captures(ctx, &mut lambda_ctx, closure);
 
@@ -264,6 +227,59 @@ fn lower_closure_body(
     ctx.lambda_bodies.append(&mut lambda_ctx.lambda_bodies);
 
     Ok((lambda_ctx.body, captures))
+}
+
+/// A fresh context for the closure's body, holding its return slot, its
+/// environment pointer and its parameters, with nothing lowered yet.
+fn closure_context<'a>(
+    ctx: &LoweringContext<'a>,
+    closure: &ClosureSource,
+    ret_ty: &Type,
+) -> LoweringContext<'a> {
+    let span = closure.span;
+    let execution_model = resolve_execution_model(closure.properties);
+
+    // arg_count = 1 (env_ptr) + user params. Captures are loaded from the
+    // environment, not passed, so they do not count.
+    let mut lambda_body = Body::new(1 + closure.params.len(), span, execution_model);
+
+    // Local 0: return value — allocated directly in body before context creation.
+    lambda_body.new_local(LocalDecl::new(ret_ty.clone(), span));
+
+    // NOTE: all param locals (1, 2, ...) are allocated via push_param, NOT new_local,
+    // so the LoweringContext sees them as proper parameters.
+    let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker, ctx.is_release);
+    // Inherit the compilation-wide kernel-name allocator so a kernel lowered
+    // inside the lambda body stays deterministic and collision-free.
+    lambda_ctx.use_compilation_ids(ctx.compilation_ids.clone());
+    // A closure inside an instantiated generic body is part of that
+    // instantiation: its types, and the symbols of closures nested in it, are
+    // read at the enclosing body's type arguments.
+    lambda_ctx.generic_subs = ctx.generic_subs.clone();
+
+    // Local 1: env_ptr (implicit first parameter — pointer to the closure struct payload).
+    // We use push_param so it does NOT emit StorageLive.
+    let env_ptr = lambda_ctx.push_param(
+        "__env_ptr".to_string(),
+        Type::new(TypeKind::RawPtr, span),
+        span,
+    );
+
+    // The environment pointer is the closure itself, so a call through it is a
+    // call to this body. A parameter of the same name, bound next, shadows it.
+    if let Some(self_name) = closure.self_name {
+        lambda_ctx.bind_local_name(self_name.to_string(), env_ptr);
+        lambda_ctx
+            .self_references
+            .insert(env_ptr, closure.ty.clone());
+    }
+
+    // Locals 2..N+1: user parameters.
+    for param in closure.params {
+        let param_ty = ctx.resolved_type(&param.typ);
+        lambda_ctx.push_param(param.name.clone(), param_ty, param.typ.span);
+    }
+    lambda_ctx
 }
 
 /// Make every enclosing local that is not shadowed by a parameter or by the

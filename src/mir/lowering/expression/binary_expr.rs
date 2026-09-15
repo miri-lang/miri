@@ -494,6 +494,11 @@ fn op_to_binop(
 }
 
 /// Determine result type for a binary operation.
+// TODO: the arithmetic result type is read raw, so in a generic body
+// instantiated at `float` the temp is typed at the parameter (pointer-width
+// integer): `a + b` stored into a `T` temp prints `3.0` for `1.5 + 2.25`, and
+// `(a + b) + a` fails the backend verifier. It needs the instantiation's
+// substitution applied, as `binary_trait_class_name` does.
 fn binary_result_type(
     ctx: &LoweringContext,
     op: &crate::ast::operator::BinaryOp,

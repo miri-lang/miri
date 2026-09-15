@@ -72,7 +72,7 @@ fn lower_function_reference(
 ) -> Operand {
     // The reference site's expression id keeps two references to the same
     // function from claiming one symbol, the way a lambda's id does.
-    let thunk_name = format!("__fnref_{}_{}", symbol, expr.id);
+    let thunk_name = ctx.closure_symbol(format!("__fnref_{}_{}", symbol, expr.id));
     let forwarded_allocator = forwarded_allocator(ctx, symbol);
     let thunk = build_forwarding_thunk(
         ctx,
@@ -93,7 +93,7 @@ fn lower_function_reference(
         kind: MirStatementKind::Assign(
             target.clone(),
             Rvalue::Aggregate(
-                AggregateKind::Closure(thunk_name.into(), fn_ty.clone()),
+                AggregateKind::Closure(thunk_name, fn_ty.clone()),
                 capture_operands,
             ),
         ),
