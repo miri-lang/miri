@@ -15,7 +15,7 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::method_dispatch::resolve_inherited_method;
+use crate::mir::lowering::method_dispatch::{operator_method_callee, resolve_inherited_method};
 use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
 #[allow(clippy::too_many_arguments)]
@@ -29,12 +29,12 @@ fn try_lower_binary_trait_method(
     op: &crate::ast::operator::BinaryOp,
     arg_watermark: usize,
 ) -> Result<Option<Operand>, LoweringError> {
-    let Some(class_name) = binary_trait_class_name(ctx, lhs) else {
+    let Some(receiver_ty) = binary_trait_receiver_type(ctx, lhs) else {
         return Ok(None);
     };
     try_lower_operator_trait_call(
         ctx,
-        &class_name,
+        &receiver_ty,
         op,
         OperatorOperands { lhs_op, rhs_op },
         expr,
@@ -49,8 +49,9 @@ pub(crate) struct OperatorOperands {
     pub rhs_op: Operand,
 }
 
-/// Lower `op` as a call to the trait method `class_name` defines for it, or
-/// None when the operator has no trait method or the class does not define it.
+/// Lower `op` as a call to the trait method the type of `receiver_ty` defines
+/// for it, or None when the operator has no trait method or the type does not
+/// define it.
 ///
 /// Both spellings of an operator reach this: the binary expression an author
 /// writes, and the comparison a parameter guard emits against the parameter.
@@ -59,7 +60,7 @@ pub(crate) struct OperatorOperands {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_lower_operator_trait_call(
     ctx: &mut LoweringContext,
-    class_name: &str,
+    receiver_ty: &Type,
     op: &crate::ast::operator::BinaryOp,
     operands: OperatorOperands,
     expr: &Expression,
@@ -69,9 +70,13 @@ pub(crate) fn try_lower_operator_trait_call(
     let Some((method_name, result)) = binary_op_trait_method(op) else {
         return Ok(None);
     };
-    let Some((owner, method)) = operator_method_body(ctx, class_name, method_name) else {
+    let Some((owner, method)) = operator_trait_class_name(&receiver_ty.kind)
+        .and_then(|class_name| operator_method_body(ctx, class_name, method_name))
+    else {
         return Ok(None);
     };
+    let (symbol, return_ty) =
+        operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
 
     let call = BinTraitCall {
         lhs_op: operands.lhs_op,
@@ -79,16 +84,12 @@ pub(crate) fn try_lower_operator_trait_call(
         dest,
         arg_watermark,
     };
-    let body = OperatorBody {
-        owner: &owner,
-        method_name,
-        return_ty: method.return_type,
-    };
+    let body = OperatorBody { symbol, return_ty };
     emit_binary_trait_call(ctx, body, result, call, expr).map(Some)
 }
 
-/// The class name implementing a binary operator trait for the lhs type
-/// (`String` or a user `Custom` type), else None.
+/// The type of the lhs when it can implement a binary operator trait (`String`
+/// or a user `Custom` type), else None.
 ///
 /// The type is read through the active instantiation substitution. A body
 /// lowered for one instantiation of a generic class or function reuses the
@@ -96,13 +97,16 @@ pub(crate) fn try_lower_operator_trait_call(
 /// raw, the operand's type is still that parameter, which names no class and so
 /// leaves the operator comparing the two operands' addresses. Outside an
 /// instantiated body the substitution is empty and this is the recorded type.
-fn binary_trait_class_name(ctx: &LoweringContext, lhs: &Expression) -> Option<String> {
+fn binary_trait_receiver_type(ctx: &LoweringContext, lhs: &Expression) -> Option<Type> {
     let recorded = ctx.type_checker.get_type(lhs.id)?;
-    if ctx.generic_subs.is_empty() {
-        return operator_trait_class_name(&recorded.kind).map(str::to_string);
-    }
-    let instantiated = super::super::apply_generic_sub(recorded, &ctx.generic_subs);
-    operator_trait_class_name(&instantiated.kind).map(str::to_string)
+    let receiver = if ctx.generic_subs.is_empty() {
+        recorded.clone()
+    } else {
+        super::super::apply_generic_sub(recorded, &ctx.generic_subs)
+    };
+    operator_trait_class_name(&receiver.kind)
+        .is_some()
+        .then_some(receiver)
 }
 
 /// The class name whose operator-trait methods apply to values of `kind`.
@@ -185,11 +189,9 @@ pub(crate) fn operator_method_body(
     }
 }
 
-/// The body an operator calls: whose symbol it is, which method, and what it
-/// returns.
-struct OperatorBody<'a> {
-    owner: &'a str,
-    method_name: &'a str,
+/// The body an operator calls: its symbol and what it returns.
+struct OperatorBody {
+    symbol: String,
     return_ty: Type,
 }
 
@@ -209,17 +211,12 @@ fn emit_binary_trait_call(
     call: BinTraitCall,
     expr: &Expression,
 ) -> Result<Operand, LoweringError> {
-    // Optimization: avoid format! overhead by allocating exact capacity.
-    let mut mangled_name = String::with_capacity(body.owner.len() + 1 + body.method_name.len());
-    mangled_name.push_str(body.owner);
-    mangled_name.push('_');
-    mangled_name.push_str(body.method_name);
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
     let return_ty = body.return_ty;
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+        literal: crate::ast::literal::Literal::Identifier(body.symbol),
     }));
 
     let adapt = match result {
@@ -498,7 +495,7 @@ fn op_to_binop(
 // instantiated at `float` the temp is typed at the parameter (pointer-width
 // integer): `a + b` stored into a `T` temp prints `3.0` for `1.5 + 2.25`, and
 // `(a + b) + a` fails the backend verifier. It needs the instantiation's
-// substitution applied, as `binary_trait_class_name` does.
+// substitution applied, as `binary_trait_receiver_type` does.
 fn binary_result_type(
     ctx: &LoweringContext,
     op: &crate::ast::operator::BinaryOp,

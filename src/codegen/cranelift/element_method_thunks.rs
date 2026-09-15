@@ -104,6 +104,11 @@ impl ElementMethod {
     ///
     /// Both are resolved through the class chain, the same rule the clone thunk
     /// applies and the one `==` and the ordering operators dispatch by.
+    // TODO: for a generic class that inherits `equals` from a generic parent
+    // (`class Child<T> extends Base<T>`), the thunk for `Child<String>` calls
+    // `Base_equals__String`, but instantiation bodies are lowered only for a
+    // class's own methods and trait defaults, so the program fails to link.
+    // A written `a.equals(b)` fails the same way on `Child_equals__String`.
     fn method_symbol(
         self,
         type_name: &str,

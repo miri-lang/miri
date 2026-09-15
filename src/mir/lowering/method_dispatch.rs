@@ -918,6 +918,35 @@ pub(crate) fn resolve_generic_argument(tc: &TypeChecker, arg: &Expression) -> Op
     }
 }
 
+/// The symbol an operator calls for `owner`'s `method_name` on a receiver of
+/// `receiver_ty`, and the type that call returns.
+///
+/// An operator reaches the same body a written call to the method does. For an
+/// instantiation of a generic class that is the body compiled for it: the
+/// shared one reads every type-parameter value as an unmanaged word, so its
+/// `self.value == other.value` over two `String`s compares their addresses.
+/// A method the class inherits from another class is named by that class.
+pub(crate) fn operator_method_callee(
+    ctx: &mut LoweringContext,
+    receiver_ty: &Type,
+    owner: &str,
+    method_name: &str,
+    method: &MethodInfo,
+) -> (String, Type) {
+    let declared_by_receiver =
+        matches!(&receiver_ty.kind, TypeKind::Custom(name, Some(_)) if name == owner);
+    let mono = declared_by_receiver
+        .then(|| resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method))
+        .flatten();
+    match mono {
+        Some(callee) => {
+            ctx.record_class_instantiations(receiver_ty);
+            callee
+        }
+        None => (format!("{owner}_{method_name}"), method.return_type.clone()),
+    }
+}
+
 /// Resolve a generic-class method call to its per-instantiation monomorphized
 /// symbol and concrete return type, or `None` when the plain generic body applies.
 fn resolve_generic_class_monomorph(

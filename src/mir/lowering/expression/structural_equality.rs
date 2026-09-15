@@ -400,11 +400,23 @@ fn emit_named_type_equality(
     rhs_op: Operand,
     is_eq: bool,
 ) -> Result<crate::mir::Local, LoweringError> {
-    if let Some((owner, _)) =
+    if let Some((owner, method)) =
         super::binary_expr::operator_method_body(ctx, name, EQUALS_METHOD_NAME)
     {
+        let recorded = Type::new(
+            TypeKind::Custom(name.to_string(), args.map(<[_]>::to_vec)),
+            span,
+        );
+        let receiver = crate::mir::lowering::apply_generic_sub(&recorded, &ctx.generic_subs);
+        let (symbol, _) = crate::mir::lowering::method_dispatch::operator_method_callee(
+            ctx,
+            &receiver,
+            &owner,
+            EQUALS_METHOD_NAME,
+            &method,
+        );
         return Ok(emit_equals_method_call(
-            ctx, span, &owner, lhs_op, rhs_op, is_eq,
+            ctx, span, &symbol, lhs_op, rhs_op, is_eq,
         ));
     }
     if matches!(
@@ -422,11 +434,11 @@ pub(super) fn type_supplies_equality(ctx: &LoweringContext, name: &str) -> bool 
     super::binary_expr::operator_method_body(ctx, name, EQUALS_METHOD_NAME).is_some()
 }
 
-/// Emit `{Owner}_equals(lhs, rhs)`, negating the result for `!=`.
+/// Emit a call to the `equals` body named `symbol`, negating the result for `!=`.
 fn emit_equals_method_call(
     ctx: &mut LoweringContext,
     span: Span,
-    name: &str,
+    symbol: &str,
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
@@ -439,7 +451,7 @@ fn emit_equals_method_call(
     let next_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: identifier_constant(&format!("{}_{}", name, EQUALS_METHOD_NAME), span),
+            func: identifier_constant(symbol, span),
             args,
             out_args: Vec::new(),
             arg_handles: Vec::new(),

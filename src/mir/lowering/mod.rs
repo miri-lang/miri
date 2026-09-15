@@ -1348,18 +1348,13 @@ fn emit_guard_trait_comparison(
         return Ok(false);
     };
     let param_ty = ctx.body.local_decls[comparison.param_local.0].ty.clone();
-    let Some(class_name) =
-        crate::mir::lowering::expression::binary_expr::operator_trait_class_name(&param_ty.kind)
-    else {
-        return Ok(false);
-    };
     let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
         lhs_op: Operand::Copy(Place::new(comparison.param_local)),
         rhs_op: comparison.guard_val,
     };
     let lowered = crate::mir::lowering::expression::binary_expr::try_lower_operator_trait_call(
         ctx,
-        class_name,
+        &param_ty,
         &binary_op,
         operands,
         guard,
