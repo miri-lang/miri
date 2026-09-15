@@ -197,6 +197,16 @@ impl<'a> LoweringContext<'a> {
         super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
     }
 
+    /// [`Self::resolved_type`] for a written declaration, in canonical form.
+    ///
+    /// A declared `Option<String?>` otherwise stays a named type with an
+    /// argument: a value converted to it is not boxed as `Some`, and a temp
+    /// declared at it is released as a plain class, leaving the optional it
+    /// carries unreleased.
+    pub fn declared_type(&self, expr: &Expression) -> Type {
+        super::variable::canonical_declared_type(self.type_checker, &self.resolved_type(expr))
+    }
+
     /// The symbol a body lowered out of this one — a lambda, a nested
     /// function, a function-reference thunk — is emitted under.
     ///

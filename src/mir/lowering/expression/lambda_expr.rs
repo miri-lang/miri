@@ -201,7 +201,7 @@ fn lower_closure_body(
 ) -> Result<(Body, Vec<CapturedVar>), LoweringError> {
     let span = closure.span;
     let ret_ty = match closure.return_type {
-        Some(ret_expr) => ctx.resolved_type(ret_expr),
+        Some(ret_expr) => ctx.declared_type(ret_expr),
         None => Type::new(TypeKind::Void, span),
     };
     let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
@@ -276,7 +276,7 @@ fn closure_context<'a>(
 
     // Locals 2..N+1: user parameters.
     for param in closure.params {
-        let param_ty = ctx.resolved_type(&param.typ);
+        let param_ty = ctx.declared_type(&param.typ);
         lambda_ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
     lambda_ctx

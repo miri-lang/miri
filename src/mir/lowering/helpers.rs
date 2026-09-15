@@ -385,18 +385,44 @@ fn substitute_variant_field_types(
 /// Used in `lower_as_return` to detect structurally-compatible generic collection types.
 /// For example, `List(Generic)` vs `List(Custom("T"))` both represent list pointers and
 /// are safe to assign via DPS without an intermediate Cast.
+///
+/// Two optionals are one value only when neither is provably an optional layer
+/// short of the other: `Option<T>` and `Option<int>` are one box, but an `int?`
+/// stored where an `Option<int?>` is declared still needs its outer `Some` box.
 pub(crate) fn mir_types_structurally_match(a: &MirType, b: &MirType) -> bool {
-    matches!(
-        (a, b),
-        (MirType::List(_), MirType::List(_))
-            | (MirType::Map(_, _), MirType::Map(_, _))
-            | (MirType::Set(_), MirType::Set(_))
-            | (MirType::Array(_), MirType::Array(_))
-            | (MirType::Option(_), MirType::Option(_))
-            | (MirType::Result(_, _), MirType::Result(_, _))
-            | (MirType::Tuple(_), MirType::Tuple(_))
-            | (MirType::Future(_), MirType::Future(_))
-    )
+    match (a, b) {
+        (MirType::Option(_), MirType::Option(_)) => {
+            !is_missing_optional_layer(a, b) && !is_missing_optional_layer(b, a)
+        }
+        _ => matches!(
+            (a, b),
+            (MirType::List(_), MirType::List(_))
+                | (MirType::Map(_, _), MirType::Map(_, _))
+                | (MirType::Set(_), MirType::Set(_))
+                | (MirType::Array(_), MirType::Array(_))
+                | (MirType::Result(_, _), MirType::Result(_, _))
+                | (MirType::Tuple(_), MirType::Tuple(_))
+                | (MirType::Future(_), MirType::Future(_))
+        ),
+    }
+}
+
+/// Whether `source` is provably at least one optional layer shallower than
+/// `target`.
+///
+/// Peels one `Option` off both sides at a time. When `target` is still optional
+/// and `source` has reached a concrete type, the source lacks a layer. A
+/// placeholder whose own depth is unknown — a generic parameter, an unresolved
+/// type, or the `Void` a `None` literal is typed at — could stand for any
+/// number of layers, so it never counts as short.
+pub(crate) fn is_missing_optional_layer(source: &MirType, target: &MirType) -> bool {
+    match (source, target) {
+        (MirType::Option(source_inner), MirType::Option(target_inner)) => {
+            is_missing_optional_layer(source_inner, target_inner)
+        }
+        (MirType::Generic | MirType::Unknown | MirType::Void | MirType::Error, _) => false,
+        (_, target) => matches!(target, MirType::Option(_)),
+    }
 }
 
 /// Whether two types are the same value at the MIR level, differing only in how
@@ -412,19 +438,26 @@ pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
     from == to || mir_types_structurally_match(&from, &to)
 }
 
-/// Whether coercing `op_ty` into `target_ty` hands the value a second holder.
+/// Whether coercing `op_ty` into `target_ty` builds a `Some` box around the value.
 ///
-/// Wrapping a bare `T` into an `Option` builds an aggregate, and Perceus retains
-/// every managed place an aggregate reads. A value a callee has just donated
-/// lives in a temp no scope releases, so that retain has to be answered.
-// TODO: the test is "the source is not an Option", not "the source is one
-// optional layer shallower than the target", so an `int?` coerced into an
-// `Option<int?>` gets no outer `Some` box and the consumer reads the inner
-// payload as an optional's address. `mir_types_structurally_match` treats any
-// two `Option`s as one value too, so the callers skip coercion before reaching
-// this test; both have to compare nesting depth.
-pub fn coercion_retains_source(op_ty: &Type, target_ty: &Type) -> bool {
-    matches!(target_ty.kind, TypeKind::Option(_)) && !matches!(op_ty.kind, TypeKind::Option(_))
+/// A bare `T` stored as a `T?` is wrapped, and so is an optional one layer short
+/// of its target: an `int?` stored as an `Option<int?>` becomes `Some(inner)`.
+/// Left bare, the inner box would stand where the outer one is expected, and the
+/// consumer would read the inner payload as the address of an optional.
+///
+/// The wrap is also what hands the value a second holder: building an aggregate
+/// makes Perceus retain every managed place it reads, and a value a callee has
+/// just donated lives in a temp no scope releases, so that retain has to be
+/// answered — which is what [`release_coerced_source`] asks this for.
+pub fn coercion_wraps_in_some(op_ty: &Type, target_ty: &Type) -> bool {
+    match (&op_ty.kind, &target_ty.kind) {
+        (TypeKind::Option(_), TypeKind::Option(_)) => is_missing_optional_layer(
+            &MirType::from_type_kind(&op_ty.kind),
+            &MirType::from_type_kind(&target_ty.kind),
+        ),
+        (_, TypeKind::Option(_)) => true,
+        _ => false,
+    }
 }
 
 /// Release the temp a retaining coercion read, when the expression being lowered
@@ -440,7 +473,7 @@ pub fn release_coerced_source(
     watermark: usize,
     span: Span,
 ) {
-    if !coercion_retains_source(op_ty, target_ty) {
+    if !coercion_wraps_in_some(op_ty, target_ty) {
         return;
     }
     if let Operand::Copy(place) | Operand::Move(place) = operand {
@@ -464,7 +497,7 @@ pub fn wrap_for_optional_slot(
     watermark: usize,
     span: Span,
 ) -> (Operand, Type) {
-    if !coercion_retains_source(&op_ty, slot_ty) {
+    if !coercion_wraps_in_some(&op_ty, slot_ty) {
         return (operand, op_ty);
     }
     let wrapped = ctx.push_temp(slot_ty.clone(), span);
@@ -480,10 +513,17 @@ pub fn wrap_for_optional_slot(
 }
 
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
-/// If `target_ty` is `Option<T>` and `op_ty` is `T`, it allocates an Option box.
-/// Otherwise, it emits a standard type Cast.
+/// If `target_ty` is one optional layer deeper than `op_ty` (`T` into `T?`, or
+/// `T?` into `T??`), it allocates an Option box. Otherwise, it emits a standard
+/// type Cast.
+// TODO: one Rvalue can hold one `Some` box, so a target two or more layers
+// deeper than its source — an `int` stored as an `Option<int?>`, or a `String?`
+// as an `Option<Option<String?>>` — is boxed once and the consumer reads the
+// payload as the address of an optional. Filling the remaining layers needs a
+// temp per layer, which an Rvalue cannot emit: every caller that assigns this
+// result has to build the chain instead.
 pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue {
-    if matches!(target_ty.kind, TypeKind::Option(_)) && !matches!(op_ty.kind, TypeKind::Option(_)) {
+    if coercion_wraps_in_some(op_ty, target_ty) {
         crate::mir::Rvalue::Aggregate(crate::mir::AggregateKind::Option, vec![operand])
     } else {
         crate::mir::Rvalue::Cast(Box::new(operand), target_ty.clone())

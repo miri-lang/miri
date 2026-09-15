@@ -76,7 +76,7 @@ fn resolve_function_return_type(
     span: crate::error::syntax::Span,
 ) -> Type {
     if let Some(ret_expr) = ret_type_expr {
-        return resolve_type(tc, ret_expr);
+        return resolve_return_annotation(tc, ret_expr);
     }
     match tc.get_variable_type(name).map(|t| &t.kind) {
         Some(TypeKind::Function(func)) => match &func.return_type {
@@ -85,6 +85,16 @@ fn resolve_function_return_type(
         },
         _ => Type::new(TypeKind::Void, span),
     }
+}
+
+/// A written return type in the canonical form the body's return slot needs.
+///
+/// `Option<int?>` reaches lowering as a named type with an argument, not as an
+/// optional. Left that way, a `return` into the slot cannot tell that the value
+/// must be boxed as `Some`, so a bare or one-layer-short optional is stored raw
+/// and the caller reads its payload as the address of an optional.
+fn resolve_return_annotation(tc: &TypeChecker, ret_expr: &Expression) -> Type {
+    variable::canonical_declared_type(tc, &resolve_type(tc, ret_expr))
 }
 
 pub fn lower_function(
@@ -654,7 +664,7 @@ fn resolve_generic_return_type(
     subs: &HashMap<String, Type>,
 ) -> Type {
     if let Some(ret_expr) = ret_type_expr {
-        return apply_generic_sub(&resolve_type(tc, ret_expr), subs);
+        return apply_generic_sub(&resolve_return_annotation(tc, ret_expr), subs);
     }
     match tc.get_variable_type(name).map(|t| &t.kind) {
         Some(TypeKind::Function(func)) => match &func.return_type {
@@ -1000,7 +1010,10 @@ fn lower_class_method_impl(
 
     let ret_ty = ret_type_expr.as_deref().map_or_else(
         || Type::new(TypeKind::Void, ast_method.span),
-        |e| substitute_self_type(&apply_generic_sub(&resolve_type(tc, e), subs), &self_type),
+        |e| {
+            let declared = apply_generic_sub(&resolve_return_annotation(tc, e), subs);
+            substitute_self_type(&declared, &self_type)
+        },
     );
 
     let execution_model = resolve_execution_model(props);
