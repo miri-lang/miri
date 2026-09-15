@@ -558,10 +558,6 @@ fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::Ha
     called
 }
 
-/// How deep [`collect_generic_instantiations`] descends through a type's own
-/// arguments. Matches the depth the symbol mangler names a type to.
-const MAX_INSTANTIATION_NESTING: usize = 64;
-
 /// Fill the generic-class instantiation registry with everything the program
 /// needs a per-instantiation body for, whether or not it names it.
 fn complete_generic_instantiation_registry(type_checker: &mut TypeChecker) {
@@ -585,7 +581,11 @@ fn complete_generic_instantiation_registry(type_checker: &mut TypeChecker) {
 fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
     let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
     for ty in type_checker.inferred_types() {
-        collect_generic_instantiations(type_checker, &ty.kind, 0, &mut discovered);
+        mir::lowering::class_instantiations::collect_generic_instantiations(
+            type_checker,
+            &ty.kind,
+            &mut discovered,
+        );
     }
     discovered.sort_by_cached_key(|(name, args)| {
         mir::lowering::dispatch::mangle_instantiation_name(name, args)
@@ -595,45 +595,34 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
     }
 }
 
-/// Append every generic-class instantiation written inside `kind`, including
-/// the ones nested in its own arguments (`List<List<W>>` yields both).
+/// Add to the registry every instantiation a lowered body recorded that it
+/// does not hold yet, with the instantiations those reach through their fields.
 ///
-/// The descent stops at [`MAX_INSTANTIATION_NESTING`], past which the symbol
-/// mangler has no name for the type anyway, so nothing below it could be given
-/// a body.
-fn collect_generic_instantiations(
-    type_checker: &TypeChecker,
-    kind: &TypeKind,
-    depth: usize,
-    out: &mut Vec<(String, Vec<Type>)>,
-) {
-    if depth >= MAX_INSTANTIATION_NESTING {
-        return;
-    }
-    let TypeKind::Custom(name, Some(args)) = kind else {
-        return;
-    };
-    let Some(TypeDefinition::Class(def)) = type_checker.type_definitions().get(name.as_str())
-    else {
-        return;
-    };
-    let Some(generics) = def.generics.as_ref() else {
-        return;
-    };
-    let resolved: Option<Vec<Type>> = args
+/// Returns whether the registry grew: a new instantiation has method bodies
+/// still to emit, and those bodies can reach further ones.
+fn register_lowered_class_instantiations(
+    type_checker: &mut TypeChecker,
+    bodies: &[(String, mir::Body)],
+) -> bool {
+    let unregistered: Vec<&mir::body::GenericClassInstantiation> = bodies
         .iter()
-        .map(|arg| mir::lowering::dispatch::resolve_generic_argument(type_checker, arg))
+        .flat_map(|(_, body)| body.generic_class_instantiations.iter())
+        .filter(|found| {
+            !mir::lowering::class_instantiations::is_registered_instantiation(
+                type_checker,
+                &found.class,
+                &found.type_args,
+            )
+        })
         .collect();
-    let Some(resolved) = resolved else {
-        return;
-    };
-    if resolved.len() != generics.len() {
-        return;
+    if unregistered.is_empty() {
+        return false;
     }
-    for arg in &resolved {
-        collect_generic_instantiations(type_checker, &arg.kind, depth + 1, out);
+    for found in unregistered {
+        type_checker.record_generic_class_instantiation(&found.class, found.type_args.clone());
     }
-    out.push((name.clone(), resolved));
+    expand_nested_generic_instantiations(type_checker);
+    true
 }
 
 fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
@@ -933,7 +922,7 @@ impl Pipeline {
         let mut pipeline_result = self.frontend_script(source)?;
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
+        let mir_bodies = self.lower_to_mir(&mut pipeline_result, opts.release)?;
 
         match opts.target {
             BuildTarget::Native => {
@@ -1568,9 +1557,14 @@ impl Pipeline {
         methods
     }
 
+    /// Lower every body the program needs.
+    ///
+    /// Takes the result mutably because lowering an instantiation can reach a
+    /// generic-class instantiation the registry does not hold yet, which is
+    /// added before its methods are emitted and before codegen reads it.
     fn lower_to_mir(
         &self,
-        result: &PipelineResult,
+        result: &mut PipelineResult,
         is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
         let mut bodies = Vec::new();
@@ -1625,7 +1619,7 @@ impl Pipeline {
             &compilation_ids,
         )?;
 
-        self.lower_called_generic_class_methods(
+        self.lower_reached_generic_class_methods(
             result,
             is_release,
             &mut bodies,
@@ -1669,6 +1663,31 @@ impl Pipeline {
         }
 
         Ok(bodies)
+    }
+
+    /// Emit the generic-class methods the lowered bodies call, registering each
+    /// instantiation those bodies reached only through a substitution, until a
+    /// round reaches nothing new.
+    fn lower_reached_generic_class_methods(
+        &self,
+        result: &mut PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        loop {
+            self.lower_called_generic_class_methods(
+                result,
+                is_release,
+                bodies,
+                lowered_names,
+                compilation_ids,
+            )?;
+            if !register_lowered_class_instantiations(&mut result.type_checker, bodies) {
+                return Ok(());
+            }
+        }
     }
 
     /// Run every verification pass over every body and turn what they find
@@ -2568,10 +2587,6 @@ impl Pipeline {
 
     /// Lower every generic function instantiation the bodies from `first_new`
     /// on call, and every one those instantiations call in turn.
-    // TODO: a generic class built at the caller's parameter (`Box<T>(a)`)
-    // inside an instantiation is never added to the class instantiation
-    // registry, which is filled before lowering, so its methods run against
-    // the shared body.
     #[allow(clippy::too_many_arguments)]
     fn lower_generic_functions_reached_from(
         result: &PipelineResult,
@@ -2760,7 +2775,7 @@ impl Pipeline {
         let mut pipeline_result = self.frontend_script(source)?;
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let mir_bodies = self.lower_to_mir(&pipeline_result, false)?;
+        let mir_bodies = self.lower_to_mir(&mut pipeline_result, false)?;
 
         let mut output = String::new();
         for (name, body) in &mir_bodies {
@@ -2780,8 +2795,8 @@ impl Pipeline {
         &self,
         source: &str,
     ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
-        let result = self.frontend(source)?;
-        self.lower_to_mir(&result, false)
+        let mut result = self.frontend(source)?;
+        self.lower_to_mir(&mut result, false)
     }
 
     /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.
@@ -2797,7 +2812,7 @@ impl Pipeline {
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         // `lower_to_mir` already inserts and elides RC. Running either pass again
         // here would hand tests bodies carrying two of every operation.
-        self.lower_to_mir(&pipeline_result, false)
+        self.lower_to_mir(&mut pipeline_result, false)
     }
 
     /// Link an object file to an executable using the system linker.
