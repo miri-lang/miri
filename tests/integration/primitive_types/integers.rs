@@ -71,3 +71,26 @@ fn test_negative_integers() {
     assert_runs("let x i8 = -128");
     assert_runs("let x i32 = -2147483648");
 }
+
+#[test]
+fn test_bitwise_not_on_integer_types() {
+    // Bitwise NOT on unsigned 8-bit integer: ~0u8 must yield 255, not 1.
+    assert_runs_with_output(
+        r#"
+let x u8 = 0
+let y = ~x
+println(f"{y}")
+"#,
+        "255",
+    );
+
+    // Bitwise NOT on signed 8-bit integer: ~0i8 must yield -1, not 1.
+    assert_runs_with_output(
+        r#"
+let x i8 = 0
+let y = ~x
+println(f"{y}")
+"#,
+        "-1",
+    );
+}
