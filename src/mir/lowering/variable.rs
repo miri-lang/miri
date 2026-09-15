@@ -267,7 +267,7 @@ fn resolve_alias_target(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Typ
 /// where nothing looks for it. Both leave a later pass reading a name instead of
 /// a type — which storage to give the value, which coercion its initializer
 /// needs, and whether the value is reference counted all then answer wrongly.
-fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
+pub(crate) fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
     let resolved = resolve_alias_target(tc, ty);
     let TypeKind::Custom(name, Some(args)) = &resolved.kind else {
         return resolved;

@@ -76,8 +76,8 @@ fn main()
     opt_five = 5
     let a [int?; 3] = [opt_five, opt_none, opt_none]
 
-    // Use an explicit if-else or `??` to check `first()` since `first()` on `[T]` returns `T?`.
-    // Here `T` is `int?`, so `first()` returns `int??`. Miri may collapse or require handling.
+    // `first()` on `[T]` returns `T?`, and here `T` is `int?`, so `f1` is an
+    // `int??` holding `Some(Some(5))`.
     let f1 = a.first()
     let l1 = a.last()
 

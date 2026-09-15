@@ -7,4 +7,5 @@ pub mod basic;
 pub mod coalescing;
 pub mod edge_cases;
 pub mod matching;
+pub mod nested;
 pub mod rc_managed;
