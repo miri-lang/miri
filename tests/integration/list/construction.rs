@@ -182,3 +182,174 @@ fn main()
         "pear|apple",
     );
 }
+
+#[test]
+fn list_from_list_of_ints_copies_every_element() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    let ints = List([1, 2, 3])
+    var copy = List(ints)
+    copy.push(4)
+    copy[0] = 9
+    println(f\"{ints.length()}|{ints[0]}{ints[1]}{ints[2]}|{copy.length()}|{copy[0]}{copy[1]}{copy[2]}{copy[3]}\")
+",
+        "3|123|4|9234",
+    );
+}
+
+#[test]
+fn list_from_list_of_run_time_strings_is_independent_of_its_source() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+fn main()
+    var src = List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+    var copy = List(src)
+    copy.push(\"FIG\".to_lower())
+    src[0] = \"KIWI\".to_lower()
+    println(f\"{src.length()}|{src[0]}|{src[1]}|{copy.length()}|{copy[0]}|{copy[1]}|{copy[2]}\")
+",
+        "2|kiwi|apple|3|pear|apple|fig",
+    );
+}
+
+#[test]
+fn list_from_list_outlives_a_source_that_goes_out_of_scope() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+fn copied() [String]
+    let src = List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+    return List(src)
+
+fn main()
+    let l = copied()
+    println(f\"{l[0]}|{l[1]}|{l.length()}\")
+",
+        "pear|apple|2",
+    );
+}
+
+#[test]
+fn list_from_list_shares_class_elements_like_clone() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+class Fruit
+    var name String
+
+fn main()
+    var src = List([Fruit(name: \"PEAR\".to_lower()), Fruit(name: \"APPLE\".to_lower())])
+    var copy = List(src)
+    copy.push(Fruit(name: \"FIG\".to_lower()))
+    copy[0].name = \"KIWI\".to_lower()
+    println(f\"{src.length()}|{src[0].name}|{copy.length()}|{copy[0].name}|{copy[2].name}\")
+",
+        "2|kiwi|3|kiwi|fig",
+    );
+}
+
+#[test]
+fn list_from_list_copies_cloneable_elements_like_clone() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+class Counter implements Cloneable
+    var value int
+
+    public fn clone() Self
+        return Counter(value: self.value)
+
+fn main()
+    var src = List([Counter(value: 1), Counter(value: 2)])
+    var copy = List(src)
+    copy[0].value = 7
+    println(f\"{src[0].value}|{copy[0].value}|{copy[1].value}\")
+",
+        "1|7|2",
+    );
+}
+
+#[test]
+fn list_from_list_keeps_nested_collection_elements() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+fn main()
+    var src = List([List([\"PEAR\".to_lower()]), List([\"APPLE\".to_lower(), \"FIG\".to_lower()])])
+    var copy = List(src)
+    copy.remove_at(0)
+    println(f\"{src.length()}|{src[0][0]}|{copy.length()}|{copy[0][1]}\")
+",
+        "2|pear|1|fig",
+    );
+}
+
+#[test]
+fn list_from_list_returned_by_a_call_releases_the_temporary() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn fruits() [String]
+    return List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+
+fn main()
+    var l = List(fruits())
+    l.push(\"FIG\".to_lower())
+    println(f\"{l[0]}|{l[2]}|{l.length()}\")
+",
+        "pear|fig|3",
+    );
+}
+
+#[test]
+fn list_from_the_same_list_in_a_loop_releases_each_copy() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    let src = List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+    var total = 0
+    var i = 0
+    while i < 20
+        var l = List(src)
+        l.push(\"FIG\".to_lower())
+        total = total + l.length()
+        i = i + 1
+    println(f\"{total}|{src[0]}|{src.length()}\")
+",
+        "60|pear|2",
+    );
+}
+
+#[test]
+fn list_from_list_parameter_of_a_generic_function_copies_at_every_instantiation() {
+    assert_heap_guard_output(
+        "
+use system.collections.list
+
+fn copy_of<T>(l [T]) [T]
+    return List(l)
+
+fn main()
+    let ints = List([1, 2, 3])
+    var ic = copy_of(ints)
+    ic.push(4)
+    let strs = List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+    var sc = copy_of(strs)
+    sc.push(\"FIG\".to_lower())
+    println(f\"{ints.length()}|{ic[2]}|{ic[3]}|{strs.length()}|{sc[0]}|{sc[2]}\")
+",
+        "3|3|4|2|pear|fig",
+    );
+}
