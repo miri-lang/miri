@@ -111,6 +111,9 @@ pub struct TypeChecker {
     /// body is checked and answered at every site that pins the parameter — see
     /// [`ordering_requirements`].
     pub(crate) ordering_requirements: ordering_requirements::OrderingRequirements,
+    /// Every site that pins a generic body's parameters, recorded during the
+    /// body pass and answered once all requirements are known.
+    pub(crate) pinning_sites: Vec<ordering_requirements::PinningSite>,
     /// Source text of the entry-point file, populated by the pipeline right
     /// before MIR lowering. Used by lowering passes (notably the testing
     /// intrinsic lowering) to convert byte spans into human-readable line
@@ -211,6 +214,7 @@ impl TypeChecker {
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
             ordering_requirements: HashMap::new(),
+            pinning_sites: Vec::new(),
             entry_source: None,
             entry_source_path: None,
             gpu_buffer_inits: HashMap::new(),
@@ -384,6 +388,7 @@ impl TypeChecker {
         self.run_pass_collect_declarations(program, &mut context);
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
+        self.answer_pinning_sites();
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);
