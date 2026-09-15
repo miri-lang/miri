@@ -197,6 +197,27 @@ impl<'a> LoweringContext<'a> {
         super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
     }
 
+    /// The symbol a body lowered out of this one — a lambda, a nested
+    /// function, a function-reference thunk — is emitted under.
+    ///
+    /// `base` is unique to the AST node, but a generic declaration's body is
+    /// lowered once shared and once per instantiation, each lowering its
+    /// closures again. Those copies differ in type and must not claim one
+    /// symbol, so an instantiated body spells its substitution after `base`,
+    /// ordered by parameter name to keep the symbol stable across builds.
+    pub fn closure_symbol(&self, base: String) -> Rc<str> {
+        if self.generic_subs.is_empty() {
+            return base.into();
+        }
+        let mut type_args: Vec<(String, Type)> = self
+            .generic_subs
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        type_args.sort_by(|a, b| a.0.cmp(&b.0));
+        super::method_dispatch::mangle_generic_name(&base, &type_args).into()
+    }
+
     /// Resolve the `Self` keyword in `ty` against the enclosing class.
     ///
     /// Returns `ty` unchanged outside a class body, where `Self` is not a

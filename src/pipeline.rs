@@ -2329,6 +2329,11 @@ impl Pipeline {
     /// `self.length()` also dispatch statically because self_type is concrete —
     /// avoiding the slot-mismatch issue between per-trait and combined-vtable
     /// method layouts.
+    // TODO: every re-lowering of T.M lowers its lambdas again under the same
+    // `__lambda_<id>` symbol, so a default method holding a lambda fails to
+    // compile once two classes implement the trait. The substitution that
+    // keeps generic instantiations apart is empty here; the implementing class
+    // has to reach the closure symbol instead.
     fn lower_trait_default_methods(
         &self,
         result: &PipelineResult,
@@ -2563,12 +2568,10 @@ impl Pipeline {
 
     /// Lower every generic function instantiation the bodies from `first_new`
     /// on call, and every one those instantiations call in turn.
-    // TODO: two gaps sit beside this worklist. A lambda written inside a
-    // generic function is emitted under the same symbol by every body lowered
-    // from that declaration, so codegen rejects the duplicate. And a generic
-    // class built at the caller's parameter (`Box<T>(a)`) inside an
-    // instantiation is never added to the class instantiation registry, which
-    // is filled before lowering, so its methods run against the shared body.
+    // TODO: a generic class built at the caller's parameter (`Box<T>(a)`)
+    // inside an instantiation is never added to the class instantiation
+    // registry, which is filled before lowering, so its methods run against
+    // the shared body.
     #[allow(clippy::too_many_arguments)]
     fn lower_generic_functions_reached_from(
         result: &PipelineResult,
