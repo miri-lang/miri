@@ -2218,6 +2218,10 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 1 {
+                // TODO: the positional argument is never checked on this path, so
+                // `List<int>(5)` and `List<int>(strings)` type-check and then read
+                // a non-sequence, or pointers, as integer elements at run time. The
+                // argument must be an array or list whose element type matches.
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::List.name().to_string(),

@@ -552,9 +552,10 @@ fn sequence_elem_kind(ctx: &LoweringContext, sequence_ty: &Type) -> Option<TypeK
 
 /// Lowers a `List(args)` constructor call.
 ///
-/// Two forms are supported:
+/// Three forms are supported:
 /// - `List()` — allocates an empty list with the element stride determined by `T`.
 /// - `List(array)` — copies an array into a list; see [`lower_list_from_array`].
+/// - `List(list)` — copies a list; see [`lower_list_from_list`].
 pub(crate) fn lower_list_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -579,16 +580,22 @@ pub(crate) fn lower_list_constructor(
     let elem_kind = sequence_elem_kind(ctx, &list_ty);
     let elem_size = elem_kind.as_ref().map_or(8, compute_elem_size_from_type);
 
-    if let [array] = args {
-        let elem_kind = elem_kind.or_else(|| {
-            let array_ty = ctx.recorded_type(array.id)?;
-            sequence_elem_kind(ctx, &array_ty)
-        });
-        let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
-        lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
-    } else {
-        let size_op = int_constant(elem_size, span);
-        emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
+    match args {
+        [list] if is_list_argument(ctx, list) => {
+            lower_list_from_list(ctx, span, list, destination)?;
+        }
+        [array] => {
+            let elem_kind = elem_kind.or_else(|| {
+                let array_ty = ctx.recorded_type(array.id)?;
+                sequence_elem_kind(ctx, &array_ty)
+            });
+            let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
+            lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
+        }
+        _ => {
+            let size_op = int_constant(elem_size, span);
+            emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
+        }
     }
     Ok(result_op)
 }
@@ -610,37 +617,72 @@ fn lower_list_from_array(
     elems_are_managed: bool,
     destination: Place,
 ) -> Result<(), LoweringError> {
-    let arg_watermark = ctx.body.local_decls.len();
-    let array_op = lower_expression(ctx, array, None)?;
-    let array_local = match &array_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        Operand::Constant(_) => None,
-    };
-
     // The runtime reads the length from the array header; this word is advisory.
     let literal_len = if let ExpressionKind::Array(elements, _) = &array.node {
         elements.len() as i64
     } else {
         0
     };
-    // TODO: the type checker also accepts a `List<T>` argument here, but both
-    // runtime entry points read their argument as a `MiriArray`, whose header
-    // differs from `MiriList`'s — so `List(list)` copies at the wrong stride
-    // (wrong integers, a crash on managed elements). A list argument needs its
-    // own copy path, or the type checker must refuse it.
     let rt_fn_name = if elems_are_managed {
         rt::LIST_NEW_FROM_MANAGED_ARRAY
     } else {
         rt::LIST_NEW_FROM_RAW
     };
-    let args = vec![
-        array_op,
+    let trailing_args = vec![
         int_constant(literal_len, span),
         int_constant(elem_size, span),
     ];
+    lower_copy_from_source(ctx, span, array, rt_fn_name, trailing_args, destination)
+}
+
+/// Whether the one argument of `List(...)` is itself a list rather than an
+/// array. The two share a constructor but not a runtime header, so each needs
+/// its own copy routine.
+fn is_list_argument(ctx: &LoweringContext, argument: &Expression) -> bool {
+    ctx.recorded_type(argument.id)
+        .is_some_and(|ty| ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::List))
+}
+
+/// Lowers `List(list)`: the runtime copies the source list exactly as its
+/// `clone()` does, so the two lists grow and shrink independently. The copy
+/// keeps the source's element callbacks: managed elements are retained, and
+/// elements whose class implements `Cloneable` are cloned.
+fn lower_list_from_list(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    list: &Expression,
+    destination: Place,
+) -> Result<(), LoweringError> {
+    lower_copy_from_source(ctx, span, list, rt::LIST_CLONE, Vec::new(), destination)
+}
+
+/// Lowers `source`, then calls the runtime routine `rt_fn_name` with the
+/// source followed by `trailing_args`, storing the new collection into
+/// `destination`.
+///
+/// The routine only reads the source, which may be a variable the caller keeps
+/// using. Only a temporary the source's lowering created is released
+/// afterwards; a local that already existed stays owned by its scope.
+fn lower_copy_from_source(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    source: &Expression,
+    rt_fn_name: &str,
+    trailing_args: Vec<Operand>,
+    destination: Place,
+) -> Result<(), LoweringError> {
+    let arg_watermark = ctx.body.local_decls.len();
+    let source_op = lower_expression(ctx, source, None)?;
+    let source_local = match &source_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        Operand::Constant(_) => None,
+    };
+
+    let mut args = vec![source_op];
+    args.extend(trailing_args);
     emit_runtime_call(ctx, span, rt_fn_name, args, destination);
 
-    if let Some(local) = array_local {
+    if let Some(local) = source_local {
         ctx.emit_temp_drop(local, arg_watermark, *span);
     }
     Ok(())
