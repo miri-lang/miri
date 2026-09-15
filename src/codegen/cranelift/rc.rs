@@ -1989,10 +1989,16 @@ impl<'a> FunctionTranslator<'a> {
     /// Resolves the symbol of the drop hook that releasing a `type_name` value
     /// runs, or `None` when the type has none.
     ///
-    /// The owner is found by the same resolution a `value.drop()` call uses, so
-    /// a subclass reaches its base's hook (or its own copy, when the base is
+    /// The owner is found by the same resolution an inherited method call uses,
+    /// so a subclass reaches its base's hook (or its own copy, when the base is
     /// abstract) and the hook this thunk declares is the method body lowered for
     /// it. A struct is not a class chain and names its own hook.
+    ///
+    /// TODO: a class that declares `fn drop(self)` and no fields never runs the
+    /// hook — `let h = Handle()` leaving scope prints nothing, and neither does
+    /// `h.drop()`. A class with one field runs it. Where the fieldless instance
+    /// loses its release (allocation, the managed-type predicate, or this thunk)
+    /// is not yet traced.
     pub fn resolve_drop_hook_name(
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,

@@ -95,6 +95,12 @@ impl TypeChecker {
         // letting it reach codegen as an internal compiler error.
         self.reject_non_drop_struct_methods(&name, methods);
 
+        // TODO: the body of a struct's `fn drop(self)` is never type-checked, so
+        // no type is recorded for its expressions and a hook that reads a field
+        // (`println(f"{self.id}")`) fails in MIR lowering with MER_CG_008
+        // "Could not determine the type of this expression". A hook that reads
+        // nothing of `self` compiles. The body needs checking with `self` bound
+        // to the struct type, as a class method's body is.
         let has_drop = methods.iter().any(is_drop_method);
         let struct_def = StructDefinition {
             fields: fields_vec,

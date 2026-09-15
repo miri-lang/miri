@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 88
+## Error fixtures (`fail/`) — 89
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -27,6 +27,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_NAM_002 | Triggers MER_NAM_002: Module Not Found. |
 | MER_OWN_003 | Triggers MER_OWN_003: Use of Moved Value. |
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |
+| MER_OWN_005 | Triggers MER_OWN_005: Drop of a Borrowed Value. |
 | MER_PAR_001 | Triggers MER_PAR_001: Unexpected Token. |
 | MER_PAR_001_colon_annotation | Colon-style type annotation (Rust-like syntax, not Miri). |
 | MER_PAR_001_arrow_return_type | Arrow-style return type (Rust-like syntax, not Miri). |
@@ -122,7 +123,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 99
+## Accepted fixtures (`pass/`) — 100
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -151,6 +152,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_NAM_002 | Accepted counterpart of MER_NAM_002: Module Not Found does not fire. |
 | MER_NAM_003 | Accepted counterpart of MER_NAM_003: Invalid Import Path does not fire. |
 | MER_OWN_004 | Accepted counterpart of MER_OWN_004: Unused Value does not fire. |
+| MER_OWN_005 | Accepted counterpart of MER_OWN_005: dropping a local the scope owns runs its hook once. |
 | MER_PAR_001 | Correct type annotation syntax without colon |
 | MER_PAR_002 | Accepted counterpart of MER_PAR_002: Unexpected End of File does not fire. |
 | MER_PAR_003 | Accepted counterpart of MER_PAR_003: Invalid Type Declaration does not fire. |

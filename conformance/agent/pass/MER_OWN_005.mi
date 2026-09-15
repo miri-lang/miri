@@ -1,0 +1,11 @@
+// summary: Accepted counterpart of MER_OWN_005: dropping a local the scope owns runs its hook once.
+// expect-stdout: closed 1
+class Handle
+    public var id int
+
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn main()
+    let h = Handle(id: 1)
+    h.drop()

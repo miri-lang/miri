@@ -1019,7 +1019,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // OWN — Ownership and resource management (4 codes: 001-004)
+    // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",
     OwnResourceNotConsumedAtScopeExit,
@@ -1048,6 +1048,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
+    "OWN",
+    "005",
+    OwnDropOfBorrowedValue,
+    "Drop of a Borrowed Value",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // MIR — MIR lowering (15 codes: 001-015)
     "MIR",
     "001",

@@ -1,0 +1,13 @@
+// expect: MER_OWN_005
+// summary: Triggers MER_OWN_005: Drop of a Borrowed Value.
+class Handle
+    public var id int
+
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn close(h Handle)
+    h.drop()
+
+let h = Handle(id: 1)
+close(h)
