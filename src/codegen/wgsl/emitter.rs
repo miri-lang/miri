@@ -2027,6 +2027,7 @@ fn binop_symbol(op: BinOp) -> Result<&'static str, CodegenError> {
 fn unop_symbol(op: UnOp) -> Result<&'static str, CodegenError> {
     match op {
         UnOp::Not => Ok("!"),
+        UnOp::BitwiseNot => Ok("~"),
         UnOp::Neg => Ok("-"),
         UnOp::Await => Err(CodegenError::Internal(
             "WGSL backend: await is not valid inside a GPU kernel".into(),
