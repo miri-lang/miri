@@ -99,6 +99,25 @@ pub struct Body {
     /// substitution already applied, so the pipeline can lower each callee
     /// without recovering its type arguments from the mangled symbol.
     pub generic_function_calls: Vec<GenericFunctionCall>,
+    /// Every generic class instantiation this body names only through its own
+    /// instantiation substitution, in the order it was met.
+    ///
+    /// The type checker records the instantiations a program writes down, once,
+    /// against the parameters of the body they appear in: `Box<T>` inside
+    /// `via_box<T>` is `Box` at a placeholder. Which concrete `Box` that is exists
+    /// only once `via_box` is lowered for a type, so the lowering records it and
+    /// the pipeline adds it to the registry that decides which per-instantiation
+    /// method bodies and drop functions get emitted.
+    pub generic_class_instantiations: Vec<GenericClassInstantiation>,
+}
+
+/// One generic class at concrete type arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericClassInstantiation {
+    /// The generic class's declared name.
+    pub class: String,
+    /// The class's type arguments, in declaration order.
+    pub type_args: Vec<Type>,
 }
 
 /// One call to a generic function at concrete type arguments.
@@ -135,6 +154,7 @@ impl Body {
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
             generic_function_calls: Vec::new(),
+            generic_class_instantiations: Vec::new(),
         }
     }
 

@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod basic;
+pub mod classes_inside_generic_functions;
 pub mod declaration_order;
 pub mod delegation;
 pub mod lambdas;

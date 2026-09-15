@@ -35,7 +35,7 @@ pub(super) struct CollectionIntrinsicCall<'a> {
 // Re-export method dispatch functions from the specialized module.
 pub(crate) use super::method_dispatch::{
     extend_subs_with_trait_params, mangle_generic_name, mangle_instantiation_name,
-    resolve_generic_argument, resolve_inherited_method,
+    resolve_inherited_method,
 };
 
 // Re-export kernel launch functions from the specialized module.
@@ -1052,9 +1052,11 @@ fn try_lower_constructor_call(
     if let Some(func_ty) = ctx.type_checker.get_type(func.id) {
         if let TypeKind::Meta(inner) = &func_ty.kind {
             if let TypeKind::Custom(type_name, _) = &inner.kind {
-                // Extract concrete type_args from the overall call expression type
-                let call_ty = ctx.type_checker.get_type(call_expr_id);
-                let type_args = call_ty.and_then(|ty| {
+                // Extract concrete type_args from the overall call expression
+                // type, which inside an instantiated body names the
+                // instantiation's types rather than its generic parameters.
+                let call_ty = ctx.recorded_type(call_expr_id);
+                let type_args = call_ty.as_ref().and_then(|ty| {
                     if let TypeKind::Custom(_, ta) = &ty.kind {
                         ta.as_ref().map(|v| v.as_slice())
                     } else {
@@ -1089,7 +1091,7 @@ fn try_lower_constructor_call(
                         type_name,
                         def,
                         args,
-                        call_ty,
+                        call_ty.as_ref(),
                         dest.cloned(),
                     )
                     .map(Some);

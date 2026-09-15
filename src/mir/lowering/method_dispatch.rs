@@ -15,6 +15,7 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::TypeChecker;
 
+use super::class_instantiations::is_registered_instantiation;
 use super::{
     apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
 };
@@ -731,6 +732,9 @@ fn emit_resolved_method_call(
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     let mono = resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info);
+    if mono.is_some() {
+        ctx.record_class_instantiations(m.obj_ty);
+    }
     let return_ty = call_result_type(ctx, &m, &mono);
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
@@ -944,14 +948,10 @@ fn resolve_generic_class_monomorph(
     if !builtin_collection_needs_its_own_body(name, class_def, method_name, &resolved) {
         return None;
     }
-    let recorded = ctx
-        .type_checker
-        .generic_class_instantiations
-        .get(name.as_str())?;
-    let is_recorded = recorded.iter().any(|tuple| {
-        tuple.len() == resolved.len() && tuple.iter().zip(&resolved).all(|(a, b)| a.kind == b.kind)
-    });
-    if !is_recorded {
+    // An instantiated body reaches instantiations the registry was never told
+    // about; the caller records the receiver's so the pipeline registers it.
+    let is_recorded = is_registered_instantiation(ctx.type_checker, name, &resolved);
+    if !is_recorded && ctx.generic_subs.is_empty() {
         return None;
     }
     let mut subs = HashMap::new();

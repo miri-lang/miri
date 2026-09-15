@@ -11,6 +11,7 @@
 //! - `variable`: Variable declaration lowering
 //! - `helpers`: Utility functions (resolve_type, bind_pattern, etc.)
 
+pub mod class_instantiations;
 pub mod compilation_ids;
 pub mod constructors;
 pub mod context;
@@ -1452,6 +1453,8 @@ fn finalize_body(
             span,
         ));
     }
+
+    ctx.record_local_class_instantiations();
 
     let body = std::mem::replace(&mut ctx.body, Body::new(0, span, ExecutionModel::Cpu));
     let lambda_bodies = std::mem::take(&mut ctx.lambda_bodies);

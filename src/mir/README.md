@@ -21,6 +21,13 @@ While the Abstract Syntax Tree (AST) represents the syntactic structure of code,
 -   **Dominator Analysis**: Computes dominator trees used by SSA and optimization passes.
 -   **GPU Metadata (`backend/`)**: Extensions to the MIR to support heterogeneous execution models, handling GPU kernel limits, barriers, and thread indices.
 
+## Monomorphization
+
+A generic function or generic-class method is lowered once per instantiation, with its substitution (`LoweringContext::generic_subs`) applied to every recorded type. What such a body reaches is recorded on the `Body` rather than recovered from mangled symbols:
+
+-   `generic_function_calls` — each generic function it calls, at the types the call pins. The pipeline lowers those in a worklist.
+-   `generic_class_instantiations` — each generic class it names only through its substitution (`Box<T>` inside `via_box<T>` lowered at `String`). The pipeline adds these to the type checker's instantiation registry, then emits the methods they call, repeating until nothing new is reached. Codegen reads the same registry for per-instantiation drop functions and element-method thunks.
+
 ## Design Principles
 
 1.  **Explicit Control Flow**: All loops and conditionals are desugared into simple conditional and unconditional branches.

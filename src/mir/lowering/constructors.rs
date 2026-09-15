@@ -202,6 +202,9 @@ pub fn lower_class_constructor(
     resolved_ty: Option<&Type>,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    if let Some(ty) = resolved_ty {
+        ctx.record_class_instantiations(ty);
+    }
     let field_subs = build_class_field_substitution(ctx, def, resolved_ty);
     let init_class_name: Option<String> = {
         if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
@@ -292,6 +295,27 @@ fn monomorphized_init_symbol(
     super::dispatch::mangle_generic_name(&format!("{class_name}_init"), &mangle_args)
 }
 
+/// The type a constructed class instance is aggregated at, and the place it is
+/// built into: the caller's destination, or a fresh temporary.
+// TODO: the type names the class without its type arguments, so an instance of
+// a generic class that is never bound (`Box<String>(s).get()`, or one passed
+// straight to a call) is released through the shared drop function, which
+// skips a field typed by the class parameter and leaks it.
+fn constructed_instance_place(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    dest: Option<Place>,
+    span: &Span,
+) -> (Type, Place, Operand) {
+    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+    let destination = match dest {
+        Some(d) => d,
+        None => Place::new(ctx.push_temp(class_ty.clone(), *span)),
+    };
+    let result_op = Operand::Copy(destination.clone());
+    (class_ty, destination, result_op)
+}
+
 fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -306,14 +330,8 @@ fn lower_class_with_init(
         .map(|(_, fi)| create_default_value(&fi.ty, span))
         .collect();
 
-    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
-    let (destination, result_op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        let temp = ctx.push_temp(class_ty.clone(), *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
-    };
+    let (class_ty, destination, result_op) =
+        constructed_instance_place(ctx, class_name, dest, span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
@@ -426,14 +444,8 @@ fn lower_class_without_init(
         operands.push(op);
     }
 
-    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
-    let (destination, result_op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        let temp = ctx.push_temp(class_ty.clone(), *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
-    };
+    let (class_ty, destination, result_op) =
+        constructed_instance_place(ctx, class_name, dest, span);
 
     let dest_local = destination.local;
     ctx.push_statement(crate::mir::Statement {
