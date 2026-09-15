@@ -222,11 +222,28 @@ fn compute_binary_int(op: crate::mir::BinOp, l: i128, r: i128) -> Option<i128> {
 
 fn fold_unary(op: crate::mir::UnOp, operand: &Constant) -> Option<Constant> {
     use crate::mir::UnOp;
+    if op == UnOp::Not {
+        if let Literal::Boolean(b) = operand.literal {
+            return Some(Constant {
+                span: operand.span,
+                ty: operand.ty.clone(),
+                literal: Literal::Boolean(!b),
+            });
+        }
+    }
+
     let val = get_int(operand)?;
 
     let res = match op {
         UnOp::Neg => (-(val as i64)) as i128,
-        UnOp::Not => !val,
+        UnOp::Not => {
+            if val == 0 {
+                1
+            } else {
+                0
+            }
+        }
+        UnOp::BitwiseNot => !val,
         UnOp::Await => return None,
     };
 

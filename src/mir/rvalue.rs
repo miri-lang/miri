@@ -389,8 +389,10 @@ pub enum BinOp {
 /// These operations take a single operand and produce a result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
-    /// Logical/bitwise negation: `!operand`
+    /// Logical negation: `!operand`
     Not,
+    /// Bitwise negation: `~operand`
+    BitwiseNot,
     /// Arithmetic negation: `-operand`
     Neg,
     /// Await an async operation, suspending until completion
