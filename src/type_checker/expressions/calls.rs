@@ -338,7 +338,7 @@ impl TypeChecker {
                     context,
                     call_id,
                 );
-                self.check_call_pins_an_ordering(func, span, call_id, context);
+                self.record_call_pinning_site(func, span, call_id, context);
                 self.record_element_ordering_for_call(func, positional_args, context);
                 result
             }
@@ -1888,16 +1888,13 @@ impl TypeChecker {
     ///
     /// The inferred arguments are read back from the mapping the call already
     /// stored, so a call that pins nothing generic costs one map lookup.
-    fn check_call_pins_an_ordering(
+    fn record_call_pinning_site(
         &mut self,
         func: &Expression,
         span: Span,
         call_id: usize,
         context: &Context,
     ) {
-        if self.ordering_requirements.is_empty() {
-            return;
-        }
         let ExpressionKind::Identifier(callee, _) = &func.node else {
             return;
         };
@@ -1910,7 +1907,7 @@ impl TypeChecker {
             crate::type_checker::ordering_requirements::FREE_FUNCTION_OWNER.to_string(),
             callee.clone(),
         );
-        self.check_pinned_ordering(&body, &substitution, span, context);
+        self.record_pinning_site(body, &substitution, span, context);
     }
 
     /// State the ordering a call needs of the elements it sorts, against the

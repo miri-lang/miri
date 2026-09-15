@@ -11,6 +11,12 @@
 //! receiver — answers for the type it pins it to. Without the deferral the
 //! operator would reach code generation with nothing to compare but the two
 //! operands' addresses.
+//!
+//! Bodies are checked in source order, so a site can be checked before the body
+//! it pins has stated anything. Sites are therefore only recorded during the
+//! body pass. After it, requirements are settled — a body that pins another
+//! body's ordering parameter to its own parameter orders that parameter too —
+//! and every site is answered against the settled set.
 
 use super::context::{Context, TypeDefinition};
 use super::operators::missing_ordering_at_instantiation_message;
@@ -31,6 +37,61 @@ pub(crate) const FREE_FUNCTION_OWNER: &str = "";
 /// Every requirement recorded across the program, keyed by the body that stated
 /// it and valued by the parameter names that body orders.
 pub(crate) type OrderingRequirements = HashMap<GenericBodyId, BTreeSet<String>>;
+
+/// What a site pins one generic parameter to.
+#[derive(Debug)]
+pub(crate) enum Pin {
+    /// One of the pinning body's own generic parameters, named as that body
+    /// declares it. Such a pin names no type to judge: it hands the requirement
+    /// on to the sites that pin the pinning body.
+    CallerParameter(String),
+    /// A type the site names directly, judged against the requirement.
+    Concrete(Type),
+}
+
+/// One place the program pins a generic body's parameters: a call to a generic
+/// function, or a method reached through a receiver whose type arguments are
+/// known.
+#[derive(Debug)]
+pub(crate) struct PinningSite {
+    /// The body the site is written in, or `None` outside a function body.
+    caller: Option<GenericBodyId>,
+    /// The body whose parameters the site pins.
+    callee: GenericBodyId,
+    /// Each pinned parameter of `callee`, by the name `callee` declares it with.
+    pins: HashMap<String, Pin>,
+    span: Span,
+}
+
+/// Grow `requirements` until every body that pins another body's ordering
+/// parameter to one of its own parameters orders that parameter too.
+///
+/// A requirement can only be added, and there are finitely many parameters to
+/// add, so the loop ends — including when bodies delegate to each other in a
+/// cycle.
+fn settle_requirements(requirements: &mut OrderingRequirements, sites: &[PinningSite]) {
+    loop {
+        let mut inherited: Vec<(GenericBodyId, String)> = Vec::new();
+        for site in sites {
+            let (Some(caller), Some(required)) = (&site.caller, requirements.get(&site.callee))
+            else {
+                continue;
+            };
+            for parameter in required {
+                if let Some(Pin::CallerParameter(own)) = site.pins.get(parameter) {
+                    inherited.push((caller.clone(), own.clone()));
+                }
+            }
+        }
+        let mut grew = false;
+        for (caller, own) in inherited {
+            grew |= requirements.entry(caller).or_default().insert(own);
+        }
+        if !grew {
+            return;
+        }
+    }
+}
 
 /// The body identifier for the declaration currently being checked, or `None`
 /// outside a function body.
@@ -129,72 +190,50 @@ impl TypeChecker {
         ))
     }
 
-    /// Report every parameter of `body` that `substitution` pins to a type
-    /// carrying no ordering.
+    /// Record that the body being checked pins `body`'s generic parameters as
+    /// `substitution` spells them, to be answered by
+    /// [`answer_pinning_sites`](Self::answer_pinning_sites).
     ///
-    /// A parameter pinned to one of the checking body's own generic parameters
-    /// names no type to judge yet: one generic body calling another hands the
-    /// requirement on, so the delegating body is recorded as ordering that
-    /// parameter and the sites that pin it answer instead.
-    // TODO: a site is answered against the requirements recorded when it is
-    // checked, and bodies are checked in source order, so a call written above
-    // the generic body it calls is never refused. Pinning sites should be
-    // recorded during the body pass and answered once requirements settle.
-    pub(crate) fn check_pinned_ordering(
+    /// Nothing is judged here, because the body being pinned may be declared
+    /// further down the source and not yet have stated what it orders. Whether
+    /// each pin names the checking body's own parameter is decided now, while
+    /// that body's scope is the one in `context`.
+    pub(crate) fn record_pinning_site(
         &mut self,
-        body: &GenericBodyId,
+        body: GenericBodyId,
         substitution: &HashMap<String, Type>,
         span: Span,
         context: &Context,
     ) {
-        let Some(parameters) = self.ordering_requirements.get(body).cloned() else {
+        if substitution.is_empty() || self.suppress_diagnostics {
             return;
-        };
-        for parameter in parameters {
-            let Some(pinned) = substitution.get(&parameter) else {
-                continue;
-            };
-            if generic_parameter_in_scope(pinned, context).is_some() {
-                self.record_ordering_requirement(pinned, context);
-                continue;
-            }
-            if self.orders_its_values(pinned) {
-                continue;
-            }
-            self.report_error_with_help(
-                DiagnosticCode::TypOrderingNotSupported,
-                missing_ordering_at_instantiation_message(pinned),
-                span,
-                format!(
-                    "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
-                     define 'compare'",
-                    body.1, parameter
-                ),
-            );
         }
+        let pins = substitution
+            .iter()
+            .map(|(parameter, pinned)| {
+                let pin = match generic_parameter_in_scope(pinned, context) {
+                    Some(name) => Pin::CallerParameter(name.to_string()),
+                    None => Pin::Concrete(pinned.clone()),
+                };
+                (parameter.clone(), pin)
+            })
+            .collect();
+        self.pinning_sites.push(PinningSite {
+            caller: current_body(context),
+            callee: body,
+            pins,
+            span,
+        });
     }
 
-    /// True when any body declaring a method of this name orders one of its own
-    /// generic parameters.
-    ///
-    /// Read before a member access rebuilds the receiver's substitution, so a
-    /// receiver whose methods order nothing costs a scan of a map that holds one
-    /// entry per ordering body in the program.
-    pub(crate) fn orders_a_parameter_of(&self, method: &str) -> bool {
-        self.ordering_requirements
-            .keys()
-            .any(|(_, declared)| declared == method)
-    }
-
-    /// Apply the requirements of `method` as reached through a receiver of type
-    /// `class_name`, whose generic parameters `substitution` pins.
+    /// Record the sites a call to `method`, reached through a receiver of type
+    /// `class_name` whose generic parameters `substitution` pins, stands for.
     ///
     /// A method's requirement is recorded against whichever type declares it,
     /// which for an inherited default method is a trait rather than the
     /// receiver's own class. The receiver's substitution is therefore re-keyed
-    /// into each declaring type's parameter names before the requirement is
-    /// answered.
-    pub(crate) fn check_pinned_ordering_for_method(
+    /// into each declaring type's parameter names, one site per declaring type.
+    pub(crate) fn record_method_pinning_sites(
         &mut self,
         class_name: &str,
         method: &str,
@@ -202,11 +241,11 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        if substitution.is_empty() || self.ordering_requirements.is_empty() {
+        if substitution.is_empty() {
             return;
         }
-        self.check_pinned_ordering(
-            &(class_name.to_string(), method.to_string()),
+        self.record_pinning_site(
+            (class_name.to_string(), method.to_string()),
             substitution,
             span,
             context,
@@ -214,7 +253,46 @@ impl TypeChecker {
         let bindings = self.class_trait_param_bindings(class_name);
         for declaring in self.declaring_types_above(class_name) {
             let rekeyed = self.rekeyed_into(&declaring, substitution, &bindings);
-            self.check_pinned_ordering(&(declaring, method.to_string()), &rekeyed, span, context);
+            self.record_pinning_site((declaring, method.to_string()), &rekeyed, span, context);
+        }
+    }
+
+    /// Settle every requirement, then report each site that pins an ordering
+    /// parameter to a type carrying no ordering.
+    ///
+    /// Runs once the body pass has recorded every requirement and every site,
+    /// so a site is answered the same wherever it is written relative to the
+    /// body it pins.
+    pub(crate) fn answer_pinning_sites(&mut self) {
+        let sites = std::mem::take(&mut self.pinning_sites);
+        settle_requirements(&mut self.ordering_requirements, &sites);
+        for site in &sites {
+            self.answer_pinning_site(site);
+        }
+    }
+
+    /// Report each ordering parameter `site` pins to a type carrying no ordering.
+    fn answer_pinning_site(&mut self, site: &PinningSite) {
+        let Some(parameters) = self.ordering_requirements.get(&site.callee).cloned() else {
+            return;
+        };
+        for parameter in parameters {
+            let Some(Pin::Concrete(pinned)) = site.pins.get(&parameter) else {
+                continue;
+            };
+            if self.orders_its_values(pinned) {
+                continue;
+            }
+            self.report_error_with_help(
+                DiagnosticCode::TypOrderingNotSupported,
+                missing_ordering_at_instantiation_message(pinned),
+                site.span,
+                format!(
+                    "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
+                     define 'compare'",
+                    site.callee.1, parameter
+                ),
+            );
         }
     }
 

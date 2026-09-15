@@ -1155,9 +1155,9 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
-        if self.orders_a_parameter_of(prop_name) {
+        if def.generics.is_some() && type_args.is_some() {
             let pinned = self.build_class_method_mapping(def, name, type_args);
-            self.check_pinned_ordering_for_method(name, prop_name, &pinned, span, context);
+            self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
         }
 
         if let Some(ty) =
