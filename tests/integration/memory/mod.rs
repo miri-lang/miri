@@ -6,6 +6,7 @@ pub mod classes;
 pub mod cloneable;
 pub mod closures;
 pub mod collections;
+pub mod drop_call;
 pub mod edge_cases;
 pub mod enums;
 pub mod escape_analysis;

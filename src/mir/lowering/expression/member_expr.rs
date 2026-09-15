@@ -427,6 +427,11 @@ fn release_field_access_base(
     }
 }
 
+// TODO: a class method read as a value (`let f = h.show`, then `f()`) type-checks
+// but fails codegen with MER_CG_008: the method symbol is declared once with the
+// method's own signature and again as a value returning a pointer, and Cranelift
+// refuses the second declaration. A method value needs either a bound closure
+// over its receiver or a type-check refusal.
 pub(crate) fn lower_member_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,

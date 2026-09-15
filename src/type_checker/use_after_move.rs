@@ -14,7 +14,7 @@
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::pattern::Pattern;
-use crate::ast::statement::{BindingResidency, StatementKind};
+use crate::ast::statement::{BindingResidency, StatementKind, DROP_HOOK_NAME};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -25,7 +25,14 @@ use std::collections::{HashMap, HashSet};
 
 use super::context::TypeDefinition;
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
-use super::utils::{is_auto_copy, is_resource};
+use super::utils::{is_auto_copy, is_resource, runs_drop_hook};
+
+/// Why `value.drop()` is refused on a receiver the scope does not own.
+pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
+
+/// How to release a value whose drop hook was called on a borrowed receiver.
+pub(crate) const BORROWED_DROP_HELP: &str =
+    "call drop() on the local variable that owns the value, or let its owner release it";
 
 #[derive(Clone)]
 struct ConsumedInfo {
@@ -63,6 +70,12 @@ pub struct UseAfterMoveChecker<'a> {
     /// whereas a cross-residency `let h = a` is a copy. Snapshotted and
     /// restored alongside `fn_bindings`.
     gpu_bindings: HashSet<String>,
+    /// Names bound by a `let`/`var` of the function being analysed and not
+    /// shadowed by a parameter, loop variable, match binding or lambda
+    /// parameter. Only these values belong to the scope that names them, so
+    /// only these may be released early with `value.drop()`. A lambda body
+    /// starts empty: what it captures belongs to the scope that declared it.
+    owned_locals: HashSet<String>,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -80,6 +93,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             in_function_body: false,
             fn_bindings: HashSet::new(),
             gpu_bindings: HashSet::new(),
+            owned_locals: HashSet::new(),
         }
     }
 
@@ -104,6 +118,10 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::If(cond, then, else_, _) => {
                 self.check_if_stmt(cond, then, else_.as_deref(), consumed);
             }
+            // TODO: a loop body is analysed once, so a resource consumed inside
+            // it (`sink(h)` or `h.drop()` in a `while`) is not reported as used
+            // again on the next pass. The body needs a second visit with the
+            // state its first pass leaves, or a fixpoint over the loop edge.
             StatementKind::While(cond, body, _) => {
                 self.check_expr(cond, consumed);
                 self.check_stmt(body, consumed);
@@ -122,17 +140,27 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::GpuFrameBlock(block) => {
                 self.check_stmt(block, consumed);
             }
+            StatementKind::Class(class_data) => self.check_method_bodies(&class_data.body),
+            StatementKind::Struct(_, _, _, methods, _, _)
+            | StatementKind::Enum(_, _, _, methods, _, _)
+            | StatementKind::Trait(_, _, _, methods, _) => self.check_method_bodies(methods),
             StatementKind::Empty
             | StatementKind::Break
             | StatementKind::Continue
             | StatementKind::Use(_, _)
             | StatementKind::Type(_, _)
-            | StatementKind::Enum(_, _, _, _, _, _)
-            | StatementKind::Struct(_, _, _, _, _, _)
-            | StatementKind::Class(_)
-            | StatementKind::Trait(_, _, _, _, _)
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
             | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
+        }
+    }
+
+    /// Analyses each method of a type declaration as a function body. A method's
+    /// receiver is a parameter like any other, so `self` is never owned there.
+    fn check_method_bodies(&mut self, members: &[Statement]) {
+        for member in members {
+            if let StatementKind::FunctionDeclaration(decl) = &member.node {
+                self.check_fn_decl(decl);
+            }
         }
     }
 
@@ -141,6 +169,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_in_fn = self.in_function_body;
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
+        let prev_owned = std::mem::take(&mut self.owned_locals);
         self.in_function_body = true;
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
@@ -150,6 +179,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.in_function_body = prev_in_fn;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
+        self.owned_locals = prev_owned;
     }
 
     fn check_variable_stmt(
@@ -188,6 +218,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.gpu_bindings.insert(decl.name.clone());
             }
             self.fn_bindings.insert(decl.name.clone());
+            self.owned_locals.insert(decl.name.clone());
         }
     }
 
@@ -221,12 +252,15 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.check_expr(iter, consumed);
         let prev_bindings = self.fn_bindings.clone();
         let prev_gpu = self.gpu_bindings.clone();
+        let prev_owned = self.owned_locals.clone();
         for d in decls {
             self.fn_bindings.insert(d.name.clone());
+            self.owned_locals.remove(d.name.as_str());
         }
         self.check_stmt(body, consumed);
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
+        self.owned_locals = prev_owned;
     }
 
     /// Processes a block's statement list with scope-exit warning for unconsumed resource vars.
@@ -235,6 +269,9 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// tracked. If a resource-typed variable is still live at the end of the block, a W0004
     /// warning is emitted — the drop hook still runs via RC.
     fn check_block(&mut self, stmts: &[Statement], consumed: &mut HashMap<String, ConsumedInfo>) {
+        // A local declared in this block stops naming an owned value when the
+        // block ends, and a name it shadowed names the outer binding again.
+        let prev_owned = self.owned_locals.clone();
         // Collect resource vars declared at this scope level (not in nested blocks).
         let mut scope_resources: Vec<(String, String, Span)> = Vec::new(); // (var_name, type_name, decl_span)
 
@@ -258,6 +295,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
             self.check_stmt(s, consumed);
         }
+        self.owned_locals = prev_owned;
 
         // At scope exit, warn for resource vars not explicitly consumed.
         for (var_name, type_name, span) in &scope_resources {
@@ -392,12 +430,14 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_lambda_expr(&mut self, lambda: &crate::ast::expression::LambdaData) {
         let prev_bindings = self.fn_bindings.clone();
+        let prev_owned = std::mem::take(&mut self.owned_locals);
         for p in &lambda.params {
             self.fn_bindings.insert(p.name.clone());
         }
         let mut lambda_consumed = HashMap::new();
         self.check_stmt(&lambda.body, &mut lambda_consumed);
         self.fn_bindings = prev_bindings;
+        self.owned_locals = prev_owned;
     }
 
     fn report_use_after_consume(
@@ -445,14 +485,20 @@ impl<'a> UseAfterMoveChecker<'a> {
         for branch in branches {
             let mut arm_consumed = pre_consumed.clone();
             let prev_bindings = self.fn_bindings.clone();
+            let prev_owned = self.owned_locals.clone();
+            let mut arm_bindings = HashSet::new();
             for pat in &branch.patterns {
-                Self::collect_pattern_bindings(pat, &mut self.fn_bindings);
+                Self::collect_pattern_bindings(pat, &mut arm_bindings);
             }
+            self.owned_locals
+                .retain(|name| !arm_bindings.contains(name));
+            self.fn_bindings.extend(arm_bindings);
             if let Some(guard) = &branch.guard {
                 self.check_expr(guard, &mut arm_consumed);
             }
             self.check_stmt(&branch.body, &mut arm_consumed);
             self.fn_bindings = prev_bindings;
+            self.owned_locals = prev_owned;
 
             intersection = Some(match intersection.take() {
                 None => arm_consumed,
@@ -474,6 +520,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         args: &[Expression],
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
+        if let Some(receiver) = self.drop_hook_receiver(callee, args) {
+            self.check_drop_hook_call(receiver, consumed);
+            return;
+        }
         let fn_name = self.extract_callee_name(callee);
         let method_chain_key: Option<String> = self.extract_method_chain_key(callee);
         let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
@@ -529,6 +579,67 @@ impl<'a> UseAfterMoveChecker<'a> {
         } else {
             self.consume_args_with_predicate(args, &params, &fn_name, consumed);
         }
+    }
+
+    /// The receiver of `receiver.drop()` when the call names the drop hook of
+    /// the receiver's type, rather than an ordinary method that happens to be
+    /// called `drop`.
+    fn drop_hook_receiver<'e>(
+        &self,
+        callee: &'e Expression,
+        args: &[Expression],
+    ) -> Option<&'e Expression> {
+        let ExpressionKind::Member(receiver, method) = &callee.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method.node else {
+            return None;
+        };
+        let receiver_ty = self.types.get(&receiver.id)?;
+        (method_name == DROP_HOOK_NAME
+            && args.is_empty()
+            && runs_drop_hook(&receiver_ty.kind, self.type_definitions))
+        .then_some(receiver.as_ref())
+    }
+
+    /// `value.drop()` runs the hook and releases the value on the spot, which is
+    /// sound only for a value this scope owns: a local it declared, which the
+    /// call then consumes, or a call result nothing else holds. Any other
+    /// receiver is still held by someone who will release it again.
+    fn check_drop_hook_call(
+        &mut self,
+        receiver: &Expression,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        self.check_expr(receiver, consumed);
+        if matches!(receiver.node, ExpressionKind::Call(_, _)) {
+            return;
+        }
+        if let ExpressionKind::Identifier(name, _) = &receiver.node {
+            if self.owned_locals.contains(name.as_str()) {
+                consumed
+                    .entry(name.clone())
+                    .or_insert_with(|| ConsumedInfo {
+                        by_fn: DROP_HOOK_NAME.to_string(),
+                        at_span: receiver.span,
+                        chain: vec![],
+                    });
+                return;
+            }
+        }
+        self.errors.push(TypeError {
+            kind: TypeErrorKind::Coded {
+                code: DiagnosticCode::OwnDropOfBorrowedValue,
+                message: BORROWED_DROP_MESSAGE.to_string(),
+                help: Some(BORROWED_DROP_HELP.to_string()),
+                expected: None,
+                actual: None,
+            },
+            span: receiver.span,
+            source_override: None,
+            repair: None,
+            related: Vec::new(),
+        });
     }
 
     fn arg_classify(arg: &Expression, params: &[Parameter], pos_idx: &mut usize) -> (bool, usize) {

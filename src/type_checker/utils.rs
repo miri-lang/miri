@@ -67,6 +67,22 @@ pub fn has_drop_hook(
     false
 }
 
+/// Whether a value of this type runs a drop hook, so that `value.drop()` calls
+/// that hook rather than an ordinary method. A generic parameter runs the hook
+/// its bound runs.
+pub fn runs_drop_hook(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    if let TypeKind::Custom(name, _) = kind {
+        return has_drop_hook(name, type_definitions);
+    }
+    if let TypeKind::Generic(_, Some(constraint), _) = kind {
+        return runs_drop_hook(&constraint.kind, type_definitions);
+    }
+    false
+}
+
 /// Determines whether a type is a resource — i.e., it defines `fn drop(self)` or
 /// transitively contains a field whose type is a resource.
 ///

@@ -82,10 +82,9 @@ impl FunctionDeclarationData {
 
     /// Whether this is the drop hook `fn drop(self)`: the receiver and nothing else.
     ///
-    /// TODO: on a class the hook is also callable as `value.drop()`, and the call
-    /// does not release the value, so the hook runs again when the last reference
-    /// goes. Either the call must consume the value or calling the hook directly
-    /// must be refused.
+    /// The hook is also callable as `value.drop()`. That call consumes the value
+    /// and releases it on the spot rather than invoking the hook as a method, so
+    /// the hook still runs once.
     pub fn is_drop_hook(&self) -> bool {
         self.name == DROP_HOOK_NAME && self.declares_receiver() && self.params.len() == 1
     }

@@ -16,6 +16,7 @@ pub mod constructors;
 pub mod context;
 pub mod control_flow;
 pub mod dispatch;
+mod drop_hook_call;
 pub mod expression;
 pub mod forall_cpu;
 pub mod forall_gpu;

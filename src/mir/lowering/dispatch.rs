@@ -77,6 +77,14 @@ pub fn lower_call(
     }
 
     if let ExpressionKind::Member(obj, method) = &func.node {
+        if let Some(op) =
+            super::drop_hook_call::try_lower_drop_hook_call(ctx, span, obj, method, args)?
+        {
+            return Ok(op);
+        }
+    }
+
+    if let ExpressionKind::Member(obj, method) = &func.node {
         if let Some(op) = super::method_dispatch::try_lower_method_call(
             ctx,
             span,

@@ -44,6 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
+use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, RESULT_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
     WARP_CONTEXT_TYPE_NAME,
@@ -1071,6 +1072,16 @@ impl TypeChecker {
         })))
     }
 
+    /// A struct's `fn drop(self)` is its one callable member, typed exactly as a
+    /// class method of the same declaration: no arguments, no result.
+    fn drop_hook_member_type() -> Type {
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![],
+            return_type: None,
+        })))
+    }
+
     fn infer_member_struct(
         &mut self,
         def: &crate::type_checker::context::StructDefinition,
@@ -1108,6 +1119,10 @@ impl TypeChecker {
             }
 
             return field_type.clone();
+        }
+
+        if prop_name == DROP_HOOK_NAME && def.has_drop {
+            return Self::drop_hook_member_type();
         }
 
         let candidates: Vec<&str> = def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
