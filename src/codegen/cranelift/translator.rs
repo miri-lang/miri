@@ -1486,6 +1486,26 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_list_set_elem_order_kind(list_ptr, kind)`.
+    pub(crate) fn call_rt_list_set_elem_order_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        list_ptr: Value,
+        kind: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::LIST_SET_ELEM_ORDER_KIND, list_ptr, kind)
+    }
+
+    /// Calls `miri_rt_array_set_elem_order_kind(array_ptr, kind)`.
+    pub(crate) fn call_rt_array_set_elem_order_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        array_ptr: Value,
+        kind: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::ARRAY_SET_ELEM_ORDER_KIND, array_ptr, kind)
+    }
+
     /// Calls `miri_rt_set_set_elem_clone_fn(set_ptr, fn_ptr)`.
     pub(crate) fn call_rt_set_set_elem_clone_fn(
         builder: &mut FunctionBuilder,

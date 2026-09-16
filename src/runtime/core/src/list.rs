@@ -10,6 +10,7 @@
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::ptr;
 
+use crate::element_order::ElementOrder;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
 /// A type-erased dynamic array.
@@ -30,9 +31,10 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 ///   `miri_rt_list_clone` to produce a deep copy instead of an IncRef.
 ///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined class
 ///   elements that implement `Cloneable`.
-/// - `elem_compare_fn`: If non-zero, called by `miri_rt_list_sort` to order two
-///   element values. Set for element types whose bytes are a reference rather
-///   than a value, which have no order of their own to read.
+/// - `elem_order`: How `miri_rt_list_sort` orders two elements: by reading their
+///   bytes as a signed, unsigned or float value, or through a comparator
+///   registered for element types whose bytes are a reference rather than a
+///   value, which have no order of their own to read.
 #[repr(C)]
 pub struct MiriList {
     data: *mut u8,
@@ -45,9 +47,8 @@ pub struct MiriList {
     /// Clone function for managed elements: `fn(*mut u8) -> *mut u8`.
     /// When non-zero, `miri_rt_list_clone` calls this instead of IncRef-ing.
     elem_clone_fn: usize,
-    /// Comparator for elements that carry no order in their bytes:
-    /// `fn(*const u8, *const u8) -> isize`. Zero means order by the bytes.
-    elem_compare_fn: usize,
+    /// How `sort` orders two elements; see [`ElementOrder`].
+    elem_order: ElementOrder,
 }
 
 impl MiriList {
@@ -60,7 +61,7 @@ impl MiriList {
             elem_size,
             elem_drop_fn: 0,
             elem_clone_fn: 0,
-            elem_compare_fn: 0,
+            elem_order: ElementOrder::SIGNED,
         }
     }
 
@@ -91,8 +92,14 @@ impl MiriList {
             elem_size,
             elem_drop_fn: 0,
             elem_clone_fn: 0,
-            elem_compare_fn: 0,
+            elem_order: ElementOrder::SIGNED,
         }
+    }
+
+    /// Orders this list's elements the way `order` does, for a list copied
+    /// from a container whose elements must sort alike.
+    pub(crate) fn set_element_order(&mut self, order: ElementOrder) {
+        self.elem_order = order;
     }
 
     /// Returns the number of elements.
@@ -329,7 +336,8 @@ pub mod ffi {
 
     /// Creates a new list from a MiriArray.
     /// This is used by the compiler to lower `List([1, 2, 3])` constructor calls.
-    /// The array's data is copied into the new list; the array is NOT consumed.
+    /// The array's data and element order are copied into the new list; the
+    /// array is NOT consumed.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_new_from_raw(
@@ -347,16 +355,17 @@ pub mod ffi {
         } else {
             arr_elem_size
         };
-        if array.is_null() {
-            return miri_rt_list_new(target_elem_size);
+        let list = miri_rt_list_new(target_elem_size);
+        if array.is_null() || list.is_null() {
+            return list;
         }
         let arr = &*array;
+        (*list).set_element_order(arr.element_order());
         let data = arr.data_ptr();
         let len = arr.len();
-        if data.is_null() || len == 0 {
-            return miri_rt_list_new(target_elem_size);
+        if data.is_null() {
+            return list;
         }
-        let list = miri_rt_list_new(target_elem_size);
         for i in 0..len {
             (*list).push(data.add(i * arr_elem_size));
         }
@@ -435,7 +444,7 @@ pub mod ffi {
         (*list).elem_size = elem_size;
         (*list).elem_drop_fn = 0;
         (*list).elem_clone_fn = 0;
-        (*list).elem_compare_fn = 0;
+        (*list).elem_order = ElementOrder::SIGNED;
         list
     }
 
@@ -702,17 +711,29 @@ pub mod ffi {
         }
     }
 
-    /// Sets the `elem_compare_fn` callback for this list.
+    /// Registers the comparator `miri_rt_list_sort` orders elements through.
     ///
-    /// When non-zero, `miri_rt_list_sort` orders two elements by calling this
-    /// function with the values their slots hold, instead of reading those
-    /// slots as numbers.
+    /// When non-zero, `fn_ptr` is an
+    /// [`crate::element_order::ElementCompareFn`] called with the values two
+    /// slots hold, instead of reading those slots as numbers.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_set_elem_compare_fn(ptr: *mut MiriList, fn_ptr: usize) {
         guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
-            (*ptr).elem_compare_fn = fn_ptr;
+            (*ptr).elem_order.set_compare_fn(fn_ptr);
+        }
+    }
+
+    /// Selects how `miri_rt_list_sort` reads an element's bytes as its value: one of
+    /// the kinds in [`crate::element_order`]. Consulted only while no
+    /// comparator is registered.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_set_elem_order_kind(ptr: *mut MiriList, kind: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_order.set_kind(kind);
         }
     }
 
@@ -795,7 +816,7 @@ pub mod ffi {
 
         (*list).elem_drop_fn = src.elem_drop_fn;
         (*list).elem_clone_fn = src.elem_clone_fn;
-        (*list).elem_compare_fn = src.elem_compare_fn;
+        (*list).elem_order = src.elem_order;
 
         if src.elem_clone_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
             let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
@@ -900,7 +921,8 @@ pub mod ffi {
     /// Sorts the list in ascending order.
     ///
     /// Elements are ordered by the comparator registered for the element type,
-    /// or by their bytes read as a signed 64-bit integer when none is.
+    /// or, when none is, by their bytes read as the signed, unsigned or float
+    /// value the registered order kind names.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
@@ -909,12 +931,7 @@ pub mod ffi {
             return;
         }
         let list = &mut *ptr;
-        crate::element_order::sort_elements(
-            list.data,
-            list.len,
-            list.elem_size,
-            list.elem_compare_fn,
-        );
+        crate::element_order::sort_elements(list.data, list.len, list.elem_size, list.elem_order);
     }
 
     /// Reverses the list in place.

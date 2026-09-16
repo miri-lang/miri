@@ -5,7 +5,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::layout::field_layout;
-use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters};
+use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
@@ -39,9 +39,10 @@ type ElementCallbackSetter = ContainerSetter;
 struct ElementCallbackSetters {
     set_drop: ElementCallbackSetter,
     set_clone: ElementCallbackSetter,
-    /// Registers the element comparator, for the containers that can be sorted.
-    /// `None` for a set and for a map's values, which have no order to keep.
-    set_compare: Option<ElementCallbackSetter>,
+    /// Registers how elements are ordered, for the containers that can be
+    /// sorted. `None` for a set and for a map's values, which have no order to
+    /// keep.
+    order: Option<ElementOrderSetters>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -468,7 +469,7 @@ impl<'a> FunctionTranslator<'a> {
                 ElementCallbackSetters {
                     set_drop: Self::call_rt_array_set_elem_drop_fn,
                     set_clone: Self::call_rt_array_set_elem_clone_fn,
-                    set_compare: Some(Self::call_rt_array_set_elem_compare_fn),
+                    order: Some(Self::ARRAY_ORDER_SETTERS),
                 },
             )?;
         }
@@ -512,7 +513,7 @@ impl<'a> FunctionTranslator<'a> {
                     ElementCallbackSetters {
                         set_drop: Self::call_rt_list_set_elem_drop_fn,
                         set_clone: Self::call_rt_list_set_elem_clone_fn,
-                        set_compare: Some(Self::call_rt_list_set_elem_compare_fn),
+                        order: Some(Self::LIST_ORDER_SETTERS),
                     },
                 )?;
             }
@@ -635,7 +636,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementCallbackSetters {
                 set_drop: Self::call_rt_map_set_val_drop_fn,
                 set_clone: Self::call_rt_map_set_val_clone_fn,
-                set_compare: None,
+                order: None,
             },
         )
     }
@@ -680,7 +681,7 @@ impl<'a> FunctionTranslator<'a> {
                 ElementCallbackSetters {
                     set_drop: Self::call_rt_set_set_elem_drop_fn,
                     set_clone: Self::call_rt_set_set_elem_clone_fn,
-                    set_compare: None,
+                    order: None,
                 },
             )?;
         }
@@ -721,11 +722,8 @@ impl<'a> FunctionTranslator<'a> {
         )? {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
         }
-        if let Some(set_compare) = setters.set_compare {
-            if let Some(addr) = Self::elem_compare_addr_for_kind(builder, ctx, elem_kind, type_ctx)?
-            {
-                set_compare(builder, ctx, container_ptr, addr)?;
-            }
+        if let Some(order) = setters.order {
+            Self::emit_element_order(builder, ctx, elem_kind, container_ptr, type_ctx, order)?;
         }
         Ok(())
     }

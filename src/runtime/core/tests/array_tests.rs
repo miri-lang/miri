@@ -547,3 +547,49 @@ fn test_array_to_list_null() {
         miri_runtime_core::miri_rt_list_free(list);
     }
 }
+
+#[test]
+fn test_array_sort_reads_unsigned_elements_when_told_to() {
+    unsafe {
+        let arr = miri_rt_array_new(3, std::mem::size_of::<u64>());
+        let values = [u64::MAX, 7, 1 << 63];
+        for (i, v) in values.iter().enumerate() {
+            miri_rt_array_set(arr, i, v as *const u64 as *const u8);
+        }
+        miri_rt_array_set_elem_order_kind(arr, miri_runtime_core::element_order::BY_UNSIGNED_VALUE);
+        miri_rt_array_sort(arr);
+
+        assert_eq!(*(miri_rt_array_get(arr, 0) as *const u64), 7);
+        assert_eq!(*(miri_rt_array_get(arr, 1) as *const u64), 1 << 63);
+        assert_eq!(*(miri_rt_array_get(arr, 2) as *const u64), u64::MAX);
+
+        miri_rt_array_free(arr);
+    }
+}
+
+#[test]
+fn test_array_clone_and_list_copy_keep_the_element_order() {
+    unsafe {
+        let arr = miri_rt_array_new(2, std::mem::size_of::<f64>());
+        let values = [-1.5f64, -2.5];
+        for (i, v) in values.iter().enumerate() {
+            miri_rt_array_set(arr, i, v as *const f64 as *const u8);
+        }
+        miri_rt_array_set_elem_order_kind(arr, miri_runtime_core::element_order::BY_FLOAT_VALUE);
+
+        let copy = miri_rt_array_clone(arr);
+        miri_rt_array_sort(copy);
+        assert_eq!(*(miri_rt_array_get(copy, 0) as *const f64), -2.5);
+
+        let list = miri_rt_array_to_list(arr);
+        miri_runtime_core::miri_rt_list_sort(list);
+        assert_eq!(
+            *(miri_runtime_core::miri_rt_list_get(list, 0) as *const f64),
+            -2.5
+        );
+
+        miri_runtime_core::miri_rt_list_free(list);
+        miri_rt_array_free(copy);
+        miri_rt_array_free(arr);
+    }
+}
