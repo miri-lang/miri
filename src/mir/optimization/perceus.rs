@@ -610,6 +610,11 @@ fn holds_inline_elements(ty: &MirType) -> bool {
 /// Whether `ty` is a vector type. A vector is stored inline wherever a
 /// collection lays its elements out at their std430 stride, so it is the one
 /// managed type whose element position holds bytes rather than a pointer.
+///
+/// TODO: `MirType::Custom` carries only the name, so this also answers true for a
+/// vector whose component has no inline layout (`Vec2<i16>`, `Vec2<bool>`,
+/// `Vec2<String>`). Codegen stores those as pointers, which then go unretained and
+/// read back wrong; the two decisions must come from `inline_element_layout`.
 fn is_inline_vector(ty: &MirType) -> bool {
     matches!(ty, MirType::Custom(name) if crate::ast::types::vec_dim(name.as_str()).is_some())
 }

@@ -60,6 +60,7 @@ pub mod sized_constructor;
 pub mod slice_readback;
 pub mod uniform_portability;
 pub mod variable_bound_gpu_for;
+pub mod vector_lists;
 pub mod vectors;
 pub mod warp;
 pub mod wgsl;

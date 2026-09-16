@@ -589,7 +589,11 @@ pub(crate) fn lower_list_constructor(
                 let array_ty = ctx.recorded_type(array.id)?;
                 sequence_elem_kind(ctx, &array_ty)
             });
-            let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
+            // An inline element is copied as its component bytes; there is no
+            // reference in its slot for the list to take.
+            let elems_are_managed = elem_kind.is_some_and(|kind| {
+                ctx.is_perceus_managed(&kind) && types::inline_element_layout(&kind).is_none()
+            });
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
         _ => {
@@ -718,7 +722,7 @@ fn emit_runtime_call(
 }
 
 /// An `int` constant operand holding `value`.
-fn int_constant(value: i64, span: &Span) -> Operand {
+pub(super) fn int_constant(value: i64, span: &Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Int, *span),
@@ -898,6 +902,9 @@ pub(crate) fn lower_array_constructor(
 
     // Check if element type is managed. This should have been rejected by the type checker.
     // If we reach here with a managed element type, it's a compiler bug.
+    // TODO: a vector element (`Array<Vec3<f32>, 3>()`) is counted as managed here and
+    // reaches this internal error, yet it is stored inline and needs no managed-element
+    // handling — it could be allocated zeroed at its stride.
     if ctx.is_perceus_managed(&elem_type.kind) {
         return Err(LoweringError::unsupported_expression(
             format!(
@@ -1041,12 +1048,8 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
 pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
     use crate::ast::expression::ExpressionKind;
     // Inline-stored vector elements occupy their std430 stride, not a pointer.
-    if let TypeKind::Custom(name, Some(args)) = kind {
-        if let Some(ExpressionKind::Type(scalar, _)) = args.first().map(|a| &a.node) {
-            if let Some(stride) = types::inline_element_stride(name, &scalar.kind) {
-                return stride;
-            }
-        }
+    if let Some(layout) = types::inline_element_layout(kind) {
+        return layout.stride;
     }
 
     // Atomic<u32> and Atomic<i32> are scalar wrappers — unwrap to inner type size

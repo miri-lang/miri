@@ -3,8 +3,8 @@
 
 use miri::ast::factory::{identifier, int_literal_expression};
 use miri::ast::types::{
-    inline_element_payload, inline_element_stride, BuiltinCollectionKind, Type, TypeKind,
-    VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+    inline_element_layout, inline_element_payload, inline_element_stride, BuiltinCollectionKind,
+    InlineElementLayout, Type, TypeKind, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
 };
 use miri::error::syntax::Span;
 
@@ -279,6 +279,58 @@ fn non_vector_or_non_numeric_kinds_are_none() {
     );
     assert_eq!(
         inline_element_payload(VEC3_TYPE_NAME, &TypeKind::Boolean),
+        None
+    );
+}
+
+fn vector_of(name: &str, component: TypeKind) -> TypeKind {
+    let component = miri::ast::Expression {
+        id: 0,
+        node: miri::ast::ExpressionKind::Type(Box::new(Type::new(component, span())), false),
+        span: span(),
+    };
+    TypeKind::Custom(name.to_string(), Some(vec![component]))
+}
+
+#[test]
+fn inferred_component_widths_are_laid_out_like_their_sized_kinds() {
+    assert_eq!(
+        inline_element_layout(&vector_of(VEC3_TYPE_NAME, TypeKind::Float)),
+        inline_element_layout(&vector_of(VEC3_TYPE_NAME, TypeKind::F64))
+    );
+    assert_eq!(
+        inline_element_layout(&vector_of(VEC2_TYPE_NAME, TypeKind::Int)),
+        Some(InlineElementLayout {
+            stride: 16,
+            payload: 16
+        })
+    );
+}
+
+#[test]
+fn inline_element_layout_pairs_the_stride_with_the_payload() {
+    assert_eq!(
+        inline_element_layout(&vector_of(VEC3_TYPE_NAME, TypeKind::F32)),
+        Some(InlineElementLayout {
+            stride: 16,
+            payload: 12
+        })
+    );
+}
+
+#[test]
+fn elements_without_a_numeric_vector_layout_are_value_words() {
+    assert_eq!(inline_element_layout(&TypeKind::F32), None);
+    assert_eq!(
+        inline_element_layout(&TypeKind::Custom(VEC3_TYPE_NAME.to_string(), None)),
+        None
+    );
+    assert_eq!(
+        inline_element_layout(&vector_of(VEC3_TYPE_NAME, TypeKind::String)),
+        None
+    );
+    assert_eq!(
+        inline_element_layout(&vector_of("Point", TypeKind::F32)),
         None
     );
 }

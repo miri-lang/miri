@@ -25,6 +25,14 @@ use cranelift_object::ObjectModule;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+/// User trap code raised when a collection that stores its elements inline was
+/// allocated with slots of a size other than the stride those elements are
+/// addressed at.
+///
+/// Built via `TrapCode::unwrap_user`, a `const fn`, so an invalid code fails to
+/// compile rather than panic at run time.
+const INLINE_STRIDE_TRAP_CODE: TrapCode = TrapCode::unwrap_user(3);
+
 /// Translates MIR functions to Cranelift IR.
 ///
 /// Each `FunctionTranslator` handles a single function, managing local variables,
@@ -1786,6 +1794,11 @@ impl<'a> FunctionTranslator<'a> {
             let base = builder.ins().iadd_imm(base_value, ptr_size as i64);
             (len, base)
         } else {
+            if inline.is_some() {
+                Self::trap_unless_slots_match_stride(
+                    builder, base_value, base_type, elem_size, ptr_type,
+                );
+            }
             // MiriArray/MiriList layout: { data: *mut u8, len: usize, ... }
             let data = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
             let len = builder
@@ -1803,12 +1816,53 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
         )?;
         // Inline element: the projection chain consumes the address directly.
+        // TODO: `List.pop` and `List.remove_at` bind this address, shrink the list and
+        // return it wrapped in an optional, so the vector they hand back points into
+        // storage the list no longer owns and reading it crashes.
         if inline.is_some() {
             return Ok(elem_addr);
         }
         Ok(builder
             .ins()
             .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
+    }
+
+    /// Trap unless the collection at `base` was allocated with slots of exactly
+    /// `stride` bytes.
+    ///
+    /// An inline element is addressed at its stride. A collection whose slots are
+    /// any other size would be read and written at the wrong offsets — handing
+    /// back bytes that belong to a neighbouring element, or lie past the end of
+    /// the buffer — so the program stops instead of reading them.
+    fn trap_unless_slots_match_stride(
+        builder: &mut FunctionBuilder,
+        base: Value,
+        base_type: &Type,
+        stride: i64,
+        ptr_type: cl_types::Type,
+    ) {
+        let Some(offset) = Self::slot_size_offset(base_type, ptr_type.bytes() as i32) else {
+            return;
+        };
+        let slot_size = builder.ins().load(ptr_type, MemFlags::new(), base, offset);
+        let mismatch = builder.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+            slot_size,
+            stride,
+        );
+        builder.ins().trapnz(mismatch, INLINE_STRIDE_TRAP_CODE);
+    }
+
+    /// Offset of the slot-size field in the runtime header of an array or list:
+    /// `MiriArray { data, elem_count, elem_size, .. }` and
+    /// `MiriList { data, len, capacity, elem_size, .. }`. Neither a map nor a set
+    /// is addressed by index, so neither has a slot size to check.
+    fn slot_size_offset(base_type: &Type, ptr_size: i32) -> Option<i32> {
+        match base_type.kind.as_builtin_collection()? {
+            BuiltinCollectionKind::Array => Some(2 * ptr_size),
+            BuiltinCollectionKind::List => Some(3 * ptr_size),
+            BuiltinCollectionKind::Map | BuiltinCollectionKind::Set => None,
+        }
     }
 
     /// Emit a runtime bounds-check (`idx_val < len_val`) that traps on failure
@@ -1878,6 +1932,12 @@ impl<'a> FunctionTranslator<'a> {
             Some((stride, _, _)) => stride,
             None => cl_elem_ty.bytes() as i64,
         };
+
+        if inline.is_some() {
+            Self::trap_unless_slots_match_stride(
+                builder, base_addr, base_type, elem_size, ptr_type,
+            );
+        }
 
         // Read data pointer from offset 0
         let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), base_addr, 0);

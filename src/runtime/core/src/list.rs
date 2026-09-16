@@ -173,13 +173,81 @@ impl MiriList {
     /// # Safety
     /// - `elem` must point to valid memory of at least `elem_size` bytes.
     pub unsafe fn push(&mut self, elem: *const u8) {
+        if let Some(dest) = self.open_slot(self.len) {
+            ptr::copy_nonoverlapping(elem, dest, self.elem_size);
+        }
+    }
+
+    /// Appends an element stored inline: `payload` component bytes read from
+    /// `src`, with the rest of the slot zeroed.
+    ///
+    /// # Safety
+    /// - `src` must point to valid memory of at least `payload` bytes.
+    /// - `payload` must not exceed `elem_size` (see [`Self::fits_inline_element`]).
+    pub unsafe fn push_inline(&mut self, src: *const u8, payload: usize) {
+        if let Some(dest) = self.open_slot(self.len) {
+            write_inline_element(dest, src, payload, self.elem_size);
+        }
+    }
+
+    /// Inserts an element stored inline at `index`, shifting later elements.
+    /// Returns false when `index` is past the end.
+    ///
+    /// # Safety
+    /// Same as [`Self::push_inline`].
+    pub unsafe fn insert_inline(&mut self, index: usize, src: *const u8, payload: usize) -> bool {
+        match self.open_slot(index) {
+            Some(dest) => {
+                write_inline_element(dest, src, payload, self.elem_size);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether an element laid out at `stride` bytes, of which `payload` are
+    /// real, has exactly the slot this list was allocated with.
+    ///
+    /// The compiler reads such an element back at `stride`, so a list whose
+    /// slots are any other size would hand every later element back from the
+    /// wrong offset.
+    pub fn fits_inline_element(&self, payload: usize, stride: usize) -> bool {
+        stride == self.elem_size && payload <= stride
+    }
+
+    /// Whether a whole element fits in the value word the word-passing entry
+    /// points receive. A wider element would be copied from past the end of
+    /// that word.
+    ///
+    /// TODO: an `i128`/`u128` list has 16-byte slots and so is refused here; its
+    /// elements need to travel by address the way inline vectors do.
+    pub fn fits_value_word(&self) -> bool {
+        self.elem_size <= std::mem::size_of::<usize>()
+    }
+
+    /// Makes room for one element at `index`, shifting the elements from
+    /// `index` on up by one, and returns the uninitialized slot. Returns `None`
+    /// when `index` is past the end.
+    unsafe fn open_slot(&mut self, index: usize) -> Option<*mut u8> {
+        if index > self.len {
+            return None;
+        }
+
         self.reserve(1);
 
-        if self.len < self.capacity {
-            let dest = self.data.add(self.len * self.elem_size);
-            ptr::copy_nonoverlapping(elem, dest, self.elem_size);
-            self.len += 1;
+        if self.len >= self.capacity {
+            return None;
         }
+
+        if index < self.len {
+            let src = self.data.add(index * self.elem_size);
+            let dest = self.data.add((index + 1) * self.elem_size);
+            let count = (self.len - index) * self.elem_size;
+            ptr::copy(src, dest, count);
+        }
+
+        self.len += 1;
+        Some(self.data.add(index * self.elem_size))
     }
 
     /// Pops the last element and copies it to `out`.
@@ -238,29 +306,13 @@ impl MiriList {
     /// # Safety
     /// - `elem` must point to valid memory of at least `elem_size` bytes.
     pub unsafe fn insert(&mut self, index: usize, elem: *const u8) -> bool {
-        if index > self.len {
-            return false;
+        match self.open_slot(index) {
+            Some(dest) => {
+                ptr::copy_nonoverlapping(elem, dest, self.elem_size);
+                true
+            }
+            None => false,
         }
-
-        self.reserve(1);
-
-        if self.len >= self.capacity {
-            return false;
-        }
-
-        // Shift elements to make room
-        if index < self.len {
-            let src = self.data.add(index * self.elem_size);
-            let dest = self.data.add((index + 1) * self.elem_size);
-            let count = (self.len - index) * self.elem_size;
-            ptr::copy(src, dest, count);
-        }
-
-        // Insert the new element
-        let dest = self.data.add(index * self.elem_size);
-        ptr::copy_nonoverlapping(elem, dest, self.elem_size);
-        self.len += 1;
-        true
     }
 
     /// Removes the element at the given index, shifting subsequent elements.
@@ -325,6 +377,18 @@ impl Drop for MiriList {
             }
         }
     }
+}
+
+/// Writes an inline element into `dest`: the slot is zeroed first, so the
+/// padding past the `payload` real bytes never carries stale memory, then the
+/// payload is copied in.
+///
+/// # Safety
+/// - `dest` must be valid for `elem_size` bytes and `src` for `payload` bytes.
+/// - `payload` must not exceed `elem_size`.
+unsafe fn write_inline_element(dest: *mut u8, src: *const u8, payload: usize, elem_size: usize) {
+    ptr::write_bytes(dest, 0, elem_size);
+    ptr::copy_nonoverlapping(src, dest, payload);
 }
 
 /// Stable FFI interface for list operations.
@@ -530,7 +594,36 @@ pub mod ffi {
             return;
         }
         let list = &mut *ptr;
+        if !list.fits_value_word() {
+            std::process::abort();
+        }
         list.push(&val as *const usize as *const u8);
+    }
+
+    /// Appends an element the list stores inline, handed by address.
+    ///
+    /// `src` points at the element's `payload` component bytes, and `stride` is
+    /// the spacing the compiler addresses the list's elements at. A list whose
+    /// slots are not exactly `stride` bytes cannot hold the element where an
+    /// index read will look for it, so the process is aborted rather than the
+    /// element stored.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_push_inline(
+        ptr: *mut MiriList,
+        src: *const u8,
+        payload: usize,
+        stride: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() || src.is_null() {
+            return;
+        }
+        let list = &mut *ptr;
+        if !list.fits_inline_element(payload, stride) {
+            std::process::abort();
+        }
+        list.push_inline(src, payload);
     }
 
     /// Pops the last element from the list.
@@ -586,6 +679,9 @@ pub mod ffi {
             return 0;
         }
         let list = &mut *ptr;
+        if !list.fits_value_word() {
+            std::process::abort();
+        }
         if index >= list.len {
             return 0;
         }
@@ -618,11 +714,38 @@ pub mod ffi {
             return 0;
         }
         let list = &mut *ptr;
+        if !list.fits_value_word() {
+            std::process::abort();
+        }
         if list.insert(index, &val as *const usize as *const u8) {
             1
         } else {
             0
         }
+    }
+
+    /// Inserts an element the list stores inline, handed by address.
+    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    ///
+    /// The arguments and the refusal follow `miri_rt_list_push_inline`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_insert_inline(
+        ptr: *mut MiriList,
+        index: usize,
+        src: *const u8,
+        payload: usize,
+        stride: usize,
+    ) -> u8 {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() || src.is_null() {
+            return 0;
+        }
+        let list = &mut *ptr;
+        if !list.fits_inline_element(payload, stride) {
+            std::process::abort();
+        }
+        u8::from(list.insert_inline(index, src, payload))
     }
 
     /// Removes the element at the given index and releases it.
