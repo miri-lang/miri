@@ -778,6 +778,243 @@ fn test_the_exit_criterion_compares_the_pack_loop_against_the_bare_loop() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// The cell every probe test runs: a baseline arm, so no skill pack is installed.
+const PROBE_JOB: &str = "01-word-frequency";
+
+/// Stand-ins for the agent harness and the compiler, on a directory put first
+/// on `PATH`.
+///
+/// The harness writes `ratings` as the subject's `RATINGS.json`, or writes
+/// nothing when `ratings` is `None`, and streams one usage event. Nothing a
+/// probe does is a live model's behaviour, so nothing about one is left to a
+/// live model here.
+#[cfg(unix)]
+fn install_fake_harness(bin: &Path, ratings: Option<&str>) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(bin).expect("cannot create the fake harness directory");
+    let write_ratings = ratings
+        .map(|text| format!("cat > RATINGS.json <<'RATINGS'\n{}\nRATINGS\n", text))
+        .unwrap_or_default();
+    let claude = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'fake harness 1'; exit 0; fi\n\
+         {}echo '{{\"type\":\"assistant\",\"message\":{{\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}},\"content\":[]}}}}'\n",
+        write_ratings
+    );
+    let miri = "#!/bin/sh\necho 'miri 0.0.0-fake'\n";
+    for (name, script) in [("claude", claude.as_str()), ("miri", miri)] {
+        let path = bin.join(name);
+        fs::write(&path, script).expect("cannot write a fake harness");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .expect("cannot make a fake harness executable");
+    }
+}
+
+/// Run `bench.py` against a synthetic round under `root`, with the fake harness
+/// first on `PATH`.
+fn run_bench(root: &Path, extra: &[&str]) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args([
+            "--job",
+            PROBE_JOB,
+            "--arm",
+            "python",
+            "--model",
+            "claude-sonnet",
+        ])
+        .args(["--round", "synthetic", "--records-root"])
+        .arg(root.join("runs"))
+        .arg("--scratch")
+        .arg(root.join("scratch"))
+        .args(extra)
+        .env("PATH", path)
+        .output()
+        .expect("cannot run python3")
+}
+
+/// The JSON files under a directory, at any depth.
+fn json_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for path in entries.filter_map(|entry| entry.ok().map(|e| e.path())) {
+        if path.is_dir() {
+            found.extend(json_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_probe_record_never_reaches_the_folder() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the probe was not run");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-probe-isolation");
+    let _ = fs::remove_dir_all(&root);
+    install_fake_harness(
+        &root.join("bin"),
+        Some(r#"{"ratings": [{"surface": "pytest", "score": 2, "reason": "slow"}]}"#),
+    );
+    let runs = root.join("runs");
+    write_synthetic_record(&runs, PROBE_JOB, "python", SyntheticRun::green(10, 1, 1));
+    let measured_workspace = root
+        .join("scratch")
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("python")
+        .join("claude-sonnet")
+        .join("1");
+    fs::create_dir_all(&measured_workspace).expect("cannot create a measured workspace");
+    fs::write(measured_workspace.join("main.py"), "measured").expect("cannot seed it");
+
+    let probed = run_bench(&root, &["--probe"]);
+    assert!(
+        probed.status.success(),
+        "the probe failed:\n{}",
+        String::from_utf8_lossy(&probed.stderr)
+    );
+
+    // Where the probe wrote, and what it did not touch.
+    let probe_record = runs
+        .join("synthetic.probe")
+        .join(PROBE_JOB)
+        .join("python")
+        .join("claude-sonnet")
+        .join("1.json");
+    let written = read(&probe_record);
+    assert!(
+        written.contains("\"pytest\"") && written.contains("\"score\": 2"),
+        "the probe record does not carry the ratings the subject wrote:\n{}",
+        written
+    );
+    assert_eq!(
+        json_files(&runs.join("synthetic")).len(),
+        1,
+        "the probe wrote a file into the round it must stay out of"
+    );
+    assert_eq!(
+        read(&measured_workspace.join("main.py")),
+        "measured",
+        "the probe overwrote the workspace a measured record points at"
+    );
+
+    // The folder reads the round and sees only the measured record.
+    let summary = fold(&runs);
+    assert!(
+        summary.contains("\"records\": 1,"),
+        "the folder counted something other than the one measured record:\n{}",
+        summary
+    );
+
+    // A probe record carried into the round by hand is refused, not folded.
+    let smuggled = runs
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("python")
+        .join("claude-sonnet")
+        .join("2.json");
+    fs::copy(&probe_record, &smuggled).expect("cannot copy the probe record");
+    let refused = Command::new("python3")
+        .arg(field_dir().join("report.py"))
+        .args(["--round", "synthetic", "--runs-root"])
+        .arg(&runs)
+        .arg("--out")
+        .arg(root.join("contaminated.json"))
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        !refused.status.success() && String::from_utf8_lossy(&refused.stderr).contains("probe"),
+        "the folder accepted a probe record inside a round:\n{}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_probe_refuses_ratings_it_cannot_read() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the probe was not run");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-probe-unreadable");
+    let unreadable = [
+        (
+            Some(r#"{"ratings": [{"surface": "pytest", "score": 7}]}"#),
+            "score",
+        ),
+        (Some(r#"{"ratings": []}"#), "no surface"),
+        (None, "RATINGS.json"),
+    ];
+    for (ratings, problem) in unreadable {
+        let _ = fs::remove_dir_all(&root);
+        install_fake_harness(&root.join("bin"), ratings);
+        let probed = run_bench(&root, &["--probe"]);
+        let stderr = String::from_utf8_lossy(&probed.stderr);
+        assert!(
+            !probed.status.success() && stderr.contains(problem),
+            "a probe with unreadable ratings ({}) did not fail naming the problem:\n{}",
+            problem,
+            stderr
+        );
+        let record = read(
+            &root
+                .join("runs")
+                .join("synthetic.probe")
+                .join(PROBE_JOB)
+                .join("python")
+                .join("claude-sonnet")
+                .join("1.json"),
+        );
+        assert!(
+            record.contains("\"ratings\": null") && record.contains("\"ratingsProblem\""),
+            "an unreadable probe does not keep its record with the problem named:\n{}",
+            record
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_only_a_probe_is_asked_for_ratings() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the launch was not rendered");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-probe-prompt");
+    let _ = fs::remove_dir_all(&root);
+    let measured = run_bench(&root, &["--dry-run"]);
+    let probe = run_bench(&root, &["--dry-run", "--probe"]);
+    for output in [&measured, &probe] {
+        assert!(
+            output.status.success(),
+            "a dry run failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        !String::from_utf8_lossy(&measured.stdout).contains("RATINGS.json"),
+        "a measured arm is asked for per-tool ratings"
+    );
+    assert!(
+        String::from_utf8_lossy(&probe.stdout).contains("RATINGS.json"),
+        "a probe is launched without asking for the ratings it exists to collect"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// A condition a verdict is computed from, as a document states it: the record
 /// fields it reads and the key `report.py` publishes its verdict under.
 struct MeasuredCondition {
@@ -910,6 +1147,11 @@ fn test_the_prompt_that_drives_a_round_is_committed_and_self_sufficient() {
     assert!(
         prompt.contains("per-tool verdict"),
         "PROMPT.md does not carry the no-per-tool-verdicts rule into the run"
+    );
+    assert!(
+        prompt.contains("--probe") && prompt.contains(".probe/"),
+        "PROMPT.md does not say how the opinion probe is run or where its ratings land, \
+         so a probe would be launched by hand, outside the instrument"
     );
     assert!(
         prompt.contains("counted separately"),

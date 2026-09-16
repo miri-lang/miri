@@ -31,6 +31,7 @@ models.toml                the three model columns
 bench.py                   runs one cell and writes its records
 report.py                  folds a round's records into summary.json
 runs/<round>/...           the records and transcripts
+runs/<round>.probe/...     the opinion probe's ratings, never folded
 ```
 
 ## The arms
@@ -88,7 +89,11 @@ of them.
 - **A measured arm is never asked for a per-tool verdict.** Asking a subject
   what it thought of a tool buys invocations a real job would not spend, and it
   inflated the tooled column of the 2026-09-09 numbers. Opinions are collected
-  afterwards, in a separate probe that is not measured.
+  afterwards, in a separate probe that is not measured: `bench.py --probe`
+  re-runs one cell per arm, asks the subject to rate every surface it used in
+  `RATINGS.json`, and writes the ratings to `runs/<round>.probe/` beside the
+  round. `report.py` never reads that directory, and it refuses — rather than
+  skips — a probe record found inside a round.
 - **Invocations lost to compiler defects are counted separately** from the
   clean loop. A defect is a fact about the compiler, not about the surface
   wrapped around it, and folding the two together is what made two earlier
@@ -128,7 +133,15 @@ python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
 
 # Fold the round and judge the claims.
 python3 evals/field/report.py --round r1
+
+# After the round, one unmeasured opinion probe per arm.
+python3 evals/field/bench.py --job 02-ledger-repair --arm miri-pack \
+    --model claude-sonnet --round r1 --probe
 ```
+
+A probe prints each rating it read. A probe whose subject left no readable
+`RATINGS.json` — missing, not JSON, or a score outside 1 to 5 — keeps its record
+and transcript with the problem named in `ratingsProblem`, and exits non-zero.
 
 `bench.py` needs the harness on the path (`claude`, `gemini`), the arm's
 toolchain, and a `miri` on the path for the Miri arms. A model column whose

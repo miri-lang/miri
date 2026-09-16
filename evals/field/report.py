@@ -32,6 +32,9 @@ BARE = "miri-bare"
 # labels a result and never decides a verdict, so a tie cannot pass for a win.
 PARITY_FACTOR = 1.25
 
+# The `kind` `bench.py` stamps on an opinion-probe record.
+PROBE_KIND = "probe"
+
 
 def load_records(round_name, runs_root):
     """Every run record of a round.
@@ -48,7 +51,18 @@ def load_records(round_name, runs_root):
 
 
 def decode(path):
+    """A run record, or nothing for a file that is not one.
+
+    An opinion-probe record is refused rather than skipped. Its ratings are what
+    a subject said about itself, and one found inside a round means the round's
+    data was mixed by hand: folding past it quietly would hide that.
+    """
     content = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(content, dict) and content.get("kind") == PROBE_KIND:
+        raise SystemExit(
+            f"{path} is an opinion-probe record; probes are never folded into a round, "
+            "and their records belong under runs/<round>.probe/"
+        )
     if not isinstance(content, dict) or "job" not in content or "hiddenTests" not in content:
         return None
     return content
