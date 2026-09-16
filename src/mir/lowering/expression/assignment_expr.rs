@@ -18,7 +18,8 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT};
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue, ensure_place, release_coerced_source, resolve_type, spellings_of_one_value,
+    coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, resolve_type,
+    spellings_of_one_value, wrap_for_optional_slot,
 };
 
 fn assign_to_identifier(
@@ -263,50 +264,96 @@ fn assign_to_member(
         // is what funds it: moving would leave the field and the source sharing
         // one reference that both release, and the field holding freed memory
         // as soon as the first release ran.
-        let val = crate::mir::lowering::dispatch::move_to_copy(lower_expression(ctx, rhs, None)?);
+        let rhs_watermark = ctx.body.local_decls.len();
+        let lowered = lower_expression(ctx, rhs, None)?;
+        let rhs_ty = resolve_arg_type(ctx, rhs, &lowered);
+        let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
         let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
         let obj_ty = ctx
             .type_checker
             .get_type(obj.id)
             .ok_or_else(|| LoweringError::type_not_found(obj.id, obj.span))?;
 
-        if let TypeKind::Custom(type_name, _) = &obj_ty.kind {
-            let field_index =
-                resolve_member_field_index(type_name, prop, ctx.type_checker.type_definitions());
-            if let Some(idx) = field_index {
-                let obj_place = ensure_place(ctx, obj_operand, obj.span);
-                let mut target_place = obj_place;
-                target_place.projection.push(PlaceElem::Field(idx));
-
-                dispatch_member_assign(
-                    ctx,
-                    &target_place,
-                    op,
-                    val.clone(),
-                    type_name,
-                    idx,
-                    prop,
-                    expr,
-                )?;
-                finalize_member_result(ctx, val, dest, expr)
-            } else {
-                Err(LoweringError::unsupported_lhs(
-                    format!("Cannot assign to member of non-struct type: {:?}", obj_ty),
-                    expr.span,
-                ))
-            }
-        } else {
-            Err(LoweringError::unsupported_lhs(
+        let TypeKind::Custom(type_name, _) = &obj_ty.kind else {
+            return Err(LoweringError::unsupported_lhs(
                 format!("Cannot assign to member of non-struct type: {:?}", obj_ty),
                 expr.span,
-            ))
-        }
+            ));
+        };
+        let field_index =
+            resolve_member_field_index(type_name, prop, ctx.type_checker.type_definitions());
+        let Some(idx) = field_index else {
+            return Err(LoweringError::unsupported_lhs(
+                format!("Cannot assign to member of non-struct type: {:?}", obj_ty),
+                expr.span,
+            ));
+        };
+        let assigned = AssignedValue {
+            operand: val,
+            ty: rhs_ty,
+            watermark: rhs_watermark,
+        };
+        store_into_field(
+            ctx,
+            assigned,
+            FieldTarget {
+                base: obj_operand,
+                base_span: obj.span,
+                type_name,
+                idx,
+                prop,
+            },
+            op,
+            rhs.span,
+            expr,
+            dest,
+        )
     } else {
         Err(LoweringError::unsupported_lhs(
             "Expected Member expression",
             expr.span,
         ))
     }
+}
+
+/// The field an assignment writes: the object holding it, the type that
+/// declares it, its index in that type's layout, and the property expression
+/// that named it.
+struct FieldTarget<'a> {
+    base: Operand,
+    base_span: crate::error::syntax::Span,
+    type_name: &'a str,
+    idx: usize,
+    prop: &'a Expression,
+}
+
+/// Store the right-hand value into the field, wrapping it first when the field
+/// declares an optional and the value arrived bare.
+fn store_into_field(
+    ctx: &mut LoweringContext,
+    assigned: AssignedValue,
+    target: FieldTarget<'_>,
+    op: &crate::ast::operator::AssignmentOp,
+    rhs_span: crate::error::syntax::Span,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let val =
+        wrap_value_for_field_slot(ctx, assigned, (target.type_name, target.idx), op, rhs_span);
+    let mut target_place = ensure_place(ctx, target.base, target.base_span);
+    target_place.projection.push(PlaceElem::Field(target.idx));
+
+    dispatch_member_assign(
+        ctx,
+        &target_place,
+        op,
+        val.clone(),
+        target.type_name,
+        target.idx,
+        target.prop,
+        expr,
+    )?;
+    finalize_member_result(ctx, val, dest, expr)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -380,10 +427,54 @@ fn resolve_member_field_index(
     }
 }
 
-// TODO: the right-hand operand is stored as it is, so a bare value assigned to
-// an optional field (`h.v = 5` where `v int?`) leaves the raw payload in the
-// field. The collection stores wrap it through `wrap_for_optional_slot`; the
-// field store needs the same against the field's declared type.
+/// The right-hand side of a member assignment, carried together with what the
+/// type checker recorded for it and the local watermark taken before it was
+/// lowered — which is what tells a temp made for it from a pre-existing local.
+struct AssignedValue {
+    operand: Operand,
+    ty: Type,
+    watermark: usize,
+}
+
+/// Wrap a bare value assigned into a field whose declaration is an optional.
+///
+/// The type checker lets a `T` stand where a `T?` is declared, and a field
+/// declaration is such a slot. The store writes exactly the operand it is
+/// handed, so a value left bare would put the raw payload in the field and the
+/// next read would take that payload for the address of an optional. A compound
+/// assignment is arithmetic on the field's own type and never stores the
+/// right-hand side on its own, so it passes through untouched.
+fn wrap_value_for_field_slot(
+    ctx: &mut LoweringContext,
+    assigned: AssignedValue,
+    field: (&str, usize),
+    op: &crate::ast::operator::AssignmentOp,
+    span: crate::error::syntax::Span,
+) -> Operand {
+    if !matches!(op, crate::ast::operator::AssignmentOp::Assign) {
+        return assigned.operand;
+    }
+    let (type_name, idx) = field;
+    let Some(slot_ty) = ctx
+        .body
+        .field_types
+        .get(type_name)
+        .and_then(|fields| fields.get(idx))
+        .cloned()
+    else {
+        return assigned.operand;
+    };
+    wrap_for_optional_slot(
+        ctx,
+        assigned.operand,
+        assigned.ty,
+        &slot_ty,
+        assigned.watermark,
+        span,
+    )
+    .0
+}
+
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
