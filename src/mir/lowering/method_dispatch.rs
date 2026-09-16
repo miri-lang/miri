@@ -763,7 +763,14 @@ fn emit_resolved_method_call(
     }
     let symbol = match mono {
         Some((mangled, _)) => mangled,
-        None => format!("{}_{}", m.defining_class, m.method_name),
+        None => {
+            // Optimization: avoid format! overhead in symbol mangling on hot method-dispatch paths.
+            let mut s = String::with_capacity(m.defining_class.len() + 1 + m.method_name.len());
+            s.push_str(m.defining_class);
+            s.push('_');
+            s.push_str(m.method_name);
+            s
+        }
     };
     emit_static_method_call(
         ctx,
@@ -969,7 +976,14 @@ pub(crate) fn operator_method_callee(
             ctx.record_class_instantiations(receiver_ty);
             callee
         }
-        None => (format!("{owner}_{method_name}"), method.return_type.clone()),
+        None => {
+            // Optimization: pre-allocate exact capacity for static method symbol to eliminate format! parsing overhead.
+            let mut s = String::with_capacity(owner.len() + 1 + method_name.len());
+            s.push_str(owner);
+            s.push('_');
+            s.push_str(method_name);
+            (s, method.return_type.clone())
+        }
     }
 }
 
