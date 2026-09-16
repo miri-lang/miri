@@ -483,12 +483,13 @@ pub fn release_coerced_source(
 
 /// Wrap a bare value about to be stored into an optional slot as `Some(value)`.
 ///
-/// The type checker lets a `T` stand where a `T?` is declared, and a
-/// collection's element slot is such a declaration. A collection store writes
-/// the operand it is handed, so a value kept bare would leave the slot holding
-/// the raw payload, and the next read would take that payload for the address
-/// of an optional. Returns the operand to store together with its type; a value
-/// that is already optional, or a slot that is not, passes through unchanged.
+/// The type checker lets a `T` stand where a `T?` is declared, and both a
+/// collection's element slot and a field declaration are such a declaration. A
+/// store writes the operand it is handed, so a value kept bare would leave the
+/// slot holding the raw payload, and the next read would take that payload for
+/// the address of an optional. Returns the operand to store together with its
+/// type; a value that is already optional, or a slot that is not, passes
+/// through unchanged.
 pub fn wrap_for_optional_slot(
     ctx: &mut LoweringContext,
     operand: Operand,
