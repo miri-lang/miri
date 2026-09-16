@@ -9,7 +9,9 @@
 //! - Type expression manipulation
 //! - Error reporting
 
-use super::context::{Context, TypeDefinition};
+use super::context::{
+    find_trait_default_method, ClassDefinition, Context, MethodInfo, TypeDefinition,
+};
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
@@ -29,15 +31,13 @@ use crate::error::type_error::TypeError;
 /// Whether releasing the last reference to a `type_name` value runs a drop hook.
 ///
 /// A struct runs the hook it declares. A class runs the `drop` its inheritance
-/// chain resolves to, so a subclass inherits its base's hook and an override
-/// replaces it. The chain is walked through the definitions rather than read off
+/// chain resolves to, in the order an inherited method call resolves it: the
+/// class's own methods, then a default its traits supply, then its base class.
+/// So a subclass inherits its base's hook, an override replaces it, and a trait
+/// default `fn drop(self)` is a hook for every class that does not declare its
+/// own `drop`. The chain is walked through the definitions rather than read off
 /// a flag stored at declaration, because a subclass may be declared before its
 /// base.
-///
-/// TODO: a class method spelled `fn drop()` (receiver left implicit) and a trait
-/// default `fn drop(self)` are both silently not hooks — neither fires when the
-/// last reference goes. Resolving them needs a decision on which spellings name
-/// a hook, followed by the trait walk `resolve_inherited_method` already does.
 pub fn has_drop_hook(
     type_name: &str,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
@@ -52,11 +52,16 @@ pub fn has_drop_hook(
                 if def.has_drop || def.methods.contains_key(DROP_HOOK_NAME) {
                     return def.has_drop;
                 }
+                if let Some(trait_drop) = find_class_trait_default_drop(def, type_definitions) {
+                    return is_drop_hook_signature(trait_drop);
+                }
                 match &def.base_class {
                     Some(base) => current = base.as_str(),
                     None => return false,
                 }
             }
+            // TODO: an enum that declares `fn drop(self)` compiles and never runs
+            // it; an enum drop hook is neither run nor refused.
             None
             | Some(TypeDefinition::Enum(_))
             | Some(TypeDefinition::Generic(_))
@@ -65,6 +70,23 @@ pub fn has_drop_hook(
         }
     }
     false
+}
+
+/// The default `drop` the first of a class's own traits to supply one declares.
+fn find_class_trait_default_drop<'a>(
+    class: &'a ClassDefinition,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+) -> Option<&'a MethodInfo> {
+    class.traits.iter().find_map(|trait_name| {
+        find_trait_default_method(type_definitions, trait_name, DROP_HOOK_NAME)
+            .map(|(_, info)| info)
+    })
+}
+
+/// Whether a registered `drop` method has the hook's shape: an instance method
+/// a caller passes nothing. The registered signature leaves the receiver out.
+fn is_drop_hook_signature(method: &MethodInfo) -> bool {
+    method.params.is_empty() && !method.is_static
 }
 
 /// Whether a value of this type runs a drop hook, so that `value.drop()` calls

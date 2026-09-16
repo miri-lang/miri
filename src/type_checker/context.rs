@@ -444,6 +444,31 @@ pub fn vtable_slot_index(
     all_methods.iter().position(|&n| n == method_name)
 }
 
+/// Finds the default (non-abstract) `method_name` a trait or one of its parent
+/// traits supplies, returning the trait that declares it with its signature.
+pub fn find_trait_default_method<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    trait_name: &'a str,
+    method_name: &str,
+) -> Option<(&'a str, &'a MethodInfo)> {
+    let mut to_check = vec![trait_name];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(t_name) = to_check.pop() {
+        if !visited.insert(t_name) {
+            continue;
+        }
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
+            if let Some(method_info) = td.methods.get(method_name) {
+                if !method_info.is_abstract {
+                    return Some((t_name, method_info));
+                }
+            }
+            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
+        }
+    }
+    None
+}
+
 /// Collect all non-constructor method names from a trait and its parent traits.
 pub fn collect_trait_vtable_methods<'a>(
     type_defs: &'a HashMap<String, TypeDefinition>,

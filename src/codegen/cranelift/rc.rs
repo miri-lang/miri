@@ -2040,6 +2040,12 @@ impl<'a> FunctionTranslator<'a> {
     /// `h.drop()`. A class with one field runs it. Where the fieldless instance
     /// loses its release (allocation, the managed-type predicate, or this thunk)
     /// is not yet traced.
+    ///
+    /// TODO: the hook is resolved from the static type of the reference being
+    /// released, so a resource released through a trait-typed reference
+    /// (`let c Closable = Handle(id: 1)`, or a temporary passed as a `Closable`
+    /// argument) never runs its hook, and `x.drop()` on a trait-typed receiver
+    /// calls the hook as a method and lets the owner's release run it again.
     pub fn resolve_drop_hook_name(
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,

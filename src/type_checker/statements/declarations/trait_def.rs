@@ -215,6 +215,8 @@ impl TypeChecker {
         for stmt in body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
+                    self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypTraitDefinition);
+
                     // Reject static methods in traits
                     if decl.properties.is_static {
                         self.report_error(

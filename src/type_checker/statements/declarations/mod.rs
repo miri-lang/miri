@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod class_def;
+pub mod drop_hook;
 pub mod enum_def;
 pub mod func;
 pub mod generics;

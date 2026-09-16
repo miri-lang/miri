@@ -803,7 +803,7 @@ impl TypeChecker {
         let has_drop = class_data
             .body
             .iter()
-            .any(statements::declarations::struct_def::is_drop_method);
+            .any(statements::declarations::drop_hook::is_drop_method);
         self.register_type_definition(
             name.clone(),
             TypeDefinition::Class(context::ClassDefinition {
