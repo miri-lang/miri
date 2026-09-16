@@ -669,6 +669,21 @@ fn test_class_listing_the_cloneable_trait_implements_it() {
 }
 
 #[test]
+fn test_class_with_multiple_traits_implements_cloneable() {
+    let mut widget = class("Widget");
+    widget.traits = vec![
+        "Printable".to_string(),
+        CLONEABLE_TRAIT_NAME.to_string(),
+        "Equatable".to_string(),
+    ];
+    let table = defs([("Widget", TypeDefinition::Class(widget))]);
+
+    assert!(FunctionTranslator::class_implements_cloneable(
+        "Widget", &table
+    ));
+}
+
+#[test]
 fn test_cloneable_is_inherited_through_the_base_chain() {
     let mut root = class("Root");
     root.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
