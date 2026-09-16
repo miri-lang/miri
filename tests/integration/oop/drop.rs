@@ -574,3 +574,284 @@ fn main()
         "held\nbox dropped",
     );
 }
+
+#[test]
+fn test_class_drop_hook_spelled_without_self_runs_once() {
+    assert_stdout_is(
+        r#"
+class Handle
+    public var id int
+
+    public fn drop()
+        println("dropped")
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        "1\ndropped",
+    );
+}
+
+#[test]
+fn test_class_drop_hook_spelled_without_self_is_a_resource() {
+    assert_compiler_warning(
+        r#"
+class Conn
+    public var handle int
+
+    public fn drop()
+        return
+
+fn main()
+    let conn = Conn(handle: 1)
+    println("working")
+"#,
+        "resource 'conn' of type 'Conn' was not consumed before scope exit",
+    );
+}
+
+#[test]
+fn test_calling_drop_hook_spelled_without_self_consumes_the_value() {
+    assert_compiler_error(
+        r#"
+class Handle
+    public var id int
+
+    public fn drop()
+        println(f"dropped {self.id}")
+
+fn main()
+    var h = Handle(id: 2)
+    h.drop()
+    println(f"{h.id}")
+"#,
+        "'h' was consumed by 'drop'",
+    );
+}
+
+#[test]
+fn test_trait_default_drop_hook_runs_once() {
+    assert_stdout_is(
+        r#"
+trait Closable
+    fn drop(self)
+        println("trait drop")
+
+class Handle implements Closable
+    public var id int
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        "1\ntrait drop",
+    );
+}
+
+#[test]
+fn test_trait_default_drop_hook_spelled_without_self_runs_once() {
+    assert_stdout_is(
+        r#"
+trait Closable
+    fn drop()
+        println("trait drop")
+
+class Handle implements Closable
+    public var id int
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        "1\ntrait drop",
+    );
+}
+
+#[test]
+fn test_trait_default_drop_hook_makes_the_class_a_resource() {
+    assert_compiler_warning(
+        r#"
+trait Closable
+    fn drop(self)
+        return
+
+class Conn implements Closable
+    public var handle int
+
+fn main()
+    let conn = Conn(handle: 1)
+    println("working")
+"#,
+        "resource 'conn' of type 'Conn' was not consumed before scope exit",
+    );
+}
+
+#[test]
+fn test_parent_trait_default_drop_hook_runs_once() {
+    assert_stdout_is(
+        r#"
+trait Closable
+    fn drop(self)
+        println("closed")
+
+trait Stream extends Closable
+    fn name() String
+
+class Pipe implements Stream
+    public var id int
+
+    public fn name() String
+        return "pipe"
+
+fn main()
+    var p = Pipe(id: 1)
+    println(p.name())
+"#,
+        "pipe\nclosed",
+    );
+}
+
+#[test]
+fn test_class_drop_hook_overrides_trait_default() {
+    assert_stdout_is(
+        r#"
+trait Closable
+    fn drop(self)
+        println("trait drop")
+
+class Handle implements Closable
+    public var id int
+
+    public fn drop(self)
+        println("class drop")
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        "1\nclass drop",
+    );
+}
+
+#[test]
+fn test_subclass_runs_trait_default_drop_hook_inherited_from_base() {
+    assert_stdout_is(
+        r#"
+trait Closable
+    fn drop(self)
+        println(f"trait drop {self.id()}")
+
+    fn id() int
+
+class Base implements Closable
+    public var key int
+
+    public fn id() int
+        return self.key
+
+class Child extends Base
+    public var extra int
+
+fn main()
+    var c = Child(key: 6, extra: 7)
+    println(f"{c.extra}")
+"#,
+        "7\ntrait drop 6",
+    );
+}
+
+const DROP_HOOK_SHAPE: &str = "is the drop hook, which takes no arguments";
+
+#[test]
+fn test_class_drop_with_parameters_is_rejected() {
+    assert_compiler_error(
+        r#"
+class Handle
+    public var id int
+
+    public fn drop(code int)
+        println(f"{code}")
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        DROP_HOOK_SHAPE,
+    );
+}
+
+#[test]
+fn test_static_class_drop_is_rejected() {
+    assert_compiler_error(
+        r#"
+class Handle
+    public var id int
+
+    public static fn drop()
+        println("static")
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        DROP_HOOK_SHAPE,
+    );
+}
+
+#[test]
+fn test_trait_drop_with_parameters_is_rejected() {
+    assert_compiler_error(
+        r#"
+trait Closable
+    fn drop(self, code int)
+        println(f"{code}")
+
+class Handle implements Closable
+    public var id int
+
+fn main()
+    var h = Handle(id: 1)
+    println(f"{h.id}")
+"#,
+        DROP_HOOK_SHAPE,
+    );
+}
+
+#[test]
+fn test_struct_drop_without_self_names_the_hook_spelling() {
+    assert_compiler_error(
+        r#"
+struct Point
+    x int
+
+    fn drop()
+        println("struct drop")
+
+fn main()
+    let p = Point(x: 1)
+    println(f"{p.x}")
+"#,
+        "Struct 'Point' declares its drop hook as 'fn drop(self)'",
+    );
+}
+
+#[test]
+fn test_calling_trait_default_drop_hook_runs_it_once_at_the_call() {
+    assert_heap_guard_output(
+        r#"
+trait Closable
+    fn drop(self)
+        println("trait drop")
+
+class Handle implements Closable
+    public var id int
+
+fn main()
+    var g = Handle(id: 2)
+    g.drop()
+    println("end")
+"#,
+        "trait drop\nend",
+    );
+}

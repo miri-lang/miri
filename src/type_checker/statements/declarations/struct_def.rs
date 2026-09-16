@@ -40,18 +40,15 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::TypeKind;
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::{
     Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::drop_hook::is_struct_drop_method;
 use crate::type_checker::TypeChecker;
-
-/// Returns true if a function declaration statement is `fn drop(self)`.
-pub(crate) fn is_drop_method(stmt: &Statement) -> bool {
-    matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.is_drop_hook())
-}
 
 impl TypeChecker {
     #[allow(clippy::too_many_arguments)]
@@ -101,7 +98,10 @@ impl TypeChecker {
         // "Could not determine the type of this expression". A hook that reads
         // nothing of `self` compiles. The body needs checking with `self` bound
         // to the struct type, as a class method's body is.
-        let has_drop = methods.iter().any(is_drop_method);
+        // TODO: a struct that implements a trait supplying a default `drop`
+        // compiles and never runs that default; only a hook the struct declares
+        // itself counts.
+        let has_drop = methods.iter().any(is_struct_drop_method);
         let struct_def = StructDefinition {
             fields: fields_vec,
             generics: if generic_defs.is_empty() {
@@ -121,21 +121,26 @@ impl TypeChecker {
     /// data types; behavior belongs on a class, a trait, or a free function.
     fn reject_non_drop_struct_methods(&mut self, struct_name: &str, methods: &[Statement]) {
         for method in methods {
-            if is_drop_method(method) {
+            if is_struct_drop_method(method) {
                 continue;
             }
             let StatementKind::FunctionDeclaration(decl) = &method.node else {
                 continue;
             };
-            self.report_error(
-                DiagnosticCode::TypStructDefinition,
+            let message = if decl.name == DROP_HOOK_NAME {
+                format!(
+                    "Struct '{}' declares its drop hook as 'fn drop(self)': the receiver \
+                     is spelled, and the hook takes nothing else.",
+                    struct_name
+                )
+            } else {
                 format!(
                     "Struct '{}' cannot define methods other than 'drop' (found '{}'). \
                      Use a class for methods, or a free function that takes the struct.",
                     struct_name, decl.name
-                ),
-                method.span,
-            );
+                )
+            };
+            self.report_error(DiagnosticCode::TypStructDefinition, message, method.span);
         }
     }
 

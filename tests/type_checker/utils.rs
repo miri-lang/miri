@@ -12,7 +12,7 @@ use miri::pipeline::{Pipeline, PipelineResult};
 use miri::type_checker::context::{
     ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
 };
-use miri::type_checker::utils::{is_residency_gated_buffer, is_resource};
+use miri::type_checker::utils::{has_drop_hook, is_residency_gated_buffer, is_resource};
 use miri::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
 
@@ -377,6 +377,50 @@ fn trait_def() -> TypeDefinition {
         methods: BTreeMap::<String, MethodInfo>::new(),
         module: "test".to_string(),
     })
+}
+
+fn drop_method(is_abstract: bool) -> MethodInfo {
+    MethodInfo {
+        params: vec![],
+        is_out_flags: vec![],
+        return_type: make_type(TypeKind::Void),
+        visibility: miri::ast::common::MemberVisibility::Public,
+        is_constructor: false,
+        is_abstract,
+        is_static: false,
+        attributes: vec![],
+    }
+}
+
+/// A class `C` implementing trait `T`, whose only method is a `drop` that is
+/// abstract or carries a default body.
+fn class_implementing_trait_with_drop(is_abstract: bool) -> HashMap<String, TypeDefinition> {
+    let TypeDefinition::Class(mut class) = class_def(false) else {
+        unreachable!("class_def builds a class");
+    };
+    class.traits = vec!["T".to_string()];
+    let TypeDefinition::Trait(mut tr) = trait_def() else {
+        unreachable!("trait_def builds a trait");
+    };
+    tr.methods
+        .insert("drop".to_string(), drop_method(is_abstract));
+    HashMap::from([
+        ("C".to_string(), TypeDefinition::Class(class)),
+        ("T".to_string(), TypeDefinition::Trait(tr)),
+    ])
+}
+
+#[test]
+fn trait_default_drop_is_the_hook_of_an_implementing_class() {
+    let defs = class_implementing_trait_with_drop(false);
+    assert!(has_drop_hook("C", &defs));
+    assert!(is_resource(&TypeKind::Custom("C".to_string(), None), &defs));
+}
+
+#[test]
+fn abstract_trait_drop_is_not_a_hook_by_itself() {
+    let defs = class_implementing_trait_with_drop(true);
+    assert!(!has_drop_hook("C", &defs));
 }
 
 // `forall` residency-gated buffer classification (must track the MIR

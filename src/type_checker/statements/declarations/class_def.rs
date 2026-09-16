@@ -48,7 +48,7 @@ use crate::type_checker::context::{
     class_method_declaration, ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo,
     TypeDefinition,
 };
-use crate::type_checker::statements::declarations::struct_def::is_drop_method;
+use crate::type_checker::statements::declarations::drop_hook::is_drop_method;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
@@ -621,6 +621,8 @@ impl TypeChecker {
         context: &mut Context,
         class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     ) {
+        self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypClassDefinition);
+
         // Check for duplicate method names (instance + static)
         if let Some(existing) = methods.get(&decl.name) {
             if existing.is_static != decl.properties.is_static {

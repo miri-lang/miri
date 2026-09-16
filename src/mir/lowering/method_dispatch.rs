@@ -11,7 +11,7 @@ use crate::error::syntax::Span;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{
-    class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
+    class_needs_vtable, find_trait_default_method, vtable_slot_index, MethodInfo, TypeDefinition,
 };
 use crate::type_checker::TypeChecker;
 
@@ -377,6 +377,12 @@ pub(crate) fn resolve_inherited_method(
 }
 
 /// Walk the class's inheritance chain (and each class's traits) for `method_name`.
+///
+/// TODO: a default a subclass's own trait supplies is preferred over a method
+/// its base class declares, and resolved to a `{Subclass}_{method}` copy that
+/// is never lowered when the base already declares the method, so the call
+/// fails to link (`class Child extends Base implements Named`, where both
+/// `Base` and `Named` supply `name()`).
 fn resolve_via_class_chain(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     class_name: &str,
@@ -426,14 +432,14 @@ fn resolve_via_class_traits(
 ) -> Option<(String, MethodInfo)> {
     for trait_name in traits {
         if let Some((defining_trait, info)) =
-            resolve_trait_default_method(type_defs, trait_name, method_name)
+            find_trait_default_method(type_defs, trait_name, method_name)
         {
             let defining = if caller_is_abstract {
-                defining_trait
+                defining_trait.to_string()
             } else {
                 class_name.to_string()
             };
-            return Some((defining, info));
+            return Some((defining, info.clone()));
         }
     }
     None
@@ -455,32 +461,6 @@ fn resolve_in_trait_hierarchy(
         if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
             if let Some(method_info) = td.methods.get(method_name) {
                 return Some((t_name.to_string(), method_info.clone()));
-            }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-        }
-    }
-    None
-}
-
-/// Walk the trait hierarchy (starting from `trait_name`) to find a non-abstract
-/// (default) implementation of `method_name`. Returns None if only abstract
-/// declarations exist or the method is not found.
-fn resolve_trait_default_method(
-    type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    trait_name: &str,
-    method_name: &str,
-) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            if let Some(method_info) = td.methods.get(method_name) {
-                if !method_info.is_abstract {
-                    return Some((t_name.to_string(), method_info.clone()));
-                }
             }
             to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
         }

@@ -17,7 +17,7 @@ this file on every run. The harness prints it to stdout instead.
 | Task | What it does | Success | Invocations | Bytes read | Bytes written |
 |------|--------------|---------|-------------|------------|---------------|
 | a | build hello world from an empty directory | yes | 2 | 131 | 39 |
-| b | repair a broken program using check, explain and fix | yes | 6 | 2965 | 74 |
+| b | repair a broken program using check, explain and fix | yes | 6 | 2952 | 74 |
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 4 | 2013 | 85 |
 | e | recover from a capability rejection | yes | 5 | 4105 | 118 |

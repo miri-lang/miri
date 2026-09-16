@@ -622,6 +622,9 @@ pub(crate) fn lower_member_expr(
         }
     }
 
+    // TODO: a method call on a parameter of a trait-bounded generic function
+    // (`fn shut<T extends Closable>(x T)` calling `x.close()`) reaches here with
+    // `obj_ty` still the generic `T` and fails as an internal codegen error.
     Err(LoweringError::unsupported_expression(
         format!("Unsupported member access on type: {}", obj_ty),
         expr.span,
