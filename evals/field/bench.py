@@ -18,6 +18,11 @@ device must not ask its subject for its own score.
     bench.py --job 01-word-frequency --arm miri-pack --model claude-opus --runs 3
     bench.py --job 01-word-frequency --arm rust --model claude-sonnet --dry-run
     bench.py --score-only <workspace> --job 01-word-frequency --arm rust
+    bench.py --job 01-word-frequency --arm miri-pack --model claude-sonnet --probe
+
+`--probe` runs the same cell as an unmeasured opinion probe: the subject is also
+asked to rate the surfaces it used, and its records land in `runs/<round>.probe/`
+beside the round, where the folder never reads them.
 """
 
 import argparse
@@ -38,6 +43,25 @@ REPO = FIELD.parent.parent
 # are reported beside the token counts and never added to them: `cargo build`
 # and `miri check` are not the same unit of work.
 TOOLCHAINS = ("miri", "cargo", "python3", "python", "deno", "uv", "pytest", "rustc")
+
+MEASURED_PROMPT = (
+    "Read BRIEF.md in this directory and do what it asks. "
+    "You have no one to ask: finish the job on your own, and stop when it is done."
+)
+
+# What a probe asks for on top of the job, and what a measured run is never
+# asked for: rating a tool buys invocations a real job would not spend.
+RATINGS_FILE = "RATINGS.json"
+PROBE_REQUEST = (
+    f" When the job is done, write {RATINGS_FILE} in this directory. For every tool,"
+    " command and document you used, rate how much it helped, from 1 (it got in the"
+    " way) to 5 (the job could not have been done without it), as"
+    ' {"ratings": [{"surface": "<name>", "score": <1-5>, "reason": "<one sentence>"}]}.'
+)
+
+# The `kind` a probe record carries. `report.py` refuses a record of this kind
+# rather than skipping it, so a probe copied into a round fails loudly.
+PROBE_KIND = "probe"
 
 
 def load_toml(path):
@@ -113,12 +137,22 @@ def install_pack(root, arm):
     )
 
 
-def launch_command(model, workspace):
+def prompt_for(arguments):
+    return MEASURED_PROMPT + PROBE_REQUEST if arguments.probe else MEASURED_PROMPT
+
+
+def round_directory(arguments):
+    """The directory a run's workspace and records live under.
+
+    A probe gets a sibling of its round, never a subdirectory of it: the folder
+    reads everything under `runs/<round>/`, and a probe that reused the round's
+    scratch path would delete the workspace a measured record points at.
+    """
+    return f"{arguments.round}.{PROBE_KIND}" if arguments.probe else arguments.round
+
+
+def launch_command(model, workspace, prompt):
     """The one non-interactive invocation a run is allowed."""
-    prompt = (
-        "Read BRIEF.md in this directory and do what it asks. "
-        "You have no one to ask: finish the job on your own, and stop when it is done."
-    )
     if model["harness"] == "claude":
         return [
             "claude",
@@ -139,13 +173,13 @@ def launch_command(model, workspace):
     raise SystemExit(f"unknown harness {model['harness']}")
 
 
-def run_agent(model, workspace, time_cap):
+def run_agent(model, workspace, time_cap, prompt):
     """Launch the harness once, capped on wall clock, and keep its transcript."""
     started = time.monotonic()
     environment = dict(os.environ, MIRI_STDLIB_PATH=str(REPO / "src" / "stdlib"))
     try:
         finished = subprocess.run(
-            launch_command(model, workspace),
+            launch_command(model, workspace, prompt),
             cwd=workspace,
             env=environment,
             capture_output=True,
@@ -299,6 +333,70 @@ def record_for(arguments, arm, model, job, outcome):
     }
 
 
+def probe_record(arguments, arm, model, outcome):
+    """A probe's record: who was asked, on what compiler, and what it said.
+
+    It carries none of a measured record's cost or test fields, and it names its
+    kind, so no reader can take it for a run of the round.
+    """
+    commit, version = compiler_stamp()
+    return {
+        "schemaVersion": 1,
+        "kind": PROBE_KIND,
+        "round": arguments.round,
+        "job": arguments.job,
+        "arm": arm["id"],
+        "run": outcome["run"],
+        "model": model["key"],
+        "modelId": model["id"],
+        "harness": {"name": model["harness"], "version": harness_version(model)},
+        "compilerCommit": commit,
+        "compilerVersion": version,
+        "packInstalled": arm["install_pack"],
+        "startedAt": outcome["startedAt"],
+        "outcome": outcome["outcome"],
+        "ratings": outcome["ratings"],
+        "ratingsProblem": outcome["ratingsProblem"],
+        "workspace": outcome["workspace"],
+    }
+
+
+def read_ratings(workspace):
+    """The ratings the subject wrote, or the reason they cannot be used.
+
+    This is the one place the benchmark reads what a subject says about itself,
+    which is why a probe's records never reach a round.
+    """
+    path = workspace / RATINGS_FILE
+    if not path.is_file():
+        return None, f"{RATINGS_FILE} is missing: the subject rated nothing"
+    try:
+        content = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        return None, f"{RATINGS_FILE} is not JSON: {error}"
+    ratings = content.get("ratings") if isinstance(content, dict) else None
+    if not isinstance(ratings, list) or not ratings:
+        return None, f"{RATINGS_FILE} rates no surface"
+    problems = [problem for problem in map(rating_problem, ratings) if problem]
+    if problems:
+        return None, problems[0]
+    return [normalized_rating(entry) for entry in ratings], None
+
+
+def rating_problem(entry):
+    surface = entry.get("surface") if isinstance(entry, dict) else None
+    if not isinstance(surface, str) or not surface.strip():
+        return f"{RATINGS_FILE} carries a rating that names no surface: {entry!r}"
+    score = entry.get("score")
+    if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5:
+        return f"{RATINGS_FILE} rates {surface} with score {score!r}, outside 1 to 5"
+    return None
+
+
+def normalized_rating(entry):
+    return {"surface": entry["surface"].strip(), "score": entry["score"], "reason": str(entry.get("reason", ""))}
+
+
 def outcome_of(exit_code, timed_out, turns, cap):
     if timed_out:
         return "capped"
@@ -309,12 +407,16 @@ def outcome_of(exit_code, timed_out, turns, cap):
     return "abandoned"
 
 
+def workspace_for(arguments, arm, model, index):
+    return Path(arguments.scratch) / round_directory(arguments) / arguments.job / arm["id"] / model["key"] / str(index)
+
+
 def one_run(arguments, arm, model, job, index):
-    workspace = Path(arguments.scratch) / arguments.round / arguments.job / arm["id"] / model["key"] / str(index)
+    workspace = workspace_for(arguments, arm, model, index)
     prepare_workspace(workspace, arguments.job, arm, job)
     started = datetime.now(timezone.utc).isoformat()
     transcript, exit_code, wall_clock, timed_out = run_agent(
-        model, workspace, job["time_cap_seconds"]
+        model, workspace, job["time_cap_seconds"], prompt_for(arguments)
     )
     usage, turns, tools, toolchain_calls = parse_transcript(transcript)
     tests = score(workspace, arguments.job, arm)
@@ -334,8 +436,28 @@ def one_run(arguments, arm, model, job, index):
     }
 
 
+def one_probe(arguments, arm, model, job, index):
+    """Run a cell once for its opinions. Nothing about the run is scored."""
+    workspace = workspace_for(arguments, arm, model, index)
+    prepare_workspace(workspace, arguments.job, arm, job)
+    started = datetime.now(timezone.utc).isoformat()
+    transcript, exit_code, _, timed_out = run_agent(
+        model, workspace, job["time_cap_seconds"], prompt_for(arguments)
+    )
+    turns = parse_transcript(transcript)[1]
+    ratings, problem = read_ratings(workspace)
+    return transcript, {
+        "run": index,
+        "startedAt": started,
+        "outcome": outcome_of(exit_code, timed_out, turns, job["turn_cap"]),
+        "ratings": ratings,
+        "ratingsProblem": problem,
+        "workspace": str(workspace),
+    }
+
+
 def write_record(arguments, arm, model, record, transcript, index):
-    directory = FIELD / "runs" / arguments.round / arguments.job / arm["id"] / model["key"]
+    directory = Path(arguments.records_root) / round_directory(arguments) / arguments.job / arm["id"] / model["key"]
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{index}.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     (directory / f"{index}.transcript.jsonl").write_text(transcript, encoding="utf-8")
@@ -351,12 +473,18 @@ def parse_arguments(argv):
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--round", default="r1")
     parser.add_argument("--scratch", default=str(Path.home() / ".cache" / "miri-field"))
+    parser.add_argument(
+        "--records-root",
+        default=str(FIELD / "runs"),
+        help="where the rounds live; this directory's runs/ by default",
+    )
     parser.add_argument("--dry-run", action="store_true", help="prepare and report, launch nothing")
     parser.add_argument("--score-only", help="score an existing workspace and report")
-    # TODO: an unmeasured opinion probe has no flag here. Per-tool ratings are
-    # collected after a round and one of the three exit conditions is stated in
-    # terms of them, but a probe run today is launched by hand and its records
-    # would land in the round if it used the measured path.
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="run as an unmeasured opinion probe, into runs/<round>.probe/",
+    )
     return parser.parse_args(argv)
 
 
@@ -372,13 +500,41 @@ def resolved_model(arguments):
 
 
 def dry_run(arguments, arm, job):
-    workspace = Path(arguments.scratch) / arguments.round / arguments.job / arm["id"] / "dry-run"
+    workspace = Path(arguments.scratch) / round_directory(arguments) / arguments.job / arm["id"] / "dry-run"
     prepare_workspace(workspace, arguments.job, arm, job)
     print(f"workspace  {workspace}")
     print(f"cases      {len(hidden_tests(arguments.job))}")
     print(f"caps       {job['turn_cap']} turns, {job['time_cap_seconds']}s")
     if arguments.model:
-        print("launch     " + " ".join(launch_command(resolved_model(arguments), workspace)))
+        command = launch_command(resolved_model(arguments), workspace, prompt_for(arguments))
+        print("launch     " + " ".join(command))
+
+
+def measured_cell(arguments, arm, model, job):
+    for index in range(1, arguments.runs + 1):
+        transcript, outcome = one_run(arguments, arm, model, job, index)
+        record = record_for(arguments, arm, model, job, outcome)
+        path = write_record(arguments, arm, model, record, transcript, index)
+        tests = outcome["hiddenTests"]
+        print(f"{path}: {outcome['outcome']}, {tests['passed']}/{tests['total']} hidden tests")
+    return 0
+
+
+def probe_cell(arguments, arm, model, job):
+    """Run a cell as a probe. A run whose ratings cannot be read keeps its record
+    and transcript, names the problem, and fails the invocation."""
+    unreadable = 0
+    for index in range(1, arguments.runs + 1):
+        transcript, outcome = one_probe(arguments, arm, model, job, index)
+        record = probe_record(arguments, arm, model, outcome)
+        path = write_record(arguments, arm, model, record, transcript, index)
+        if outcome["ratingsProblem"]:
+            unreadable += 1
+            print(f"{path}: {outcome['ratingsProblem']}", file=sys.stderr)
+            continue
+        for rating in outcome["ratings"]:
+            print(f"{path}: {rating['surface']} rated {rating['score']}/5")
+    return 1 if unreadable else 0
 
 
 def main(argv):
@@ -387,6 +543,8 @@ def main(argv):
     job = job_named(arguments.job)
 
     if arguments.score_only:
+        if arguments.probe:
+            raise SystemExit("a probe is never scored: --probe and --score-only do not combine")
         print(json.dumps(score(Path(arguments.score_only), arguments.job, arm), indent=2))
         return 0
     if arguments.dry_run:
@@ -396,13 +554,8 @@ def main(argv):
         raise SystemExit("a run needs --model; only --dry-run and --score-only may omit it")
 
     model = resolved_model(arguments)
-    for index in range(1, arguments.runs + 1):
-        transcript, outcome = one_run(arguments, arm, model, job, index)
-        record = record_for(arguments, arm, model, job, outcome)
-        path = write_record(arguments, arm, model, record, transcript, index)
-        tests = outcome["hiddenTests"]
-        print(f"{path}: {outcome['outcome']}, {tests['passed']}/{tests['total']} hidden tests")
-    return 0
+    run_cell = probe_cell if arguments.probe else measured_cell
+    return run_cell(arguments, arm, model, job)
 
 
 if __name__ == "__main__":

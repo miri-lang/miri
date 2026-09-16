@@ -36,7 +36,12 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
    A measured arm is never asked for a per-tool verdict. Asking a subject
    what it thought of a tool buys invocations a real job would not spend.
    Opinions are collected afterwards, by re-running one cell per arm as an
-   unmeasured probe whose records are not written into the round.
+   unmeasured probe whose records are not written into the round:
+
+       python3 evals/field/bench.py --job <job> --arm <arm> \
+           --model <model> --round <round> --probe
+
+   Its ratings land in runs/<round>.probe/ and are committed there.
 
 3. Record per cell what bench.py records: tokens, turns, tool invocations,
    toolchain invocations, wall clock, outcome, hidden-test pass rate, and
@@ -87,7 +92,8 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
      the bare Miri arm, in every job. Measured from `toolInvocations`,
      `outcome`, `hiddenTests`; judged as `packLoop`;
    - no surface the published page recommends was rated 2 out of 5 or lower
-     by the unmeasured opinion probe.
+     by the unmeasured opinion probe. Read from the `ratings` of the records
+     under runs/<round>.probe/; quote every rating of 2 or lower in the entry.
 
    If any of the three fails, say which, and say that the pack stays
    unpublished. Findings below the silent-wrong-answer bar do not restart the
