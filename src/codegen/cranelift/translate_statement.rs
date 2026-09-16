@@ -1200,12 +1200,13 @@ impl<'a> FunctionTranslator<'a> {
         )? {
             FunctionTranslator::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
         }
-        FunctionTranslator::emit_list_compare_fn_for_elem_kind(
+        FunctionTranslator::emit_element_order(
             builder,
             ctx,
             &inner_ty.kind,
             list_ptr,
             type_ctx,
+            FunctionTranslator::LIST_ORDER_SETTERS,
         )?;
         Ok(())
     }
@@ -1245,12 +1246,13 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             type_ctx.type_definitions,
         )?;
-        FunctionTranslator::emit_list_compare_fn_for_elem_kind(
+        FunctionTranslator::emit_element_order(
             builder,
             ctx,
             &elem_ty.kind,
             list_ptr,
             type_ctx,
+            FunctionTranslator::LIST_ORDER_SETTERS,
         )?;
         Ok(())
     }

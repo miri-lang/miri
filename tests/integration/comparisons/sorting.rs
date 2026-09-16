@@ -476,3 +476,205 @@ fn main()
         "false,true,true",
     );
 }
+
+#[test]
+fn test_unsigned_64_bit_values_above_the_signed_maximum_sort_last() {
+    // The largest `u64` has its top bit set, which a signed reading of the same
+    // bytes takes for the most negative number.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<u64>()
+    let big u64 = 18446744073709551615
+    let above_signed u64 = 9223372036854775808
+    let small u64 = 1
+    l.push(big)
+    l.push(small)
+    l.push(above_signed)
+    l.sort()
+    println(f"{l[0]},{l[1]},{l[2]}")
+"#,
+        "1,9223372036854775808,18446744073709551615",
+    );
+}
+
+#[test]
+fn test_unsigned_32_bit_values_above_the_signed_maximum_sort_last() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<u32>()
+    let big u32 = 4000000000
+    let small u32 = 3
+    let middle u32 = 2147483647
+    l.push(big)
+    l.push(small)
+    l.push(middle)
+    l.sort()
+    println(f"{l[0]},{l[1]},{l[2]}")
+"#,
+        "3,2147483647,4000000000",
+    );
+}
+
+#[test]
+fn test_unsigned_16_and_8_bit_values_above_the_signed_maximum_sort_last() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var wide = List<u16>()
+    let wide_big u16 = 65535
+    let wide_small u16 = 2
+    wide.push(wide_big)
+    wide.push(wide_small)
+    wide.sort()
+
+    var narrow = List<u8>()
+    let narrow_big u8 = 200
+    let narrow_small u8 = 7
+    narrow.push(narrow_big)
+    narrow.push(narrow_small)
+    narrow.sort()
+
+    println(f"{wide[0]},{wide[1]} {narrow[0]},{narrow[1]}")
+"#,
+        "2,65535 7,200",
+    );
+}
+
+#[test]
+fn test_unsigned_values_in_a_list_built_from_a_literal_sort_by_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let big u64 = 18446744073709551615
+    let small u64 = 5
+    var l = List([big, small])
+    l.sort()
+    println(f"{l[0]},{l[1]}")
+"#,
+        "5,18446744073709551615",
+    );
+}
+
+#[test]
+fn test_unsigned_values_in_an_array_sort_by_value() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let big u64 = 18446744073709551615
+    let small u64 = 5
+    var a = [big, small]
+    a.sort()
+    println(f"{a[0]},{a[1]}")
+"#,
+        "5,18446744073709551615",
+    );
+}
+
+#[test]
+fn test_a_cloned_list_of_unsigned_values_sorts_by_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<u64>()
+    let big u64 = 18446744073709551615
+    let small u64 = 5
+    l.push(big)
+    l.push(small)
+    var copy = l.clone()
+    copy.sort()
+    println(f"{copy[0]},{copy[1]}")
+"#,
+        "5,18446744073709551615",
+    );
+}
+
+#[test]
+fn test_negative_floats_sort_by_magnitude_below_zero() {
+    // IEEE-754 stores a float as sign and magnitude, so the bytes of `-2.5`
+    // read as a signed integer land above those of `-1.5`.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<float>()
+    l.push(-1.5)
+    l.push(0.5)
+    l.push(-2.5)
+    l.push(-0.25)
+    l.sort()
+    println(f"{l[0]},{l[1]},{l[2]},{l[3]}")
+"#,
+        "-2.5,-1.5,-0.25,0.5",
+    );
+}
+
+#[test]
+fn test_negative_floats_in_an_array_sort_by_value() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var a = [-1.5, 0.5, -2.5]
+    a.sort()
+    println(f"{a[0]},{a[1]},{a[2]}")
+"#,
+        "-2.5,-1.5,0.5",
+    );
+}
+
+#[test]
+fn test_narrow_signed_values_keep_sorting_negatives_first() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<i8>()
+    let high i8 = 100
+    let low i8 = -100
+    let zero i8 = 0
+    l.push(high)
+    l.push(low)
+    l.push(zero)
+    l.sort()
+    println(f"{l[0]},{l[1]},{l[2]}")
+"#,
+        "-100,0,100",
+    );
+}
+
+#[test]
+fn test_a_list_a_transform_produced_from_unsigned_values_sorts_by_value() {
+    // `u64` is laid out like `int`, so only its order tells the list `map` and
+    // `filter` build apart from one of signed values.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<u64>()
+    let big u64 = 18446744073709551615
+    let small u64 = 5
+    l.push(big)
+    l.push(small)
+    var mapped = l.map(fn(x u64) u64: x)
+    mapped.sort()
+    var kept = l.filter(fn(x u64) bool: x > 0)
+    kept.sort()
+    println(f"{mapped[0]},{mapped[1]} {kept[0]},{kept[1]}")
+"#,
+        "5,18446744073709551615 5,18446744073709551615",
+    );
+}

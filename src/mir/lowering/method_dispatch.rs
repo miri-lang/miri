@@ -829,6 +829,29 @@ fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
     )
 }
 
+/// Whether a type argument sorts differently from the signed integer an
+/// unmonomorphized generic body falls back to.
+///
+/// A list the shared body builds carries no element order of its own, so the
+/// runtime reads its elements as signed values. That is wrong for an unsigned
+/// integer with its top bit set and for every negative float. Most such types
+/// already differ in layout; `u64` does not, and only its order asks for a body
+/// of its own.
+fn orders_differently_from_signed_fallback(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+    )
+}
+
 /// Whether a built-in collection's `method_name` settles the ownership of the
 /// elements it touches by calling the runtime, which makes its shared generic
 /// body correct at every element type.
@@ -878,11 +901,13 @@ fn shared_body_would_borrow_a_managed_element(
 /// Whether a built-in collection instantiated at `resolved` needs a
 /// per-instantiation body for `method_name`, rather than the shared generic one.
 ///
-/// Two things ask for one. The shared body types every type-parameter position
-/// at the pointer-width integer fallback, so a differently-laid-out argument
-/// makes its signature disagree with the call site. And a body written in
-/// ordinary Miri code that reads a managed element takes no reference to it,
-/// while the call site releases every element of the collection it gets back.
+/// Three things ask for one. The shared body types every type-parameter
+/// position at the pointer-width integer fallback, so a differently-laid-out
+/// argument makes its signature disagree with the call site, and an argument
+/// ordered unlike a signed integer would sort wrongly in any list the body
+/// builds. And a body written in ordinary Miri code that reads a managed
+/// element takes no reference to it, while the call site releases every element
+/// of the collection it gets back.
 ///
 /// Every other class always needs one, so it passes straight through.
 fn builtin_collection_needs_its_own_body(
@@ -904,6 +929,7 @@ fn builtin_collection_needs_its_own_body(
         .filter(|arg| crate::type_checker::generics::extract_value_generic(arg).is_none())
         .any(|arg| {
             differs_from_pointer_width_fallback(&arg.kind)
+                || orders_differently_from_signed_fallback(&arg.kind)
                 || shared_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
         })
 }

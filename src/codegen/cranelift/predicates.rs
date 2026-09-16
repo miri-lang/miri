@@ -122,6 +122,54 @@ impl<'a> FunctionTranslator<'a> {
     /// element's raw bytes.
     pub(crate) const STRING_CONTENT_ELEMENT_KIND: i64 = 1;
 
+    /// The order kind that makes a list or array sort its elements as unsigned
+    /// integers. Mirrors the runtime's `element_order::BY_UNSIGNED_VALUE`; the
+    /// default `0` reads an element's bytes as a signed value.
+    pub(crate) const UNSIGNED_VALUE_ORDER_KIND: i64 = 1;
+
+    /// The order kind that makes a list or array sort its elements as floats.
+    /// Mirrors the runtime's `element_order::BY_FLOAT_VALUE`.
+    pub(crate) const FLOAT_VALUE_ORDER_KIND: i64 = 2;
+
+    /// The order kind a list or array of `elem_kind` must register so its bytes
+    /// sort by value, or `None` when the runtime's signed default already does
+    /// (signed integers, booleans) or the element carries no value in its bytes.
+    pub(crate) fn element_order_kind(elem_kind: &TypeKind) -> Option<i64> {
+        match elem_kind {
+            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128 => {
+                Some(Self::UNSIGNED_VALUE_ORDER_KIND)
+            }
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64 => {
+                Some(Self::FLOAT_VALUE_ORDER_KIND)
+            }
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::Boolean
+            | TypeKind::String
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Map(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Custom(_, _)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => None,
+        }
+    }
+
     /// Extracts the key and value expressions from a Map TypeKind.
     ///
     /// Mirrors [`Self::set_elem_expr`]: a map written as a type literal carries

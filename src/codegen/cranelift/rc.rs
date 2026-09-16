@@ -41,6 +41,16 @@ pub(crate) struct ElementIdentitySetters {
     pub(crate) set_equals_fn: ContainerSetter,
 }
 
+/// The runtime setters through which a list's or array's elements learn how
+/// two of them are ordered. See [`FunctionTranslator::emit_element_order`].
+#[derive(Clone, Copy)]
+pub(crate) struct ElementOrderSetters {
+    /// Selects how an element's bytes read as its value: signed, unsigned or float.
+    pub(crate) set_kind: ContainerSetter,
+    /// Routes ordering through a generated `compare` thunk.
+    pub(crate) set_compare_fn: ContainerSetter,
+}
+
 /// Mangle a generic class name with a concrete instantiation's type arguments,
 /// producing the per-instantiation drop-thunk suffix (`Box` + `[String]` →
 /// `Box__String`). Shares `mangle_generic_name`'s scheme so the drop call site
@@ -286,7 +296,7 @@ impl<'a> FunctionTranslator<'a> {
     /// a string through its class, a custom type through its own name, and a
     /// recorded instantiation of a generic class through that instantiation, so
     /// the comparison runs the body compiled for the element's concrete type.
-    pub(crate) fn elem_compare_addr_for_kind(
+    fn elem_compare_addr_for_kind(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_kind: &TypeKind,
@@ -420,25 +430,42 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Sets `elem_compare_fn` on `list_ptr` when the element type orders its
-    /// values through its own `compare`. Mirrors `emit_list_clone_fn_for_elem_kind`
-    /// for the ordering side, on the empty-constructor path where
-    /// `translate_rvalue` has no operands to inspect.
-    pub(crate) fn emit_list_compare_fn_for_elem_kind(
+    /// Registers how a list or array orders its elements of `elem_kind`: a
+    /// class or string through its own `compare`, an unsigned integer or a
+    /// float by the value its bytes hold, anything else by the runtime's signed
+    /// reading of those bytes (the default, which registers nothing).
+    pub(crate) fn emit_element_order(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_kind: &TypeKind,
-        list_ptr: Value,
+        container_ptr: Value,
         type_ctx: &TypeCtx,
+        setters: ElementOrderSetters,
     ) -> Result<(), CodegenError> {
         if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
             return Ok(());
         }
+        if let Some(kind) = Self::element_order_kind(elem_kind) {
+            let kind = builder.ins().iconst(type_ctx.ptr_type, kind);
+            (setters.set_kind)(builder, ctx, container_ptr, kind)?;
+        }
         if let Some(addr) = Self::elem_compare_addr_for_kind(builder, ctx, elem_kind, type_ctx)? {
-            Self::call_rt_list_set_elem_compare_fn(builder, ctx, list_ptr, addr)?;
+            (setters.set_compare_fn)(builder, ctx, container_ptr, addr)?;
         }
         Ok(())
     }
+
+    /// The order setters of a list, for [`Self::emit_element_order`].
+    pub(crate) const LIST_ORDER_SETTERS: ElementOrderSetters = ElementOrderSetters {
+        set_kind: Self::call_rt_list_set_elem_order_kind,
+        set_compare_fn: Self::call_rt_list_set_elem_compare_fn,
+    };
+
+    /// The order setters of an array, for [`Self::emit_element_order`].
+    pub(crate) const ARRAY_ORDER_SETTERS: ElementOrderSetters = ElementOrderSetters {
+        set_kind: Self::call_rt_array_set_elem_order_kind,
+        set_compare_fn: Self::call_rt_array_set_elem_compare_fn,
+    };
 
     /// Sets `elem_clone_fn` on `set_ptr` when the element type is a Cloneable
     /// custom class. Mirrors `emit_set_drop_fn_for_elem_kind` but for the clone

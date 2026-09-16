@@ -13,6 +13,7 @@
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 
+use crate::element_order::ElementOrder;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
 /// A type-erased fixed-size array.
@@ -30,9 +31,10 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 ///   `miri_rt_array_clone` to produce a deep copy instead of an IncRef.
 ///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined
 ///   class elements that implement `Cloneable`.
-/// - `elem_compare_fn`: If non-zero, called by `miri_rt_array_sort` to order two
-///   element values. Set for element types whose bytes are a reference rather
-///   than a value, which have no order of their own to read.
+/// - `elem_order`: How `miri_rt_array_sort` orders two elements: by reading their
+///   bytes as a signed, unsigned or float value, or through a comparator
+///   registered for element types whose bytes are a reference rather than a
+///   value, which have no order of their own to read.
 #[repr(C)]
 pub struct MiriArray {
     data: *mut u8,
@@ -40,7 +42,7 @@ pub struct MiriArray {
     elem_size: usize,
     elem_drop_fn: usize,
     elem_clone_fn: usize,
-    elem_compare_fn: usize,
+    elem_order: ElementOrder,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
@@ -70,6 +72,11 @@ impl MiriArray {
     /// Returns the size of each element in bytes.
     pub fn elem_size(&self) -> usize {
         self.elem_size
+    }
+
+    /// How this array orders its elements, for a copy that must sort alike.
+    pub(crate) fn element_order(&self) -> ElementOrder {
+        self.elem_order
     }
 }
 
@@ -120,7 +127,7 @@ pub mod ffi {
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
                     (*arr).elem_clone_fn = 0;
-                    (*arr).elem_compare_fn = 0;
+                    (*arr).elem_order = ElementOrder::SIGNED;
                     return arr;
                 }
             };
@@ -132,7 +139,7 @@ pub mod ffi {
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
                     (*arr).elem_clone_fn = 0;
-                    (*arr).elem_compare_fn = 0;
+                    (*arr).elem_order = ElementOrder::SIGNED;
                     return arr;
                 }
             };
@@ -148,7 +155,7 @@ pub mod ffi {
         (*arr).elem_size = elem_size;
         (*arr).elem_drop_fn = 0;
         (*arr).elem_clone_fn = 0;
-        (*arr).elem_compare_fn = 0;
+        (*arr).elem_order = ElementOrder::SIGNED;
 
         arr
     }
@@ -242,17 +249,29 @@ pub mod ffi {
         }
     }
 
-    /// Sets the `elem_compare_fn` callback for this array.
+    /// Registers the comparator `miri_rt_array_sort` orders elements through.
     ///
-    /// When non-zero, `miri_rt_array_sort` orders two elements by calling this
-    /// function with the values their slots hold, instead of reading those
-    /// slots as numbers.
+    /// When non-zero, `fn_ptr` is an
+    /// [`crate::element_order::ElementCompareFn`] called with the values two
+    /// slots hold, instead of reading those slots as numbers.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_set_elem_compare_fn(ptr: *mut MiriArray, fn_ptr: usize) {
         guard::guard_check(ptr as *mut u8);
         if !ptr.is_null() {
-            (*ptr).elem_compare_fn = fn_ptr;
+            (*ptr).elem_order.set_compare_fn(fn_ptr);
+        }
+    }
+
+    /// Selects how `miri_rt_array_sort` reads an element's bytes as its value: one of
+    /// the kinds in [`crate::element_order`]. Consulted only while no
+    /// comparator is registered.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set_elem_order_kind(ptr: *mut MiriArray, kind: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_order.set_kind(kind);
         }
     }
 
@@ -407,7 +426,7 @@ pub mod ffi {
         }
         (*new_arr).elem_drop_fn = src.elem_drop_fn;
         (*new_arr).elem_clone_fn = src.elem_clone_fn;
-        (*new_arr).elem_compare_fn = src.elem_compare_fn;
+        (*new_arr).elem_order = src.elem_order;
         if src.elem_clone_fn != 0 && !src.data.is_null() && src.elem_count > 0 && src.elem_size > 0
         {
             let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
@@ -439,7 +458,8 @@ pub mod ffi {
     /// Sorts the array in ascending order.
     ///
     /// Elements are ordered by the comparator registered for the element type,
-    /// or by their bytes read as a signed 64-bit integer when none is.
+    /// or, when none is, by their bytes read as the signed, unsigned or float
+    /// value the registered order kind names.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
@@ -452,7 +472,7 @@ pub mod ffi {
             arr.data,
             arr.elem_count,
             arr.elem_size,
-            arr.elem_compare_fn,
+            arr.elem_order,
         );
     }
 
@@ -481,6 +501,10 @@ pub mod ffi {
         }
         let arr = &*ptr;
         let list = crate::miri_rt_list_new(arr.elem_size);
+        if list.is_null() {
+            return list;
+        }
+        (*list).set_element_order(arr.elem_order);
         if arr.data.is_null() {
             return list;
         }

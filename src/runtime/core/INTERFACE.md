@@ -45,6 +45,7 @@ header. The RC header is at `ptr - RC_HEADER_SIZE` (8 bytes on 64-bit platforms)
 
 ```
 [RC: usize][data: *mut u8][elem_count: usize][elem_size: usize][elem_drop_fn: usize]
+          [elem_clone_fn: usize][elem_order_kind: usize][elem_compare_fn: usize]
 ```
 
 `data` points to a separately-allocated zeroed buffer of `elem_count * elem_size` bytes.
@@ -56,10 +57,17 @@ managed elements have their RC decremented.
 
 ```
 [RC: usize][data: *mut u8][len: usize][capacity: usize][elem_size: usize][elem_drop_fn: usize]
+          [elem_clone_fn: usize][elem_order_kind: usize][elem_compare_fn: usize]
 ```
 
 `data` points to a separately-allocated buffer that grows by doubling. `elem_drop_fn`,
 when non-zero, is called on each removed element pointer to decrement its RC.
+
+Both sortable containers carry an element order (`element_order.rs`): a kind
+saying whether `sort` reads an element's bytes as a signed, unsigned or float
+value, and a comparator that replaces that reading for elements whose bytes are
+a reference. Codegen registers both from the element type; `clone` and every
+list copied from an array keep them.
 
 #### MiriSet (`set.rs`)
 

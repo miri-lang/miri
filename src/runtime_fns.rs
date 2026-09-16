@@ -76,6 +76,9 @@ pub mod rt {
     pub const ARRAY_SET_ELEM_CLONE_FN: &str = "miri_rt_array_set_elem_clone_fn";
     /// Compiler-internal: registers the element comparator on an array, not in stdlib.
     pub const ARRAY_SET_ELEM_COMPARE_FN: &str = "miri_rt_array_set_elem_compare_fn";
+    /// Compiler-internal: selects how an array reads its elements' bytes when
+    /// sorting, not in stdlib.
+    pub const ARRAY_SET_ELEM_ORDER_KIND: &str = "miri_rt_array_set_elem_order_kind";
 
     // ── Tuple ─────────────────────────────────────────────────────────────────
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
@@ -109,6 +112,9 @@ pub mod rt {
     pub const LIST_SET_ELEM_CLONE_FN: &str = "miri_rt_list_set_elem_clone_fn";
     /// Compiler-internal: registers the element comparator, not in stdlib.
     pub const LIST_SET_ELEM_COMPARE_FN: &str = "miri_rt_list_set_elem_compare_fn";
+    /// Compiler-internal: selects how a list reads its elements' bytes when
+    /// sorting, not in stdlib.
+    pub const LIST_SET_ELEM_ORDER_KIND: &str = "miri_rt_list_set_elem_order_kind";
 
     // ── Map ──────────────────────────────────────────────────────────────────
     pub const MAP_NEW: &str = "miri_rt_map_new";
@@ -311,6 +317,7 @@ pub mod rt {
         ARRAY_SET_ELEM_DROP_FN,
         ARRAY_SET_ELEM_CLONE_FN,
         ARRAY_SET_ELEM_COMPARE_FN,
+        ARRAY_SET_ELEM_ORDER_KIND,
         // Tuple
         TUPLE_LEN,
         // List
@@ -335,6 +342,7 @@ pub mod rt {
         LIST_SET_ELEM_DROP_FN,
         LIST_SET_ELEM_CLONE_FN,
         LIST_SET_ELEM_COMPARE_FN,
+        LIST_SET_ELEM_ORDER_KIND,
         // Map
         MAP_NEW,
         MAP_FREE,
