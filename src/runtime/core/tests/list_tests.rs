@@ -814,3 +814,70 @@ fn test_list_copied_from_an_array_keeps_its_element_order() {
         miri_rt_array_free(arr);
     }
 }
+
+/// Reads the three `f32` components of the vec3 stored inline at `index`.
+unsafe fn vec3_at(list: *const MiriList, index: usize) -> [f32; 3] {
+    let slot = miri_rt_list_get(list, index) as *const f32;
+    [*slot, *slot.add(1), *slot.add(2)]
+}
+
+#[test]
+fn test_list_push_inline_copies_components_and_zeroes_padding() {
+    unsafe {
+        let list = miri_rt_list_new(16);
+        let first = [1.0f32, 2.0, 3.0];
+        let second = [4.0f32, 5.0, 6.0];
+        miri_rt_list_push_inline(list, first.as_ptr() as *const u8, 12, 16);
+        miri_rt_list_push_inline(list, second.as_ptr() as *const u8, 12, 16);
+
+        assert_eq!(miri_rt_list_len(list), 2);
+        assert_eq!(vec3_at(list, 0), first);
+        assert_eq!(vec3_at(list, 1), second);
+        let padding = (miri_rt_list_get(list, 0) as *const u32).add(3);
+        assert_eq!(*padding, 0);
+
+        miri_rt_list_free(list);
+    }
+}
+
+#[test]
+fn test_list_insert_inline_shifts_later_elements() {
+    unsafe {
+        let list = miri_rt_list_new(16);
+        let (a, b, c) = ([1.0f32, 1.5, 2.0], [3.0f32, 3.5, 4.0], [5.0f32, 5.5, 6.0]);
+        miri_rt_list_push_inline(list, a.as_ptr() as *const u8, 12, 16);
+        miri_rt_list_push_inline(list, c.as_ptr() as *const u8, 12, 16);
+
+        assert_eq!(
+            miri_rt_list_insert_inline(list, 1, b.as_ptr() as *const u8, 12, 16),
+            1
+        );
+        assert_eq!(
+            miri_rt_list_insert_inline(list, 9, b.as_ptr() as *const u8, 12, 16),
+            0
+        );
+
+        assert_eq!(miri_rt_list_len(list), 3);
+        assert_eq!(vec3_at(list, 0), a);
+        assert_eq!(vec3_at(list, 1), b);
+        assert_eq!(vec3_at(list, 2), c);
+
+        miri_rt_list_free(list);
+    }
+}
+
+#[test]
+fn test_list_inline_element_must_match_the_slot_size() {
+    unsafe {
+        let pointer_slots = miri_rt_list_new(std::mem::size_of::<usize>());
+        assert!(!(*pointer_slots).fits_inline_element(12, 16));
+        assert!((*pointer_slots).fits_value_word());
+        miri_rt_list_free(pointer_slots);
+
+        let vec3_slots = miri_rt_list_new(16);
+        assert!((*vec3_slots).fits_inline_element(12, 16));
+        assert!(!(*vec3_slots).fits_inline_element(24, 16));
+        assert!(!(*vec3_slots).fits_value_word());
+        miri_rt_list_free(vec3_slots);
+    }
+}

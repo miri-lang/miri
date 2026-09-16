@@ -91,6 +91,10 @@ pub mod rt {
     pub const LIST_POP: &str = "miri_rt_list_pop";
     pub const LIST_SET: &str = "miri_rt_list_set";
     pub const LIST_INSERT: &str = "miri_rt_list_insert";
+    /// Compiler-internal: appends an element stored inline, handed by address, not in stdlib.
+    pub const LIST_PUSH_INLINE: &str = "miri_rt_list_push_inline";
+    /// Compiler-internal: inserts an element stored inline, handed by address, not in stdlib.
+    pub const LIST_INSERT_INLINE: &str = "miri_rt_list_insert_inline";
     pub const LIST_REMOVE: &str = "miri_rt_list_remove";
     pub const LIST_TAKE_AT: &str = "miri_rt_list_take_at";
     pub const LIST_CLEAR: &str = "miri_rt_list_clear";
@@ -328,6 +332,8 @@ pub mod rt {
         LIST_POP,
         LIST_SET,
         LIST_INSERT,
+        LIST_PUSH_INLINE,
+        LIST_INSERT_INLINE,
         LIST_REMOVE,
         LIST_TAKE_AT,
         LIST_CLEAR,

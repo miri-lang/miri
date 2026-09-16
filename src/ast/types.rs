@@ -857,12 +857,48 @@ pub fn atomic_inner_type(args: &[Type]) -> Option<&Type> {
 /// non-numeric kind. Four-byte scalars (`f32`/`i32`/`u32`) are the only
 /// GPU-compatible components; the eight-byte kinds are accepted so host-side
 /// (CPU) inline layout of wider vectors stays consistent.
+///
+/// `int` and `float` are the eight-byte kinds a component gets when its width is
+/// inferred rather than written (`Vec3(1.0, 2.0, 3.0)` is a `Vec3<float>`). They
+/// are laid out like `i64` and `f64`: a vector is stored inline whatever width
+/// its component was given, because reference counting never retains a vector
+/// placed in a collection and a pointer stored there would outlive its target.
 fn vec_component_bytes(scalar: &TypeKind) -> Option<i64> {
     match scalar {
         TypeKind::F32 | TypeKind::I32 | TypeKind::U32 => Some(4),
-        TypeKind::F64 | TypeKind::I64 | TypeKind::U64 => Some(8),
+        TypeKind::F64 | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::Int => Some(8),
         _ => None,
     }
+}
+
+/// How a collection lays out an element it stores inline: the spacing between
+/// consecutive elements and the number of those bytes the element really uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineElementLayout {
+    /// std430 spacing between consecutive elements; see [`inline_element_stride`].
+    pub stride: i64,
+    /// Bytes the element's components occupy; see [`inline_element_payload`].
+    pub payload: i64,
+}
+
+/// The inline layout of a collection element of type `kind`, or `None` when the
+/// element is stored as a single value word (a scalar or a pointer).
+///
+/// Only a vector with a numeric component is stored inline. Every site that
+/// decides how an element travels in or out of a collection asks this, so the
+/// size a collection is allocated with and the stride its elements are written
+/// and read at cannot disagree.
+pub fn inline_element_layout(kind: &TypeKind) -> Option<InlineElementLayout> {
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return None;
+    };
+    let ExpressionKind::Type(scalar, _) = &args.first()?.node else {
+        return None;
+    };
+    Some(InlineElementLayout {
+        stride: inline_element_stride(name, &scalar.kind)?,
+        payload: inline_element_payload(name, &scalar.kind)?,
+    })
 }
 
 /// std430 inline byte stride between consecutive vector elements stored inline

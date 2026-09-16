@@ -14,7 +14,9 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
-use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
+use super::constructors::{
+    int_constant, lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS,
+};
 use super::helpers::{
     coerce_rvalue, gpu_math_return_type, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
@@ -598,14 +600,19 @@ fn lower_list_push(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
-    let func_op = runtime_fn_operand(rt::LIST_PUSH, *span);
+    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, item_arg.span);
+    let func_name = if inline {
+        rt::LIST_PUSH_INLINE
+    } else {
+        rt::LIST_PUSH
+    };
+    let func_op = runtime_fn_operand(func_name, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
-            args: vec![obj_op, Operand::Copy(Place::new(item_local))],
+            args: [vec![obj_op], item_args].concat(),
             out_args: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(dummy_dest),
@@ -618,6 +625,37 @@ fn lower_list_push(
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
     Ok(Some(Operand::Copy(Place::new(dummy_dest))))
+}
+
+/// The operands that hand a list the element `item`, and whether they hand it
+/// inline.
+///
+/// An element the list lays out inline is wider than the value word the
+/// word-passing entry points copy it from, so it travels by address, followed
+/// by the number of its bytes that are real and the stride the list's slots
+/// must have. The list copies those bytes and keeps no reference, so the caller
+/// goes on owning the element. Every other element is a value word, and a
+/// reference to it is donated to the list.
+fn list_element_operands(
+    ctx: &mut LoweringContext,
+    item: Operand,
+    item_ty: Type,
+    span: Span,
+) -> (Vec<Operand>, bool) {
+    match crate::ast::types::inline_element_layout(&item_ty.kind) {
+        Some(layout) => {
+            let operands = vec![
+                move_to_copy(item),
+                int_constant(layout.payload, &span),
+                int_constant(layout.stride, &span),
+            ];
+            (operands, true)
+        }
+        None => {
+            let item_local = store_operand_temp(ctx, move_to_copy(item), item_ty, span);
+            (vec![Operand::Copy(Place::new(item_local))], false)
+        }
+    }
 }
 
 /// Donate a reference to a value a container is about to take ownership of.
@@ -800,14 +838,19 @@ fn lower_list_insert(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
-    let func_op = runtime_fn_operand(rt::LIST_INSERT, *span);
+    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, item_arg.span);
+    let func_name = if inline {
+        rt::LIST_INSERT_INLINE
+    } else {
+        rt::LIST_INSERT
+    };
+    let func_op = runtime_fn_operand(func_name, *span);
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
-            args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
+            args: [vec![obj_op, index_op], item_args].concat(),
             out_args: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result_temp),

@@ -32,10 +32,11 @@ use miri_runtime_core::{
 use miri_runtime_core::{
     miri_rt_list_capacity, miri_rt_list_clear, miri_rt_list_clone, miri_rt_list_decref_element,
     miri_rt_list_first, miri_rt_list_free, miri_rt_list_get, miri_rt_list_get_mut,
-    miri_rt_list_insert, miri_rt_list_is_empty, miri_rt_list_last, miri_rt_list_len,
-    miri_rt_list_new, miri_rt_list_new_from_managed_array, miri_rt_list_new_from_raw,
-    miri_rt_list_pop, miri_rt_list_push, miri_rt_list_remove, miri_rt_list_reverse,
-    miri_rt_list_set, miri_rt_list_set_elem_drop_fn, miri_rt_list_sort, miri_rt_list_with_capacity,
+    miri_rt_list_insert, miri_rt_list_insert_inline, miri_rt_list_is_empty, miri_rt_list_last,
+    miri_rt_list_len, miri_rt_list_new, miri_rt_list_new_from_managed_array,
+    miri_rt_list_new_from_raw, miri_rt_list_pop, miri_rt_list_push, miri_rt_list_push_inline,
+    miri_rt_list_remove, miri_rt_list_reverse, miri_rt_list_set, miri_rt_list_set_elem_drop_fn,
+    miri_rt_list_sort, miri_rt_list_with_capacity,
 };
 
 // -----------------------------------------------------------------------
@@ -167,6 +168,42 @@ fn test_array_ffi_abi() {
         // Null safety
         assert_eq!(miri_rt_array_len(std::ptr::null()), 0);
         miri_rt_array_free(std::ptr::null_mut());
+    }
+}
+
+/// Compiled code checks an inline collection's slot size before indexing it,
+/// reading the field straight out of the runtime header: the third word of a
+/// `MiriArray` and the fourth of a `MiriList`.
+#[test]
+fn test_slot_size_sits_where_compiled_code_reads_it() {
+    unsafe {
+        let array = miri_rt_array_new(2, 16);
+        assert_eq!(*(array as *const usize).add(2), 16);
+        miri_rt_array_free(array);
+
+        let list = miri_rt_list_new(16);
+        assert_eq!(*(list as *const usize).add(3), 16);
+        miri_rt_list_free(list);
+    }
+}
+
+#[test]
+fn test_list_inline_ffi_abi() {
+    unsafe {
+        let list = miri_rt_list_new(8);
+        let (first, second) = ([1.0f32, 2.0], [3.0f32, 4.0]);
+        miri_rt_list_push_inline(list, second.as_ptr() as *const u8, 8, 8);
+        assert_eq!(
+            miri_rt_list_insert_inline(list, 0, first.as_ptr() as *const u8, 8, 8),
+            1
+        );
+        assert_eq!(miri_rt_list_len(list), 2);
+        assert_eq!(*(miri_rt_list_get(list, 0) as *const f32).add(1), 2.0);
+        assert_eq!(*(miri_rt_list_get(list, 1) as *const f32), 3.0);
+
+        miri_rt_list_push_inline(std::ptr::null_mut(), first.as_ptr() as *const u8, 8, 8);
+        assert_eq!(miri_rt_list_len(list), 2);
+        miri_rt_list_free(list);
     }
 }
 
