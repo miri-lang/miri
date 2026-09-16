@@ -523,6 +523,11 @@ def measured_cell(arguments, arm, model, job):
 def probe_cell(arguments, arm, model, job):
     """Run a cell as a probe. A run whose ratings cannot be read keeps its record
     and transcript, names the problem, and fails the invocation."""
+    # TODO: nothing judges the probe's exit condition. Whether a surface the
+    # published page recommends was rated 2 or lower is read off these records
+    # by hand, because no committed file lists the surfaces that page
+    # recommends, so there is nothing to join the ratings against. Every other
+    # condition is computed by report.py; this one is still typed.
     unreadable = 0
     for index in range(1, arguments.runs + 1):
         transcript, outcome = one_probe(arguments, arm, model, job, index)
