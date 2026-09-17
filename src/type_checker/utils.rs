@@ -1712,6 +1712,11 @@ impl TypeChecker {
                 }
                 Self::error_type()
             }
+            // TODO: only a class naming `Iterable<T>` itself is iterable. One
+            // reaching it through a trait that extends it, or through a class it
+            // extends, is refused as not iterable, because the element type is
+            // read from this class's own `trait_args`. The loop lowering in
+            // `mir/lowering/loops.rs` reads the trait list the same literal way.
             TypeKind::Custom(name, args) => {
                 if let Some(TypeDefinition::Class(class_def)) =
                     self.type_table.global_type_definitions.get(name)

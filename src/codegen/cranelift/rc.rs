@@ -2081,7 +2081,8 @@ impl<'a> FunctionTranslator<'a> {
         .unwrap_or_else(|| format!("{type_name}_clone"))
     }
 
-    /// Returns true if `type_name` (or any ancestor class) lists `"Cloneable"` in its traits.
+    /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,
+    /// directly or through a trait that extends it.
     pub fn class_implements_cloneable(
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
@@ -2093,8 +2094,8 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
-    /// Returns true if `type_name` or any class it extends lists `trait_name`
-    /// among the traits it implements.
+    /// Returns true if `type_name` or any class it extends implements
+    /// `trait_name`, directly or through a trait that extends it.
     pub fn class_implements(
         type_name: &str,
         trait_name: &str,

@@ -683,7 +683,7 @@ class Length extends Measure
 
 ### Trait Inheritance
 
-Traits can extend other traits using `extends`. Implementing a derived trait requires implementing all methods from the entire inheritance chain.
+Traits can extend other traits using `extends`. Implementing a derived trait requires implementing all methods from the entire inheritance chain, and a class implementing it implements every trait in that chain: a class implementing `trait Ranked extends Comparable` orders under `<`, `<=`, `>` and `>=` and sorts in a `List` exactly as one naming `Comparable` would, and the same holds for `Equatable`, `Addable`, `Multiplicable` and `Cloneable`.
 
 ```miri
 trait Shape
