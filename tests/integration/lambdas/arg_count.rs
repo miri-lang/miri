@@ -64,20 +64,21 @@ fn main()
 
 #[test]
 fn test_lambda_correct_call() {
-    assert_type_checks(
+    assert_runs_with_output(
         r#"
 
 fn main()
     let add = fn(a int, b int) int: a + b
     println(f"{add(3, 4)}")
     "#,
+        "7",
     );
 }
 
 #[test]
 fn test_lambda_passed_to_function_correct_arity() {
     // Lambda passed as a higher-order function argument — arity must still check.
-    assert_type_checks(
+    assert_runs_with_output(
         r#"
 
 fn apply(f fn(x int) int, n int) int
@@ -87,5 +88,6 @@ fn main()
     let result = apply(fn(n int) int: n * 2, 5)
     println(f"{result}")
     "#,
+        "10",
     );
 }

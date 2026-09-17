@@ -258,7 +258,7 @@ fn main()
 /// twice.
 #[test]
 fn test_named_function_comparator_leaves_the_heap_clean() {
-    assert_heap_guard_ok(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -277,5 +277,6 @@ fn main()
     for entry in top
         println(f"{entry.word}:{entry.count}")
     "#,
+        "the:3\nfox:2",
     );
 }
