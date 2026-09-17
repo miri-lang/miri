@@ -15,7 +15,9 @@ use crate::runtime_fns::rt;
 
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::{lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT};
+use crate::mir::lowering::dispatch::{
+    donate_operand_to_container, lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
+};
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
     coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, resolve_type,
@@ -634,16 +636,16 @@ fn assign_to_index_map(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
+    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, idx.span);
 
     inc_ref_if_managed(ctx, &val, &val_ty, expr);
-    // TODO: a key built for this write (`m["a" + "b"] = 1`, or a bare key
-    // wrapped as `Some` for an optional key type) is retained here and never
-    // released, so it leaks. `lower_map_set` donates the key and then drops the
-    // temp that produced it; this path should do the same.
-    inc_ref_if_managed(ctx, &key_op, &key_ty, expr);
 
     let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr);
+    if let Some(src) = key_src {
+        ctx.emit_temp_drop(src, key_watermark, idx.span);
+    }
 
     let ret_val = match val {
         Operand::Move(p) => Operand::Copy(p),
@@ -881,6 +883,9 @@ pub(crate) fn lower_assignment_expr(
                 let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
                 if let Some(obj_ty) = &obj_ty {
                     if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
+                        // TODO: `op` is not consulted here, so a compound write
+                        // (`m[k] += 1`) stores the right-hand side as if it were
+                        // a plain `=` instead of combining it with the old value.
                         let val = lower_stored_value(ctx, rhs, obj_ty, MAP_VALUE_SLOT)?;
                         return assign_to_index_map(ctx, obj, obj_ty, idx, val, expr, dest);
                     }
