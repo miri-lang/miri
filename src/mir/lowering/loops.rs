@@ -464,6 +464,9 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
             }
             _ => None,
         })
+        // TODO: a class reaching `Iterable` through a trait that extends it or
+        // through a class it extends is not found here; the type checker's
+        // element-type resolution refuses it first, and both must move together.
         .filter(|name| {
             matches!(
                 ctx.type_checker.type_definitions().get(name),

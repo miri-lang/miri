@@ -516,15 +516,10 @@ impl TypeChecker {
     }
 
     /// Checks whether a type implements a given trait: its class, or a class
-    /// it extends, lists the trait.
+    /// it extends, lists the trait or a trait that extends it.
     ///
     /// Maps `TypeKind::String` to class `"String"`, `TypeKind::Custom(name, _)` to `name`,
     /// and returns `false` for primitive types.
-    // TODO: a trait's parent traits are not consulted, so a class implementing
-    // `trait Ranked extends Comparable` is refused under `<` even though
-    // conformance made it declare `compare`. The walk has to expand each listed
-    // trait through `parent_traits`, and the MIR and codegen checks that ask the
-    // same question (`class_implements_trait`) have to agree with it.
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
         let class_name = match &ty.kind {
             TypeKind::String => STRING_TYPE_NAME,

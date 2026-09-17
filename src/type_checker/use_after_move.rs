@@ -1037,6 +1037,11 @@ impl<'a> UseAfterMoveChecker<'a> {
             if cd.is_abstract {
                 continue;
             }
+            // TODO: this reads the class's own trait list, so an implementer
+            // reaching the trait through a trait that extends it, or through a
+            // base class, is left out of the join while other implementers are
+            // found. `context::class_implements_trait` is the shared answer; the
+            // switch waits on a program showing a missed escape.
             let implements_trait = cd.traits.iter().any(|t| t == trait_or_abstract);
             let inherits_abstract =
                 !implements_trait && self.class_extends(class_name, trait_or_abstract);

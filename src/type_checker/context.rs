@@ -331,14 +331,46 @@ pub fn class_ancestry<'a>(
     .take(type_defs.len())
 }
 
-/// Returns `true` if `class_name` or any class it extends lists `trait_name`
-/// among the traits it implements.
+/// Returns `true` if `class_name` or any class it extends implements
+/// `trait_name`: lists it, or lists a trait that extends it, directly or
+/// through other traits.
+///
+/// Conformance holds a class to every method of a listed trait's parent
+/// traits, so the class answers for each of them as if it had named it.
 pub fn class_implements_trait(
     class_name: &str,
     trait_name: &str,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> bool {
-    class_ancestry(class_name, type_defs).any(|(_, def)| def.traits.iter().any(|t| t == trait_name))
+    class_ancestry(class_name, type_defs).any(|(_, def)| {
+        def.traits
+            .iter()
+            .any(|t| trait_is_or_extends(t, trait_name, type_defs))
+    })
+}
+
+/// Returns `true` if `trait_name` is `ancestor` or extends it, directly or
+/// through other traits. Each trait is visited once, so a circular `extends`
+/// cannot hang the walk.
+pub fn trait_is_or_extends(
+    trait_name: &str,
+    ancestor: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let mut pending = vec![trait_name];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if name == ancestor {
+            return true;
+        }
+        if !visited.insert(name) {
+            continue;
+        }
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(name) {
+            pending.extend(td.parent_traits.iter().map(String::as_str));
+        }
+    }
+    false
 }
 
 /// Returns `true` if `class_name` is `ancestor` or extends it, directly or
