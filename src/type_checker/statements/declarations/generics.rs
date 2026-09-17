@@ -39,11 +39,55 @@
 //! - Implicit vs explicit returns
 //! - Return type compatibility
 
+use crate::ast::factory::make_type;
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
-use crate::type_checker::context::{Context, GenericDefinition};
+use crate::type_checker::context::{Context, GenericDefinition, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
+    /// The type a class names itself by inside its own body: the class at its
+    /// own generic parameters (`Tagged<T>`), or the bare name when it declares
+    /// none. `self` and `Self` both resolve to it.
+    ///
+    /// A generic class named bare would be carried into its method signatures
+    /// that way, so a call site substituting the receiver's type arguments
+    /// would read a `Self` parameter as the class with no arguments — failing
+    /// the arity check and matching no instantiation.
+    ///
+    /// The generic parameters must already be defined in `context`.
+    pub(crate) fn own_class_type(
+        &self,
+        name: &str,
+        generics: Option<&[Expression]>,
+        context: &Context,
+    ) -> Type {
+        let type_args: Vec<Expression> = generics
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|generic| self.generic_parameter_type(generic, context))
+            .map(|param| self.create_type_expression(param))
+            .collect();
+        let type_args = (!type_args.is_empty()).then_some(type_args);
+        make_type(TypeKind::Custom(name.to_string(), type_args))
+    }
+
+    /// The type a declared generic parameter stands for inside its owner's body.
+    fn generic_parameter_type(&self, generic: &Expression, context: &Context) -> Option<Type> {
+        let ExpressionKind::GenericType(name_expr, _, _) = &generic.node else {
+            return None;
+        };
+        let name = self.extract_type_name(name_expr).ok()?;
+        let Some(TypeDefinition::Generic(def)) = context.resolve_type_definition(name) else {
+            return None;
+        };
+        Some(make_type(TypeKind::Generic(
+            def.name.clone(),
+            def.constraint.clone().map(Box::new),
+            def.kind,
+        )))
+    }
+
     pub(crate) fn extract_generic_definitions(
         &mut self,
         generics: &[Expression],

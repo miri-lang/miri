@@ -27,6 +27,11 @@ const MAX_INSTANTIATION_NESTING: usize = 64;
 /// The descent stops at [`MAX_INSTANTIATION_NESTING`], past which the symbol
 /// mangler has no name for the type anyway, so nothing below it could be given
 /// a body.
+///
+/// For the same reason a class spelled at an argument the mangler has no token
+/// for is left out, though its arguments are still searched. Inside a generic
+/// class `self` has the class at its own parameters (`Box<T>`): that is the
+/// generic definition, not an instantiation any call could reach.
 pub(crate) fn collect_generic_instantiations(
     type_checker: &TypeChecker,
     kind: &TypeKind,
@@ -67,7 +72,12 @@ fn collect_nested_instantiations(
     for arg in &resolved {
         collect_nested_instantiations(type_checker, &arg.kind, depth + 1, out);
     }
-    out.push((name.clone(), resolved));
+    if resolved
+        .iter()
+        .all(|arg| super::has_a_monomorphized_spelling(&arg.kind))
+    {
+        out.push((name.clone(), resolved));
+    }
 }
 
 /// Whether the registry already holds `class` at exactly `type_args`.
