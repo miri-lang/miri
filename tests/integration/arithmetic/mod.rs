@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod binary;
+pub mod compound_assignment;
 pub mod errors;
 pub mod precedence;
 pub mod unary;

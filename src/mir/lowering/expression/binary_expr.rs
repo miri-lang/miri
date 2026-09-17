@@ -491,11 +491,16 @@ fn op_to_binop(
 }
 
 /// Determine result type for a binary operation.
-// TODO: the arithmetic result type is read raw, so in a generic body
-// instantiated at `float` the temp is typed at the parameter (pointer-width
-// integer): `a + b` stored into a `T` temp prints `3.0` for `1.5 + 2.25`, and
-// `(a + b) + a` fails the backend verifier. It needs the instantiation's
-// substitution applied, as `binary_trait_receiver_type` does.
+///
+/// An arithmetic result is typed through the active instantiation substitution,
+/// as `binary_trait_receiver_type` reads its receiver. The type checker records
+/// the type of `a + b` in a generic body once, against the parameter; read raw
+/// inside a body instantiated at `float`, the temp holding the result is still
+/// typed at the parameter, which codegen resolves to the pointer-width integer
+/// fallback. The float sum is then truncated on its way into the temp, and a
+/// second operation reading that temp mixes widths and fails the backend
+/// verifier. Outside an instantiated body the substitution is empty and this is
+/// the resolved type unchanged.
 fn binary_result_type(
     ctx: &LoweringContext,
     op: &crate::ast::operator::BinaryOp,
@@ -510,7 +515,10 @@ fn binary_result_type(
         | crate::ast::operator::BinaryOp::GreaterThanEqual => {
             Type::new(TypeKind::Boolean, expr.span)
         }
-        _ => resolve_type(ctx.type_checker, expr),
+        _ => super::super::apply_generic_sub(
+            &resolve_type(ctx.type_checker, expr),
+            &ctx.generic_subs,
+        ),
     }
 }
 
