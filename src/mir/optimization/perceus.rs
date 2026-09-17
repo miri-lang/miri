@@ -7,12 +7,16 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
+use crate::ast::expression::ExpressionKind;
+use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
+use crate::mir::lowering::apply_generic_sub;
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::types::MirType;
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
+use std::collections::HashMap;
 
 /// Inserts reference counting operations for managed types.
 ///
@@ -27,6 +31,7 @@ struct PerceusContext<'a> {
     local_decls: &'a [crate::mir::LocalDecl],
     unmanaged_type_names: &'a std::collections::HashSet<String>,
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
+    class_type_params: &'a std::collections::HashMap<String, Vec<String>>,
     type_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Used by `is_place_managed` to resolve `closure.Field(i)` projections so that
@@ -97,6 +102,7 @@ impl OptimizationPass for Perceus {
             ref local_decls,
             ref unmanaged_type_names,
             ref field_types,
+            ref class_type_params,
             ref type_params,
             ref closure_capture_types,
             ..
@@ -106,6 +112,7 @@ impl OptimizationPass for Perceus {
             local_decls,
             unmanaged_type_names,
             field_types,
+            class_type_params,
             type_params,
             closure_capture_types,
             borrowed: &borrowed,
@@ -323,16 +330,7 @@ impl Perceus {
         lhs: &Place,
     ) -> Option<Place> {
         let param_place = get_move_from_borrowed_place(rvalue, ctx.borrowed)?;
-        let is_managed = |place: &Place| {
-            is_place_managed(
-                place,
-                ctx.local_decls,
-                ctx.unmanaged_type_names,
-                ctx.field_types,
-                ctx.type_params,
-                ctx.closure_capture_types,
-            )
-        };
+        let is_managed = |place: &Place| is_place_managed(place, ctx);
         (is_managed(&param_place) && is_managed(lhs)).then_some(param_place)
     }
 
@@ -351,14 +349,7 @@ impl Perceus {
         }
 
         // Direct managed place?
-        if is_place_managed(
-            source,
-            ctx.local_decls,
-            ctx.unmanaged_type_names,
-            ctx.field_types,
-            ctx.type_params,
-            ctx.closure_capture_types,
-        ) {
+        if is_place_managed(source, ctx) {
             return true;
         }
 
@@ -394,14 +385,7 @@ impl Perceus {
                 _ => None,
             };
             if let Some(place) = place {
-                if is_place_managed(
-                    place,
-                    ctx.local_decls,
-                    ctx.unmanaged_type_names,
-                    ctx.field_types,
-                    ctx.type_params,
-                    ctx.closure_capture_types,
-                ) {
+                if is_place_managed(place, ctx) {
                     new_stmts.push(Statement {
                         kind: StatementKind::IncRef(place.clone()),
                         span,
@@ -444,16 +428,7 @@ impl Perceus {
     fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
         // A borrowed local's value belongs to the caller or the closure
         // environment; overwriting it must not release that value.
-        lhs.local.0 != 0
-            && !ctx.borrowed.contains(lhs.local)
-            && is_place_managed(
-                lhs,
-                ctx.local_decls,
-                ctx.unmanaged_type_names,
-                ctx.field_types,
-                ctx.type_params,
-                ctx.closure_capture_types,
-            )
+        lhs.local.0 != 0 && !ctx.borrowed.contains(lhs.local) && is_place_managed(lhs, ctx)
     }
 }
 
@@ -498,7 +473,9 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// Handles `Index` projections for collection types and `Field` projections for:
 /// - `Option<T>` — `Field(0)` yields the inner `T`
 /// - `Tuple(T0, T1, ...)` — `Field(i)` yields `Ti`
-/// - Custom struct/class types — `Field(i)` is resolved via `field_types`
+/// - Custom struct/class types — `Field(i)` is resolved via `field_types`, at the
+///   type arguments of the instance it is projected from (see
+///   [`instantiated_field_type`])
 /// - Closure locals — `Field(i)` yields the type of captured variable `i`,
 ///   looked up from `closure_capture_types` using the root local index
 ///
@@ -506,29 +483,19 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// which variant is active), so the Perceus main loop falls back to checking
 /// `managed_locals.contains(&lhs.local)` for those cases.
 ///
-/// Uses [`MirType`] throughout, which stores collection element types as resolved
-/// `MirType` values (not `Box<Expression>`), so this function never needs to
-/// inspect AST expression nodes.
-fn is_place_managed(
-    place: &Place,
-    local_decls: &[crate::mir::LocalDecl],
-    unmanaged_type_names: &std::collections::HashSet<String>,
-    field_types: &std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
-    type_params: &std::collections::HashSet<String>,
-    closure_capture_types: &std::collections::HashMap<
-        crate::mir::Local,
-        Vec<crate::ast::types::Type>,
-    >,
-) -> bool {
-    // Start from the MIR-level resolved type of the base local.
-    let mut current: MirType = local_decls[place.local.0].mir_ty.clone();
+/// The walk is over [`MirType`], which stores collection element types as
+/// resolved `MirType` values. Alongside it the declared type is carried as far
+/// as a class field or an option payload preserves it, because `MirType::Custom`
+/// names a class without its type arguments.
+fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
+    let decl = &ctx.local_decls[place.local.0];
+    let mut current: MirType = decl.mir_ty.clone();
+    let mut declared: Option<Type> = Some(decl.ty.clone());
 
     for elem in &place.projection {
-        let next = match elem {
+        let (next, next_declared) = match elem {
             PlaceElem::Deref => return false,
             // For Index projections, extract the element type from the collection.
-            // MirType stores element types as resolved MirType values — no AST
-            // expression nodes to inspect.
             PlaceElem::Index(_) => {
                 let element = match current {
                     MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => *elem,
@@ -542,45 +509,97 @@ fn is_place_managed(
                 if is_inline_vector(&element) {
                     return false;
                 }
-                element
+                (element, None)
             }
-            PlaceElem::Field(i) => match &current {
-                // Option<T>.Field(0) → the inner type T
-                MirType::Option(inner) if *i == 0 => *inner.clone(),
-                // Tuple(T0, T1, …).Field(i) → Ti
-                MirType::Tuple(elems) => match elems.get(*i).cloned() {
-                    Some(t) => t,
-                    None => return false,
-                },
-                // Custom(struct/class).Field(i) → look up in the pre-built field_types map
-                // and convert to MirType on the fly.
-                // Resolving here (not at LocalDecl creation time) avoids needing a separate
-                // MIR-level field_types map — we reuse the existing one that holds `Type`.
-                MirType::Custom(name) => {
-                    match field_types.get(name.as_str()).and_then(|fs| fs.get(*i)) {
-                        Some(ty) => MirType::from_type_kind(&ty.kind),
-                        None => return false,
-                    }
-                }
-                // Closure.Field(i) → the type of captured variable i.
-                // Capture types are indexed by the root local because a closure
-                // is always a single-level projection (never nested).
-                MirType::Function => {
-                    match closure_capture_types
-                        .get(&place.local)
-                        .and_then(|caps| caps.get(*i))
-                    {
-                        Some(ty) => MirType::from_type_kind(&ty.kind),
-                        None => return false,
-                    }
-                }
-                _ => return false,
+            PlaceElem::Field(i) => match project_field(ctx, place, &current, declared, *i) {
+                Some(projected) => projected,
+                None => return false,
             },
         };
         current = next;
+        declared = next_declared;
     }
 
-    current.is_managed(unmanaged_type_names, type_params)
+    current.is_managed(ctx.unmanaged_type_names, ctx.type_params)
+}
+
+/// The type a `Field(index)` projection yields from a value of type `current`,
+/// paired with its declared type where the projection preserves it; `None` when
+/// the field cannot be resolved.
+fn project_field(
+    ctx: &PerceusContext,
+    place: &Place,
+    current: &MirType,
+    declared: Option<Type>,
+    index: usize,
+) -> Option<(MirType, Option<Type>)> {
+    match current {
+        // Option<T>.Field(0) → the inner type T
+        MirType::Option(inner) if index == 0 => {
+            let payload = declared.and_then(|ty| {
+                let TypeKind::Option(inner) = ty.kind else {
+                    return None;
+                };
+                Some(*inner)
+            });
+            Some((*inner.clone(), payload))
+        }
+        // Tuple(T0, T1, …).Field(i) → Ti
+        MirType::Tuple(elems) => Some((elems.get(index)?.clone(), None)),
+        // Custom(struct/class).Field(i) → the declared field type, read at the
+        // instance's type arguments.
+        MirType::Custom(name) => {
+            let declared_field = ctx.field_types.get(name.as_str())?.get(index)?;
+            let field_ty = instantiated_field_type(ctx, name, declared.as_ref(), declared_field);
+            Some((MirType::from_type_kind(&field_ty.kind), Some(field_ty)))
+        }
+        // Closure.Field(i) → the type of captured variable i.
+        // Capture types are indexed by the root local because a closure
+        // is always a single-level projection (never nested).
+        MirType::Function => {
+            let capture_ty = ctx.closure_capture_types.get(&place.local)?.get(index)?;
+            Some((MirType::from_type_kind(&capture_ty.kind), None))
+        }
+        _ => None,
+    }
+}
+
+/// The type of a class field as seen through an instance of the class.
+///
+/// `field_types` holds each field as the class declares it, so a field declared
+/// `value T` reads as the parameter `T` — never managed — even when the instance
+/// is a `Tagged<String>` whose field holds a string. Substituting the instance's
+/// own type arguments gives the field the type its value actually has. A
+/// non-generic class, an instance whose arguments are not known, or an argument
+/// that is a value rather than a type leaves the declared spelling in place.
+fn instantiated_field_type(
+    ctx: &PerceusContext,
+    class_name: &str,
+    instance: Option<&Type>,
+    field_ty: &Type,
+) -> Type {
+    let (Some(params), Some(TypeKind::Custom(_, Some(args)))) = (
+        ctx.class_type_params.get(class_name),
+        instance.map(|ty| &ty.kind),
+    ) else {
+        return field_ty.clone();
+    };
+    let subs: HashMap<String, Type> = params
+        .iter()
+        .zip(args)
+        .filter_map(|(param, arg)| {
+            let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
+                return None;
+            };
+            let arg_ty = if *is_nullable {
+                Type::new(TypeKind::Option(arg_ty.clone()), arg_ty.span)
+            } else {
+                (**arg_ty).clone()
+            };
+            Some((param.clone(), arg_ty))
+        })
+        .collect();
+    apply_generic_sub(field_ty, &subs)
 }
 
 /// Whether the destination of an aggregate is an array or list whose elements

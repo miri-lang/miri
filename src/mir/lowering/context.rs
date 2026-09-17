@@ -125,6 +125,7 @@ impl<'a> LoweringContext<'a> {
         // Pre-compute field type map for struct/class types (used by Perceus to resolve
         // Field(i) projections without access to the type checker at optimization time).
         body.field_types = Self::compute_field_types(type_checker);
+        body.class_type_params = Self::compute_class_type_params(type_checker);
         // Pre-compute set of types that define a user `fn drop(self)` destructor.
         // Used by RC elision to avoid removing the DecRef that triggers the destructor.
         body.has_drop_types = Self::compute_has_drop_types(type_checker);
@@ -781,5 +782,25 @@ impl<'a> LoweringContext<'a> {
         }
 
         field_types
+    }
+
+    /// Builds a map from each generic class name to its type parameter names,
+    /// in declaration order — the order a `Custom(class, Some(args))` spells its
+    /// arguments in.
+    fn compute_class_type_params(
+        type_checker: &crate::type_checker::TypeChecker,
+    ) -> HashMap<String, Vec<String>> {
+        type_checker
+            .type_definitions()
+            .iter()
+            .filter_map(|(name, def)| {
+                let crate::type_checker::context::TypeDefinition::Class(class_def) = def else {
+                    return None;
+                };
+                let generics = class_def.generics.as_ref()?;
+                let params = generics.iter().map(|g| g.name.clone()).collect();
+                Some((name.clone(), params))
+            })
+            .collect()
     }
 }

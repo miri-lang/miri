@@ -229,12 +229,29 @@ pub fn lower_class_constructor(
             .collect()
     };
 
+    let instance_ty = constructed_instance_type(class_name, resolved_ty, span);
     if let Some(init_class) = init_class_name {
         let init_symbol = monomorphized_init_symbol(ctx, def, &init_class, class_name, &field_subs);
-        lower_class_with_init(ctx, span, class_name, init_symbol, &all_fields, args, dest)
+        lower_class_with_init(ctx, span, instance_ty, init_symbol, &all_fields, args, dest)
     } else {
-        lower_class_without_init(ctx, span, class_name, &all_fields, args, dest)
+        lower_class_without_init(ctx, span, instance_ty, &all_fields, args, dest)
     }
+}
+
+/// The type a constructed class instance is built at: the resolved constructor
+/// type when the call site knows it, so an instance of a generic class keeps
+/// its type arguments (`Box<String>`) and is released through the drop function
+/// of its own instantiation. Without them an instance that is never bound —
+/// `Box<String>(s).get()`, or one passed straight to a call — would be released
+/// through the shared drop function, which skips a field typed by the class
+/// parameter and leaks it.
+fn constructed_instance_type(class_name: &str, resolved_ty: Option<&Type>, span: &Span) -> Type {
+    if let Some(ty) = resolved_ty {
+        if matches!(&ty.kind, TypeKind::Custom(name, _) if name == class_name) {
+            return ty.clone();
+        }
+    }
+    Type::new(TypeKind::Custom(class_name.to_string(), None), *span)
 }
 
 /// Build the generic-parameter → concrete-type map for one class instantiation.
@@ -295,31 +312,26 @@ fn monomorphized_init_symbol(
     super::dispatch::mangle_generic_name(&format!("{class_name}_init"), &mangle_args)
 }
 
-/// The type a constructed class instance is aggregated at, and the place it is
-/// built into: the caller's destination, or a fresh temporary.
-// TODO: the type names the class without its type arguments, so an instance of
-// a generic class that is never bound (`Box<String>(s).get()`, or one passed
-// straight to a call) is released through the shared drop function, which
-// skips a field typed by the class parameter and leaks it.
+/// The place a constructed class instance is built into: the caller's
+/// destination, or a fresh temporary declared at the instance's type.
 fn constructed_instance_place(
     ctx: &mut LoweringContext,
-    class_name: &str,
+    instance_ty: &Type,
     dest: Option<Place>,
     span: &Span,
-) -> (Type, Place, Operand) {
-    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+) -> (Place, Operand) {
     let destination = match dest {
         Some(d) => d,
-        None => Place::new(ctx.push_temp(class_ty.clone(), *span)),
+        None => Place::new(ctx.push_temp(instance_ty.clone(), *span)),
     };
     let result_op = Operand::Copy(destination.clone());
-    (class_ty, destination, result_op)
+    (destination, result_op)
 }
 
 fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
-    class_name: &str,
+    instance_ty: Type,
     init_symbol: String,
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
     args: &[Expression],
@@ -330,13 +342,12 @@ fn lower_class_with_init(
         .map(|(_, fi)| create_default_value(&fi.ty, span))
         .collect();
 
-    let (class_ty, destination, result_op) =
-        constructed_instance_place(ctx, class_name, dest, span);
+    let (destination, result_op) = constructed_instance_place(ctx, &instance_ty, dest, span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             destination.clone(),
-            Rvalue::Aggregate(AggregateKind::Class(class_ty), field_defaults),
+            Rvalue::Aggregate(AggregateKind::Class(instance_ty), field_defaults),
         ),
         span: *span,
     });
@@ -391,7 +402,7 @@ fn lower_class_with_init(
 fn lower_class_without_init(
     ctx: &mut LoweringContext,
     span: &Span,
-    class_name: &str,
+    instance_ty: Type,
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
     args: &[Expression],
     dest: Option<Place>,
@@ -444,14 +455,13 @@ fn lower_class_without_init(
         operands.push(op);
     }
 
-    let (class_ty, destination, result_op) =
-        constructed_instance_place(ctx, class_name, dest, span);
+    let (destination, result_op) = constructed_instance_place(ctx, &instance_ty, dest, span);
 
     let dest_local = destination.local;
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             destination,
-            Rvalue::Aggregate(AggregateKind::Class(class_ty), operands.clone()),
+            Rvalue::Aggregate(AggregateKind::Class(instance_ty), operands.clone()),
         ),
         span: *span,
     });

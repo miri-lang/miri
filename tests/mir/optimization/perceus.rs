@@ -407,6 +407,54 @@ fn test_copy_of_managed_struct_field_increfs_the_projected_place() {
     );
 }
 
+/// A single-parameter body returning `_1.0`, where `_1` is `Tagged<arg>` and
+/// `Tagged` declares its only field at its type parameter `T`.
+///
+/// The value lands in the return slot, which the pass never counts among the
+/// locals it owns, so only the projected field's own type can call for a retain.
+fn return_of_generic_class_field(arg: TypeKind) -> Body {
+    let mut body = body_with(
+        &[ty(TypeKind::String), collection("Tagged", vec![arg])],
+        1,
+        vec![assign(place(0), use_copy(field(1, 0)))],
+    );
+    body.field_types = HashMap::from([(
+        "Tagged".to_string(),
+        vec![ty(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            miri::ast::types::TypeDeclarationKind::None,
+        ))],
+    )]);
+    body.class_type_params = HashMap::from([("Tagged".to_string(), vec!["T".to_string()])]);
+    body
+}
+
+#[test]
+fn test_field_declared_at_the_class_parameter_is_retained_at_a_managed_argument() {
+    let mut body = return_of_generic_class_field(TypeKind::String);
+
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![
+            StatementKind::IncRef(field(1, 0)),
+            StatementKind::Assign(place(0), use_copy(field(1, 0))),
+        ],
+        "a `value T` field of a `Tagged<String>` holds a string and must be retained"
+    );
+}
+
+#[test]
+fn test_field_declared_at_the_class_parameter_is_not_retained_at_a_scalar_argument() {
+    let mut body = return_of_generic_class_field(TypeKind::Int);
+
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![StatementKind::Assign(place(0), use_copy(field(1, 0)))],
+        "a `value T` field of a `Tagged<int>` holds a bare integer"
+    );
+}
+
 #[test]
 fn test_copy_of_scalar_struct_field_gets_no_incref() {
     let mut body = body_with(
@@ -854,13 +902,13 @@ fn use_conn(conn Conn) int:
     );
 }
 
-/// A generic class's bare-generic field (`value T`) has no concrete type in the
-/// class definition, so Perceus classifies it as unmanaged and emits no IncRef
-/// when it is read out. The matching omission on the drop side — the drop thunk
-/// skips a field it cannot resolve — is what keeps this balanced; adding an
-/// IncRef here without the paired DecRef would leak the field's allocation.
+/// A generic class's field declared at its parameter (`value T`) is read at the
+/// instance's type arguments, so out of a `Box<String>` it is a string. The
+/// instance is released through the drop function of its own instantiation,
+/// which releases that string, so the value read out takes its own reference
+/// before the instance goes.
 #[test]
-fn test_generic_field_read_is_not_increfd_and_instance_is_released_once() {
+fn test_generic_field_read_is_increfd_and_instance_is_released_once() {
     let source = r#"
 class Box<T>
     value T
@@ -878,10 +926,14 @@ fn unwrap_box() String:
         rc_and_storage_statements(&body),
         vec![
             StatementKind::StorageLive(place(1)),
+            StatementKind::IncRef(Place {
+                local: Local(1),
+                projection: vec![PlaceElem::Field(0)],
+            }),
             StatementKind::DecRef(place(1)),
             StatementKind::StorageDead(place(1)),
         ],
-        "the instance is released exactly once and the generic field read adds no IncRef"
+        "the field read out is retained and the instance is released exactly once"
     );
 }
 

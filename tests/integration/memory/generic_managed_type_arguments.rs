@@ -146,3 +146,174 @@ fn main()
 "#,
     );
 }
+
+#[test]
+fn test_unbound_generic_instance_passed_to_a_call_releases_its_field() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn take(t Tagged<String>) bool
+    return t.value == "fig"
+
+fn main()
+    let h = take(Tagged<String>("FIG".to_lower()))
+    println(f"{h}")
+"#,
+        "true",
+    );
+}
+
+#[test]
+fn test_unbound_generic_instance_used_as_a_receiver_releases_its_field() {
+    assert_runs_with_output(
+        r#"
+class Box<T>
+    v T
+
+    fn init(v T)
+        self.v = v
+
+    public fn get() T
+        return self.v
+
+fn main()
+    println(Box<String>("PEAR".to_lower()).get())
+"#,
+        "pear",
+    );
+}
+
+#[test]
+fn test_set_contains_an_unbound_generic_instance_releases_its_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+    public fn equals(other Tagged<T>) bool
+        return self.value == other.value
+
+fn main()
+    var s = Set<Tagged<String>>()
+    s.add(Tagged<String>("PEAR".to_lower()))
+    let pear = s.contains(Tagged<String>("PEAR".to_lower()))
+    let fig = s.contains(Tagged<String>("FIG".to_lower()))
+    println(f"{pear},{fig}")
+"#,
+        "true,false",
+    );
+}
+
+#[test]
+fn test_unbound_generic_instance_at_a_scalar_keeps_its_value() {
+    assert_runs_with_output(
+        r#"
+class Box<T>
+    v T
+
+    fn init(v T)
+        self.v = v
+
+    public fn get() T
+        return self.v
+
+fn twice(b Box<int>) int
+    return b.get() * 2
+
+fn main()
+    println(f"{Box<int>(40 + 1).get()},{twice(Box<int>(21))}")
+"#,
+        "41,42",
+    );
+}
+
+#[test]
+fn test_field_typed_by_the_class_parameter_is_retained_when_returned() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn take(t Tagged<String>) String
+    return t.value
+
+fn outlive() String
+    let t = Tagged<String>("B".to_lower())
+    return take(t)
+
+fn main()
+    let s = outlive()
+    println(s + "!")
+    println(take(Tagged<String>("A".to_lower())))
+"#,
+        "b!\na",
+    );
+}
+
+#[test]
+fn test_field_typed_by_the_class_parameter_is_retained_inside_a_generic_function() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn take<T>(t Tagged<T>) T
+    return t.value
+
+fn pass<T>(a T) T
+    return take(Tagged<T>(a))
+
+fn main()
+    println(pass("F".to_lower()))
+    println(f"{pass(3)}")
+"#,
+        "f\n3",
+    );
+}
+
+#[test]
+fn test_field_reached_through_a_nested_generic_field_is_retained() {
+    assert_runs_with_output(
+        r#"
+class Box<T>
+    v T
+
+    fn init(v T)
+        self.v = v
+
+class Outer<T>
+    inner Box<T>
+
+    fn init(v T)
+        self.inner = Box<T>(v)
+
+fn deep(o Outer<String>) String
+    return o.inner.v
+
+fn outlive() String
+    let o = Outer<String>("KEEP".to_lower())
+    return deep(o)
+
+fn main()
+    println(outlive() + "!")
+    println(deep(Outer<String>("DEEP".to_lower())))
+"#,
+        "keep!\ndeep",
+    );
+}
