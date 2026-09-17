@@ -753,6 +753,12 @@ pub fn lower_generic_instantiation_with_compilation_ids(
 /// lowered means the body's `forall` capture resolves to that same device
 /// buffer — the whole GPU launch path is reused unchanged. No generic
 /// substitution applies (`subs` is empty); the specialization axis is residency.
+// TODO: two specializations of one function re-lower its body, and a lambda in
+// that body is emitted under the same symbol both times, which codegen refuses
+// as a duplicate definition. `closure_symbol` tells copies apart by the
+// substitution and the receiver; a specialized free function has neither, so
+// the residency axis (`param_handles`) has to reach the symbol as well.
+// Unprobed — needs a GPU host to reproduce.
 pub fn lower_residency_instantiation_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,

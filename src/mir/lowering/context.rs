@@ -211,21 +211,28 @@ impl<'a> LoweringContext<'a> {
     /// The symbol a body lowered out of this one — a lambda, a nested
     /// function, a function-reference thunk — is emitted under.
     ///
-    /// `base` is unique to the AST node, but a generic declaration's body is
-    /// lowered once shared and once per instantiation, each lowering its
-    /// closures again. Those copies differ in type and must not claim one
-    /// symbol, so an instantiated body spells its substitution after `base`,
-    /// ordered by parameter name to keep the symbol stable across builds.
+    /// `base` is unique to the AST node, but one written body is lowered more
+    /// than once: a generic declaration is lowered shared and again per
+    /// instantiation, and a trait's default method is lowered again for every
+    /// class that implements it. Each lowering emits the body's closures anew,
+    /// and those copies differ — in the types they are instantiated at, or in
+    /// the class `self` names — so they must not claim one symbol.
+    ///
+    /// The receiver leads the suffix, then the substitution ordered by
+    /// parameter name, so the symbol stays stable across builds.
     pub fn closure_symbol(&self, base: String) -> Rc<str> {
-        if self.generic_subs.is_empty() {
-            return base.into();
-        }
         let mut type_args: Vec<(String, Type)> = self
             .generic_subs
             .iter()
             .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect();
         type_args.sort_by(|a, b| a.0.cmp(&b.0));
+        if let Some(self_type) = &self.self_type {
+            type_args.insert(0, (String::new(), self_type.clone()));
+        }
+        if type_args.is_empty() {
+            return base.into();
+        }
         super::method_dispatch::mangle_generic_name(&base, &type_args).into()
     }
 
