@@ -7,10 +7,10 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
-use crate::mir::lowering::instantiated_class_field_type;
+use crate::mir::lowering::{instantiated_class_field_type, type_argument};
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::types::MirType;
@@ -507,7 +507,8 @@ fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
                 if is_inline_vector(&element) {
                     return false;
                 }
-                (element, None)
+                let element_declared = declared.as_ref().and_then(indexed_element_type);
+                (element, element_declared)
             }
             PlaceElem::Field(i) => match project_field(ctx, place, &current, declared, *i) {
                 Some(projected) => projected,
@@ -560,6 +561,28 @@ fn project_field(
         }
         _ => None,
     }
+}
+
+/// The declared type an `Index` projection yields from a collection.
+///
+/// The walk's `MirType` keeps a collection's element resolved, but only the
+/// declared spelling still carries a class element's type arguments — a
+/// `List<Tagged<String>>` indexes to `Tagged<String>`, where the `MirType` is
+/// `Custom("Tagged")` and names the class alone. Carrying the argument through
+/// is what lets a field declared at the class parameter be read at the type it
+/// actually holds. Indexing a sequence or a set yields its element; indexing a
+/// map yields its value.
+fn indexed_element_type(collection: &Type) -> Option<Type> {
+    let TypeKind::Custom(name, Some(args)) = &collection.kind else {
+        return None;
+    };
+    let argument = match BuiltinCollectionKind::from_name(name)? {
+        BuiltinCollectionKind::Array | BuiltinCollectionKind::List | BuiltinCollectionKind::Set => {
+            args.first()?
+        }
+        BuiltinCollectionKind::Map => args.get(1)?,
+    };
+    type_argument(argument)
 }
 
 /// The type of a class field as seen through an instance of the class.

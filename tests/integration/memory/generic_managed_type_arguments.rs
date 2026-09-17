@@ -317,3 +317,78 @@ fn main()
         "keep!\ndeep",
     );
 }
+
+#[test]
+fn test_field_read_off_a_list_element_is_retained() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn first(a String) String
+    var l = List<Tagged<String>>()
+    l.push(Tagged<String>(a))
+    return l[0].value
+
+fn main()
+    println(first("PEAR".to_lower()))
+    var l = List<Tagged<String>>()
+    l.push(Tagged<String>("FIG".to_lower()))
+    println(f"{l[0].value}")
+"#,
+        "pear\nfig",
+    );
+}
+
+#[test]
+fn test_field_read_off_a_list_element_leaves_the_heap_balanced() {
+    assert_heap_guard_ok(
+        r#"
+use system.collections.list
+
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn first(a String) String
+    var l = List<Tagged<String>>()
+    l.push(Tagged<String>(a))
+    return l[0].value
+
+fn main()
+    println(first("PEAR".to_lower()))
+"#,
+    );
+}
+
+#[test]
+fn test_field_read_off_a_list_element_in_a_generic_body_is_retained() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn first<T>(a T) T
+    var l = List<Tagged<T>>()
+    l.push(Tagged<T>(a))
+    return l[0].value
+
+fn main()
+    println(first("PEAR".to_lower()))
+    println(f"{first(7)}")
+"#,
+        "pear\n7",
+    );
+}
