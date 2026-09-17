@@ -665,7 +665,7 @@ fn list_element_operands(
 /// the value is then released, so the net effect is one reference handed over:
 /// the caller keeps releasing whatever it already owned, and the container
 /// releases the donated one through its drop callback.
-fn donate_operand_to_container(
+pub(super) fn donate_operand_to_container(
     ctx: &mut LoweringContext,
     op: Operand,
     ty: Type,

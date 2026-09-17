@@ -377,6 +377,10 @@ impl<'a> FunctionTranslator<'a> {
                 .iconst(type_ctx.ptr_type, Self::STRING_CONTENT_ELEMENT_KIND);
             return (setters.set_kind)(builder, ctx, container_ptr, kind);
         }
+        // TODO: an optional element or key (`Set<int?>`, `Map<int?, V>`) gets
+        // neither a content kind nor an equals callback, so the runtime matches
+        // it by the address of its `Some` box: two equal optionals are stored
+        // as two entries and a lookup misses what the container holds.
         match Self::elem_equals_addr_for_kind(builder, ctx, elem_kind, type_ctx)? {
             Some(addr) => (setters.set_equals_fn)(builder, ctx, container_ptr, addr),
             None => Ok(()),
