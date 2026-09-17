@@ -887,3 +887,62 @@ fn main()
         "cat dog",
     );
 }
+
+#[test]
+fn test_default_method_lambda_works_for_two_implementing_classes() {
+    // The default body is lowered once per implementing class, so the lambda it
+    // holds is emitted twice and the two copies must not claim one symbol.
+    assert_runs_with_output(
+        r#"
+trait Named
+    fn name(self) String
+    fn loud(self) String
+        let f = fn(s String) String: s.to_upper()
+        return f(self.name())
+
+class Cat implements Named
+    fn name(self) String
+        return "cat"
+
+class Dog implements Named
+    fn name(self) String
+        return "dog"
+
+fn main()
+    println(Cat().loud())
+    println(Dog().loud())
+    "#,
+        "CAT\nDOG",
+    );
+}
+
+#[test]
+fn test_default_method_function_reference_works_for_two_implementing_classes() {
+    // A function reference in a default body lowers a forwarding thunk, which is
+    // emitted once per implementing class as well.
+    assert_runs_with_output(
+        r#"
+fn shout(s String) String
+    return s.to_upper()
+
+trait Named
+    fn name(self) String
+    fn loud(self) String
+        let f = shout
+        return f(self.name())
+
+class Cat implements Named
+    fn name(self) String
+        return "cat"
+
+class Dog implements Named
+    fn name(self) String
+        return "dog"
+
+fn main()
+    println(Cat().loud())
+    println(Dog().loud())
+    "#,
+        "CAT\nDOG",
+    );
+}

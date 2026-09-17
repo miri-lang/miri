@@ -2348,11 +2348,9 @@ impl Pipeline {
     /// `self.length()` also dispatch statically because self_type is concrete —
     /// avoiding the slot-mismatch issue between per-trait and combined-vtable
     /// method layouts.
-    // TODO: every re-lowering of T.M lowers its lambdas again under the same
-    // `__lambda_<id>` symbol, so a default method holding a lambda fails to
-    // compile once two classes implement the trait. The substitution that
-    // keeps generic instantiations apart is empty here; the implementing class
-    // has to reach the closure symbol instead.
+    /// Every re-lowering emits the default body's closures again; they are kept
+    /// apart because `LoweringContext::closure_symbol` spells the implementing
+    /// class after the closure's own base name.
     fn lower_trait_default_methods(
         &self,
         result: &PipelineResult,
