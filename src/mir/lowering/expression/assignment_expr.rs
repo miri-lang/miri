@@ -20,8 +20,8 @@ use crate::mir::lowering::dispatch::{
 };
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, resolve_type,
-    spellings_of_one_value, wrap_for_optional_slot,
+    coerce_rvalue, ensure_place, release_coerced_source, resolve_arg_type, spellings_of_one_value,
+    wrap_for_optional_slot,
 };
 
 fn assign_to_identifier(
@@ -303,7 +303,6 @@ fn assign_to_member(
                 base_span: obj.span,
                 type_name,
                 idx,
-                prop,
             },
             op,
             rhs.span,
@@ -319,14 +318,12 @@ fn assign_to_member(
 }
 
 /// The field an assignment writes: the object holding it, the type that
-/// declares it, its index in that type's layout, and the property expression
-/// that named it.
+/// declares it, and its index in that type's layout.
 struct FieldTarget<'a> {
     base: Operand,
     base_span: crate::error::syntax::Span,
     type_name: &'a str,
     idx: usize,
-    prop: &'a Expression,
 }
 
 /// Store the right-hand value into the field, wrapping it first when the field
@@ -352,7 +349,6 @@ fn store_into_field(
         val.clone(),
         target.type_name,
         target.idx,
-        target.prop,
         expr,
     )?;
     finalize_member_result(ctx, val, dest, expr)
@@ -366,7 +362,6 @@ fn dispatch_member_assign(
     val: Operand,
     type_name: &str,
     idx: usize,
-    prop: &Expression,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     match op {
@@ -378,7 +373,7 @@ fn dispatch_member_assign(
         | crate::ast::operator::AssignmentOp::AssignMul
         | crate::ast::operator::AssignmentOp::AssignDiv
         | crate::ast::operator::AssignmentOp::AssignMod => {
-            assign_to_member_compound(ctx, target_place, op, val, prop, expr)?;
+            assign_to_member_compound(ctx, target_place, op, val, (type_name, idx), expr)?;
         }
     }
     Ok(())
@@ -516,12 +511,35 @@ fn assign_to_member_simple(
     Ok(())
 }
 
+/// The type of the temp holding a compound assignment's arithmetic result.
+///
+/// The field's own declared slot states it. The property expression that named
+/// the field does not: the type checker records no type against that
+/// identifier, so reading it yields the error type and the temp is laid out at
+/// the pointer-width integer fallback — which truncates a `float` field's sum
+/// on its way back into the field. The slot type is read through the active
+/// instantiation substitution, so a field declared at a generic parameter is
+/// typed at whatever the body was instantiated at.
+fn compound_field_result_type(
+    ctx: &LoweringContext,
+    field: (&str, usize),
+    span: crate::error::syntax::Span,
+) -> Type {
+    let (type_name, idx) = field;
+    ctx.body
+        .field_types
+        .get(type_name)
+        .and_then(|fields| fields.get(idx))
+        .map(|slot| crate::mir::lowering::apply_generic_sub(slot, &ctx.generic_subs))
+        .unwrap_or_else(|| Type::new(TypeKind::Error, span))
+}
+
 fn assign_to_member_compound(
     ctx: &mut LoweringContext,
     target_place: &Place,
     op: &crate::ast::operator::AssignmentOp,
     val: Operand,
-    prop: &Expression,
+    field: (&str, usize),
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     let bin_op = match op {
@@ -534,7 +552,7 @@ fn assign_to_member_compound(
     };
 
     let lhs_op = Operand::Copy(target_place.clone());
-    let result_ty = resolve_type(ctx.type_checker, prop);
+    let result_ty = compound_field_result_type(ctx, field, expr.span);
     let temp = ctx.push_temp(result_ty, expr.span);
 
     ctx.push_statement(crate::mir::Statement {
@@ -758,7 +776,11 @@ fn assign_to_index_compound(
     };
 
     let lhs_op = Operand::Copy(target_place.clone());
-    // This temp is allocated but not used in compound array assign; left for compatibility
+    // TODO: the temp holding the result is typed `int` whatever the element is,
+    // so `xs[0] += 2.25` on a list of floats truncates the sum and stores 3
+    // where 3.75 belongs. It needs the indexed collection's element type, the
+    // way a field's compound assignment reads its declaring type's slot in
+    // `compound_field_result_type`.
     let _temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
 
     ctx.push_statement(crate::mir::Statement {
