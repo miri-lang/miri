@@ -355,19 +355,25 @@ pub(crate) fn instantiated_class_field_type<'a>(
     let subs: HashMap<String, Type> = params
         .into_iter()
         .zip(args)
-        .filter_map(|(param, arg)| {
-            let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
-                return None;
-            };
-            let arg_ty = if *is_nullable {
-                Type::new(TypeKind::Option(arg_ty.clone()), arg_ty.span)
-            } else {
-                (**arg_ty).clone()
-            };
-            Some((param.to_string(), arg_ty))
-        })
+        .filter_map(|(param, arg)| Some((param.to_string(), type_argument(arg)?)))
         .collect();
     apply_generic_sub(field_ty, &subs)
+}
+
+/// The type a type argument denotes, or `None` when the argument is a value
+/// rather than a type (the size of a value generic).
+///
+/// A nullable argument (`T` at `int?`) denotes the option it stands for, so it
+/// is folded into `Option` here rather than by every caller.
+pub(crate) fn type_argument(arg: &Expression) -> Option<Type> {
+    let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
+        return None;
+    };
+    Some(if *is_nullable {
+        Type::new(TypeKind::Option(arg_ty.clone()), arg_ty.span)
+    } else {
+        (**arg_ty).clone()
+    })
 }
 
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters
