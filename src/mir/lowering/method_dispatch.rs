@@ -711,7 +711,10 @@ fn emit_resolved_method_call(
     m: ResolvedMethod,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mono = resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info);
+    let mono = match &m.obj.node {
+        ExpressionKind::Super => resolve_super_monomorph(ctx, m.method_name, m.method_info),
+        _ => resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info),
+    };
     if mono.is_some() {
         ctx.record_class_instantiations(m.obj_ty);
     }
@@ -938,7 +941,9 @@ pub(crate) fn resolve_generic_argument(tc: &TypeChecker, arg: &Expression) -> Op
 /// instantiation of a generic class that is the body compiled for it: the
 /// shared one reads every type-parameter value as an unmanaged word, so its
 /// `self.value == other.value` over two `String`s compares their addresses.
-/// A method the class inherits from another class is named by that class.
+/// A method the class inherits from another class is named by that class, at
+/// the type arguments the `extends` chain maps the receiver's onto — so the
+/// operator, a written call and a container's element thunk all reach one body.
 pub(crate) fn operator_method_callee(
     ctx: &mut LoweringContext,
     receiver_ty: &Type,
@@ -946,12 +951,7 @@ pub(crate) fn operator_method_callee(
     method_name: &str,
     method: &MethodInfo,
 ) -> (String, Type) {
-    let declared_by_receiver =
-        matches!(&receiver_ty.kind, TypeKind::Custom(name, Some(_)) if name == owner);
-    let mono = declared_by_receiver
-        .then(|| resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method))
-        .flatten();
-    match mono {
+    match resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method) {
         Some(callee) => {
             ctx.record_class_instantiations(receiver_ty);
             callee
@@ -969,12 +969,48 @@ pub(crate) fn operator_method_callee(
 
 /// Resolve a generic-class method call to its per-instantiation monomorphized
 /// symbol and concrete return type, or `None` when the plain generic body applies.
+///
+/// The symbol names the class that declares the method, at the type arguments
+/// that class is instantiated at — which the `extends` chain maps from the
+/// receiver's own. A receiver's instantiation is what gets registered, and the
+/// pipeline derives its ancestors' from it, so the named body is lowered.
 fn resolve_generic_class_monomorph(
     ctx: &LoweringContext,
     obj_ty: &Type,
     method_name: &str,
     method_info: &MethodInfo,
 ) -> Option<(String, Type)> {
+    let (name, resolved) = receiver_instantiation(ctx, obj_ty)?;
+    monomorph_for_instantiation(ctx, &name, &resolved, method_name, method_info)
+}
+
+/// Resolve a `super.method(...)` call inside a generic class to the body
+/// compiled for the base class's own instantiation.
+///
+/// `super` is typed as the bare base-class name, carrying none of the type
+/// arguments the `extends` clause gives it, so the receiver type alone would
+/// name the shared body — which reads a managed type argument as an unmanaged
+/// word and so stores a field without taking a reference to it. The enclosing
+/// class's instantiation is what supplies them.
+fn resolve_super_monomorph(
+    ctx: &LoweringContext,
+    method_name: &str,
+    method_info: &MethodInfo,
+) -> Option<(String, Type)> {
+    let self_type = ctx.self_type.as_ref()?;
+    let (class_name, class_args) = receiver_instantiation(ctx, self_type)?;
+    let (base, base_args) =
+        crate::mir::lowering::inherited_instantiation::base_class_instantiation(
+            ctx.type_checker.type_definitions(),
+            &class_name,
+            &class_args,
+        )?;
+    monomorph_for_instantiation(ctx, &base, &base_args, method_name, method_info)
+}
+
+/// The class and concrete type arguments a receiver's type names, or `None`
+/// when it names no monomorphizable instantiation of a generic class.
+fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(String, Vec<Type>)> {
     let TypeKind::Custom(name, Some(arg_exprs)) = &obj_ty.kind else {
         return None;
     };
@@ -994,26 +1030,58 @@ fn resolve_generic_class_monomorph(
     {
         return None;
     }
-    if !builtin_collection_needs_its_own_body(name, class_def, method_name, &resolved) {
+    Some((name.clone(), resolved))
+}
+
+/// Resolve the monomorphized symbol and return type for `method_name` called on
+/// `name` instantiated at `resolved`.
+fn monomorph_for_instantiation(
+    ctx: &LoweringContext,
+    name: &str,
+    resolved: &[Type],
+    method_name: &str,
+    method_info: &MethodInfo,
+) -> Option<(String, Type)> {
+    let defs = &ctx.type_checker.type_definitions();
+    let Some(TypeDefinition::Class(class_def)) = defs.get(name) else {
+        return None;
+    };
+    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved) {
         return None;
     }
     // An instantiated body reaches instantiations the registry was never told
     // about; the caller records the receiver's so the pipeline registers it.
-    let is_recorded = is_registered_instantiation(ctx.type_checker, name, &resolved);
+    let is_recorded = is_registered_instantiation(ctx.type_checker, name, resolved);
     if !is_recorded && ctx.generic_subs.is_empty() {
         return None;
     }
-    let mut subs = HashMap::new();
-    let type_args: Vec<(String, Type)> = gens
+    // An inherited method has no copy of its own: its body belongs to the
+    // ancestor that declares it, compiled at that ancestor's type arguments.
+    let (owner, owner_args) =
+        crate::mir::lowering::inherited_instantiation::declaring_class_instantiation(
+            defs,
+            name,
+            resolved,
+            method_name,
+        )?;
+    let Some(TypeDefinition::Class(owner_def)) = defs.get(owner.as_str()) else {
+        return None;
+    };
+    let owner_gens = owner_def.generics.as_ref()?;
+    if owner_args.len() != owner_gens.len()
+        || !owner_args
+            .iter()
+            .all(|t| is_monomorphizable_type_argument(&t.kind, defs))
+    {
+        return None;
+    }
+    let mut subs: HashMap<String, Type> = owner_gens
         .iter()
-        .zip(&resolved)
-        .map(|(g, t)| {
-            subs.insert(g.name.clone(), t.clone());
-            (g.name.clone(), t.clone())
-        })
+        .zip(&owner_args)
+        .map(|(g, t)| (g.name.clone(), t.clone()))
         .collect();
-    let mangled = mangle_generic_name(&format!("{name}_{method_name}"), &type_args);
-    extend_subs_with_trait_params(ctx.type_checker, name, &mut subs);
+    let mangled = mangle_instantiation_name(&format!("{owner}_{method_name}"), &owner_args);
+    extend_subs_with_trait_params(ctx.type_checker, &owner, &mut subs);
     let return_ty = apply_generic_sub(&method_info.return_type, &subs);
     Some((mangled, return_ty))
 }
