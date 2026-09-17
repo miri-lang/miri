@@ -7,16 +7,14 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
-use crate::ast::expression::ExpressionKind;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
-use crate::mir::lowering::apply_generic_sub;
+use crate::mir::lowering::instantiated_class_field_type;
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::types::MirType;
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
-use std::collections::HashMap;
 
 /// Inserts reference counting operations for managed types.
 ///
@@ -584,22 +582,7 @@ fn instantiated_field_type(
     ) else {
         return field_ty.clone();
     };
-    let subs: HashMap<String, Type> = params
-        .iter()
-        .zip(args)
-        .filter_map(|(param, arg)| {
-            let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
-                return None;
-            };
-            let arg_ty = if *is_nullable {
-                Type::new(TypeKind::Option(arg_ty.clone()), arg_ty.span)
-            } else {
-                (**arg_ty).clone()
-            };
-            Some((param.clone(), arg_ty))
-        })
-        .collect();
-    apply_generic_sub(field_ty, &subs)
+    instantiated_class_field_type(params.iter().map(String::as_str), args, field_ty)
 }
 
 /// Whether the destination of an aggregate is an array or list whose elements

@@ -338,6 +338,38 @@ pub(crate) fn substitute_call_mapping(
         .collect()
 }
 
+/// The type a field declared as `field_ty` has inside an instance whose type
+/// arguments are `args`, for a class declaring the parameters `params`.
+///
+/// A class field is declared in the class's own parameters (`value T`,
+/// `items List<T>`), which name nothing concrete. Substituting the whole field
+/// type, not only a bare parameter, is what reaches an element type nested
+/// inside a collection field. An argument that is a value rather than a type
+/// (the size of a value generic) leaves its parameter unsubstituted, and a
+/// nullable argument (`T` at `int?`) substitutes as the option it denotes.
+pub(crate) fn instantiated_class_field_type<'a>(
+    params: impl IntoIterator<Item = &'a str>,
+    args: &[Expression],
+    field_ty: &Type,
+) -> Type {
+    let subs: HashMap<String, Type> = params
+        .into_iter()
+        .zip(args)
+        .filter_map(|(param, arg)| {
+            let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
+                return None;
+            };
+            let arg_ty = if *is_nullable {
+                Type::new(TypeKind::Option(arg_ty.clone()), arg_ty.span)
+            } else {
+                (**arg_ty).clone()
+            };
+            Some((param.to_string(), arg_ty))
+        })
+        .collect();
+    apply_generic_sub(field_ty, &subs)
+}
+
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters
 /// with their concrete counterparts. Exhaustively handles all `TypeKind` variants
 /// that can contain nested types: recursively substitutes in `Option<T>`, `List<T>`,

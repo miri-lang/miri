@@ -1385,6 +1385,15 @@ impl<'a> FunctionTranslator<'a> {
                                         .map(|(_, ty, _)| ty.kind.clone())
                                         .unwrap_or(TypeKind::Error);
 
+                                    // TODO: a generic struct reads its field at a
+                                    // bare parameter only, so a managed element
+                                    // nested in a field (`items List<T>`) stays
+                                    // unresolved the way a class field did. It needs
+                                    // the same instantiated read the class branch
+                                    // makes below, once a generic struct holding a
+                                    // managed field links at all — today the drop
+                                    // thunk `__drop_Bag` it references is never
+                                    // defined.
                                     // Only apply substitution for compiler-known Vec types.
                                     if crate::ast::types::vec_type_dim(&current).is_some() {
                                         Self::substitute_first_generic(
@@ -1402,19 +1411,23 @@ impl<'a> FunctionTranslator<'a> {
                                             def,
                                             type_ctx.type_definitions,
                                         );
-                                    let field_type = all_fields
-                                        .get(*idx)
-                                        .map(|(_, fi)| fi.ty.kind.clone())
-                                        .unwrap_or(TypeKind::Error);
-
-                                    // Monomorphize a generic-parameter field to its
-                                    // concrete type argument (scalar `T` at its real
-                                    // width); concrete fields pass through unchanged.
-                                    crate::type_checker::generics::substitute_generic_field_kind(
-                                        &field_type,
-                                        type_args_opt.as_deref(),
-                                        def.generics.as_ref(),
-                                    )
+                                    // Read the field at the instance's type arguments,
+                                    // the way Perceus reads it: `value T` at a scalar
+                                    // stores at that scalar's width, and `items List<T>`
+                                    // at `String` holds managed elements, so a store
+                                    // through `self.items[i]` releases what it replaces.
+                                    match (all_fields.get(*idx), type_args_opt, &def.generics) {
+                                        (Some((_, fi)), Some(args), Some(generics)) => {
+                                            crate::mir::lowering::instantiated_class_field_type(
+                                                generics.iter().map(|g| g.name.as_str()),
+                                                args,
+                                                &fi.ty,
+                                            )
+                                            .kind
+                                        }
+                                        (Some((_, fi)), _, _) => fi.ty.kind.clone(),
+                                        (None, _, _) => TypeKind::Error,
+                                    }
                                 }
                                 None
                                 | Some(TypeDefinition::Enum(_))

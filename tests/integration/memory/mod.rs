@@ -11,6 +11,7 @@ pub mod edge_cases;
 pub mod element_call_arguments;
 pub mod enums;
 pub mod escape_analysis;
+pub mod field_index_write;
 pub mod field_projections;
 pub mod functions;
 pub mod generic_managed_type_arguments;

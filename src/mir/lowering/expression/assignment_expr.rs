@@ -673,6 +673,11 @@ fn assign_to_index_array(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_operand = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    // TODO: a receiver that is itself an indexed read (`self.rows[r][c] = x`)
+    // lowers to a retained copy into a temp that nothing releases, so the inner
+    // collection and what it holds leak. The temp needs the watermark and
+    // `emit_temp_drop` that `assign_to_index_map` gives its key, without
+    // dropping a receiver that was already a place.
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let index_operand = lower_expression(ctx, idx, None)?;
