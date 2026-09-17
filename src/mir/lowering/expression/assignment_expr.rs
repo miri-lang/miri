@@ -475,6 +475,10 @@ fn wrap_value_for_field_slot(
     .0
 }
 
+// TODO: the field type is read as the class declares it, so outside the class's
+// own methods a field declared at the class parameter (`t.value = s` on a
+// `Tagged<String>`) is stored with a plain assignment and the value it replaces
+// is never released.
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
