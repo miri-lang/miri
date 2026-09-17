@@ -19,3 +19,6 @@ notes
 .mcp.json
 # Python bytecode from the benchmark harness
 __pycache__
+# Per-machine scheduler state: rewritten with a new session id and pid on
+# every run, so tracking it puts a spurious diff in every working tree.
+.claude/scheduled_tasks.lock
