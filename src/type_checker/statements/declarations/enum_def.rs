@@ -60,6 +60,10 @@ impl TypeChecker {
         let generic_defs = self.resolve_enum_generics(generics, context);
 
         // Set up class context so `self` resolves correctly in method bodies
+        // TODO: a generic enum names itself bare here, so a method taking
+        // `other Self` is refused at every call site (arity 0 against the
+        // receiver's arguments). Classes resolve to `own_class_type` instead;
+        // enums need the same, checked against enum payload lowering.
         let self_type = make_type(TypeKind::Custom(name.clone(), None));
         context.enter_class(name.clone(), None, self_type.clone());
 

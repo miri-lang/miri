@@ -863,7 +863,7 @@ impl TypeChecker {
         if let Some(gens) = &class_data.generics {
             self.define_generics(gens, context);
         }
-        let class_type = make_type(TypeKind::Custom(name.to_string(), None));
+        let class_type = self.own_class_type(name, class_data.generics.as_deref(), context);
         context.enter_class(
             name.to_string(),
             base_class_name.map(String::from),
