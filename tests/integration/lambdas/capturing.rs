@@ -13,8 +13,9 @@ fn main()
     var x = 10
     let f = fn() int: x + 1
     println(f"{f()}")
+    println(f"{f()}")
     "#,
-        "11",
+        "11\n11",
     );
 }
 
