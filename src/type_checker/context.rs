@@ -284,6 +284,14 @@ impl TypeDefinition {
 ///
 /// Returns fields in declaration order: ancestor fields come before descendant fields.
 /// This is the canonical field layout for class instances in codegen and MIR lowering.
+// TODO: an ancestor's field type is returned in that ancestor's own generic
+// parameters, with no mapping through `extends`, so an instantiation whose
+// clause renames or reorders them reads the field at the wrong type. In
+// `class Child<X, Y> extends Base<Y, X>`, a `Child<int, float>` reads `left`
+// (declared `A`, bound to `Y` = float) as an int and `right` as a float, and a
+// managed ancestor field is released by neither, so it leaks. Map each
+// ancestor's field types through the chain's `extends` arguments, as
+// `crate::mir::lowering::inherited_instantiation` does for method symbols.
 pub fn collect_class_fields_all<'a>(
     class_def: &'a ClassDefinition,
     type_definitions: &'a HashMap<String, TypeDefinition>,

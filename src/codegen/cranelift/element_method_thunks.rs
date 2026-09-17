@@ -100,21 +100,42 @@ impl ElementMethod {
         }
     }
 
-    /// The symbol of the method body this question calls for `type_name`.
+    /// The symbol of the method body this question calls for `type_name` at
+    /// `inst_args`.
     ///
     /// Both are resolved through the class chain, the same rule the clone thunk
-    /// applies and the one `==` and the ordering operators dispatch by.
-    // TODO: for a generic class that inherits `equals` from a generic parent
-    // (`class Child<T> extends Base<T>`), the thunk for `Child<String>` calls
-    // `Base_equals__String`, but instantiation bodies are lowered only for a
-    // class's own methods and trait defaults, so the program fails to link.
-    // A written `a.equals(b)` fails the same way on `Child_equals__String`.
+    /// applies and the one `==` and the ordering operators dispatch by. An
+    /// inherited method's body belongs to the class that declares it and is
+    /// compiled at *that* class's type arguments, which the `extends` chain maps
+    /// from the element's — so a `Child<U> extends Base<List<U>>` element asks
+    /// `Base_equals__List_String`, the body the pipeline lowered for it.
     fn method_symbol(
         self,
         type_name: &str,
+        inst_args: Option<&[Type]>,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> String {
         let method_name = self.method_name();
+        // The owner and the arguments must come from one answer: naming a class
+        // from one resolution and arguments from another spells a symbol that
+        // belongs to neither, and nothing defines it.
+        if let Some((owner, owner_args)) = inst_args.and_then(|args| {
+            crate::mir::lowering::inherited_instantiation::declaring_class_instantiation(
+                type_definitions,
+                type_name,
+                args,
+                method_name,
+            )
+        }) {
+            return crate::codegen::cranelift::rc::mangle_class_instantiation(
+                &format!("{owner}_{method_name}"),
+                &owner_args,
+            );
+        }
+        // No declaring instantiation means no per-instantiation body was
+        // compiled — a non-generic ancestor declares the method, or the element
+        // is not a generic instantiation at all — and the shared symbol is what
+        // the call sites name too.
         let owner = crate::mir::lowering::dispatch::resolve_inherited_method(
             type_definitions,
             type_name,
@@ -189,10 +210,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let callee = MethodCallee {
             method,
-            symbol: instantiated_symbol(
-                &method.method_symbol(type_name, type_definitions),
-                inst_args,
-            ),
+            symbol: method.method_symbol(type_name, inst_args, type_definitions),
             ptr_type,
             call_conv,
         };

@@ -625,6 +625,54 @@ fn register_lowered_class_instantiations(
     true
 }
 
+/// Register the instantiation each recorded generic class's base is reached at,
+/// until a round discovers none.
+///
+/// An instance of `Child<String>` is also an instance of whatever `Child`
+/// extends, and the methods it inherits are compiled as that class's — at that
+/// class's own type arguments, which the `extends` clause maps from the child's.
+/// Registering the derived instantiation is what gives those bodies an
+/// instantiation to be lowered for. The loop carries the derivation up a longer
+/// chain one link per round.
+fn register_base_class_instantiations(type_checker: &mut TypeChecker) {
+    loop {
+        let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
+            .generic_class_instantiations
+            .iter()
+            .map(|(name, tuples)| (name.clone(), tuples.clone()))
+            .collect();
+        let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
+
+        for (class_name, tuples) in &recorded {
+            for args in tuples {
+                let base = mir::lowering::inherited_instantiation::base_class_instantiation(
+                    type_checker.type_definitions(),
+                    class_name,
+                    args,
+                );
+                discovered.extend(base);
+            }
+        }
+
+        let before = recorded_instantiation_count(type_checker);
+        for (name, args) in discovered {
+            type_checker.record_generic_class_instantiation(&name, args);
+        }
+        if recorded_instantiation_count(type_checker) == before {
+            return;
+        }
+    }
+}
+
+/// How many instantiation tuples the registry holds, across every class.
+fn recorded_instantiation_count(type_checker: &TypeChecker) -> usize {
+    type_checker
+        .generic_class_instantiations
+        .values()
+        .map(Vec::len)
+        .sum()
+}
+
 fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
     loop {
         let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
@@ -679,20 +727,11 @@ fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
             }
         }
 
-        let before: usize = type_checker
-            .generic_class_instantiations
-            .values()
-            .map(Vec::len)
-            .sum();
+        let before = recorded_instantiation_count(type_checker);
         for (name, args) in discovered {
             type_checker.record_generic_class_instantiation(&name, args);
         }
-        let after: usize = type_checker
-            .generic_class_instantiations
-            .values()
-            .map(Vec::len)
-            .sum();
-        if after == before {
+        if recorded_instantiation_count(type_checker) == before {
             return;
         }
     }
@@ -1677,6 +1716,7 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         loop {
+            register_base_class_instantiations(&mut result.type_checker);
             self.lower_called_generic_class_methods(
                 result,
                 is_release,

@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod float;
 pub mod generic_class_equality;
+pub mod inherited_generic_equality;
 pub mod integer;
 pub mod logical;
 pub mod ordering;
