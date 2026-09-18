@@ -21,6 +21,7 @@ use super::helpers::{
     coerce_rvalue_in, gpu_math_return_type, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
+use super::inline_element_take::{inline_element, lower_inline_element_take, ListRemoval};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
@@ -962,6 +963,19 @@ pub(super) fn try_lower_collection_intrinsic(
 
     if args.len() == 1 && method_name == "push" && builtin == Some(BuiltinCollectionKind::List) {
         return lower_list_push(ctx, obj, obj_ty, &args[0], span);
+    }
+
+    // A list of inline elements cannot use the standard library's `pop` /
+    // `remove_at`: that body is compiled once over an opaque element type and
+    // reads one value word out of the slot, which for an inline element is a
+    // prefix of its components rather than the element.
+    if builtin == Some(BuiltinCollectionKind::List) {
+        if let Some(removal) = ListRemoval::of(method_name, args) {
+            if let Some(element) = inline_element(ctx, obj_ty) {
+                return lower_inline_element_take(ctx, obj, obj_ty, &element, removal, span, dest)
+                    .map(Some);
+            }
+        }
     }
 
     if args.len() == 2 && method_name == "insert" && builtin == Some(BuiltinCollectionKind::List) {

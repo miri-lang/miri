@@ -14,7 +14,7 @@ use crate::codegen::cranelift::translator::{
     empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::error::CodegenError;
-use crate::mir::rc::is_field_managed;
+use crate::mir::rc::{is_field_managed, is_optional_payload_managed};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{ClassDefinition, EnumDefinition, TypeDefinition};
 
@@ -822,7 +822,7 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if is_field_managed(&inner.kind) {
+        if is_optional_payload_managed(&inner.kind) {
             let ptr_type = type_ctx.ptr_type;
             let cl_inner_ty =
                 crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
