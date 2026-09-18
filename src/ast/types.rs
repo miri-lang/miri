@@ -871,6 +871,25 @@ fn vec_component_bytes(scalar: &TypeKind) -> Option<i64> {
     }
 }
 
+/// Whether `scalar` can be a vector's component.
+///
+/// A component earns its place by having an inline byte width: that width is
+/// what a collection strides its elements by and what reference counting reads
+/// as bytes rather than as a pointer. A component without one has no layout for
+/// the two to agree on, so the type checker refuses it where it is written —
+/// see [`VECTOR_COMPONENT_TYPE_NAMES`] for the message that names the set.
+pub fn is_vector_component(scalar: &TypeKind) -> bool {
+    vec_component_bytes(scalar).is_some()
+}
+
+/// The component types a vector may be written at, widest use first, as the
+/// refusal diagnostic lists them.
+///
+/// [`vec_component_bytes`] is the authority; this is its prose. A unit test
+/// holds the two together, so a component gaining a width without gaining a
+/// name here fails the build.
+pub const VECTOR_COMPONENT_TYPE_NAMES: &str = "f32, i32, u32, f64, i64, u64, int, float";
+
 /// How a collection lays out an element it stores inline: the spacing between
 /// consecutive elements and the number of those bytes the element really uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

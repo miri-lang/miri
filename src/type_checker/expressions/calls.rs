@@ -2832,6 +2832,11 @@ impl TypeChecker {
                 .collect()
         });
 
+        // A component can reach a vector without ever being written — inferred
+        // from the arguments, as `Vec2('a', 'b')` infers `String` — so the
+        // constructor asks the same question the written spelling is asked.
+        self.validate_vector_component(name, generic_args.as_deref(), span);
+
         make_type(TypeKind::Custom(name.to_string(), generic_args))
     }
 
