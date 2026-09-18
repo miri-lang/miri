@@ -78,3 +78,61 @@ fn test_error_on_integer_overflow() {
     let overflow_val = "340282366920938463463374607431768211456"; // 2^128
     parser_error_test(overflow_val, &SyntaxErrorKind::InvalidIntegerLiteral);
 }
+
+#[test]
+fn test_integer_literal_bit_pattern_reinterpretation() {
+    // Non-decimal (hex, binary, octal) literals in the range (i64::MAX..=u64::MAX]
+    // are reinterpreted as two's-complement signed i64 values.
+    run_int_tests(vec![
+        ("0xFFFF_FFFF_FFFF_FFFF", int(-1)),
+        ("0x8000_0000_0000_0000", int(i64::MIN as i128)),
+        (
+            "0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111",
+            int(-1),
+        ),
+        ("0o1777777777777777777777", int(-1)),
+        // Bit patterns beyond u64::MAX retain their full i128 value
+        ("0x1_0000_0000_0000_0000", int(18446744073709551616)),
+    ]);
+}
+
+#[test]
+fn test_integer_literal_boundaries_and_underscores() {
+    run_int_tests(vec![
+        ("0", int(0)),
+        ("0_0", int(0)),
+        ("1_2_3", int(123)),
+        ("0x0_F_F", int(255)),
+        ("0b1_0_1", int(5)),
+        ("0o7_7", int(63)),
+        ("9_223_372_036_854_775_807", int(i64::MAX as i128)),
+        ("170141183460469231731687303715884105727", int(i128::MAX)),
+    ]);
+}
+
+#[test]
+fn test_error_on_invalid_numeric_underscores() {
+    // Leading/trailing underscores in decimal numbers
+    parser_error_test("123_", &SyntaxErrorKind::InvalidNumberLiteral);
+    parser_error_test("_123", &SyntaxErrorKind::InvalidNumberLiteral);
+
+    // Leading underscore after prefix in non-decimal numbers
+    parser_error_test("0x_FF", &SyntaxErrorKind::InvalidHexLiteral);
+    parser_error_test("0b_101", &SyntaxErrorKind::InvalidBinaryLiteral);
+    parser_error_test("0o_77", &SyntaxErrorKind::InvalidOctalLiteral);
+}
+
+#[test]
+fn test_error_on_non_decimal_integer_overflow() {
+    // Binary overflow (> i128::MAX)
+    let bin_overflow = format!("0b1{}", "0".repeat(128)); // 2^128
+    parser_error_test(&bin_overflow, &SyntaxErrorKind::InvalidBinaryLiteral);
+
+    // Hex overflow (> i128::MAX)
+    let hex_overflow = "0x100000000000000000000000000000000"; // 2^128
+    parser_error_test(hex_overflow, &SyntaxErrorKind::InvalidHexLiteral);
+
+    // Octal overflow (> i128::MAX)
+    let oct_overflow = "0o4000000000000000000000000000000000000000000"; // 2^128
+    parser_error_test(oct_overflow, &SyntaxErrorKind::InvalidOctalLiteral);
+}
