@@ -91,6 +91,40 @@ fn main()
     assert_runs_with_output(source, "1.0 4.0 5.0 8.0");
 }
 
+/// The sized constructor allocates its elements zeroed, which is a valid vector
+/// because the components live in the element's own bytes: a written element
+/// reads back, and one never written reads as the zero vector.
+#[test]
+fn cpu_vec3_sized_array_constructor_zero_fills_elements() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var buf = Array<Vec3<f32>, 3>()
+    buf[1] = Vec3<f32>(1.0, 2.0, 3.0)
+    println(f'{buf[1].x} {buf[1].y} {buf[1].z} {buf[0].x} {buf[2].z}')
+";
+    assert_runs_with_output(source, "1.0 2.0 3.0 0.0 0.0");
+}
+
+/// The sized constructor spaces its elements at the vector's std430 stride, so
+/// writing one element leaves its neighbours alone.
+#[test]
+fn cpu_vec2_sized_array_constructor_keeps_elements_apart() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var buf = Array<Vec2<i32>, 3>()
+    buf[0] = Vec2<i32>(10, 20)
+    buf[2] = Vec2<i32>(30, 40)
+    println(f'{buf[0].x} {buf[0].y} {buf[1].x} {buf[1].y} {buf[2].x} {buf[2].y}')
+";
+    assert_runs_with_output(source, "10 20 0 0 30 40");
+}
+
 /// Inline vector element field write: `arr[i].x = e` updates one component and
 /// leaves the others intact (no 8-byte pointer store corrupting neighbors).
 #[test]

@@ -916,12 +916,13 @@ pub(crate) fn lower_array_constructor(
         _ => Type::new(TypeKind::Int, *span),
     };
 
-    // Check if element type is managed. This should have been rejected by the type checker.
-    // If we reach here with a managed element type, it's a compiler bug.
-    // TODO: a vector element (`Array<Vec3<f32>, 3>()`) is counted as managed here and
-    // reaches this internal error, yet it is stored inline and needs no managed-element
-    // handling — it could be allocated zeroed at its stride.
-    if ctx.is_perceus_managed(&elem_type.kind) {
+    // An element stored inline lives in the array's own bytes, so the zeroed
+    // storage the runtime hands back is already a valid value of its type and no
+    // managed-element handling applies. Every other managed element is a
+    // reference the type checker refuses; reaching here with one is a compiler bug.
+    if ctx.is_perceus_managed(&elem_type.kind)
+        && types::inline_element_layout(&elem_type.kind).is_none()
+    {
         return Err(LoweringError::unsupported_expression(
             format!(
                 "Array<T, N>() with managed element type '{}' should have been rejected at type-check time",

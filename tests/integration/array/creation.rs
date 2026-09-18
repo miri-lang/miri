@@ -379,7 +379,59 @@ use system.collections.array
 
 let a = Array<List<int>, 4>()
 ",
-        "managed element type",
+        "allocates its elements zeroed",
+    );
+}
+
+/// A struct is reached through a reference even when none of its fields is
+/// reference-counted, so a zero-filled element would be a null pointer. The
+/// refusal belongs to the type checker; reaching codegen is a compiler bug.
+#[test]
+fn test_array_sized_struct_element_type_error() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+struct Point
+    x int
+    y int
+
+let a = Array<Point, 4>()
+",
+        "allocates its elements zeroed",
+    );
+}
+
+/// A vector element with a component no collection can lay out inline is
+/// refused by naming the component, which is what the reader has to change.
+#[test]
+fn test_array_sized_vector_element_unsupported_component_error() {
+    assert_compiler_error(
+        "
+use system.gpu.vector
+use system.collections.array
+
+let a = Array<Vec3<bool>, 4>()
+",
+        "Vector component type 'bool' is not supported",
+    );
+}
+
+/// An enum element is refused for the same reason as a struct one, and with the
+/// same diagnostic rather than an internal codegen error.
+#[test]
+fn test_array_sized_enum_element_type_error() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+enum Color
+    Red
+    Green
+
+let a = Array<Color, 4>()
+",
+        "allocates its elements zeroed",
     );
 }
 

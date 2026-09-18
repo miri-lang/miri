@@ -51,7 +51,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
-use crate::type_checker::utils::{is_gpu_compatible, is_perceus_managed};
+use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -2879,15 +2879,7 @@ impl TypeChecker {
                     size_expr.span,
                 );
 
-                // Reject managed element types at type-check time
-                if is_perceus_managed(&elem_type.kind, &self.type_table.global_type_definitions) {
-                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
-                        format!(
-                            "Array<T, N>() is not yet supported for managed element type '{}'; use an array literal",
-                            elem_type
-                        ),
-                        args[0].span,
-                    );
+                if self.refuse_unusable_array_element(&elem_type, args[0].span) {
                     return Some(make_type(TypeKind::Error));
                 }
 
@@ -2925,6 +2917,30 @@ impl TypeChecker {
             span,
         );
         Some(make_type(TypeKind::Error))
+    }
+
+    /// Refuses an element type `Array<T, N>()` cannot hand back, and answers
+    /// whether it did. `span` covers the element type as the reader wrote it.
+    ///
+    /// The two refusals are ordered by how much they tell the reader. A vector
+    /// only fails to be zero-fillable when its component is one no collection
+    /// lays out inline, and that component is what has to change, so it is named
+    /// rather than the element's whole spelling.
+    fn refuse_unusable_array_element(&mut self, elem_type: &Type, span: Span) -> bool {
+        if self.refuse_unsupported_vector_component(elem_type, span) {
+            return true;
+        }
+        if is_zero_fillable_element(&elem_type.kind, &self.type_table.global_type_definitions) {
+            return false;
+        }
+        self.report_error(
+            DiagnosticCode::TypBuiltinConstructor,
+            format!(
+                "Array<T, N>() allocates its elements zeroed, which is not a valid '{elem_type}'; build the array from a literal instead"
+            ),
+            span,
+        );
+        true
     }
 }
 
