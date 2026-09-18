@@ -15,10 +15,11 @@ use super::context::{
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
-    vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME,
-    LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS,
-    RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, WARP_CONTEXT_TYPE_NAME,
+    is_vector_component, vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME,
+    DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
+    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
+    RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES,
+    WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -946,6 +947,13 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
         // component is a WGSL-vector-capable 4-byte scalar (f32 / i32 / u32 and
         // their narrower aliases / browser-portable `Int`). 64-bit components
         // have no portable WGSL vector type and are rejected.
+        //
+        // TODO: the narrow arms (I8/I16/U8/U16) are unreachable for a vector —
+        // a component without an inline byte width is refused where it is
+        // written, so no buffer can hold one. Reaching them would also need the
+        // upload widened: the host marshals such a component at 1 or 2 bytes
+        // while the shader reads the i32/u32 that `wgsl_scalar_name` emits.
+        // Either widen the upload and admit them, or drop these arms.
         TypeKind::Custom(name, Some(args)) if crate::ast::types::vec_dim(name).is_some() => {
             matches!(
                 vector_component_kind(args),
@@ -2274,6 +2282,7 @@ impl TypeChecker {
         match def {
             TypeDefinition::Struct(struct_def) => {
                 self.validate_generics(&resolved_args, &struct_def.generics, context, expr.span);
+                self.validate_vector_component(name, resolved_args.as_deref(), expr.span);
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
             TypeDefinition::Enum(enum_def) => {
@@ -2306,6 +2315,56 @@ impl TypeChecker {
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
         }
+    }
+
+    /// Refuses a vector written at a component type that has no inline layout.
+    ///
+    /// A vector is laid out from its component's byte width: a collection
+    /// strides its elements by that width, and reference counting reads such an
+    /// element as bytes rather than as a pointer. A component without a width
+    /// leaves the two to disagree — codegen falls back to storing a pointer that
+    /// nothing retains, and the element reads back as zeros or garbage — so the
+    /// vector is refused here, where the component is written.
+    ///
+    /// A component still standing as a generic parameter is not judged: the
+    /// concrete type arrives at the instantiation site, and refusing the
+    /// parameter would refuse the vector declarations themselves. Only a
+    /// resolved `Generic` counts as one — a bare `Custom` name is a struct or a
+    /// class, which has no inline layout and is refused like any other.
+    ///
+    /// A type node the compiler synthesized carries no source range. It is a
+    /// copy of a spelling the reader wrote somewhere — an array literal's
+    /// inferred element type, a declaration read out of another module — and
+    /// that occurrence is refused where it stands, so reporting again here
+    /// would only repeat it against the file's first byte.
+    pub(crate) fn validate_vector_component(
+        &mut self,
+        name: &str,
+        args: Option<&[Expression]>,
+        span: Span,
+    ) {
+        if vec_dim(name).is_none() || span.is_empty() {
+            return;
+        }
+        let Some(ExpressionKind::Type(component, _)) =
+            args.and_then(|a| a.first()).map(|a| &a.node)
+        else {
+            return;
+        };
+        if is_vector_component(&component.kind)
+            || matches!(component.kind, TypeKind::Error | TypeKind::Generic(..))
+        {
+            return;
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TypVectorBuiltin,
+            format!(
+                "Vector component type '{}' is not supported",
+                component.kind
+            ),
+            span,
+            format!("'{name}' component must be one of: {VECTOR_COMPONENT_TYPE_NAMES}"),
+        );
     }
 
     /// Resolves a type alias with generic substitution.

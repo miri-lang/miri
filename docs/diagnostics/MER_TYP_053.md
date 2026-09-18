@@ -1,6 +1,8 @@
 ## Rule
 
-A vector builtin function (e.g., `vec2()`, `vec3()`) was called with an invalid number of arguments or argument types that do not match the vector's component type. Vector constructors have fixed arities and strict type requirements.
+A vector was used in a way its type does not permit. Either a vector builtin (e.g. `dot`, `cross`, `normalize`) was called with the wrong number of arguments or with argument types that do not match the vector's component type — these builtins have fixed arities and strict type requirements — or the vector itself was written at a component type it cannot be laid out at.
+
+A vector's component must have a byte width, because that width is the stride a collection spaces its elements by and the span reference counting reads an element's bytes from. The components with one are `f32`, `i32`, `u32` (the GPU-portable widths) and `f64`, `i64`, `u64`, `int`, `float` (host only — WGSL has no 64-bit vector). Any other component, `i16` or `bool` or `String` among them, is refused where it is written rather than read back as zeros.
 
 ## Messages
 
@@ -20,6 +22,7 @@ A vector builtin function (e.g., `vec2()`, `vec3()`) was called with an invalid 
 - `mix expects exactly three arguments, but got {count}`
 - `mix expects vector with f32 elements, got {type}`
 - `mix expects both vector arguments to have the same type, got {type1} and {type2}`
+- `Vector component type '{type}' is not supported`
 
 ## Before
 

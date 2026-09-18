@@ -3,8 +3,9 @@
 
 use miri::ast::factory::{identifier, int_literal_expression};
 use miri::ast::types::{
-    inline_element_layout, inline_element_payload, inline_element_stride, BuiltinCollectionKind,
-    InlineElementLayout, Type, TypeKind, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+    inline_element_layout, inline_element_payload, inline_element_stride, is_vector_component,
+    BuiltinCollectionKind, InlineElementLayout, Type, TypeKind, VEC2_TYPE_NAME, VEC3_TYPE_NAME,
+    VEC4_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES,
 };
 use miri::error::syntax::Span;
 
@@ -333,4 +334,54 @@ fn elements_without_a_numeric_vector_layout_are_value_words() {
         inline_element_layout(&vector_of("Point", TypeKind::F32)),
         None
     );
+}
+
+/// Every component the diagnostic advertises really has an inline width, and
+/// every kind the diagnostic leaves out really lacks one. The message and the
+/// layout decision are one fact spelled twice; this is what holds them together.
+#[test]
+fn the_advertised_components_are_exactly_the_ones_with_an_inline_width() {
+    let advertised = [
+        ("f32", TypeKind::F32),
+        ("i32", TypeKind::I32),
+        ("u32", TypeKind::U32),
+        ("f64", TypeKind::F64),
+        ("i64", TypeKind::I64),
+        ("u64", TypeKind::U64),
+        ("int", TypeKind::Int),
+        ("float", TypeKind::Float),
+    ];
+    for (name, kind) in &advertised {
+        assert!(
+            VECTOR_COMPONENT_TYPE_NAMES.contains(name),
+            "'{name}' has an inline width but the diagnostic does not name it"
+        );
+        assert!(
+            is_vector_component(kind),
+            "the diagnostic names '{name}' but it has no inline width"
+        );
+        assert!(
+            inline_element_stride(VEC3_TYPE_NAME, kind).is_some(),
+            "'{name}' is advertised but strides nowhere"
+        );
+    }
+
+    for kind in [
+        TypeKind::I8,
+        TypeKind::I16,
+        TypeKind::U8,
+        TypeKind::U16,
+        TypeKind::F16,
+        TypeKind::Boolean,
+        TypeKind::I128,
+        TypeKind::U128,
+        TypeKind::String,
+        TypeKind::Void,
+    ] {
+        assert!(
+            !is_vector_component(&kind),
+            "{kind:?} has no inline layout and must not pass as a component"
+        );
+        assert!(inline_element_stride(VEC3_TYPE_NAME, &kind).is_none());
+    }
 }
