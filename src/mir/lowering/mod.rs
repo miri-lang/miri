@@ -24,6 +24,7 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod inherited_instantiation;
+mod inline_element_take;
 pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;

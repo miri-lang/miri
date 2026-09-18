@@ -127,3 +127,13 @@ pub fn is_field_managed(kind: &TypeKind) -> bool {
             | TypeKind::Custom(_, _)
     )
 }
+
+/// Returns true if a value held in an optional's payload slot is managed.
+///
+/// An optional stores its payload as one value word, never as inline bytes, so a
+/// vector reaches it as the pointer to an allocation of its own — the one place
+/// the inline-layout reasoning behind [`is_field_managed`] does not hold. Freeing
+/// the box without releasing that pointer leaks the vector.
+pub fn is_optional_payload_managed(kind: &TypeKind) -> bool {
+    is_field_managed(kind) || crate::ast::types::vec_type_dim(kind).is_some()
+}

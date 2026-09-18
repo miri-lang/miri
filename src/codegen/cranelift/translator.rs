@@ -1815,10 +1815,9 @@ impl<'a> FunctionTranslator<'a> {
             elem_size,
             ptr_type,
         )?;
-        // Inline element: the projection chain consumes the address directly.
-        // TODO: `List.pop` and `List.remove_at` bind this address, shrink the list and
-        // return it wrapped in an optional, so the vector they hand back points into
-        // storage the list no longer owns and reading it crashes.
+        // Inline element: the projection chain consumes the address directly, so
+        // it stays valid only while the collection holds the slot. A caller that
+        // keeps the element past that has to copy its components out first.
         if inline.is_some() {
             return Ok(elem_addr);
         }

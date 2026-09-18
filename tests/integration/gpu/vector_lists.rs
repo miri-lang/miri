@@ -158,3 +158,115 @@ fn main()
 ";
     assert_runs_with_output(source, "1.0 9.0 9.0 2.0");
 }
+
+#[test]
+fn popping_a_vector_off_a_list_reads_back_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    match vs.pop()
+        Some(v): println(f'{v.x} {v.y} {v.z} {vs.length()}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "4.0 5.0 6.0 1");
+}
+
+#[test]
+fn a_popped_vector_survives_the_list_reusing_the_slot_it_came_from() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    match vs.pop()
+        Some(v)
+            vs.clear()
+            vs.push(Vec3<f32>(7.0, 8.0, 9.0))
+            vs.push(Vec3<f32>(10.0, 11.0, 12.0))
+            println(f'{v.x} {v.y} {v.z}')
+        None
+            println('none')
+";
+    assert_runs_with_output(source, "4.0 5.0 6.0");
+}
+
+#[test]
+fn removing_a_vector_at_an_index_reads_back_every_component_and_shifts_the_rest() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(7.0, 8.0, 9.0)])
+    match vs.remove_at(0)
+        Some(v): println(f'{v.x} {v.y} {v.z}')
+        None: println('none')
+    println(f'{vs[0].x} {vs[1].x} {vs.length()}')
+";
+    assert_runs_with_output(source, "1.0 2.0 3.0\n4.0 7.0 2");
+}
+
+#[test]
+fn popping_a_vec2_and_a_vec4_off_a_list_reads_back_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var twos = List([Vec2<i32>(7, 8), Vec2<i32>(9, 10)])
+    match twos.pop()
+        Some(t): println(f'{t.x} {t.y}')
+        None: println('none')
+    var fours = List([Vec4<f32>(1.0, 2.0, 3.0, 4.0), Vec4<f32>(5.0, 6.0, 7.0, 8.0)])
+    match fours.remove_at(1)
+        Some(q): println(f'{q.x} {q.y} {q.z} {q.w}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "9 10\n5.0 6.0 7.0 8.0");
+}
+
+#[test]
+fn popping_every_vector_off_a_list_then_popping_again_reports_none() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec2<f32>(1.0, 2.0)])
+    match vs.pop()
+        Some(v): println(f'{v.x} {v.y}')
+        None: println('none')
+    match vs.pop()
+        Some(v): println(f'{v.x} {v.y}')
+        None: println('none')
+    match vs.remove_at(0)
+        Some(v): println(f'{v.x} {v.y}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "1.0 2.0\nnone\nnone");
+}
+
+#[test]
+fn removing_a_vector_at_an_index_the_list_does_not_hold_reports_none() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    var negative = 0
+    negative = negative - 1
+    match vs.remove_at(negative)
+        Some(v): println(f'{v.y}')
+        None: println('negative none')
+    match vs.remove_at(9)
+        Some(v): println(f'{v.y}')
+        None: println('past-end none')
+    println(f'{vs.length()}')
+";
+    assert_runs_with_output(source, "negative none\npast-end none\n2");
+}
