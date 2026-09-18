@@ -164,6 +164,119 @@ fn main()
 }
 
 #[test]
+fn test_a_bare_value_two_optional_layers_short_is_boxed_for_every_layer() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let o Option<int?> = 5
+    match o
+        Some(mid): println(f"{mid}")
+        None: println("none")
+"#,
+        "Some(5)",
+    );
+}
+
+#[test]
+fn test_a_managed_optional_two_layers_short_is_boxed_for_every_layer() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let inner String? = Some("deep")
+    let o Option<Option<String?>> = inner
+    match o
+        Some(mid): match mid
+            Some(i): println(f"deep {i}")
+            None: println("mid none")
+        None: println("none")
+"#,
+        "deep Some(deep)",
+    );
+}
+
+#[test]
+fn test_a_none_literal_into_a_two_layer_target_stays_the_outer_none() {
+    assert_heap_guard_output(
+        r#"
+fn nothing() Option<int?>
+    return None
+
+fn main()
+    let o Option<int?> = None
+    match o
+        Some(mid): println(f"some {mid}")
+        None: println("none")
+    match nothing()
+        Some(mid): println(f"some {mid}")
+        None: println("returned none")
+"#,
+        "none\nreturned none",
+    );
+}
+
+#[test]
+fn test_a_value_two_optional_layers_short_is_boxed_at_every_coercion_site() {
+    assert_heap_guard_output(
+        r#"
+class Box
+    var held Option<String?>
+
+fn lift() Option<Option<int?>>
+    return 3
+
+fn take(o Option<String?>)
+    match o
+        Some(mid): println(f"take {mid}")
+        None: println("take none")
+
+fn main()
+    take("arg")
+    let b = Box("field")
+    match b.held
+        Some(mid): println(f"field {mid}")
+        None: println("field none")
+    var assigned Option<String?> = None
+    assigned = "assigned"
+    match assigned
+        Some(mid): println(f"assign {mid}")
+        None: println("assign none")
+    match lift()
+        Some(mid): println(f"ret {mid}")
+        None: println("ret none")
+"#,
+        "take Some(arg)\nfield Some(field)\nassign Some(assigned)\nret Some(Some(3))",
+    );
+}
+
+/// A double release shows up as corruption only once enough allocations have
+/// cycled, so the source is boxed forty times rather than once.
+#[test]
+fn test_boxing_through_two_layers_leaves_an_owned_source_to_its_owner() {
+    let spins = "take Some(spin)\n".repeat(40);
+    let expected = format!("take Some(owned)\ntake Some(owned)\nstill owned\n{spins}spun");
+    assert_heap_guard_output(
+        r#"
+fn take(o Option<String?>)
+    match o
+        Some(mid): println(f"take {mid}")
+        None: println("take none")
+
+fn main()
+    let owned = "owned"
+    take(owned)
+    take(owned)
+    println(f"still {owned}")
+    var i = 0
+    while i < 40
+        take("spin")
+        i = i + 1
+    println("spun")
+"#,
+        &expected,
+    );
+}
+
+#[test]
 fn test_nested_optionals_of_strings_are_heap_guard_clean() {
     assert_heap_guard_output(
         r#"

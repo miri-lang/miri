@@ -15,7 +15,7 @@ use crate::runtime_fns::rt;
 use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, StructDefinition};
 
 use super::dispatch::resolve_inherited_method;
-use super::helpers::coerce_rvalue;
+use super::helpers::coerce_rvalue_in;
 use super::{
     apply_generic_sub, build_class_generic_substitution, lower_expression, LoweringContext,
 };
@@ -77,8 +77,9 @@ pub fn lower_struct_constructor(
 
         let op = if op_ty.kind != target_ty.kind {
             let temp = ctx.push_temp(target_ty.clone(), *span);
+            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, target_ty, *span);
             ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, target_ty)),
+                kind: StatementKind::Assign(Place::new(temp), rvalue),
                 span: *span,
             });
             Operand::Copy(Place::new(temp))
@@ -353,6 +354,13 @@ fn lower_class_with_init(
     });
 
     let mut call_args = vec![Operand::Copy(destination)];
+    // TODO: an argument is handed to `init` exactly as it was lowered, without
+    // being compared against the parameter the constructor declares, so a bare
+    // value passed where an optional is written (`Box("s")` into `fn init(held
+    // String?)`) reaches the body unboxed and the first read takes the payload
+    // for the address of an optional. The call path a plain function takes
+    // coerces here (`lower_and_coerce_args`); this one needs the resolved `init`
+    // signature to do the same.
     let init_arg_watermark = ctx.body.local_decls.len();
     for arg in args {
         match &arg.node {
@@ -440,11 +448,9 @@ fn lower_class_without_init(
         let op_ty = op.ty(&ctx.body).clone();
         let op = if op_ty.kind != field_info.ty.kind {
             let temp = ctx.push_temp(field_info.ty.clone(), *span);
+            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, &field_info.ty, *span);
             ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(
-                    Place::new(temp),
-                    coerce_rvalue(op, &op_ty, &field_info.ty),
-                ),
+                kind: StatementKind::Assign(Place::new(temp), rvalue),
                 span: *span,
             });
             Operand::Copy(Place::new(temp))

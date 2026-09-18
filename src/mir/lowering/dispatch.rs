@@ -18,7 +18,7 @@ use super::constructors::{
     int_constant, lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS,
 };
 use super::helpers::{
-    coerce_rvalue, gpu_math_return_type, release_coerced_source, resolve_arg_type,
+    coerce_rvalue_in, gpu_math_return_type, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
 use super::{apply_generic_sub, lower_expression, LoweringContext};
@@ -1417,11 +1417,9 @@ fn lower_and_coerce_args(
                 if op_ty.kind != target_ty.kind && !spellings_of_one_value(&op_ty, &target_ty) {
                     let temp = ctx.push_temp(target_ty.clone(), arg.span);
                     retain_still_held_value(ctx, &op, &op_ty, arg.span);
+                    let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, arg.span);
                     ctx.push_statement(crate::mir::Statement {
-                        kind: StatementKind::Assign(
-                            Place::new(temp),
-                            coerce_rvalue(op.clone(), &op_ty, &target_ty),
-                        ),
+                        kind: StatementKind::Assign(Place::new(temp), rvalue),
                         span: arg.span,
                     });
                     release_coerced_source(ctx, &op, &op_ty, &target_ty, watermark, arg.span);

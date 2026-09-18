@@ -13,7 +13,7 @@ use crate::mir::{
     Terminator, TerminatorKind,
 };
 
-use super::helpers::{coerce_rvalue, release_coerced_source};
+use super::helpers::{coerce_rvalue_in, release_coerced_source};
 use super::{lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
@@ -472,7 +472,7 @@ fn assign_variable_initializer(
     let op_ty = op.ty(&ctx.body).clone();
     let target_ty = ctx.body.local_decls[local.0].ty.clone();
     let rvalue = if op_ty.kind != *var_ty_kind {
-        coerce_rvalue(op.clone(), &op_ty, &target_ty)
+        coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, *span)
     } else {
         Rvalue::Use(op.clone())
     };
