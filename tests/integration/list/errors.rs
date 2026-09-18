@@ -49,14 +49,14 @@ l.set(5, 99)
 fn list_constructor_rejects_set_arg() {
     // `List(<set>)` previously type-checked but crashed at runtime (SIGBUS) because
     // lowering treated the set pointer as a raw array. The type checker now
-    // rejects any non-array argument.
+    // rejects any non-sequence argument.
     assert_compiler_error(
         "
 use system.collections.list
 
 let l = List({1, 2, 3})
 ",
-        "List(...) expects an array literal argument",
+        "List(...) expects an array or list argument",
     );
 }
 
@@ -68,7 +68,54 @@ use system.collections.list
 
 let l = List(42)
 ",
-        "List(...) expects an array literal argument",
+        "List(...) expects an array or list argument",
+    );
+}
+
+#[test]
+fn list_with_type_argument_rejects_scalar_arg() {
+    // Writing the element type must not skip the argument check: lowering hands
+    // the argument to the list-copy routine, which reads it as a sequence
+    // header, so a scalar there is a wild read.
+    assert_compiler_error(
+        "
+use system.collections.list
+
+fn main()
+    let five = List<int>(5)
+    println(f\"{five.length()}\")
+",
+        "expects an array or list of 'int'",
+    );
+}
+
+#[test]
+fn list_with_type_argument_rejects_mismatched_element_type() {
+    // The elements are string pointers; reading them as `int` prints addresses.
+    assert_compiler_error(
+        "
+use system.collections.list
+
+fn main()
+    let strs = List([\"PEAR\".to_lower()])
+    let wrong = List<int>(strs)
+    println(f\"{wrong[0]}\")
+",
+        "expects an array or list of 'int'",
+    );
+}
+
+#[test]
+fn list_with_type_argument_rejects_set_arg() {
+    assert_compiler_error(
+        "
+use system.collections.list
+
+fn main()
+    let l = List<int>({1, 2, 3})
+    println(f\"{l.length()}\")
+",
+        "expects an array or list of 'int'",
     );
 }
 
@@ -112,5 +159,22 @@ let x = 42
 let slice = x[0..1]
 ",
         "is not sliceable",
+    );
+}
+
+#[test]
+fn list_with_type_argument_rejects_a_narrower_element_width() {
+    // The elements are laid out four bytes apart; copying them word for word
+    // into an `int` list reads two of them as one element (8589934593).
+    assert_compiler_error(
+        "
+use system.collections.list
+
+fn main()
+    let src = List<i32>([1, 2, 3])
+    let wide = List<int>(src)
+    println(f\"{wide[0]}\")
+",
+        "expects an array or list of 'int'",
     );
 }

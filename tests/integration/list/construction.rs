@@ -353,3 +353,102 @@ fn main()
         "3|3|4|2|pear|fig",
     );
 }
+
+#[test]
+fn list_with_type_argument_copies_a_matching_array() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    var l = List<int>([1, 2, 3])
+    l.push(4)
+    println(f\"{l.length()}|{l[0]}|{l[3]}\")
+",
+        "4|1|4",
+    );
+}
+
+#[test]
+fn list_with_type_argument_copies_a_matching_list() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    let src = List([1, 2, 3])
+    var copy = List<int>(src)
+    copy.push(4)
+    println(f\"{src.length()}|{copy.length()}|{copy[2]}\")
+",
+        "3|4|3",
+    );
+}
+
+#[test]
+fn list_with_type_argument_copies_a_matching_list_of_strings() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    let src = List([\"PEAR\".to_lower(), \"APPLE\".to_lower()])
+    var copy = List<String>(src)
+    println(f\"{copy[0]}|{copy[1]}|{copy.length()}\")
+",
+        "pear|apple|2",
+    );
+}
+
+#[test]
+fn list_with_type_argument_accepts_an_empty_array_literal() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    var l = List<int>([])
+    l.push(7)
+    println(f\"{l.length()}|{l[0]}\")
+",
+        "1|7",
+    );
+}
+
+#[test]
+fn list_with_a_generic_parameter_as_its_type_argument_copies_at_every_instantiation() {
+    // Inside a generic body the written element type is the parameter itself,
+    // so the argument check must accept a sequence of that same parameter.
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn copy_of<T>(l [T]) [T]
+    return List<T>(l)
+
+fn main()
+    let ints = List([1, 2, 3])
+    var ic = copy_of(ints)
+    ic.push(4)
+    let strs = List([\"PEAR\".to_lower()])
+    var sc = copy_of(strs)
+    println(f\"{ints.length()}|{ic.length()}|{ic[3]}|{sc[0]}\")
+",
+        "3|4|4|pear",
+    );
+}
+
+#[test]
+fn list_with_type_argument_copies_a_matching_narrow_element_width() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn main()
+    let src = List<u8>([200, 7])
+    let copy = List<u8>(src)
+    println(f\"{copy[0]}|{copy[1]}\")
+",
+        "200|7",
+    );
+}

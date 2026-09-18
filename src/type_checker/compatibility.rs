@@ -370,7 +370,7 @@ impl TypeChecker {
         )
     }
 
-    fn check_inner_type_compatible(
+    pub(crate) fn check_inner_type_compatible(
         &self,
         inner1: &crate::ast::Expression,
         inner2: &crate::ast::Expression,

@@ -2217,17 +2217,7 @@ impl TypeChecker {
         }
 
         if let Some(args) = type_args {
-            if args.len() == 1 {
-                // TODO: the positional argument is never checked on this path, so
-                // `List<int>(5)` and `List<int>(strings)` type-check and then read
-                // a non-sequence, or pointers, as integer elements at run time. The
-                // argument must be an array or list whose element type matches.
-                let elem_type = self.resolve_type_expression(&args[0], context);
-                return Some(make_type(TypeKind::Custom(
-                    BuiltinCollectionKind::List.name().to_string(),
-                    Some(vec![self.create_type_expression(elem_type)]),
-                )));
-            } else {
+            if args.len() != 1 {
                 self.report_error(
                     DiagnosticCode::TypGenericArgumentCount,
                     format!(
@@ -2238,30 +2228,38 @@ impl TypeChecker {
                 );
                 return Some(make_type(TypeKind::Error));
             }
-        }
-
-        if let Some((_, arg_type)) = positional_args.first() {
-            let elem_type = match &arg_type.kind {
-                TypeKind::Custom(cname, Some(cargs))
-                    if (BuiltinCollectionKind::from_name(cname.as_str())
-                        == Some(BuiltinCollectionKind::Array)
-                        || BuiltinCollectionKind::from_name(cname.as_str())
-                            == Some(BuiltinCollectionKind::List))
-                        && !cargs.is_empty() =>
-                {
-                    self.resolve_type_expression(&cargs[0], context)
-                }
-                _ => {
-                    self.report_error(DiagnosticCode::TypBuiltinConstructor,
+            let elem_type = self.resolve_type_expression(&args[0], context);
+            if let Some((arg_expr, arg_type)) = positional_args.first() {
+                if !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
+                    self.report_error(
+                        DiagnosticCode::TypBuiltinConstructor,
                         format!(
-                            "List(...) expects an array literal argument, got '{}'. Use 'List<T>()' for an empty list or 'List([...])' to convert an array",
-                            arg_type
+                            "List<{0}>(...) expects an array or list of '{0}', got '{1}'. Use 'List<{0}>()' for an empty list",
+                            elem_type, arg_type
                         ),
                         span,
                     );
                     return Some(make_type(TypeKind::Error));
                 }
+            }
+            return Some(make_type(TypeKind::Custom(
+                BuiltinCollectionKind::List.name().to_string(),
+                Some(vec![self.create_type_expression(elem_type)]),
+            )));
+        }
+
+        if let Some((_, arg_type)) = positional_args.first() {
+            let Some(elem_expr) = sequence_element_expression(arg_type) else {
+                self.report_error(DiagnosticCode::TypBuiltinConstructor,
+                    format!(
+                        "List(...) expects an array or list argument, got '{}'. Use 'List<T>()' for an empty list or 'List([...])' to convert an array",
+                        arg_type
+                    ),
+                    span,
+                );
+                return Some(make_type(TypeKind::Error));
             };
+            let elem_type = self.resolve_type_expression(elem_expr, context);
             return Some(make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
                 Some(vec![self.create_type_expression(elem_type)]),
@@ -2275,6 +2273,58 @@ impl TypeChecker {
             span,
         );
         Some(make_type(TypeKind::Error))
+    }
+
+    /// Whether a `List<T>(arg)` argument is a sequence whose elements a list of
+    /// `T` can copy.
+    ///
+    /// Lowering hands the argument straight to the list-copy runtime routines,
+    /// which read it as a sequence header and copy element words at the stride
+    /// of `T`. A scalar, a set, or a sequence of another element type is read
+    /// as something it is not — a wild read, not a conversion — so the shape is
+    /// a type error rather than a coercion.
+    fn sequence_argument_fits_element(
+        &self,
+        elem_type: &Type,
+        arg_expr: &Expression,
+        arg_type: &Type,
+        context: &Context,
+    ) -> bool {
+        // A prior diagnostic already named the real problem; adding a second
+        // one here would bury it.
+        if matches!(arg_type.kind, TypeKind::Error) {
+            return true;
+        }
+        let Some(actual_elem) = sequence_element_expression(arg_type) else {
+            return false;
+        };
+        let Ok(actual_elem_type) = self.extract_type_from_expression(actual_elem) else {
+            return false;
+        };
+        // An empty literal carries no element type to disagree with.
+        if matches!(actual_elem_type.kind, TypeKind::Void) {
+            return true;
+        }
+        if matches!(arg_expr.node, ExpressionKind::Array(_, _)) {
+            // The literal's elements are materialized for this list, so an
+            // untyped literal still adapts to the written element type
+            // (`List<u8>([200, 7])`, `List<f32>([1.5])`).
+            return self.are_compatible(elem_type, &actual_elem_type, context);
+        }
+        // A sequence that already exists has its elements laid out at its own
+        // element width. Copying them word for word into an element of another
+        // width reads garbage — two `i32` elements arrive as one `int` — so
+        // integer widening, which is sound for a scalar, is not sound here.
+        if let (Some(declared_width), Some(actual_width)) = (
+            self.get_integer_size(elem_type),
+            self.get_integer_size(&actual_elem_type),
+        ) {
+            if declared_width != actual_width {
+                return false;
+            }
+        }
+        let declared_elem = self.create_type_expression(elem_type.clone());
+        self.check_inner_type_compatible(&declared_elem, actual_elem, context)
     }
 
     fn try_infer_map_constructor(
@@ -2291,6 +2341,11 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
+                // TODO: the positional argument is never checked on this path,
+                // so `Map<int, int>(7)` type-checks and lowering then discards
+                // the argument and allocates an empty map — accepted, dropped,
+                // never mentioned. It must be refused, the way the same call
+                // without type arguments already is.
                 let k_type = self.resolve_type_expression(&args[0], context);
                 let v_type = self.resolve_type_expression(&args[1], context);
                 return Some(make_type(TypeKind::Custom(
@@ -2357,6 +2412,11 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 1 {
+                // TODO: the positional argument is never checked on this path,
+                // so `Set<int>(5)` type-checks and lowering then discards the
+                // argument and allocates an empty set — accepted, dropped,
+                // never mentioned. It must be refused, the way the same call
+                // without type arguments already is.
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Set.name().to_string(),
@@ -2789,6 +2849,10 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
+                // TODO: the positional argument is never checked on this path,
+                // so `Array<int, 3>(5)` reaches MIR, which refuses it there.
+                // The rejection belongs here, as a type error with a span on
+                // the argument.
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 let size_expr = args[1].clone();
 
@@ -2876,6 +2940,27 @@ fn type_arg_is_concrete(ty: &Type) -> bool {
         }
         TypeKind::Option(inner) => type_arg_is_concrete(inner),
         _ => true,
+    }
+}
+
+/// The element type expression of an `Array<T, N>` or a `List<T>`, in either
+/// the `Custom` spelling a constructor produces or the native spelling a
+/// written type carries.
+///
+/// These are exactly the two shapes MIR's sequence lowering knows how to copy
+/// element-wise, so the type checker recognizes the same pair.
+fn sequence_element_expression(ty: &Type) -> Option<&Expression> {
+    match &ty.kind {
+        TypeKind::List(inner) | TypeKind::Array(inner, _) => Some(inner),
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name.as_str()),
+                Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+            ) =>
+        {
+            args.first()
+        }
+        _ => None,
     }
 }
 
