@@ -409,19 +409,32 @@ pub(crate) fn mir_types_structurally_match(a: &MirType, b: &MirType) -> bool {
 
 /// Whether `source` is provably at least one optional layer shallower than
 /// `target`.
-///
-/// Peels one `Option` off both sides at a time. When `target` is still optional
-/// and `source` has reached a concrete type, the source lacks a layer. A
-/// placeholder whose own depth is unknown — a generic parameter, an unresolved
-/// type, or the `Void` a `None` literal is typed at — could stand for any
-/// number of layers, so it never counts as short.
 pub(crate) fn is_missing_optional_layer(source: &MirType, target: &MirType) -> bool {
+    missing_optional_layers(source, target) > 0
+}
+
+/// How many `Some` boxes `source` needs before it is the same shape as `target`.
+///
+/// Peels one `Option` off both sides at a time. Once `source` has reached a
+/// concrete type, every `Option` still wrapping `target` is a layer the source
+/// lacks. A placeholder whose own depth is unknown — a generic parameter, an
+/// unresolved type, or the `Void` a `None` literal is typed at — could stand for
+/// any number of layers, so it is never short.
+pub(crate) fn missing_optional_layers(source: &MirType, target: &MirType) -> usize {
     match (source, target) {
         (MirType::Option(source_inner), MirType::Option(target_inner)) => {
-            is_missing_optional_layer(source_inner, target_inner)
+            missing_optional_layers(source_inner, target_inner)
         }
-        (MirType::Generic | MirType::Unknown | MirType::Void | MirType::Error, _) => false,
-        (_, target) => matches!(target, MirType::Option(_)),
+        (MirType::Generic | MirType::Unknown | MirType::Void | MirType::Error, _) => 0,
+        (_, target) => option_depth(target),
+    }
+}
+
+/// The number of `Option` layers wrapping `ty`.
+fn option_depth(ty: &MirType) -> usize {
+    match ty {
+        MirType::Option(inner) => 1 + option_depth(inner),
+        _ => 0,
     }
 }
 
@@ -502,27 +515,100 @@ pub fn wrap_for_optional_slot(
         return (operand, op_ty);
     }
     let wrapped = ctx.push_temp(slot_ty.clone(), span);
+    let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, slot_ty, span);
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(wrapped),
-            coerce_rvalue(operand.clone(), &op_ty, slot_ty),
-        ),
+        kind: MirStatementKind::Assign(Place::new(wrapped), rvalue),
         span,
     });
     release_coerced_source(ctx, &operand, &op_ty, slot_ty, watermark, span);
     (Operand::Copy(Place::new(wrapped)), slot_ty.clone())
 }
 
+/// The optional types a value of type `op_ty` passes through on its way to
+/// `target_ty`, innermost first and excluding `target_ty` itself.
+///
+/// A target `n` layers deeper than its source needs `n` boxes but only `n - 1`
+/// intermediate types, because the last box is `target_ty` itself. Each entry
+/// peels one more `Option` off the target, so every step of the chain is exactly
+/// one layer — which is all [`coerce_rvalue`] can build at a time.
+fn intermediate_optional_layers(op_ty: &Type, target_ty: &Type) -> Vec<Type> {
+    let missing = missing_optional_layers(
+        &MirType::from_type_kind(&op_ty.kind),
+        &MirType::from_type_kind(&target_ty.kind),
+    );
+    let mut layers = Vec::with_capacity(missing.saturating_sub(1));
+    let mut layer = target_ty;
+    for _ in 1..missing {
+        // `MirType::Option` is produced by `TypeKind::Option` alone, so a
+        // non-zero count guarantees the spellings peeled here exist.
+        let TypeKind::Option(inner) = &layer.kind else {
+            break;
+        };
+        layer = inner;
+        layers.push(layer.clone());
+    }
+    layers.reverse();
+    layers
+}
+
+/// Build every `Some` box `operand` needs beyond the one an Rvalue can hold, and
+/// return the operand and type for that final box.
+///
+/// One `Rvalue` holds one `Aggregate(Option, ..)`, so a target two or more
+/// layers deeper than its source — an `int` stored as an `Option<int?>`, or a
+/// `String?` as an `Option<Option<String?>>` — would otherwise be boxed once and
+/// the consumer would read the payload as the address of an optional.
+///
+/// Each intermediate box lives in a temp the enclosing scope owns, because the
+/// next box up retains it and that retain has to be answered on every exit path,
+/// not just the one that falls out of the block.
+fn fill_optional_layers(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    op_ty: &Type,
+    target_ty: &Type,
+    span: Span,
+) -> (Operand, Type) {
+    let mut inner = operand;
+    let mut inner_ty = op_ty.clone();
+    for layer_ty in intermediate_optional_layers(op_ty, target_ty) {
+        let temp = ctx.push_temp(layer_ty.clone(), span);
+        let rvalue = coerce_rvalue(inner, &inner_ty, &layer_ty);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+            span,
+        });
+        ctx.register_scope_temp(temp);
+        inner = Operand::Copy(Place::new(temp));
+        inner_ty = layer_ty;
+    }
+    (inner, inner_ty)
+}
+
+/// Coerce `operand` into `target_ty`, emitting whatever statements the coercion
+/// needs before the Rvalue that completes it.
+///
+/// The counterpart to [`coerce_rvalue`] for callers that assign the result: they
+/// have a `ctx` to emit into, so a target several optional layers deep can be
+/// boxed layer by layer instead of once.
+pub fn coerce_rvalue_in(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    op_ty: &Type,
+    target_ty: &Type,
+    span: Span,
+) -> Rvalue {
+    let (filled, filled_ty) = fill_optional_layers(ctx, operand, op_ty, target_ty, span);
+    coerce_rvalue(filled, &filled_ty, target_ty)
+}
+
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
 /// If `target_ty` is one optional layer deeper than `op_ty` (`T` into `T?`, or
 /// `T?` into `T??`), it allocates an Option box. Otherwise, it emits a standard
 /// type Cast.
-// TODO: one Rvalue can hold one `Some` box, so a target two or more layers
-// deeper than its source — an `int` stored as an `Option<int?>`, or a `String?`
-// as an `Option<Option<String?>>` — is boxed once and the consumer reads the
-// payload as the address of an optional. Filling the remaining layers needs a
-// temp per layer, which an Rvalue cannot emit: every caller that assigns this
-// result has to build the chain instead.
+///
+/// Builds the one box an Rvalue can hold; a target that needs more than one is
+/// reached through [`coerce_rvalue_in`].
 pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue {
     if coercion_wraps_in_some(op_ty, target_ty) {
         crate::mir::Rvalue::Aggregate(crate::mir::AggregateKind::Option, vec![operand])
@@ -644,7 +730,7 @@ pub fn lower_as_return(
                 let watermark = ctx.body.local_decls.len();
                 let operand = lower_expression(ctx, expr, None)?;
                 let op_ty = operand.ty(&ctx.body).clone();
-                let rvalue = coerce_rvalue(operand.clone(), &op_ty, ret_ty);
+                let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, ret_ty, expr.span);
                 ctx.push_statement(crate::mir::Statement {
                     kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
                     span: expr.span,
