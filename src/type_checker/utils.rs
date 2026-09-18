@@ -15,11 +15,11 @@ use super::context::{
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
-    is_vector_component, vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME,
-    DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
-    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
-    RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES,
-    WARP_CONTEXT_TYPE_NAME,
+    inline_element_layout, is_vector_component, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
+    TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
+    GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
+    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
+    SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -172,6 +172,41 @@ fn is_resource_inner<'a>(
             .is_some_and(|c| is_resource_inner(&c.kind, type_definitions, visited)),
         _ => false,
     }
+}
+
+/// Whether `Array<T, N>()` can hand back storage for an element of type `kind`.
+///
+/// The constructor allocates its elements zeroed, so an element is admissible
+/// only when a run of zero bytes is already a valid value of its type. That
+/// holds for a scalar, for a type parameter — which is instantiated at one — and
+/// for the two wrappers a collection stores inside its own bytes: a vector,
+/// whose components lie inline, and an `Atomic`, which is a scalar in a struct's
+/// clothing. It does not hold for a value reached through a reference, whose
+/// zero word is a null pointer, so a string, a collection, a closure and every
+/// user-defined struct, enum and class are refused.
+///
+/// [`is_perceus_managed`] alone is not that question: it calls a struct managed
+/// only when one of its fields is, so a struct of plain scalars passes it while
+/// still being reached through a reference.
+pub fn is_zero_fillable_element(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    if inline_element_layout(kind).is_some() {
+        return true;
+    }
+    if let TypeKind::Custom(name, _) = kind {
+        if name == ATOMIC_TYPE_NAME {
+            return true;
+        }
+        if matches!(
+            type_definitions.get(name),
+            Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_))
+        ) {
+            return false;
+        }
+    }
+    !is_perceus_managed(kind, type_definitions)
 }
 
 /// Determines whether a type requires Perceus reference counting.
@@ -2365,6 +2400,25 @@ impl TypeChecker {
             span,
             format!("'{name}' component must be one of: {VECTOR_COMPONENT_TYPE_NAMES}"),
         );
+    }
+
+    /// Refuses `ty` when it is a vector whose component has no inline layout,
+    /// and answers whether it did — so the caller can stop rather than report a
+    /// second, vaguer reason for the same type.
+    ///
+    /// [`Self::validate_vector_component`] refuses such a vector where its
+    /// components are written; a type named in a position that constructs no
+    /// value — the element of a sized array constructor — is never written that
+    /// way, so the same refusal is asked for here.
+    pub(crate) fn refuse_unsupported_vector_component(&mut self, ty: &Type, span: Span) -> bool {
+        let TypeKind::Custom(name, args) = &ty.kind else {
+            return false;
+        };
+        if vec_type_dim(&ty.kind).is_none() || inline_element_layout(&ty.kind).is_some() {
+            return false;
+        }
+        self.validate_vector_component(name, args.as_deref(), span);
+        true
     }
 
     /// Resolves a type alias with generic substitution.

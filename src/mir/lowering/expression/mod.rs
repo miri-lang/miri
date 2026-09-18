@@ -92,6 +92,10 @@ pub fn lower_expression(
         ExpressionKind::GenericType(_, _, _) | ExpressionKind::TypeDeclaration(_, _, _, _) => {
             // These should be handled during type checking/resolution.
             // If they reach MIR lowering, they are being used as values incorrectly.
+            // TODO: a sized `Array<T, N>` naming a generic parameter reaches here
+            // instead. Both `fn f<T>(a Array<T, 4>)` and `Array<T, 4>()` inside a
+            // generic body fail, so the sized spelling is not substituted during
+            // monomorphization; the unsized `[T]` form is unaffected.
             Err(LoweringError::unsupported_expression(
                 "Type declarations cannot be used as expressions".to_string(),
                 expr.span,
