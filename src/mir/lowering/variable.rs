@@ -321,9 +321,16 @@ fn resolve_decl_init<'d>(
     span: &Span,
 ) -> Result<(Type, Option<&'d Expression>, Option<Operand>), LoweringError> {
     if let Some(type_expr) = &decl.typ {
-        let declared = resolve_type(ctx.type_checker, type_expr);
-        let ty = ctx.resolve_self_in(&canonical_declared_type(ctx.type_checker, &declared));
-        return Ok((ty, decl.initializer.as_deref(), None));
+        // A written type is the one spelling of a local's type that the type
+        // checker never rewrites: `var x Tagged<T>` still names the enclosing
+        // body's parameter. The instantiation's substitution has to be applied
+        // here, or the local is released as `Tagged<T>` — whose field is a bare
+        // parameter, so the shared drop sees nothing managed to release.
+        return Ok((
+            ctx.declared_type(type_expr),
+            decl.initializer.as_deref(),
+            None,
+        ));
     }
     let Some(init_expr) = decl.initializer.as_deref() else {
         return Err(LoweringError::unsupported_expression(
