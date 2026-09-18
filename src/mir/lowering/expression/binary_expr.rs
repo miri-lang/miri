@@ -610,7 +610,12 @@ fn lower_structural_equality(
         ));
     };
 
-    let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) else {
+    // The recorded type is written once against the enclosing body's own
+    // parameters, so inside a monomorphized body an `Option<Tagged<T>>` still
+    // names `T`. The payload comparison and the payload release both key off
+    // this type: read raw, the release reaches the class's shared drop, which
+    // sees a bare parameter where the instantiation has a managed field.
+    let Some(lhs_ty) = ctx.recorded_type(lhs.id) else {
         return Err(LoweringError::unsupported_expression(
             "structural equality: cannot determine type".to_string(),
             expr.span,

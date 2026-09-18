@@ -27,6 +27,21 @@ fn with_box(program: &str) -> String {
     format!("{BOX}\n{program}")
 }
 
+const TAGGED: &str = r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+    public fn equals(other Tagged<T>) bool
+        return self.value == other.value
+"#;
+
+fn with_tagged(program: &str) -> String {
+    format!("{TAGGED}\n{program}")
+}
+
 #[test]
 fn test_a_class_built_at_the_parameter_keeps_a_string() {
     assert_runs_with_output(
@@ -263,5 +278,73 @@ fn main()
         println(f"{n}")
 "#,
         "apple\nfig\npear\n10\n20\n30",
+    );
+}
+
+// A local whose type is *written* — rather than inferred from its initializer —
+// is the second way a generic parameter reaches a local's type. The written
+// spelling is `Tagged<T>`, which only becomes `Tagged<String>` once the
+// instantiation's substitution is applied; without it the local is released
+// through the class's shared drop, where the field is still a bare parameter
+// and so counts as nothing to release.
+#[test]
+fn test_a_written_local_type_at_the_parameter_releases_the_class_field() {
+    assert_runs_with_output(
+        &with_tagged(
+            r#"
+fn held<T>(a T, b T) bool
+    var x Tagged<T> = Tagged<T>(a)
+    var y Tagged<T> = Tagged<T>(b)
+    return x == y
+
+fn main()
+    println(f"{held('X'.to_lower(), 'X'.to_lower())}")
+    println(f"{held('X'.to_lower(), 'Y'.to_lower())}")
+    println(f"{held(7, 7)}")
+"#,
+        ),
+        "true\nfalse\ntrue",
+    );
+}
+
+#[test]
+fn test_an_optional_written_at_the_parameter_releases_the_class_field() {
+    assert_runs_with_output(
+        &with_tagged(
+            r#"
+fn same_after_assignment<T>(a T, b T) bool
+    var x Tagged<T>? = None
+    x = Tagged<T>(a)
+    var y Tagged<T>? = None
+    y = Tagged<T>(b)
+    return x == y
+
+fn main()
+    println(f"{same_after_assignment('X'.to_lower(), 'X'.to_lower())}")
+    println(f"{same_after_assignment('X'.to_lower(), 'Y'.to_lower())}")
+"#,
+        ),
+        "true\nfalse",
+    );
+}
+
+#[test]
+fn test_an_optional_initialized_at_the_parameter_releases_the_class_field() {
+    assert_runs_with_output(
+        &with_tagged(
+            r#"
+fn same_at_declaration<T>(a T, b T) bool
+    var x Tagged<T>? = Tagged<T>(a)
+    var y Tagged<T>? = Tagged<T>(b)
+    return x == y
+
+fn main()
+    println(f"{same_at_declaration('X'.to_lower(), 'X'.to_lower())}")
+    println(f"{same_at_declaration('X'.to_lower(), 'Y'.to_lower())}")
+    println(f"{same_at_declaration(4, 4)}")
+    println(f"{same_at_declaration(4, 5)}")
+"#,
+        ),
+        "true\nfalse\ntrue\nfalse",
     );
 }

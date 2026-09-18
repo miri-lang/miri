@@ -707,6 +707,11 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementCallbackSetters,
     ) -> Result<(), CodegenError> {
+        // TODO: unlike every sibling registration site, this one does not screen
+        // `elem_kind` through `is_unresolved_generic_elem` first, so an aggregate
+        // literal whose elements are a bare generic parameter (`var arr = [a, a]`
+        // inside `fn f<T>`) registers `__decref_T` — a symbol nothing defines,
+        // which fails the link rather than the compile.
         if let Some(addr) =
             Self::elem_decref_addr_for_kind(builder, ctx, elem_kind, ptr_type, type_ctx)?
         {

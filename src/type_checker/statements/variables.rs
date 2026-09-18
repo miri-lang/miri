@@ -455,6 +455,12 @@ impl TypeChecker {
             make_type(TypeKind::Error)
         };
 
+        // TODO: when the annotation names a generic parameter of the enclosing
+        // body (`var x Tagged<T> = Tagged<int>(1)` inside `fn f<T>`), the two
+        // sides compare as compatible and the mismatch goes unreported — the
+        // same spelling written `Tagged<String>` outside a generic body is
+        // correctly refused. `are_compatible` treats the unsubstituted argument
+        // as matching anything.
         // If both type annotation and initializer exist, check compatibility
         if let (Some(type_expr), Some(init)) = (&decl.typ, &decl.initializer) {
             let declared_type = self.resolve_type_expression(type_expr, context);
