@@ -969,8 +969,6 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    // ── Method / self semantics ─────────────────────────────────────────────────
-
     /// Look up the escape summary for a static method call on `class_name`.
     ///
     /// Walks the `base_class` chain so that inherited methods are found in the
