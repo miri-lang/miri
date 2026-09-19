@@ -640,23 +640,30 @@ fn test_the_pack_lists_no_repair_the_registry_does_not_have() {
 fn commands_named_in(body: &str) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for span in backticked_spans(body) {
-        let mut words = span.split_whitespace();
-        if words.next() != Some("miri") {
-            continue;
-        }
-        let Some(subcommand) = words.next().filter(|word| !word.starts_with('-')) else {
+        let Some((subcommand, rest)) = miri_invocation(&span) else {
             continue;
         };
-        for word in words {
+        for word in rest {
             let flag = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
             if flag.starts_with("--") && flag.len() > 2 {
-                found.push((subcommand.to_string(), flag.to_string()));
+                found.push((subcommand.clone(), flag.to_string()));
             }
         }
     }
     found.sort();
     found.dedup();
     found
+}
+
+/// The subcommand a `miri <subcommand> ...` span names, and the words after it.
+///
+/// Anything that is not such an invocation reads as nothing, so a backticked
+/// span of prose or of another tool's command line is passed over.
+fn miri_invocation(span: &str) -> Option<(String, Vec<&str>)> {
+    let mut words = span.split_whitespace();
+    words.next().filter(|word| *word == "miri")?;
+    let subcommand = words.next().filter(|word| !word.starts_with('-'))?;
+    Some((subcommand.to_string(), words.collect()))
 }
 
 /// The text inside single backticks, plus every line of a fenced `sh` block.
@@ -748,4 +755,123 @@ fn test_every_flag_a_pack_names_is_one_the_binary_accepts() {
         "expected the packs to name a good many flags, found {}",
         checked
     );
+}
+
+/// The surfaces the published packs recommend, as `surfaces.toml` lists them.
+///
+/// One definition, because two readers join on it: this gate checks the packs
+/// against it, and the live benchmark keys its opinion probe on it. A second
+/// copy of the path or the shape is a second thing to keep in step.
+#[derive(serde::Deserialize)]
+pub struct Surfaces {
+    pub commands: Vec<String>,
+    pub documents: Vec<String>,
+}
+
+impl Surfaces {
+    /// Every surface, commands before documents.
+    pub fn all(&self) -> Vec<&str> {
+        self.commands
+            .iter()
+            .chain(self.documents.iter())
+            .map(String::as_str)
+            .collect()
+    }
+}
+
+pub fn surfaces_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("skills")
+        .join("surfaces.toml")
+}
+
+pub fn recommended_surfaces() -> Surfaces {
+    let path = surfaces_path();
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {}", path.display(), e));
+    toml::from_str(&text).unwrap_or_else(|e| panic!("cannot parse {}: {}", path.display(), e))
+}
+
+/// Every pack directory under `skills/`, sorted.
+fn pack_directories() -> Vec<PathBuf> {
+    let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+    let mut entries: Vec<_> = fs::read_dir(&skills_dir)
+        .expect("the skills directory must be readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    entries.sort();
+    entries
+}
+
+#[test]
+fn test_the_packs_recommend_exactly_the_surfaces_the_vocabulary_lists() {
+    // The opinion probe asks a subject to rate the surfaces this page
+    // recommends, and its verdict joins those ratings against this file. A
+    // command the packs started recommending without being listed here would
+    // never be rated, and the verdict would pass by having asked nobody.
+    let surfaces = recommended_surfaces();
+    let mut named = Vec::new();
+    for pack in pack_directories() {
+        let content = fs::read_to_string(pack.join("SKILL.md"))
+            .expect("every skill must have a readable SKILL.md");
+        let (_, body) = parse_yaml_frontmatter(&content);
+        named.extend(
+            subcommands_named_in(&body)
+                .into_iter()
+                .map(|subcommand| format!("miri {}", subcommand)),
+        );
+    }
+    named.sort();
+    named.dedup();
+
+    let listed: Vec<&str> = surfaces.commands.iter().map(String::as_str).collect();
+    let unlisted: Vec<&String> = named
+        .iter()
+        .filter(|command| !listed.contains(&command.as_str()))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "the packs recommend {:?}, which {} does not list, so the opinion probe \
+         would never ask a subject to rate it",
+        unlisted,
+        surfaces_path().display()
+    );
+    let unrecommended: Vec<&String> = surfaces
+        .commands
+        .iter()
+        .filter(|command| !named.contains(command))
+        .collect();
+    assert!(
+        unrecommended.is_empty(),
+        "{} lists {:?}, which no pack recommends, so the probe would ask about a \
+         surface the published page never points at",
+        surfaces_path().display(),
+        unrecommended
+    );
+
+    let packs: Vec<String> = pack_directories()
+        .iter()
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    assert_eq!(
+        surfaces.documents,
+        packs,
+        "{} names different documents than the packs under skills/",
+        surfaces_path().display()
+    );
+}
+
+/// Every `miri <subcommand>` a skill body names, deduplicated.
+fn subcommands_named_in(body: &str) -> Vec<String> {
+    let mut found: Vec<String> = backticked_spans(body)
+        .iter()
+        .filter_map(|span| miri_invocation(span).map(|(subcommand, _)| subcommand))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
 }

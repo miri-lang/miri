@@ -22,7 +22,9 @@ device must not ask its subject for its own score.
 
 `--probe` runs the same cell as an unmeasured opinion probe: the subject is also
 asked to rate the surfaces it used, and its records land in `runs/<round>.probe/`
-beside the round, where the folder never reads them.
+beside the round, never inside it. Nothing a probe says reaches a claim; the
+folder reads those records for one verdict only, on the opinion condition of the
+exit criterion.
 """
 
 import argparse
@@ -52,12 +54,12 @@ MEASURED_PROMPT = (
 # What a probe asks for on top of the job, and what a measured run is never
 # asked for: rating a tool buys invocations a real job would not spend.
 RATINGS_FILE = "RATINGS.json"
-PROBE_REQUEST = (
-    f" When the job is done, write {RATINGS_FILE} in this directory. For every tool,"
-    " command and document you used, rate how much it helped, from 1 (it got in the"
-    " way) to 5 (the job could not have been done without it), as"
-    ' {"ratings": [{"surface": "<name>", "score": <1-5>, "reason": "<one sentence>"}]}.'
-)
+
+# Where the surfaces the published page recommends are listed. The probe hands
+# the subject those names so its answers can be joined against them: a free-text
+# surface (`check`, `the check command`) matches nothing, and a verdict that
+# joined on nothing would read as held by having asked no one.
+SURFACES = REPO / "skills" / "surfaces.toml"
 
 # The `kind` a probe record carries. `report.py` refuses a record of this kind
 # rather than skipping it, so a probe copied into a round fails loudly.
@@ -137,8 +139,33 @@ def install_pack(root, arm):
     )
 
 
+def recommended_surfaces():
+    """The surfaces the published page recommends, commands before documents."""
+    listed = load_toml(SURFACES)
+    return listed["commands"] + listed["documents"]
+
+
+def probe_request():
+    """What a probe asks for on top of the job.
+
+    The vocabulary is quoted into the request rather than described, so a
+    subject spells a surface the way the verdict looks it up. A surface outside
+    the list is still worth hearing about — a baseline arm rates its own
+    toolchain — so rating one is invited rather than forbidden.
+    """
+    vocabulary = ", ".join(recommended_surfaces())
+    return (
+        f" When the job is done, write {RATINGS_FILE} in this directory. For every tool,"
+        " command and document you used, rate how much it helped, from 1 (it got in the"
+        " way) to 5 (the job could not have been done without it), as"
+        ' {"ratings": [{"surface": "<name>", "score": <1-5>, "reason": "<one sentence>"}]}.'
+        f" Where what you used is one of these, name it exactly: {vocabulary}."
+        " Anything else you used, name in your own words."
+    )
+
+
 def prompt_for(arguments):
-    return MEASURED_PROMPT + PROBE_REQUEST if arguments.probe else MEASURED_PROMPT
+    return MEASURED_PROMPT + probe_request() if arguments.probe else MEASURED_PROMPT
 
 
 def round_directory(arguments):
@@ -522,12 +549,11 @@ def measured_cell(arguments, arm, model, job):
 
 def probe_cell(arguments, arm, model, job):
     """Run a cell as a probe. A run whose ratings cannot be read keeps its record
-    and transcript, names the problem, and fails the invocation."""
-    # TODO: nothing judges the probe's exit condition. Whether a surface the
-    # published page recommends was rated 2 or lower is read off these records
-    # by hand, because no committed file lists the surfaces that page
-    # recommends, so there is nothing to join the ratings against. Every other
-    # condition is computed by report.py; this one is still typed.
+    and transcript, names the problem, and fails the invocation.
+
+    The records are what `report.py` judges the opinion condition from; nothing
+    about that verdict is decided here.
+    """
     unreadable = 0
     for index in range(1, arguments.runs + 1):
         transcript, outcome = one_probe(arguments, arm, model, job, index)
