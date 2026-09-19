@@ -124,3 +124,26 @@ fn main()
         "3.75",
     );
 }
+
+#[test]
+fn test_float_field_declared_at_the_class_parameter_keeps_the_fraction() {
+    assert_runs_with_output(
+        r#"
+
+class Counter<T>
+    n T
+
+    fn init(n T)
+        self.n = n
+
+fn main()
+    var f = Counter<float>(0.5)
+    f.n += 0.25
+    println(f"{f.n}")
+    var i = Counter<int>(1)
+    i.n += 41
+    println(f"{i.n}")
+    "#,
+        "0.75\n42",
+    );
+}

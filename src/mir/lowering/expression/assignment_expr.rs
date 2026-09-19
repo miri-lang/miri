@@ -272,8 +272,7 @@ fn assign_to_member(
         let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
         let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
         let obj_ty = ctx
-            .type_checker
-            .get_type(obj.id)
+            .recorded_type(obj.id)
             .ok_or_else(|| LoweringError::type_not_found(obj.id, obj.span))?;
 
         let TypeKind::Custom(type_name, _) = &obj_ty.kind else {
@@ -295,14 +294,15 @@ fn assign_to_member(
             ty: rhs_ty,
             watermark: rhs_watermark,
         };
+        let slot_ty = field_slot_type(ctx, &obj_ty, type_name, idx);
         store_into_field(
             ctx,
             assigned,
             FieldTarget {
                 base: obj_operand,
                 base_span: obj.span,
-                type_name,
                 idx,
+                slot_ty,
             },
             op,
             rhs.span,
@@ -317,13 +317,13 @@ fn assign_to_member(
     }
 }
 
-/// The field an assignment writes: the object holding it, the type that
-/// declares it, and its index in that type's layout.
-struct FieldTarget<'a> {
+/// The field an assignment writes: the object holding it, its index in that
+/// object's layout, and the type the field has in that object.
+struct FieldTarget {
     base: Operand,
     base_span: crate::error::syntax::Span,
-    type_name: &'a str,
     idx: usize,
+    slot_ty: Option<Type>,
 }
 
 /// Store the right-hand value into the field, wrapping it first when the field
@@ -331,14 +331,13 @@ struct FieldTarget<'a> {
 fn store_into_field(
     ctx: &mut LoweringContext,
     assigned: AssignedValue,
-    target: FieldTarget<'_>,
+    target: FieldTarget,
     op: &crate::ast::operator::AssignmentOp,
     rhs_span: crate::error::syntax::Span,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let val =
-        wrap_value_for_field_slot(ctx, assigned, (target.type_name, target.idx), op, rhs_span);
+    let val = wrap_value_for_field_slot(ctx, assigned, target.slot_ty.as_ref(), op, rhs_span);
     let mut target_place = ensure_place(ctx, target.base, target.base_span);
     target_place.projection.push(PlaceElem::Field(target.idx));
 
@@ -347,33 +346,30 @@ fn store_into_field(
         &target_place,
         op,
         val.clone(),
-        target.type_name,
-        target.idx,
+        target.slot_ty.as_ref(),
         expr,
     )?;
     finalize_member_result(ctx, val, dest, expr)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn dispatch_member_assign(
     ctx: &mut LoweringContext,
     target_place: &Place,
     op: &crate::ast::operator::AssignmentOp,
     val: Operand,
-    type_name: &str,
-    idx: usize,
+    slot_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     match op {
         crate::ast::operator::AssignmentOp::Assign => {
-            assign_to_member_simple(ctx, target_place, type_name, idx, val, expr)?;
+            assign_to_member_simple(ctx, target_place, slot_ty, val, expr)?;
         }
         crate::ast::operator::AssignmentOp::AssignAdd
         | crate::ast::operator::AssignmentOp::AssignSub
         | crate::ast::operator::AssignmentOp::AssignMul
         | crate::ast::operator::AssignmentOp::AssignDiv
         | crate::ast::operator::AssignmentOp::AssignMod => {
-            assign_to_member_compound(ctx, target_place, op, val, (type_name, idx), expr)?;
+            assign_to_member_compound(ctx, target_place, op, val, slot_ty, expr)?;
         }
     }
     Ok(())
@@ -444,57 +440,60 @@ struct AssignedValue {
 fn wrap_value_for_field_slot(
     ctx: &mut LoweringContext,
     assigned: AssignedValue,
-    field: (&str, usize),
+    slot_ty: Option<&Type>,
     op: &crate::ast::operator::AssignmentOp,
     span: crate::error::syntax::Span,
 ) -> Operand {
     if !matches!(op, crate::ast::operator::AssignmentOp::Assign) {
         return assigned.operand;
     }
-    let (type_name, idx) = field;
-    let Some(slot_ty) = ctx
-        .body
-        .field_types
-        .get(type_name)
-        .and_then(|fields| fields.get(idx))
-        .cloned()
-    else {
+    let Some(slot_ty) = slot_ty else {
         return assigned.operand;
     };
     wrap_for_optional_slot(
         ctx,
         assigned.operand,
         assigned.ty,
-        &slot_ty,
+        slot_ty,
         assigned.watermark,
         span,
     )
     .0
 }
 
-// TODO: the field type is read as the class declares it, so outside the class's
-// own methods a field declared at the class parameter (`t.value = s` on a
-// `Tagged<String>`) is stored with a plain assignment and the value it replaces
-// is never released.
+/// The type of the field an assignment writes, as the instance being written
+/// through holds it.
+///
+/// `Body::field_types` records a field as its class declares it, so a field
+/// declared `value T` reads as the bare parameter — neither managed nor an
+/// optional slot — everywhere but the class's own method bodies, where the
+/// table is substituted in place for the instantiation being lowered. The
+/// instance's own type arguments are what give the field the type its value
+/// actually has, and that type is what decides whether the store releases what
+/// it replaces and whether a bare value is wrapped for an optional slot.
+fn field_slot_type(
+    ctx: &LoweringContext,
+    instance: &Type,
+    type_name: &str,
+    idx: usize,
+) -> Option<Type> {
+    let declared = ctx.body.field_types.get(type_name)?.get(idx)?;
+    Some(crate::mir::lowering::field_type_in_instance(
+        &ctx.body.class_type_params,
+        type_name,
+        Some(instance),
+        declared,
+    ))
+}
+
 fn assign_to_member_simple(
     ctx: &mut LoweringContext,
     target_place: &Place,
-    type_name: &str,
-    idx: usize,
+    slot_ty: Option<&Type>,
     val: Operand,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let field_is_managed = if let Some(ft) = ctx
-        .body
-        .field_types
-        .get(type_name)
-        .and_then(|fs| fs.get(idx))
-    {
-        let kind = ft.kind.clone();
-        ctx.is_perceus_managed(&kind)
-    } else {
-        false
-    };
+    let field_is_managed = slot_ty.is_some_and(|ty| ctx.is_perceus_managed(&ty.kind));
 
     if field_is_managed {
         ctx.push_statement(crate::mir::Statement {
@@ -513,24 +512,14 @@ fn assign_to_member_simple(
 
 /// The type of the temp holding a compound assignment's arithmetic result.
 ///
-/// The field's own declared slot states it. The property expression that named
-/// the field does not: the type checker records no type against that
-/// identifier, so reading it yields the error type and the temp is laid out at
-/// the pointer-width integer fallback — which truncates a `float` field's sum
-/// on its way back into the field. The slot type is read through the active
-/// instantiation substitution, so a field declared at a generic parameter is
-/// typed at whatever the body was instantiated at.
-fn compound_field_result_type(
-    ctx: &LoweringContext,
-    field: (&str, usize),
-    span: crate::error::syntax::Span,
-) -> Type {
-    let (type_name, idx) = field;
-    ctx.body
-        .field_types
-        .get(type_name)
-        .and_then(|fields| fields.get(idx))
-        .map(|slot| crate::mir::lowering::apply_generic_sub(slot, &ctx.generic_subs))
+/// The field's own slot states it. The property expression that named the field
+/// does not: the type checker records no type against that identifier, so
+/// reading it yields the error type and the temp is laid out at the
+/// pointer-width integer fallback — which truncates a `float` field's sum on its
+/// way back into the field.
+fn compound_field_result_type(slot_ty: Option<&Type>, span: crate::error::syntax::Span) -> Type {
+    slot_ty
+        .cloned()
         .unwrap_or_else(|| Type::new(TypeKind::Error, span))
 }
 
@@ -539,7 +528,7 @@ fn assign_to_member_compound(
     target_place: &Place,
     op: &crate::ast::operator::AssignmentOp,
     val: Operand,
-    field: (&str, usize),
+    slot_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     let bin_op = match op {
@@ -552,7 +541,7 @@ fn assign_to_member_compound(
     };
 
     let lhs_op = Operand::Copy(target_place.clone());
-    let result_ty = compound_field_result_type(ctx, field, expr.span);
+    let result_ty = compound_field_result_type(slot_ty, expr.span);
     let temp = ctx.push_temp(result_ty, expr.span);
 
     ctx.push_statement(crate::mir::Statement {
@@ -779,7 +768,7 @@ fn assign_to_index_compound(
     // TODO: the temp holding the result is typed `int` whatever the element is,
     // so `xs[0] += 2.25` on a list of floats truncates the sum and stores 3
     // where 3.75 belongs. It needs the indexed collection's element type, the
-    // way a field's compound assignment reads its declaring type's slot in
+    // way a field's compound assignment reads the field's own slot in
     // `compound_field_result_type`.
     let _temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
 
