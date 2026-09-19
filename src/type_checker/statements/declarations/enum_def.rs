@@ -59,13 +59,12 @@ impl TypeChecker {
 
         let generic_defs = self.resolve_enum_generics(generics, context);
 
-        // Set up class context so `self` resolves correctly in method bodies
-        // TODO: a generic enum names itself bare here, so a method taking
-        // `other Self` is refused at every call site (arity 0 against the
-        // receiver's arguments). Classes resolve to `own_class_type` instead;
-        // enums need the same, checked against enum payload lowering.
-        let self_type = make_type(TypeKind::Custom(name.clone(), None));
-        context.enter_class(name.clone(), None, self_type.clone());
+        // Set up class context so `self` resolves correctly in method bodies.
+        // The enum names itself at its own parameters, so a method signature
+        // written `Self`, `Holder<T>` or the bare `Holder` all mean the same
+        // type and substitute to the receiver's instantiation at a call site.
+        let self_type = self.type_at_own_parameters(&name, generics.as_deref(), context);
+        context.enter_class(name.clone(), None, self_type);
 
         // Resolve variants
         let variant_map = self.collect_enum_variants(variants, context);
@@ -96,7 +95,7 @@ impl TypeChecker {
         }
 
         // Define enum type symbol (constructor/type)
-        self.register_enum_symbol(&name, &self_type, visibility, context);
+        self.register_enum_symbol(&name, visibility, context);
 
         // PASS 2: Type-check method bodies
         self.check_enum_method_bodies(method_statements, context);
@@ -248,14 +247,19 @@ impl TypeChecker {
         (method_map, method_statements)
     }
 
+    /// Bind the enum's name to the type itself, so `Holder.One(1)` resolves the
+    /// receiver. The name stands for the enum family, not one instantiation, so
+    /// it is bound bare even when the enum declares generic parameters.
     fn register_enum_symbol(
         &mut self,
         name: &str,
-        self_type: &Type,
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let enum_type_meta = make_type(TypeKind::Meta(Box::new(self_type.clone())));
+        let enum_type_meta = make_type(TypeKind::Meta(Box::new(make_type(TypeKind::Custom(
+            name.to_string(),
+            None,
+        )))));
 
         if context.scopes.len() == 2 {
             self.type_table.global_scope.insert(

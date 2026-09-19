@@ -2016,6 +2016,13 @@ impl TypeChecker {
             };
 
             if variant_types.is_empty() {
+                // TODO: a payload-less variant of a generic enum carries no
+                // value to infer the arguments from, and the enum's own name
+                // is bound bare, so this yields the bare enum — which then
+                // fails against any annotation naming an instantiation
+                // (`let n Holder<int> = Holder.Nothing`). A variant carrying a
+                // payload infers through the function type built below; this
+                // branch needs the expected type instead.
                 return make_type(TypeKind::Custom(enum_name.to_string(), type_args));
             }
 

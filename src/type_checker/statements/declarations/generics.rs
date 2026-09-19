@@ -46,14 +46,14 @@ use crate::type_checker::context::{Context, GenericDefinition, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
-    /// The type a class names itself by inside its own body: the class at its
-    /// own generic parameters (`Tagged<T>`), or the bare name when it declares
-    /// none. `self` and `Self` both resolve to it.
+    /// The type a class or enum names itself by inside its own body: the
+    /// definition at its own generic parameters (`Tagged<T>`), or the bare name
+    /// when it declares none. `self` and `Self` both resolve to it.
     ///
-    /// A generic class named bare would be carried into its method signatures
-    /// that way, so a call site substituting the receiver's type arguments
-    /// would read a `Self` parameter as the class with no arguments — failing
-    /// the arity check and matching no instantiation.
+    /// A generic definition named bare would be carried into its method
+    /// signatures that way, so a call site substituting the receiver's type
+    /// arguments would read a `Self` parameter as the definition with no
+    /// arguments — failing the arity check and matching no instantiation.
     ///
     /// The generic parameters must already be defined in `context`.
     ///
@@ -63,7 +63,7 @@ impl TypeChecker {
     /// __value_generic__*, the substitution sentinel reaching type resolution.
     /// A value generic only ever stands for a value, so it needs a spelling of
     /// its own here rather than the type parameter this builds.
-    pub(crate) fn own_class_type(
+    pub(crate) fn type_at_own_parameters(
         &self,
         name: &str,
         generics: Option<&[Expression]>,

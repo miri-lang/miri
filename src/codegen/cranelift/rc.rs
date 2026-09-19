@@ -937,6 +937,11 @@ impl<'a> FunctionTranslator<'a> {
     /// thunk `generate_type_drop_functions` actually defined — both sides mangle
     /// through the same `mangle_generic_name`, so a registry hit guarantees the
     /// symbol exists.
+    ///
+    /// TODO: only a class is recognized here, so a generic enum element falls to
+    /// the bare name below and the emitted `__decref_Holder` matches no defined
+    /// thunk — `List<Holder<int>>` fails to link. The enum needs the same
+    /// per-instantiation mangling, and a thunk emitted under that name.
     fn generic_drop_thunk_name_part(
         class_name: &str,
         type_args: Option<&[Expression]>,
