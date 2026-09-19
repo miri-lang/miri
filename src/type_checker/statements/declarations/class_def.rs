@@ -89,7 +89,7 @@ impl TypeChecker {
 
         self.register_class_hierarchy(&name, &base_class_name, &trait_names);
 
-        let class_type = self.own_class_type(&name, generics.as_deref(), context);
+        let class_type = self.type_at_own_parameters(&name, generics.as_deref(), context);
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
         let (fields, methods, method_statements) =
