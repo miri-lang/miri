@@ -349,6 +349,12 @@ pub(crate) fn substitute_call_mapping(
 /// inside a collection field. An argument that is a value rather than a type
 /// (the size of a value generic) leaves its parameter unsubstituted, and a
 /// nullable argument (`T` at `int?`) substitutes as the option it denotes.
+// TODO: a class declaring both a value parameter and a type parameter — a
+// `Buf<T, Size>` holding `Array<T, Size>` alongside a bare `T` — leaks the bare
+// field's value at a managed instantiation, while either field alone is
+// balanced. Whether the value argument being dropped here misaligns the pairing
+// for the parameters that follow it is unproven; the codegen drop thunk zips the
+// same parameters against resolved types of its own and must agree.
 pub(crate) fn instantiated_class_field_type<'a>(
     params: impl IntoIterator<Item = &'a str>,
     args: &[Expression],
@@ -360,6 +366,32 @@ pub(crate) fn instantiated_class_field_type<'a>(
         .filter_map(|(param, arg)| Some((param.to_string(), type_argument(arg)?)))
         .collect();
     apply_generic_sub(field_ty, &subs)
+}
+
+/// The type a field of `class_name` has inside `instance`, given each class's
+/// type parameters in declaration order.
+///
+/// One rule with two readers, which must agree: MIR lowering decides from it
+/// whether a store into the field releases what it replaces, and Perceus decides
+/// from it whether the field it projects is reference counted. Disagreeing, a
+/// store claims a value nothing releases, or releases one nothing claimed.
+///
+/// A non-generic class, an instance whose arguments are not known, or a field
+/// that is not declared at any of the class's parameters leaves the declared
+/// spelling in place.
+pub(crate) fn field_type_in_instance(
+    class_type_params: &HashMap<String, Vec<String>>,
+    class_name: &str,
+    instance: Option<&Type>,
+    field_ty: &Type,
+) -> Type {
+    let (Some(params), Some(TypeKind::Custom(_, Some(args)))) = (
+        class_type_params.get(class_name),
+        instance.map(|ty| &ty.kind),
+    ) else {
+        return field_ty.clone();
+    };
+    instantiated_class_field_type(params.iter().map(String::as_str), args, field_ty)
 }
 
 /// The type a type argument denotes, or `None` when the argument is a value

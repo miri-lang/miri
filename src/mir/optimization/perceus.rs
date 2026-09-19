@@ -10,7 +10,7 @@
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
-use crate::mir::lowering::{instantiated_class_field_type, type_argument};
+use crate::mir::lowering::{field_type_in_instance, type_argument};
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::types::MirType;
@@ -423,6 +423,13 @@ impl Perceus {
     }
 
     /// Determines if a reassignment destination needs a DecRef.
+    // TODO: the borrowed test ignores the projection, so `self.field = x` inside
+    // a method is rejected — `self` is a parameter — and the value the field held
+    // is never released, leaking one allocation per store. What a field holds is
+    // owned by the object, not by the caller, so the guard belongs only on an
+    // unprojected destination. Widening it reaches every method that overwrites a
+    // field and every write through a captured value, so it needs the whole suite
+    // under the heap guard, not the leak check alone.
     fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
         // A borrowed local's value belongs to the caller or the closure
         // environment; overwriting it must not release that value.
@@ -473,7 +480,7 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// - `Tuple(T0, T1, ...)` — `Field(i)` yields `Ti`
 /// - Custom struct/class types — `Field(i)` is resolved via `field_types`, at the
 ///   type arguments of the instance it is projected from (see
-///   [`instantiated_field_type`])
+///   [`field_type_in_instance`])
 /// - Closure locals — `Field(i)` yields the type of captured variable `i`,
 ///   looked up from `closure_capture_types` using the root local index
 ///
@@ -549,7 +556,12 @@ fn project_field(
         // instance's type arguments.
         MirType::Custom(name) => {
             let declared_field = ctx.field_types.get(name.as_str())?.get(index)?;
-            let field_ty = instantiated_field_type(ctx, name, declared.as_ref(), declared_field);
+            let field_ty = field_type_in_instance(
+                ctx.class_type_params,
+                name,
+                declared.as_ref(),
+                declared_field,
+            );
             Some((MirType::from_type_kind(&field_ty.kind), Some(field_ty)))
         }
         // Closure.Field(i) → the type of captured variable i.
@@ -583,29 +595,6 @@ fn indexed_element_type(collection: &Type) -> Option<Type> {
         BuiltinCollectionKind::Map => args.get(1)?,
     };
     type_argument(argument)
-}
-
-/// The type of a class field as seen through an instance of the class.
-///
-/// `field_types` holds each field as the class declares it, so a field declared
-/// `value T` reads as the parameter `T` — never managed — even when the instance
-/// is a `Tagged<String>` whose field holds a string. Substituting the instance's
-/// own type arguments gives the field the type its value actually has. A
-/// non-generic class, an instance whose arguments are not known, or an argument
-/// that is a value rather than a type leaves the declared spelling in place.
-fn instantiated_field_type(
-    ctx: &PerceusContext,
-    class_name: &str,
-    instance: Option<&Type>,
-    field_ty: &Type,
-) -> Type {
-    let (Some(params), Some(TypeKind::Custom(_, Some(args)))) = (
-        ctx.class_type_params.get(class_name),
-        instance.map(|ty| &ty.kind),
-    ) else {
-        return field_ty.clone();
-    };
-    instantiated_class_field_type(params.iter().map(String::as_str), args, field_ty)
 }
 
 /// Whether the destination of an aggregate is an array or list whose elements

@@ -392,3 +392,148 @@ fn main()
         "pear\n7",
     );
 }
+
+#[test]
+fn test_storing_into_a_field_declared_at_the_class_parameter_releases_the_old_value() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var t = Tagged<String>("OLD".to_lower())
+    t.value = "MID".to_lower()
+    println(t.value)
+"#,
+        "mid",
+    );
+}
+
+#[test]
+fn test_storing_through_a_copy_of_a_generic_instance_releases_the_old_value() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var t = Tagged<String>("OLD".to_lower())
+    var u = t
+    u.value = "MID".to_lower()
+    println(t.value)
+"#,
+        "mid",
+    );
+}
+
+#[test]
+fn test_storing_into_an_unmanaged_field_declared_at_the_class_parameter_is_unchanged() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var t = Tagged<int>(1)
+    t.value = 7
+    println(f"{t.value}")
+"#,
+        "7",
+    );
+}
+
+#[test]
+fn test_storing_into_a_field_declared_at_a_nullable_class_parameter_wraps_the_value() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var t = Tagged<String?>(None)
+    t.value = "MID".to_lower()
+    println(t.value ?? "none")
+"#,
+        "mid",
+    );
+}
+
+#[test]
+fn test_storing_a_field_into_itself_keeps_the_value_alive() {
+    assert_runs_with_output(
+        r#"
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var t = Tagged<String>("OLD".to_lower())
+    t.value = t.value
+    println(t.value)
+"#,
+        "old",
+    );
+}
+
+#[test]
+fn test_storing_into_a_field_of_a_list_element_releases_the_old_value() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Tagged<T>
+    value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    var l = List<Tagged<String>>()
+    l.push(Tagged<String>("OLD".to_lower()))
+    l[0].value = "NEW".to_lower()
+    println(l[0].value)
+"#,
+        "new",
+    );
+}
+
+#[test]
+fn test_storing_through_a_nested_generic_field_releases_the_old_value() {
+    assert_runs_with_output(
+        r#"
+class Box<T>
+    v T
+
+    fn init(v T)
+        self.v = v
+
+class Outer<T>
+    inner Box<T>
+
+    fn init(v T)
+        self.inner = Box<T>(v)
+
+fn main()
+    var o = Outer<String>("OLD".to_lower())
+    o.inner.v = "NEW".to_lower()
+    println(o.inner.v)
+    o.inner = Box<String>("FRESH".to_lower())
+    println(o.inner.v)
+"#,
+        "new\nfresh",
+    );
+}
