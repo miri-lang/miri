@@ -87,13 +87,21 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
    the skill pack is published. It ends on the first round in which all three
    hold:
 
-   - no new silent wrong-answer compiler defect was found;
+   - no run on a Miri arm answered wrongly in silence. Measured from
+     `silentWrongAnswer`, `arm`; judged as `silentWrongAnswers`. Whether the
+     defect behind such an answer is new is a fact about the compiler's
+     history rather than about the round, so the round is judged on the
+     stronger thing the records carry: that none was produced at all;
    - the packed Miri arm needs no more tool invocations to reach green than
      the bare Miri arm, in every job. Measured from `toolInvocations`,
      `outcome`, `hiddenTests`; judged as `packLoop`;
    - no surface the published page recommends was rated 2 out of 5 or lower
-     by the unmeasured opinion probe. Read from the `ratings` of the records
-     under runs/<round>.probe/; quote every rating of 2 or lower in the entry.
+     by the unmeasured opinion probe. Measured from `ratings`; judged as
+     `probeRatings`. The surfaces are the ones `skills/surfaces.toml` lists,
+     which the published page is gated against and which the probe hands a
+     subject so its answers join against them; quote every rating of 2 or
+     lower in the entry, together with any surface the verdict reports as
+     unrated or unrecognised.
 
    If any of the three fails, say which, and say that the pack stays
    unpublished. Findings below the silent-wrong-answer bar do not restart the

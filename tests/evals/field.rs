@@ -13,6 +13,7 @@
 //! typed by hand rather than produced by a reference, measures the instrument
 //! instead of the subject, and it does so silently.
 
+use crate::skills::recommended_surfaces;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
@@ -514,6 +515,9 @@ struct SyntheticRun {
     seconds: u32,
     invocations: u32,
     green: bool,
+    /// Whether the run declared itself finished on an answer the hidden tests
+    /// refuse — the worst thing a round can record.
+    silent: bool,
 }
 
 impl SyntheticRun {
@@ -523,6 +527,7 @@ impl SyntheticRun {
             seconds,
             invocations,
             green: true,
+            silent: false,
         }
     }
 }
@@ -550,13 +555,14 @@ fn write_synthetic_run(root: &Path, job: &str, arm: &str, index: u32, run: Synth
             "tokens":{{"in":{half},"out":{half}}},"turns":1,"toolInvocations":{invocations},
             "toolchainInvocations":1,"outcome":"finished",
             "hiddenTests":{{"passed":{passed},"total":6,"failures":[]}},
-            "silentWrongAnswer":false,"workspace":"/tmp"}}"#,
+            "silentWrongAnswer":{silent},"workspace":"/tmp"}}"#,
         job = job,
         arm = arm,
         half = run.tokens / 2,
         seconds = run.seconds,
         invocations = run.invocations,
         passed = passed,
+        silent = run.silent,
         index = index,
     );
     fs::write(directory.join(format!("{}.json", index)), record)
@@ -1015,6 +1021,313 @@ fn test_only_a_probe_is_asked_for_ratings() {
     let _ = fs::remove_dir_all(&root);
 }
 
+#[test]
+fn test_a_probe_asks_for_ratings_keyed_on_the_committed_surfaces() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the launch was not rendered");
+        return;
+    }
+    // A verdict computed by joining ratings against a vocabulary is only as
+    // good as the subject's spelling. Handing it the names is what makes
+    // `miri check` and `the check command` the same answer.
+    let root = std::env::temp_dir().join("miri-field-probe-vocabulary");
+    let _ = fs::remove_dir_all(&root);
+    let probe = run_bench(&root, &["--dry-run", "--probe"]);
+    assert!(
+        probe.status.success(),
+        "the probe dry run failed:\n{}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+    let launch = String::from_utf8_lossy(&probe.stdout);
+    for surface in recommended_surfaces().all() {
+        assert!(
+            launch.contains(surface),
+            "the probe never names `{}`, so a subject would spell it however it liked \
+             and the verdict would join on nothing:\n{}",
+            surface,
+            launch
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// One probe record of a synthetic round, written beside the round rather than
+/// inside it, where the folder reads a probe from.
+fn write_synthetic_probe(root: &Path, arm: &str, ratings: &str, problem: &str) {
+    let directory = root
+        .join("synthetic.probe")
+        .join(PROBE_JOB)
+        .join(arm)
+        .join("claude-sonnet");
+    fs::create_dir_all(&directory).expect("cannot create a synthetic probe");
+    let record = format!(
+        r#"{{"schemaVersion":1,"kind":"probe","round":"synthetic","job":"{job}","arm":"{arm}",
+            "run":1,"model":"claude-sonnet","modelId":"x",
+            "harness":{{"name":"claude","version":"1"}},"compilerCommit":"0",
+            "compilerVersion":"0","packInstalled":true,"startedAt":"now","outcome":"finished",
+            "ratings":{ratings},"ratingsProblem":{problem},"workspace":"/tmp"}}"#,
+        job = PROBE_JOB,
+        arm = arm,
+        ratings = ratings,
+        problem = problem,
+    );
+    fs::write(directory.join("1.json"), record).expect("cannot write a synthetic probe record");
+}
+
+/// A rating of one surface, as a subject writes it.
+fn rating(surface: &str, score: u32) -> String {
+    format!(
+        r#"{{"surface":"{}","score":{},"reason":"r"}}"#,
+        surface, score
+    )
+}
+
+/// A synthetic round with one measured record, so the folder has a round to fold.
+fn seed_round(root: &Path) {
+    write_synthetic_record(root, PROBE_JOB, "miri-pack", SyntheticRun::green(1, 1, 1));
+    write_synthetic_record(root, PROBE_JOB, "miri-bare", SyntheticRun::green(1, 1, 1));
+}
+
+/// A scratch round for one probe case, cleared and seeded.
+fn probe_scratch(case: &str) -> PathBuf {
+    let scratch = std::env::temp_dir().join(format!("miri-field-probe-{}", case));
+    let _ = fs::remove_dir_all(&scratch);
+    seed_round(&scratch);
+    scratch
+}
+
+/// The first command of the vocabulary, as a surface to rate.
+fn a_recommended_surface() -> String {
+    recommended_surfaces()
+        .commands
+        .first()
+        .expect("the vocabulary lists no command")
+        .clone()
+}
+
+#[test]
+fn test_a_probe_that_rated_every_surface_well_holds_the_opinion_condition() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    let scratch = probe_scratch("well-rated");
+    let surfaces = recommended_surfaces();
+    let rated = surfaces
+        .all()
+        .iter()
+        .map(|surface| rating(surface, 4))
+        .collect::<Vec<_>>()
+        .join(",");
+    write_synthetic_probe(&scratch, "miri-pack", &format!("[{}]", rated), "null");
+
+    let held = fold(&scratch);
+    assert!(
+        claim_held(&held, "probeRatings"),
+        "the judge does not report a well-rated probe as holding:\n{}",
+        held
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_a_surface_rated_at_the_bar_fails_the_opinion_condition_and_is_named() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    let scratch = probe_scratch("rated-low");
+    let surface = a_recommended_surface();
+    write_synthetic_probe(
+        &scratch,
+        "miri-pack",
+        &format!("[{},{}]", rating(&surface, 2), rating("miri test", 5)),
+        "null",
+    );
+
+    let refused = fold(&scratch);
+    assert!(
+        !claim_held(&refused, "probeRatings"),
+        "the judge reports a surface rated at the bar as holding:\n{}",
+        refused
+    );
+    assert!(
+        refused.contains(&surface),
+        "the verdict does not name the surface that was rated low:\n{}",
+        refused
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_a_surface_is_judged_on_its_worst_score_however_it_was_spelled() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    // The subject types the name, so case and spacing must decide nothing, and
+    // one arm liking a surface must not cancel another arm's verdict on it.
+    let scratch = probe_scratch("worst-score");
+    let surface = a_recommended_surface();
+    write_synthetic_probe(
+        &scratch,
+        "miri-pack",
+        &format!("[{}]", rating(&surface.to_uppercase(), 5)),
+        "null",
+    );
+    write_synthetic_probe(
+        &scratch,
+        "miri-bare",
+        &format!("[{}]", rating(&format!("  {}  ", surface), 2)),
+        "null",
+    );
+
+    let disagreed = fold(&scratch);
+    assert!(
+        !claim_held(&disagreed, "probeRatings"),
+        "a surface one probe rated at the bar reads as holding because another liked it:\n{}",
+        disagreed
+    );
+    assert!(
+        !disagreed.contains("unrecognised\": [\n"),
+        "a surface the subject typed in another case placed nowhere, \
+         so the join is spelling-bound:\n{}",
+        disagreed
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_an_opinion_condition_nobody_answered_does_not_hold() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    // Three ways to answer nothing. Each must fail: a condition that held on
+    // silence would be held by having asked no one.
+    let unprobed = probe_scratch("unprobed");
+    let folded = fold(&unprobed);
+    assert!(
+        !claim_held(&folded, "probeRatings"),
+        "the judge reports a round that was never probed as holding:\n{}",
+        folded
+    );
+    let _ = fs::remove_dir_all(&unprobed);
+
+    let unjoined = probe_scratch("unjoined");
+    write_synthetic_probe(
+        &unjoined,
+        "python",
+        &format!("[{}]", rating("pytest", 5)),
+        "null",
+    );
+    let folded = fold(&unjoined);
+    assert!(
+        !claim_held(&folded, "probeRatings"),
+        "the judge reports a probe that rated no recommended surface as holding:\n{}",
+        folded
+    );
+    assert!(
+        folded.contains("pytest"),
+        "the verdict drops a surface it could not place, so a misspelling would be invisible:\n{}",
+        folded
+    );
+    let _ = fs::remove_dir_all(&unjoined);
+
+    let unreadable = probe_scratch("rated-nothing");
+    write_synthetic_probe(
+        &unreadable,
+        "miri-pack",
+        "null",
+        r#""RATINGS.json is missing""#,
+    );
+    let folded = fold(&unreadable);
+    assert!(
+        !claim_held(&folded, "probeRatings"),
+        "the judge reports a probe whose ratings could not be read as holding:\n{}",
+        folded
+    );
+    let _ = fs::remove_dir_all(&unreadable);
+}
+
+#[test]
+fn test_a_measured_record_kept_beside_a_probe_is_refused() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    // The isolation runs both ways. A probe record inside a round is already
+    // refused; a run record beside a probe means the same hand mixed the two.
+    let scratch = probe_scratch("mixed");
+    let cell = |round: &str| {
+        scratch
+            .join(round)
+            .join(PROBE_JOB)
+            .join("miri-pack")
+            .join("claude-sonnet")
+    };
+    fs::create_dir_all(cell("synthetic.probe")).expect("cannot create a probe directory");
+    fs::copy(
+        cell("synthetic").join("1.json"),
+        cell("synthetic.probe").join("1.json"),
+    )
+    .expect("cannot copy a measured record");
+
+    let mixed = Command::new("python3")
+        .arg(field_dir().join("report.py"))
+        .args(["--round", "synthetic", "--runs-root"])
+        .arg(&scratch)
+        .arg("--out")
+        .arg(scratch.join("mixed.json"))
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        !mixed.status.success()
+            && String::from_utf8_lossy(&mixed.stderr).contains("measured run record"),
+        "the folder accepted a measured record kept beside a probe:\n{}",
+        String::from_utf8_lossy(&mixed.stdout)
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_the_exit_criterion_refuses_a_round_that_produced_a_silent_wrong_answer() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the folder was not run");
+        return;
+    }
+    let scratch = std::env::temp_dir().join("miri-field-silent-wrong-answers");
+
+    let _ = fs::remove_dir_all(&scratch);
+    seed_round(&scratch);
+    let clean = fold(&scratch);
+    assert!(
+        claim_held(&clean, "silentWrongAnswers"),
+        "the judge does not report a round with no silent wrong answer as holding:\n{}",
+        clean
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+    seed_round(&scratch);
+    write_synthetic_run(
+        &scratch,
+        PROBE_JOB,
+        "miri-pack",
+        2,
+        SyntheticRun {
+            silent: true,
+            ..SyntheticRun::green(1, 1, 1)
+        },
+    );
+    let refused = fold(&scratch);
+    assert!(
+        !claim_held(&refused, "silentWrongAnswers"),
+        "the judge reports a round whose Miri arm answered wrongly in silence as holding:\n{}",
+        refused
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A condition a verdict is computed from, as a document states it: the record
 /// fields it reads and the key `report.py` publishes its verdict under.
 struct MeasuredCondition {
@@ -1051,18 +1364,92 @@ fn backticked(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The keys `bench.py` writes into a run record.
+/// The keys `bench.py` writes into a record, measured or probe.
+///
+/// A condition may be stated in terms of either. The opinion condition reads a
+/// probe's `ratings`, which no measured run carries and no round folds, and it
+/// is a recorded number all the same.
 fn record_fields() -> BTreeSet<String> {
     let runner = read(&field_dir().join("bench.py"));
-    let body = runner
-        .split_once("def record_for(")
+    ["def record_for(", "def probe_record("]
+        .into_iter()
+        .flat_map(|builder| fields_built_by(&runner, builder))
+        .collect()
+}
+
+/// The keys one of `bench.py`'s record builders writes.
+fn fields_built_by(runner: &str, builder: &str) -> Vec<String> {
+    let fields = runner
+        .split_once(builder)
         .and_then(|(_, rest)| rest.split("\ndef ").next())
-        .expect("bench.py no longer builds its record in record_for");
-    body.split('"')
+        .and_then(|body| body.split_once("return {"))
+        .map(|(_, fields)| fields)
+        .unwrap_or_else(|| panic!("bench.py no longer builds a record in {}", builder));
+    fields
+        .split('"')
         .skip(1)
         .step_by(2)
         .map(str::to_string)
         .collect()
+}
+
+/// The verdict keys `report.py` publishes under one object of its summary.
+///
+/// Read from the object rather than from the whole file: `silentWrongAnswers`
+/// is also the name of a per-cell count, and a gate satisfied by finding that
+/// spelling anywhere would pass for a condition no verdict is computed for.
+fn published_keys(folder: &str, object: &str) -> BTreeSet<String> {
+    let (_, rest) = folder
+        .split_once(&format!("\"{}\": {{", object))
+        .unwrap_or_else(|| panic!("report.py no longer publishes a {} object", object));
+    let mut keys = BTreeSet::new();
+    for line in rest.lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.starts_with('}') {
+            break;
+        }
+        if let Some((key, _)) = trimmed
+            .strip_prefix('"')
+            .and_then(|key| key.split_once('"'))
+        {
+            keys.insert(key.to_string());
+        }
+    }
+    keys
+}
+
+/// Where the exit criterion's list of conditions opens and closes in `PROMPT.md`.
+const EXIT_LIST_OPENS: &str = "It ends on the first round in which all three";
+const EXIT_LIST_CLOSES: &str = "If any of the three fails";
+
+/// The exit criterion's conditions, one string per bullet.
+///
+/// A condition wrapped across lines is joined back into one, so how the prose
+/// was reflowed decides nothing.
+fn exit_conditions(prompt: &str) -> Vec<String> {
+    let block = prompt
+        .split_once(EXIT_LIST_OPENS)
+        .and_then(|(_, rest)| rest.split_once(EXIT_LIST_CLOSES))
+        .map(|(block, _)| block)
+        .unwrap_or_else(|| {
+            panic!(
+                "PROMPT.md no longer lists the exit criterion between `{}` and `{}`",
+                EXIT_LIST_OPENS, EXIT_LIST_CLOSES
+            )
+        });
+    let mut conditions: Vec<String> = Vec::new();
+    for line in block.lines() {
+        let trimmed = line.trim();
+        match (trimmed.strip_prefix("- "), conditions.last_mut()) {
+            (Some(opening), _) => conditions.push(opening.to_string()),
+            (None, Some(current)) if !trimmed.is_empty() => {
+                current.push(' ');
+                current.push_str(trimmed);
+            }
+            (None, _) => {}
+        }
+    }
+    conditions
 }
 
 #[test]
@@ -1081,26 +1468,47 @@ fn test_every_measured_condition_is_one_the_record_carries_and_the_folder_judges
         claim_count,
         "every claim in CLAIMS.md must say what it is measured from and what judges it"
     );
-    let exit = measured_conditions(&prompt);
+    // Every condition of the exit criterion, not merely one of them: a
+    // condition that names no computed verdict is a verdict typed by hand, and
+    // a hand-typed verdict is the thing this gate exists to make impossible.
+    let conditions = exit_conditions(&prompt);
     assert!(
-        !exit.is_empty(),
-        "the exit criterion in PROMPT.md names no measured condition"
+        !conditions.is_empty(),
+        "the exit criterion in PROMPT.md lists no condition"
     );
+    let mut exit = Vec::new();
+    for condition in &conditions {
+        let measured = measured_conditions(condition);
+        assert_eq!(
+            measured.len(),
+            1,
+            "an exit condition states no `Measured from ...; judged as ...` sentence, \
+             so its verdict could only be typed by hand: {}",
+            condition
+        );
+        exit.extend(measured);
+    }
 
-    for condition in stated.iter().chain(exit.iter()) {
-        for field in &condition.fields {
+    let published = [
+        (&stated, published_keys(&folder, "claims")),
+        (&exit, published_keys(&folder, "exitCriterion")),
+    ];
+    for (conditions, keys) in &published {
+        for condition in conditions.iter() {
+            for field in &condition.fields {
+                assert!(
+                    fields.contains(field),
+                    "a condition is stated in terms of `{}`, which bench.py never records, \
+                     so its verdict could only be typed by hand",
+                    field
+                );
+            }
             assert!(
-                fields.contains(field),
-                "a condition is stated in terms of `{}`, which bench.py never records, \
-                 so its verdict could only be typed by hand",
-                field
+                keys.contains(&condition.verdict),
+                "a condition is judged as `{}`, which report.py never publishes a verdict under",
+                condition.verdict
             );
         }
-        assert!(
-            folder.contains(&format!("\"{}\":", condition.verdict)),
-            "a condition is judged as `{}`, which report.py never computes",
-            condition.verdict
-        );
     }
 }
 

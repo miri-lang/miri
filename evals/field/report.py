@@ -17,9 +17,11 @@ import argparse
 import json
 import statistics
 import sys
+import tomllib
 from pathlib import Path
 
 FIELD = Path(__file__).resolve().parent
+REPO = FIELD.parent.parent
 
 CPU_JOBS = ("01-word-frequency", "02-ledger-repair", "03-tracker-extension", "04-data-edges")
 GPU_JOB = "05-gpu-heat"
@@ -34,6 +36,17 @@ PARITY_FACTOR = 1.25
 
 # The `kind` `bench.py` stamps on an opinion-probe record.
 PROBE_KIND = "probe"
+
+# Where the surfaces the published page recommends are listed. The probe's
+# ratings are joined against it, which is what turns "what does the page
+# recommend" from a reading of its prose into a lookup.
+SURFACES = REPO / "skills" / "surfaces.toml"
+
+# The score at or below which a surface fails the probe's condition.
+LOW_RATING = 2
+
+# The arms that run on the compiler under test.
+MIRI_ARMS = (PACK, BARE)
 
 
 def load_records(round_name, runs_root):
@@ -66,6 +79,48 @@ def decode(path):
     if not isinstance(content, dict) or "job" not in content or "hiddenTests" not in content:
         return None
     return content
+
+
+def load_probe_records(round_name, runs_root):
+    """Every opinion-probe record beside a round.
+
+    A probe lives in `runs/<round>.probe/`, never inside the round. An absent
+    directory is not an error and not an empty result either: it is a round
+    whose opinion condition nobody measured, and a verdict computed from no
+    records does not hold.
+    """
+    directory = runs_root / f"{round_name}.{PROBE_KIND}"
+    if not directory.is_dir():
+        return []
+    records = [decode_probe(path) for path in sorted(directory.rglob("*.json"))]
+    return [record for record in records if record is not None]
+
+
+def decode_probe(path):
+    """A probe record, or nothing for a file that is not one.
+
+    A measured run record found here is refused for the same reason a probe
+    record inside a round is: it means the two were mixed by hand, and the one
+    place that reads them must say so rather than quietly pick a side.
+    """
+    content = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(content, dict):
+        return None
+    if content.get("kind") == PROBE_KIND:
+        return content
+    if "hiddenTests" in content:
+        raise SystemExit(
+            f"{path} is a measured run record kept beside a probe; a round's runs belong "
+            "under runs/<round>/ and are never folded into the opinion condition"
+        )
+    return None
+
+
+def recommended_surfaces():
+    """The surfaces the published page recommends, commands before documents."""
+    with open(SURFACES, "rb") as handle:
+        listed = tomllib.load(handle)
+    return listed["commands"] + listed["documents"]
 
 
 def is_green(record):
@@ -251,6 +306,80 @@ def judge_pack_loop(cells, models, jobs):
     return verdict(detail)
 
 
+def judge_silent_wrong_answers(cells, models, jobs):
+    """The exit criterion's first condition — no Miri run answered wrongly in silence.
+
+    Judged on what a record carries rather than on whether the defect behind a
+    wrong answer was new: newness is a fact about the compiler's history, not
+    about the round, and a condition needing that history could only be typed by
+    hand. A subject that declared itself finished on an answer the hidden tests
+    refuse restarts the loop whichever Miri arm produced it.
+    """
+    detail = []
+    for model in models:
+        for job in jobs:
+            for arm in MIRI_ARMS:
+                cell = cells.get((job, arm, model))
+                if cell is None:
+                    detail.append(note(job, model, False, f"{arm} was not run"))
+                    continue
+                wrong = cell["silentWrongAnswers"]
+                detail.append(note(job, model, wrong == 0, f"{arm} recorded {wrong} silent wrong answers"))
+    return verdict(detail)
+
+
+def judge_probe_ratings(records, surfaces):
+    """The exit criterion's opinion condition — no recommended surface rated low.
+
+    The join is on the committed vocabulary, never on free text. A rating whose
+    surface the page does not recommend is reported under `unrecognised` and
+    decides nothing: a baseline arm rating its own toolchain is not an opinion
+    about this page. That leaves one way for the join to say nothing at all —
+    ratings that placed no recommended surface — and it must not read as held,
+    because a condition nobody answered is not a condition that passed.
+    """
+    placed, unrecognised = join_ratings(records, surfaces)
+    detail = [unreadable_note(record) for record in records if record.get("ratingsProblem")]
+    detail.extend(surface_note(surface, placed[surface]) for surface in surfaces if surface in placed)
+    computed = verdict(detail)
+    computed["unrecognised"] = sorted(set(unrecognised))
+    computed["unrated"] = [surface for surface in surfaces if surface not in placed]
+    return computed
+
+
+def join_ratings(records, surfaces):
+    """The scores each recommended surface was given, and the names that placed nowhere."""
+    lookup = {joinable(surface): surface for surface in surfaces}
+    placed, unrecognised = {}, []
+    for record in records:
+        for entry in record.get("ratings") or []:
+            surface = lookup.get(joinable(entry["surface"]))
+            if surface is None:
+                unrecognised.append(entry["surface"])
+            else:
+                placed.setdefault(surface, []).append(entry["score"])
+    return placed, unrecognised
+
+
+def joinable(surface):
+    """A surface name as the join reads it: case and spacing carry no meaning."""
+    return " ".join(surface.lower().split())
+
+
+def surface_note(surface, scores):
+    ranked = sorted(scores)
+    reason = "rated " + ", ".join(str(score) for score in ranked) + " out of 5"
+    return {"surface": surface, "held": ranked[0] > LOW_RATING, "reason": reason}
+
+
+def unreadable_note(record):
+    return {
+        "surface": None,
+        "held": False,
+        "reason": f"{record['arm']} on {record['model']} rated nothing: {record['ratingsProblem']}",
+    }
+
+
 def note(job, model, held, reason, rank=None):
     entry = {"job": job, "model": model, "held": bool(held), "reason": reason}
     if rank is not None:
@@ -262,7 +391,7 @@ def verdict(detail):
     return {"held": all(entry["held"] for entry in detail) and bool(detail), "detail": detail}
 
 
-def summarize(round_name, records):
+def summarize(round_name, records, probe_records):
     cells, jobs, models = build_cells(records)
     return {
         "schemaVersion": 1,
@@ -282,7 +411,9 @@ def summarize(round_name, records):
             "C5": judge_lead(cells, models, "wallClockToGreen"),
         },
         "exitCriterion": {
+            "silentWrongAnswers": judge_silent_wrong_answers(cells, models, jobs),
             "packLoop": judge_pack_loop(cells, models, jobs),
+            "probeRatings": judge_probe_ratings(probe_records, recommended_surfaces()),
         },
     }
 
@@ -300,13 +431,18 @@ def main(argv):
 
     runs_root = Path(arguments.runs_root) if arguments.runs_root else FIELD / "runs"
     records = load_records(arguments.round, runs_root)
-    summary = summarize(arguments.round, records)
+    probe_records = load_probe_records(arguments.round, runs_root)
+    summary = summarize(arguments.round, records, probe_records)
     destination = Path(arguments.out) if arguments.out else runs_root / arguments.round / "summary.json"
     destination.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
     held = [name for name, claim in summary["claims"].items() if claim["held"]]
-    loop = "holds" if summary["exitCriterion"]["packLoop"]["held"] else "fails"
-    print(f"{destination}: {len(records)} records, claims held: {', '.join(held) or 'none'}; pack loop {loop}")
+    exit_held = [name for name, condition in summary["exitCriterion"].items() if condition["held"]]
+    print(
+        f"{destination}: {len(records)} records and {len(probe_records)} probed, "
+        f"claims held: {', '.join(held) or 'none'}; "
+        f"exit conditions held: {', '.join(exit_held) or 'none'}"
+    )
     return 0
 
 

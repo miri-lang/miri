@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The surfaces the published packs recommend.
+#
+# A surface is a command or a document this page tells an agent to reach for.
+# Listing them here turns "what does the page recommend" from a reading of the
+# prose into a join key: the live benchmark's opinion probe asks a subject to
+# rate the surfaces it used under exactly these names, and its verdict is
+# computed by matching what came back against this file. A free-text name
+# (`check`, `the check command`) matches nothing, which is why the probe is
+# handed the vocabulary rather than asked to invent one.
+#
+# The packs are gated against this file in both directions: a command a pack
+# recommends and this file omits would be rated by nobody, and a command this
+# file lists and no pack recommends would put a surface in front of a subject
+# that the published page never points at.
+
+# Commands, spelled as a reader types them.
+commands = [
+    "miri agent",
+    "miri check",
+    "miri explain",
+    "miri fix",
+    "miri patch",
+    "miri run",
+    "miri test",
+    "miri view",
+]
+
+# Documents, named by the directory each pack ships under.
+documents = ["miri-gpu", "miri-lang", "miri-testing"]

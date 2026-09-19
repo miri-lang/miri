@@ -31,7 +31,7 @@ models.toml                the three model columns
 bench.py                   runs one cell and writes its records
 report.py                  folds a round's records into summary.json
 runs/<round>/...           the records and transcripts
-runs/<round>.probe/...     the opinion probe's ratings, never folded
+runs/<round>.probe/...     the opinion probe's ratings, never folded into a claim
 ```
 
 ## The arms
@@ -92,8 +92,10 @@ of them.
   afterwards, in a separate probe that is not measured: `bench.py --probe`
   re-runs one cell per arm, asks the subject to rate every surface it used in
   `RATINGS.json`, and writes the ratings to `runs/<round>.probe/` beside the
-  round. `report.py` never reads that directory, and it refuses — rather than
-  skips — a probe record found inside a round.
+  round. Nothing a subject says about a tool reaches a claim: `report.py` reads
+  that directory for one verdict only, on the opinion condition of the exit
+  criterion, and it refuses — rather than skips — a probe record found inside a
+  round or a measured record found beside one.
 - **Invocations lost to compiler defects are counted separately** from the
   clean loop. A defect is a fact about the compiler, not about the surface
   wrapped around it, and folding the two together is what made two earlier
@@ -157,9 +159,15 @@ and a prompt under version control cannot drift without the drift showing in a
 diff.
 
 `CLAIMS.md` holds the pre-registered claims, and `report.py` computes each
-verdict from the records — no verdict is typed by hand. It also computes the
-exit criterion's loop condition, and labels every comparison a lead claim loses
-as `parity` or `behind`, so a failing round still shows its distance from the
-claim. `baseline.md` holds the
+verdict from the records — no verdict is typed by hand. It computes every
+condition of the exit criterion too: that no Miri run answered wrongly in
+silence, that the packed loop costs no more invocations than the bare one, and
+that no surface the published page recommends came back rated 2 out of 5 or
+lower. That last one is joined against `skills/surfaces.toml`, which lists the
+surfaces the page recommends and which the packs themselves are gated against —
+a free-text surface name would match nothing, and a verdict that matched nothing
+would read as held by having asked no one. `report.py` also labels every
+comparison a lead claim loses as `parity` or `behind`, so a failing round still
+shows its distance from the claim. `baseline.md` holds the
 2026-09-09 numbers that predate this instrument, with the reasons they are not
 comparable to anything produced here. `LOG.md` carries one entry per round.
