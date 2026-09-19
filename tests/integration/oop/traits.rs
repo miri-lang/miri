@@ -115,6 +115,73 @@ fn main()
     );
 }
 
+#[test]
+fn test_trait_default_method_inherited_from_parent_trait() {
+    // Default method defined on parent trait is accessible when implementing child trait.
+    assert_runs_with_output(
+        r#"
+trait BaseTrait
+    fn base_default()
+        println("base default")
+
+trait ChildTrait extends BaseTrait
+
+class Receiver implements ChildTrait
+
+fn main()
+    let r = Receiver()
+    r.base_default()
+    "#,
+        "base default",
+    );
+}
+
+#[test]
+fn test_trait_default_method_inherited_through_base_class() {
+    // Subclass inherits default trait method implemented by base class.
+    assert_runs_with_output(
+        r#"
+trait Greetable
+    fn greet()
+        println("hello from trait")
+
+class Base implements Greetable
+
+class Derived extends Base
+
+fn main()
+    let d = Derived()
+    d.greet()
+    "#,
+        "hello from trait",
+    );
+}
+
+#[test]
+fn test_multiple_traits_one_with_default_method() {
+    // Class implements two traits, one required abstract method and one with a default method.
+    assert_runs_with_output(
+        r#"
+trait AbstractTrait
+    fn required()
+
+trait DefaultTrait
+    fn default_action()
+        println("default action")
+
+class Component implements AbstractTrait, DefaultTrait
+    fn required()
+        println("required action")
+
+fn main()
+    let c = Component()
+    c.required()
+    c.default_action()
+    "#,
+        "required action\ndefault action",
+    );
+}
+
 // ── Multiple trait implementation ─────────────────────────────────────────────
 
 #[test]
