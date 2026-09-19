@@ -219,8 +219,9 @@ impl MiriList {
     /// points receive. A wider element would be copied from past the end of
     /// that word.
     ///
-    /// TODO: an `i128`/`u128` list has 16-byte slots and so is refused here; its
-    /// elements need to travel by address the way inline vectors do.
+    /// A list with wider slots is handed its elements by address instead, so a
+    /// word-passing call reaching such a list means the compiler chose the wrong
+    /// entry point; the caller aborts rather than storing half a value.
     pub fn fits_value_word(&self) -> bool {
         self.elem_size <= std::mem::size_of::<usize>()
     }

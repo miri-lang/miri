@@ -1083,7 +1083,7 @@ pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
         TypeKind::I16 | TypeKind::U16 => 2,
         TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
         TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => 8,
-        TypeKind::I128 | TypeKind::U128 => 16,
+        TypeKind::I128 | TypeKind::U128 => types::WIDE_SCALAR_BYTES,
         // All heap-allocated types are pointer-sized (8 bytes on 64-bit).
         // This includes String, Custom (structs/enums/classes).
         // Note: canonical collection variants (List/Array/Map/Set) are normalized to

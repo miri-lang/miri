@@ -920,6 +920,21 @@ pub fn inline_element_layout(kind: &TypeKind) -> Option<InlineElementLayout> {
     })
 }
 
+/// Byte width of a 128-bit scalar, the one scalar too wide for a value word.
+pub const WIDE_SCALAR_BYTES: i64 = 16;
+
+/// The byte width of a scalar element no value word can carry, or `None` for a
+/// scalar that fits in one.
+///
+/// The word-passing collection entry points copy an element out of a single
+/// pointer-sized parameter, so a 128-bit element read from there would take its
+/// upper half from past that word. An element this answers for is handed over by
+/// address instead, the way an inline vector is, and occupies its full width in
+/// the collection's slot.
+pub fn wide_scalar_element_bytes(kind: &TypeKind) -> Option<i64> {
+    matches!(kind, TypeKind::I128 | TypeKind::U128).then_some(WIDE_SCALAR_BYTES)
+}
+
 /// std430 inline byte stride between consecutive vector elements stored inline
 /// in a collection (the spacing used for addressing `arr[i]`), or `None` when
 /// `name` is not a vector type or `scalar` is not a vector component.

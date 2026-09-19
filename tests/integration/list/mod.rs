@@ -17,3 +17,4 @@ pub mod methods;
 pub mod optional_elements;
 pub mod rc;
 pub mod transformable;
+pub mod wide_scalar_elements;

@@ -601,7 +601,7 @@ fn lower_list_push(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, item_arg.span);
+    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, obj_ty, item_arg.span);
     let func_name = if inline {
         rt::LIST_PUSH_INLINE
     } else {
@@ -637,26 +637,91 @@ fn lower_list_push(
 /// must have. The list copies those bytes and keeps no reference, so the caller
 /// goes on owning the element. Every other element is a value word, and a
 /// reference to it is donated to the list.
+///
+/// A vector already is an address by the time it gets here; a 128-bit scalar
+/// arrives as a value and is spilled to one. Whether the element is that wide
+/// is read off the list's declared element type rather than the argument's: the
+/// slot is as wide as the list was allocated for, and an `int` literal written
+/// into an `i128` list still has to fill all sixteen bytes.
 fn list_element_operands(
     ctx: &mut LoweringContext,
     item: Operand,
     item_ty: Type,
+    list_ty: &Type,
     span: Span,
 ) -> (Vec<Operand>, bool) {
-    match crate::ast::types::inline_element_layout(&item_ty.kind) {
-        Some(layout) => {
-            let operands = vec![
-                move_to_copy(item),
-                int_constant(layout.payload, &span),
-                int_constant(layout.stride, &span),
-            ];
-            (operands, true)
-        }
-        None => {
-            let item_local = store_operand_temp(ctx, move_to_copy(item), item_ty, span);
-            (vec![Operand::Copy(Place::new(item_local))], false)
-        }
+    if let Some(layout) = crate::ast::types::inline_element_layout(&item_ty.kind) {
+        let operands = vec![
+            move_to_copy(item),
+            int_constant(layout.payload, &span),
+            int_constant(layout.stride, &span),
+        ];
+        return (operands, true);
     }
+    if let Some((slot_ty, width)) = wide_element_slot(ctx, list_ty) {
+        let item = widen_operand_to_slot(ctx, move_to_copy(item), &item_ty, &slot_ty, span);
+        let addr = spill_operand_to_address(ctx, item, slot_ty, span);
+        let operands = vec![addr, int_constant(width, &span), int_constant(width, &span)];
+        return (operands, true);
+    }
+    let item_local = store_operand_temp(ctx, move_to_copy(item), item_ty, span);
+    (vec![Operand::Copy(Place::new(item_local))], false)
+}
+
+/// The element type of `list_ty` and its byte width, when that element is a
+/// scalar too wide to travel in a value word.
+fn wide_element_slot(ctx: &LoweringContext, list_ty: &Type) -> Option<(Type, i64)> {
+    let slot_ty = collection_slot_type(ctx, list_ty, ELEMENT_SLOT)?;
+    let width = crate::ast::types::wide_scalar_element_bytes(&slot_ty.kind)?;
+    Some((slot_ty, width))
+}
+
+/// Convert `op` to the slot's type when it arrived as something narrower.
+///
+/// The bytes the list is handed are read back at the slot's width, so a value
+/// that filled only part of it would be completed by whatever lay beside it.
+/// The cast extends by the source's signedness, so a negative `int` reaches the
+/// wider slot as the same number.
+fn widen_operand_to_slot(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    op_ty: &Type,
+    slot_ty: &Type,
+    span: Span,
+) -> Operand {
+    if op_ty.kind == slot_ty.kind {
+        return op;
+    }
+    let local = ctx.push_temp(slot_ty.clone(), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(local),
+            Rvalue::Cast(Box::new(op), slot_ty.clone()),
+        ),
+        span,
+    });
+    Operand::Copy(Place::new(local))
+}
+
+/// Store `op` into a fresh temp and hand back the address of that temp.
+///
+/// The by-address entry points read an element's bytes out of memory, so a
+/// value that has no address of its own needs one. The reference is only read
+/// during the call, which copies the bytes out, so the temp outliving the call
+/// is all the address needs.
+fn spill_operand_to_address(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    ty: Type,
+    span: Span,
+) -> Operand {
+    let value_local = store_operand_temp(ctx, op, ty, span);
+    let addr_local = ctx.push_temp(Type::new(TypeKind::RawPtr, span), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(addr_local), Rvalue::Ref(Place::new(value_local))),
+        span,
+    });
+    Operand::Copy(Place::new(addr_local))
 }
 
 /// Donate a reference to a value a container is about to take ownership of.
@@ -738,6 +803,12 @@ fn collection_slot_type(ctx: &LoweringContext, collection_ty: &Type, slot: usize
 /// intrinsic that takes ownership of them, leaving the map holding references it
 /// does not own. Lowering the call here donates both instead, matching
 /// `lower_list_push`.
+///
+/// TODO: both operands are donated as a single value word, so a key or value
+/// wider than that word is silently truncated — two distinct 128-bit keys fold
+/// into one entry. A list hands such an element over by address instead (see
+/// [`list_element_operands`]); the map entry points, and every lookup that has
+/// to match the bytes they stored, need the same treatment.
 fn lower_map_set(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -784,6 +855,10 @@ fn lower_map_set(
 ///
 /// Mirrors [`lower_map_set`]; the intrinsic reports whether the element was
 /// newly inserted, so the call keeps its boolean result.
+///
+/// TODO: the element is donated as a single value word, so one wider than that
+/// word loses its upper half and compares equal to any other element sharing its
+/// low word. The same fix [`lower_map_set`] needs applies here.
 fn lower_set_add(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -839,7 +914,7 @@ fn lower_list_insert(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let item_op_src = operand_src_local(&item_op);
-    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, item_arg.span);
+    let (item_args, inline) = list_element_operands(ctx, item_op, item_ty, obj_ty, item_arg.span);
     let func_name = if inline {
         rt::LIST_INSERT_INLINE
     } else {

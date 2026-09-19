@@ -119,6 +119,10 @@ impl TypeChecker {
             return;
         }
 
+        // TODO: the bound is the default `int` whatever the literal is written
+        // into, so a value above the 64-bit range cannot be spelled where an
+        // `i128`/`u128` is expected — only bound to an annotated `let` first.
+        // The expected type should pick the bound.
         let max = if self.negated_int_literals.contains(&expr_id) {
             i64::MAX as i128 + 1
         } else {
