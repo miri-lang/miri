@@ -1183,9 +1183,8 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Option<Type> {
         let mut search_class_def: crate::type_checker::context::ClassDefinition = def.clone();
+        let mut mapping = self.build_class_method_mapping(&search_class_def, name, type_args);
         loop {
-            let mapping = self.build_class_method_mapping(&search_class_def, name, type_args);
-
             if let Some(field_ty) =
                 self.lookup_class_field(&search_class_def, prop_name, name, &mapping, span, context)
             {
@@ -1220,11 +1219,48 @@ impl TypeChecker {
                 });
 
             match next_def {
-                Some(base_def) => search_class_def = base_def,
+                Some(base_def) => {
+                    mapping = self
+                        .base_class_mapping(&search_class_def, &base_def, &mapping)
+                        .unwrap_or_else(|| {
+                            self.build_class_method_mapping(&base_def, name, type_args)
+                        });
+                    search_class_def = base_def;
+                }
                 None => break,
             }
         }
         None
+    }
+
+    /// The base class's generic parameters bound to the arguments the child's
+    /// `extends` clause gives them, resolved through the child's own bindings.
+    ///
+    /// `class Child extends Base<String>` binds `Base`'s `T` to `String` though
+    /// the child carries no parameter of its own, and `class Child<U> extends
+    /// Base<List<U>>` at `U = String` binds it to `List<String>` — so a method
+    /// the child inherits returns the type the clause pins rather than the
+    /// parameter the parent wrote it against. `None` when the clause names no
+    /// arguments, or names a count the parent's parameters do not account for:
+    /// there is nothing to bind in either case.
+    fn base_class_mapping(
+        &self,
+        child: &crate::type_checker::context::ClassDefinition,
+        base: &crate::type_checker::context::ClassDefinition,
+        child_mapping: &std::collections::HashMap<String, Type>,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        let declared = child.base_class_args.as_ref()?;
+        let generics = base.generics.as_ref()?;
+        if declared.len() != generics.len() {
+            return None;
+        }
+        Some(
+            generics
+                .iter()
+                .zip(declared)
+                .map(|(param, arg)| (param.name.clone(), self.substitute_type(arg, child_mapping)))
+                .collect(),
+        )
     }
 
     fn lookup_class_field(

@@ -305,3 +305,28 @@ fn main()
         "0",
     );
 }
+
+#[test]
+fn test_field_inherited_by_a_class_declaring_none_is_released() {
+    // The child declares no field of its own, so a release path that asks only
+    // what the class itself declares frees the block without ever letting go of
+    // the string the parent holds.
+    assert_runs_with_output(
+        r#"
+class Holder
+    v String
+
+    fn init(v String)
+        self.v = v
+
+class Wrapper extends Holder
+    fn init(v String)
+        super.init(v)
+
+fn main()
+    let w = Wrapper("W".to_lower())
+    println(w.v)
+"#,
+        "w",
+    );
+}

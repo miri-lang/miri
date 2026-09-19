@@ -521,6 +521,14 @@ impl<'a> FunctionTranslator<'a> {
         crate::type_checker::utils::has_drop_hook(name, type_defs)
     }
 
+    /// Whether releasing an instance of `name` has a reference to give up.
+    ///
+    /// A class is asked about every field it stores, the ones it inherits
+    /// included: those belong to the instance just as much as its own, and a
+    /// class that declares none of its own still has to release what its parent
+    /// declared. An inherited field is read at the type the `extends` chain
+    /// pins it to, so `class Child extends Base<String>` sees a string where
+    /// the parent wrote a parameter.
     pub(crate) fn has_managed_fields(
         name: &str,
         type_defs: &HashMap<String, TypeDefinition>,
@@ -530,10 +538,15 @@ impl<'a> FunctionTranslator<'a> {
                 .fields
                 .iter()
                 .any(|(_, ty, _)| crate::mir::rc::is_field_managed(&ty.kind)),
-            Some(TypeDefinition::Class(def)) => def
-                .fields
+            Some(TypeDefinition::Class(_)) => {
+                crate::mir::lowering::inherited_instantiation::instantiated_field_types(
+                    type_defs,
+                    name,
+                    &[],
+                )
                 .iter()
-                .any(|(_, fi)| crate::mir::rc::is_field_managed(&fi.ty.kind)),
+                .any(|ty| crate::mir::rc::is_field_managed(&ty.kind))
+            }
             Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
                 fields
                     .iter()
