@@ -2091,6 +2091,10 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Mul if is_float => builder.ins().fmul(lhs, rhs),
             BinOp::Mul => builder.ins().imul(lhs, rhs),
             BinOp::Div if is_float => builder.ins().fdiv(lhs, rhs),
+            // TODO: dividing two 128-bit integers trips an `unreachable` in the
+            // Cranelift verifier — `/` and `%` both crash the compiler where
+            // `+`, `-` and `*` are fine. Cranelift has no native 128-bit divide,
+            // so this path needs a libcall rather than the instruction below.
             BinOp::Div => {
                 Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
                 if is_unsigned {

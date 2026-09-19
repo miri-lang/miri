@@ -9,6 +9,11 @@
 use super::{into_raw_ptr, MiriString};
 
 /// Converts a 64-bit signed integer to its decimal string representation.
+///
+/// TODO: a 128-bit value is narrowed to this parameter at the call, so anything
+/// outside the 64-bit range prints as the signed reading of its low word. The
+/// wider types need conversions of their own; widening these would change the
+/// ABI every other integer width already calls with.
 #[no_mangle]
 pub extern "C" fn miri_rt_int_to_string(value: i64) -> *mut MiriString {
     let s = value.to_string();
