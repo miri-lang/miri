@@ -10,7 +10,8 @@
 //! - Error reporting
 
 use super::context::{
-    find_trait_default_method, ClassDefinition, Context, MethodInfo, TypeDefinition,
+    find_trait_default_method, ClassDefinition, Context, GenericDefinition, MethodInfo,
+    TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -28,6 +29,42 @@ use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
+
+/// The element type a definition that names `Iterable` without an argument
+/// yields.
+///
+/// A class writes `implements Iterable` bare only inside a declaration that is
+/// still being checked, or in one the parser already reported on. Standing in
+/// the trait's own parameter keeps the loop variable typed as something rather
+/// than collapsing it to the iterable's own type.
+fn unspecified_element_type() -> Type {
+    make_type(TypeKind::Generic(
+        "T".to_string(),
+        None,
+        TypeDeclarationKind::None,
+    ))
+}
+
+/// `generics` paired with `args` by position, empty when the definition
+/// declares none or is reached at a different number than it declares —
+/// neither pairing would be anything but a guess, and a type left spelled as
+/// its parameter is what every caller already handles.
+fn generic_substitution(
+    generics: Option<&[GenericDefinition]>,
+    args: &[Type],
+) -> std::collections::HashMap<String, Type> {
+    let Some(generics) = generics else {
+        return std::collections::HashMap::new();
+    };
+    if generics.len() != args.len() {
+        return std::collections::HashMap::new();
+    }
+    generics
+        .iter()
+        .zip(args)
+        .map(|(generic, arg)| (generic.name.clone(), arg.clone()))
+        .collect()
+}
 
 /// Whether releasing the last reference to a `type_name` value runs a drop hook.
 ///
@@ -1745,51 +1782,17 @@ impl TypeChecker {
                 }
                 Self::error_type()
             }
-            // TODO: only a class naming `Iterable<T>` itself is iterable. One
-            // reaching it through a trait that extends it, or through a class it
-            // extends, is refused as not iterable, because the element type is
-            // read from this class's own `trait_args`. The loop lowering in
-            // `mir/lowering/loops.rs` reads the trait list the same literal way.
-            TypeKind::Custom(name, args) => {
-                if let Some(TypeDefinition::Class(class_def)) =
-                    self.type_table.global_type_definitions.get(name)
-                {
-                    if let Some(trait_args) = class_def.trait_args.get(ITERABLE_TRAIT_NAME) {
-                        // For a generic class implementing Iterable<T>, substitute the trait's
-                        // type argument using the instantiation's type parameters.
-                        // E.g., Class<int> implementing Iterable<T> becomes Iterable<int>.
-                        // This mirrors the parallel fix in src/mir/lowering/loops.rs and must
-                        // stay in sync: both sites substitute the element type before returning.
-                        let elem_ty = trait_args.first().cloned().unwrap_or_else(|| {
-                            make_type(TypeKind::Generic(
-                                "T".to_string(),
-                                None,
-                                TypeDeclarationKind::None,
-                            ))
-                        });
-
-                        if let Some(class_generics) = &class_def.generics {
-                            if let Some(class_args) = args {
-                                let mut subs = std::collections::HashMap::new();
-                                for (generic, arg) in class_generics.iter().zip(class_args) {
-                                    if let Ok(concrete) = self.extract_type_from_expression(arg) {
-                                        subs.insert(generic.name.clone(), concrete);
-                                    }
-                                }
-                                return self.substitute_type(&elem_ty, &subs);
-                            }
-                        }
-
-                        return elem_ty;
-                    }
+            TypeKind::Custom(_, _) => match self.iterable_element_type(ty) {
+                Some(element_type) => element_type,
+                None => {
+                    self.report_error(
+                        DiagnosticCode::TypTypeMismatch,
+                        format!("Type {} is not iterable", ty),
+                        span,
+                    );
+                    Self::error_type()
                 }
-                self.report_error(
-                    DiagnosticCode::TypTypeMismatch,
-                    format!("Type {} is not iterable", ty),
-                    span,
-                );
-                Self::error_type()
-            }
+            },
             TypeKind::Error => Self::error_type(),
             _ => {
                 self.report_error(
@@ -1802,6 +1805,143 @@ impl TypeChecker {
         }
     }
 
+    /// The element type a class yields as `Iterable<T>`, or `None` when the
+    /// type is not a class that reaches the trait at all.
+    ///
+    /// A class reaches `Iterable` three ways: by naming it, by naming a trait
+    /// that extends it, or by extending a class that does either. Whichever
+    /// definition in that chain names the trait writes the element type in its
+    /// *own* generic parameters, so the type is substituted by the arguments
+    /// that definition is reached at — a trait's by the `implements` clause
+    /// that lists it, an ancestor's by the `extends` clause that pins it — and
+    /// never by the leaf's own arguments, whose parameters may share a name
+    /// and mean something else entirely.
+    ///
+    /// This is the single definition of iterability. [`Self::get_iterable_element_type`],
+    /// [`Self::type_is_iterable`] and the loop lowering in
+    /// [`crate::mir::lowering::loops`] all ask here, so a `for` loop cannot be
+    /// typed by one and refused by another.
+    pub(crate) fn iterable_element_type(&self, class_ty: &Type) -> Option<Type> {
+        let TypeKind::Custom(class_name, args) = &class_ty.kind else {
+            return None;
+        };
+        let type_args: Vec<Type> = args
+            .iter()
+            .flatten()
+            .map(|arg| {
+                self.extract_type_from_expression(arg)
+                    .unwrap_or_else(|_| Self::error_type())
+            })
+            .collect();
+        self.iterable_element_of_instantiation(class_name, &type_args)
+    }
+
+    /// Whether a class by this name reaches `Iterable`, at whatever element
+    /// type. The name alone is asked, so the answer holds for every
+    /// instantiation of a generic class.
+    pub(crate) fn class_is_iterable(&self, class_name: &str) -> bool {
+        self.iterable_element_of_instantiation(class_name, &[])
+            .is_some()
+    }
+
+    /// The element type `class_name`, instantiated at `type_args`, yields.
+    ///
+    /// The walk climbs the `extends` chain, carrying each link's arguments into
+    /// the next through the clause that writes them, and stops at the first
+    /// class that names a trait reaching `Iterable`. Taking at most as many
+    /// steps as there are definitions keeps a circular `extends` from hanging
+    /// it: the cycle answers `None` rather than spinning.
+    fn iterable_element_of_instantiation(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+    ) -> Option<Type> {
+        let type_definitions = &self.type_table.global_type_definitions;
+        let mut current = class_name.to_string();
+        let mut current_args = type_args.to_vec();
+
+        for _ in 0..=type_definitions.len() {
+            let Some(TypeDefinition::Class(class_def)) = type_definitions.get(&current) else {
+                return None;
+            };
+            let subs = generic_substitution(class_def.generics.as_deref(), &current_args);
+            if let Some(element_type) = self.iterable_element_named_by(class_def) {
+                return Some(self.substitute_type(&element_type, &subs));
+            }
+            let base = class_def.base_class.clone()?;
+            current_args = class_def
+                .base_class_args
+                .iter()
+                .flatten()
+                .map(|arg| self.substitute_type(arg, &subs))
+                .collect();
+            current = base;
+        }
+        None
+    }
+
+    /// The element type one of `class_def`'s own traits reaches `Iterable` at,
+    /// written in `class_def`'s generic parameters.
+    ///
+    /// Traits are visited in declaration order rather than through the
+    /// `trait_args` map, so a class listing several of them resolves to the
+    /// same element type on every build.
+    fn iterable_element_named_by(&self, class_def: &ClassDefinition) -> Option<Type> {
+        class_def.traits.iter().find_map(|trait_name| {
+            let trait_args = class_def
+                .trait_args
+                .get(trait_name)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            self.iterable_element_through_trait(
+                trait_name,
+                trait_args,
+                &mut std::collections::HashSet::new(),
+            )
+        })
+    }
+
+    /// The element type `trait_name`, instantiated at `trait_args`, reaches
+    /// `Iterable` at — as itself, or through the traits it extends.
+    ///
+    /// Each parent's arguments are written in the extending trait's parameters,
+    /// so they are substituted on the way down. Each trait is visited once, so
+    /// a circular `extends` cannot hang the walk.
+    fn iterable_element_through_trait(
+        &self,
+        trait_name: &str,
+        trait_args: &[Type],
+        visited: &mut std::collections::HashSet<String>,
+    ) -> Option<Type> {
+        if trait_name == ITERABLE_TRAIT_NAME {
+            return Some(
+                trait_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(unspecified_element_type),
+            );
+        }
+        if !visited.insert(trait_name.to_string()) {
+            return None;
+        }
+        let Some(TypeDefinition::Trait(trait_def)) =
+            self.type_table.global_type_definitions.get(trait_name)
+        else {
+            return None;
+        };
+        let subs = generic_substitution(trait_def.generics.as_deref(), trait_args);
+        trait_def.parent_traits.iter().find_map(|parent_name| {
+            let parent_args: Vec<Type> = trait_def
+                .parent_trait_args
+                .get(parent_name)
+                .into_iter()
+                .flatten()
+                .map(|arg| self.substitute_type(arg, &subs))
+                .collect();
+            self.iterable_element_through_trait(parent_name, &parent_args, visited)
+        })
+    }
+
     /// Determines whether a type is iterable (can be used in a for loop).
     ///
     /// A type is iterable if it is one of:
@@ -1809,16 +1949,14 @@ impl TypeChecker {
     /// - A built-in collection (List, Array, Set, Map)
     /// - Tuple
     /// - Range
-    /// - A custom class implementing the Iterable trait
+    /// - A custom class reaching the Iterable trait
     ///
-    /// This function and `get_iterable_element_type` (immediately above) encode one
-    /// iterability rule and must be changed together. They are deliberately adjacent:
-    /// a hint that offers a `for` loop where `for` would be rejected, or stays silent
-    /// where it would be accepted, is worse than no hint.
+    /// The class case defers to [`Self::class_is_iterable`], which reads the one
+    /// definition of iterability: a hint that offers a `for` loop where `for`
+    /// would be rejected, or stays silent where it would be accepted, is worse
+    /// than no hint.
     pub(crate) fn type_is_iterable(&self, type_name: &str, context: &Context) -> bool {
-        use crate::ast::types::{
-            ITERABLE_TRAIT_NAME, RANGE_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
-        };
+        use crate::ast::types::{RANGE_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 
         // String is iterable
         if type_name == STRING_TYPE_NAME {
@@ -1840,13 +1978,13 @@ impl TypeChecker {
             return true;
         }
 
-        // Check if it's a custom class implementing Iterable
+        // Check if it's a custom class reaching Iterable
         let def_opt = context
             .resolve_type_definition(type_name)
             .or_else(|| self.type_table.global_type_definitions.get(type_name));
 
-        if let Some(TypeDefinition::Class(class_def)) = def_opt {
-            return class_def.trait_args.contains_key(ITERABLE_TRAIT_NAME);
+        if let Some(TypeDefinition::Class(_)) = def_opt {
+            return self.class_is_iterable(type_name);
         }
 
         false

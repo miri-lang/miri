@@ -173,6 +173,218 @@ fn main()
 }
 
 #[test]
+fn test_for_loop_over_class_implementing_a_trait_that_extends_iterable() {
+    // The class never names `Iterable`; it names a trait that extends it. The
+    // element type is written at that trait's `extends` clause, so it has to be
+    // carried down to the class for the loop variable to be typed at all.
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+trait Sized extends Iterable<int>
+    fn size_hint() int
+
+class Counter implements Sized
+    var count int
+
+    fn size_hint() int
+        return self.count
+
+    fn length() int
+        return self.count
+
+    fn element_at(index int) int
+        return index
+
+fn main()
+    var c = Counter()
+    c.count = 3
+    for n in c
+        println(f"value {n + 1}")
+"#,
+        "value 1\nvalue 2\nvalue 3",
+    );
+}
+
+#[test]
+fn test_for_loop_over_subclass_of_an_iterable_class() {
+    // `Sub` names no trait of its own: it reaches `Iterable` through the class
+    // it extends, and the loop calls the body that class compiles.
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+class Counter implements Iterable<int>
+    var count int
+
+    fn length() int
+        return self.count
+
+    fn element_at(index int) int
+        return index * 2
+
+class Sub extends Counter
+
+fn main()
+    var s = Sub()
+    s.count = 3
+    for n in s
+        println(f"value {n}")
+"#,
+        "value 0\nvalue 2\nvalue 4",
+    );
+}
+
+#[test]
+fn test_for_loop_over_generic_class_reaching_iterable_through_a_derived_trait() {
+    // The element type travels two substitutions: the trait's parameter is
+    // bound by the class's `implements` clause, and the class's parameter by
+    // the instantiation. A managed element proves both agree — a loop variable
+    // left as an opaque parameter releases the element through the wrong drop
+    // path, which `assert_runs_with_output` catches as a leak.
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+trait Listable<E> extends Iterable<E>
+    fn is_empty() bool
+
+class Bag<T> implements Listable<T>
+    fn is_empty() bool
+        return false
+
+    fn length() int
+        return 200
+
+    fn element_at(index int) T
+        return "a" + "b"
+
+fn main()
+    let b = Bag<String>()
+    var total = 0
+    for s in b
+        total += s.length()
+    println(f"total {total}")
+"#,
+        "total 400",
+    );
+}
+
+#[test]
+fn test_for_loop_over_subclass_of_a_generic_iterable_class_pins_the_element_type() {
+    // The child names no parameter; its `extends` clause pins the parent's, and
+    // that is what the element type has to be read at. The elements are built at
+    // runtime rather than written as literals, so the loop variable's drop path
+    // is really exercised: a literal is reference-count-blind and would let an
+    // element type left opaque pass.
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+class Bag<T> implements Iterable<T>
+    fn length() int
+        return 200
+
+    fn element_at(index int) T
+        return "a" + "b"
+
+class Words extends Bag<String>
+
+fn main()
+    let w = Words()
+    var total = 0
+    for s in w
+        total += s.length()
+    println(f"total {total}")
+"#,
+        "total 400",
+    );
+}
+
+#[test]
+fn test_for_loop_over_a_subclass_calls_the_length_it_overrides() {
+    // `length` and `element_at` are reached independently: the child compiles a
+    // body for the one it overrides, and inherits the other from the class that
+    // declares it. Reading both off one name would either call a body the child
+    // never compiled or ignore the override.
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+class Base implements Iterable<int>
+    fn length() int
+        return 2
+
+    fn element_at(index int) int
+        return index
+
+class Over extends Base
+    fn length() int
+        return 4
+
+fn main()
+    let o = Over()
+    for n in o
+        println(f"value {n}")
+"#,
+        "value 0\nvalue 1\nvalue 2\nvalue 3",
+    );
+}
+
+#[test]
+fn test_class_implementing_a_trait_that_does_not_extend_iterable_is_rejected() {
+    assert_compiler_error(
+        r#"
+use system.ops
+
+trait Named
+    fn label() String
+
+class Tag implements Named
+    fn label() String
+        return "tag"
+
+fn main()
+    var t = Tag()
+    for y in t
+        println(f"{y}")
+"#,
+        "Type Tag is not iterable",
+    );
+}
+
+#[test]
+fn test_traits_that_extend_each_other_are_refused_rather_than_walked_forever() {
+    // Deciding iterability means walking `extends` clauses, and a cycle in them
+    // must answer rather than spin. The message is the ordinary refusal: this
+    // pins that the walk terminates, not that a cycle diagnostic exists.
+    assert_compiler_error(
+        r#"
+use system.ops
+
+trait Ping extends Pong
+    fn ping() int
+
+trait Pong extends Ping
+    fn pong() int
+
+class Both implements Ping
+    fn ping() int
+        return 1
+
+    fn pong() int
+        return 2
+
+fn main()
+    let b = Both()
+    for n in b
+        println(f"{n}")
+"#,
+        "Type Both is not iterable",
+    );
+}
+
+#[test]
 fn test_generic_class_with_non_first_trait_param() {
     // A class `Pair<K, V> implements Iterable<V>` must correctly map the
     // element type to the second generic parameter, not the first. This proves
