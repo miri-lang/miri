@@ -2314,6 +2314,10 @@ impl TypeChecker {
         expr: &Expression,
         context: &Context,
     ) -> Type {
+        if let Some(own) = Self::own_definition_type(name, &def, resolved_args.as_deref(), context)
+        {
+            return own;
+        }
         match def {
             TypeDefinition::Struct(struct_def) => {
                 self.validate_generics(&resolved_args, &struct_def.generics, context, expr.span);
@@ -2350,6 +2354,39 @@ impl TypeChecker {
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
         }
+    }
+
+    /// The type a class, trait or enum's own name stands for when it is written
+    /// bare inside its own body: the definition at its own generic parameters,
+    /// which is what `Self` resolves to there.
+    ///
+    /// Stored with no arguments instead, a generic definition's own name would
+    /// be carried that way into every signature naming it, and a call site
+    /// substituting the receiver's type arguments into that signature outside
+    /// the body would read the parameter as the definition with no arguments —
+    /// an arity mismatch against every instantiation, the receiver's included.
+    ///
+    /// A name written with arguments already says which instantiation it means,
+    /// and a name a generic parameter shadows stands for that parameter.
+    fn own_definition_type(
+        name: &str,
+        def: &TypeDefinition,
+        args: Option<&[Expression]>,
+        context: &Context,
+    ) -> Option<Type> {
+        if args.is_some() || context.current_class.as_deref() != Some(name) {
+            return None;
+        }
+        let names_the_body_being_checked = match def {
+            TypeDefinition::Class(_) | TypeDefinition::Trait(_) | TypeDefinition::Enum(_) => true,
+            TypeDefinition::Struct(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {
+                false
+            }
+        };
+        if !names_the_body_being_checked {
+            return None;
+        }
+        context.current_class_type.clone()
     }
 
     /// Refuses a vector written at a component type that has no inline layout.

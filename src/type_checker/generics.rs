@@ -583,16 +583,6 @@ impl TypeChecker {
         let params_len = params.as_ref().map_or(0, |v| v.len());
 
         if args_len != params_len {
-            // Allow bare class name references inside own class body.
-            // e.g., inside `class List<T>`, a parameter typed as `List` (without `<T>`)
-            // is valid — it refers to the current class type.
-            // TODO: the bare reference is still stored without arguments, so a
-            // call site reading the signature outside the class refuses it.
-            // It should resolve to `own_class_type` as `Self` does, or be
-            // refused here with a diagnostic naming `List<T>` / `Self`.
-            if args_len == 0 && context.current_class.is_some() {
-                return;
-            }
             self.report_error(
                 DiagnosticCode::TypGenericArgumentCount,
                 format!(
