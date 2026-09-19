@@ -1010,15 +1010,23 @@ fn resolve_super_monomorph(
 
 /// The class and concrete type arguments a receiver's type names, or `None`
 /// when it names no monomorphizable instantiation of a generic class.
+///
+/// A class that declares no parameters is reached at no arguments and still
+/// names an instantiation: the class it extends may pin the parent's
+/// parameters (`class Child extends Base<String>`), and every body the child
+/// inherits belongs to that instantiation of the parent.
 fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(String, Vec<Type>)> {
-    let TypeKind::Custom(name, Some(arg_exprs)) = &obj_ty.kind else {
+    let TypeKind::Custom(name, arg_exprs) = &obj_ty.kind else {
         return None;
     };
     let defs = &ctx.type_checker.type_definitions();
     let Some(TypeDefinition::Class(class_def)) = defs.get(name.as_str()) else {
         return None;
     };
-    let gens = class_def.generics.as_ref()?;
+    let Some(gens) = class_def.generics.as_ref() else {
+        return Some((name.clone(), Vec::new()));
+    };
+    let arg_exprs = arg_exprs.as_ref()?;
     let resolved: Vec<Type> = arg_exprs
         .iter()
         .map(|e| resolve_generic_argument(ctx.type_checker, e))
@@ -1051,7 +1059,11 @@ fn monomorph_for_instantiation(
     }
     // An instantiated body reaches instantiations the registry was never told
     // about; the caller records the receiver's so the pipeline registers it.
-    let is_recorded = is_registered_instantiation(ctx.type_checker, name, resolved);
+    // A receiver that declares no parameters carries no instantiation to
+    // register — its own bodies are lowered once, unconditionally — so only a
+    // generic receiver has to be found in the registry.
+    let is_recorded =
+        resolved.is_empty() || is_registered_instantiation(ctx.type_checker, name, resolved);
     if !is_recorded && ctx.generic_subs.is_empty() {
         return None;
     }

@@ -562,7 +562,46 @@ fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::Ha
 /// needs a per-instantiation body for, whether or not it names it.
 fn complete_generic_instantiation_registry(type_checker: &mut TypeChecker) {
     record_inferred_generic_instantiations(type_checker);
+    record_pinned_base_class_instantiations(type_checker);
     expand_nested_generic_instantiations(type_checker);
+}
+
+/// Record the instantiation each class that declares no parameters of its own
+/// reaches its base at.
+///
+/// `class Child extends Base<String>` writes the parent's type argument down
+/// without carrying one, so the child appears in no instantiation tuple and
+/// nothing derives `Base<String>` from it. Every body such a child inherits —
+/// its `super.init`, the methods a call on it reaches — belongs to that
+/// instantiation of the parent, and a non-generic class's own bodies are always
+/// lowered, so the parent's must exist for them to call.
+///
+/// Discoveries are recorded in a fixed order: the definitions come out of a
+/// hash map, and the registry's order decides the order bodies are emitted in,
+/// which a byte-reproducible build depends on.
+fn record_pinned_base_class_instantiations(type_checker: &mut TypeChecker) {
+    let mut discovered: Vec<(String, Vec<Type>)> = type_checker
+        .type_definitions()
+        .iter()
+        .filter(|(_, def)| matches!(def, TypeDefinition::Class(class) if class.generics.is_none()))
+        .filter_map(|(class_name, _)| {
+            mir::lowering::inherited_instantiation::base_class_instantiation(
+                type_checker.type_definitions(),
+                class_name,
+                &[],
+            )
+        })
+        .filter(|(_, args)| {
+            args.iter()
+                .all(|arg| mir::lowering::has_a_monomorphized_spelling(&arg.kind))
+        })
+        .collect();
+    discovered.sort_by_cached_key(|(name, args)| {
+        mir::lowering::dispatch::mangle_instantiation_name(name, args)
+    });
+    for (name, args) in discovered {
+        type_checker.record_generic_class_instantiation(&name, args);
+    }
 }
 
 /// Record the instantiations a program reaches only through a return type.

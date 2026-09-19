@@ -16,7 +16,7 @@ use crate::codegen::cranelift::translator::{
 use crate::error::CodegenError;
 use crate::mir::rc::{is_field_managed, is_optional_payload_managed};
 use crate::runtime_fns::rt;
-use crate::type_checker::context::{ClassDefinition, EnumDefinition, TypeDefinition};
+use crate::type_checker::context::{EnumDefinition, TypeDefinition};
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
@@ -262,30 +262,6 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Error
             | TypeKind::Linear(_) => false,
         }
-    }
-
-    /// A field of a generic class as one instantiation actually stores it.
-    ///
-    /// `inst_args` is the recorded instantiation's ordered type arguments, so a
-    /// `Box<String>` resolves `value T` to `String` and `items List<T>` to
-    /// `List<String>` — the nested element too, which is what a collection-backed
-    /// class needs to release what it holds. Returns the field type unchanged
-    /// when the class is not generic or no per-instantiation arguments are
-    /// available (the shared bare-name thunk).
-    pub fn instantiated_field_type(
-        class_def: &ClassDefinition,
-        field_ty: &Type,
-        inst_args: Option<&[Type]>,
-    ) -> Type {
-        let (Some(generics), Some(args)) = (class_def.generics.as_ref(), inst_args) else {
-            return field_ty.clone();
-        };
-        let subs: HashMap<String, Type> = generics
-            .iter()
-            .zip(args)
-            .map(|(generic, arg)| (generic.name.clone(), arg.clone()))
-            .collect();
-        crate::mir::lowering::apply_generic_sub(field_ty, &subs)
     }
 
     /// Address of the comparator to register as a container's `elem_compare_fn`
@@ -1081,24 +1057,29 @@ impl<'a> FunctionTranslator<'a> {
                 Self::emit_enum_drop(builder, ctx, enum_def, inst_args, payload_ptr, type_ctx)
             }
             TypeDefinition::Class(class_def) => {
-                use crate::type_checker::context::collect_class_fields_all;
-                let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
-                // A field of a generic class is written in the class's own type
-                // parameters (`value T`, `items List<T>`), which name nothing
-                // concrete on their own. The per-instantiation drop thunk
-                // (`__drop_Box__String`) supplies `inst_args`, so every field
-                // resolves to the kind this instantiation actually stores: a
-                // managed one joins the DecRef set at that kind, a scalar one is a
-                // genuine no-op and is skipped. Substituting the whole field type
-                // rather than only a bare parameter is what reaches an element type
-                // nested inside a collection field. The shared bare-name thunk
-                // (`inst_args = None`) is only reached as a collection element's
-                // decref helper; there the direct drop already routed through the
-                // mangled thunk, so an unresolvable generic field is skipped here.
+                // A field of a generic class is written in the type parameters
+                // of the class that declares it (`value T`, `items List<T>`),
+                // which name nothing concrete on their own. The
+                // per-instantiation drop thunk (`__drop_Box__String`) supplies
+                // `inst_args`, and the `extends` chain carries them on to every
+                // ancestor, so each field resolves to the kind this instance
+                // actually stores: a managed one joins the DecRef set at that
+                // kind, a scalar one is a genuine no-op and is skipped.
+                // Substituting the whole field type rather than only a bare
+                // parameter is what reaches an element type nested inside a
+                // collection field. The shared bare-name thunk (`inst_args =
+                // None`) is only reached as a collection element's decref
+                // helper; there the direct drop already routed through the
+                // mangled thunk, so an unresolvable generic field is skipped.
+                let resolved =
+                    crate::mir::lowering::inherited_instantiation::instantiated_field_types(
+                        type_ctx.type_definitions,
+                        type_name,
+                        inst_args.unwrap_or_default(),
+                    );
                 let mut managed_fields: Vec<(usize, TypeKind)> = Vec::new();
-                for (idx, (_field_name, fi)) in all_fields.iter().enumerate() {
-                    let resolved = Self::instantiated_field_type(class_def, &fi.ty, inst_args);
-                    let kind = &resolved.kind;
+                for (idx, field_ty) in resolved.iter().enumerate() {
+                    let kind = &field_ty.kind;
                     if class_def.generics.is_some()
                         && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
                     {

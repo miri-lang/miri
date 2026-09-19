@@ -56,28 +56,6 @@ pub(crate) fn declaring_class_instantiation(
     None
 }
 
-/// Whether a body for `method_name` is compiled under `class_def`'s own name.
-///
-/// That holds for a method the class declares, and equally for one a trait it
-/// lists supplies a default for: a default is re-lowered once per implementing
-/// class, under that class's symbol, so the class owns that body as much as a
-/// written method. Only a method reached through `extends` belongs elsewhere.
-fn compiles_its_own_body(
-    class_def: &crate::type_checker::context::ClassDefinition,
-    method_name: &str,
-    type_definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    class_def.methods.contains_key(method_name)
-        || class_def.traits.iter().any(|trait_name| {
-            crate::type_checker::context::find_trait_default_method(
-                type_definitions,
-                trait_name,
-                method_name,
-            )
-            .is_some()
-        })
-}
-
 /// The class `class_name` extends and the type arguments it is instantiated at
 /// when `class_name` carries `type_args`.
 ///
@@ -108,6 +86,94 @@ pub(crate) fn base_class_instantiation(
     Some((base.to_string(), base_args))
 }
 
+/// The type each field of an instance of `class_name` at `type_args` is stored
+/// at, in the order [`collect_class_fields_all`] lists them.
+///
+/// A field is written in the parameters of the class that *declares* it, and a
+/// class reaches its parent's parameters through its own `extends` clause. So
+/// each ancestor's fields are substituted by the arguments that ancestor is
+/// reached at — `class Child extends Base<String>` stores `Base`'s `value T` as
+/// a `String` although the child carries no parameter — and never by the
+/// arguments of the class furthest down, whose parameters may share a name with
+/// the parent's and mean something else entirely.
+///
+/// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
+pub(crate) fn instantiated_field_types(
+    type_definitions: &HashMap<String, TypeDefinition>,
+    class_name: &str,
+    type_args: &[Type],
+) -> Vec<Type> {
+    ancestry_instantiations(type_definitions, class_name, type_args)
+        .iter()
+        .rev()
+        .flat_map(|(class_def, args)| {
+            let subs = class_substitution(class_def, args).unwrap_or_default();
+            class_def
+                .fields
+                .iter()
+                .map(move |(_, field)| super::apply_generic_sub(&field.ty, &subs))
+        })
+        .collect()
+}
+
+/// Whether a body for `method_name` is compiled under `class_def`'s own name.
+///
+/// That holds for a method the class declares, and equally for one a trait it
+/// lists supplies a default for: a default is re-lowered once per implementing
+/// class, under that class's symbol, so the class owns that body as much as a
+/// written method. Only a method reached through `extends` belongs elsewhere.
+fn compiles_its_own_body(
+    class_def: &crate::type_checker::context::ClassDefinition,
+    method_name: &str,
+    type_definitions: &HashMap<String, TypeDefinition>,
+) -> bool {
+    class_def.methods.contains_key(method_name)
+        || class_def.traits.iter().any(|trait_name| {
+            crate::type_checker::context::find_trait_default_method(
+                type_definitions,
+                trait_name,
+                method_name,
+            )
+            .is_some()
+        })
+}
+
+/// `class_name` and every class it extends, nearest first, each paired with the
+/// type arguments it is reached at.
+///
+/// The walk visits exactly the classes [`collect_class_fields_all`] does, so a
+/// caller can pair the two results field by field. A circular `extends` is
+/// reported where the class is declared; bounding the walk by the number of
+/// definitions keeps this from hanging before that report is produced.
+///
+/// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
+fn ancestry_instantiations<'a>(
+    type_definitions: &'a HashMap<String, TypeDefinition>,
+    class_name: &str,
+    type_args: &[Type],
+) -> Vec<(&'a crate::type_checker::context::ClassDefinition, Vec<Type>)> {
+    let mut chain = Vec::new();
+    let mut next = Some((class_name.to_string(), type_args.to_vec()));
+    for _ in 0..=type_definitions.len() {
+        let Some((current, current_args)) = next.take() else {
+            break;
+        };
+        let Some(TypeDefinition::Class(class_def)) = type_definitions.get(&current) else {
+            break;
+        };
+        // An ancestor whose arguments the `extends` chain does not pin — a
+        // non-generic parent, or one reached through a clause that fills none
+        // of its parameters — is reached at no arguments, and its fields keep
+        // the spelling they were declared with.
+        next = class_def.base_class.as_ref().map(|base| {
+            base_class_instantiation(type_definitions, &current, &current_args)
+                .unwrap_or_else(|| (base.clone(), Vec::new()))
+        });
+        chain.push((class_def, current_args));
+    }
+    chain
+}
+
 /// Whether `class_name` declares generic parameters.
 fn class_takes_generics(
     class_name: &str,
@@ -121,11 +187,16 @@ fn class_takes_generics(
 
 /// `class_def`'s generic parameters paired with `class_args`, or `None` when
 /// the counts disagree and the pairing would be a guess.
+///
+/// A class that declares no parameters substitutes nothing: it is reached at no
+/// arguments, and whatever its `extends` clause writes is already concrete.
 fn class_substitution(
     class_def: &crate::type_checker::context::ClassDefinition,
     class_args: &[Type],
 ) -> Option<HashMap<String, Type>> {
-    let generics = class_def.generics.as_ref()?;
+    let Some(generics) = class_def.generics.as_ref() else {
+        return class_args.is_empty().then(HashMap::new);
+    };
     if generics.len() != class_args.len() {
         return None;
     }
@@ -326,6 +397,153 @@ mod tests {
         assert!(
             declaring_class_instantiation(&defs, "Child", &[string_type()], "equals").is_none()
         );
+    }
+
+    /// `class_def` with one field named `value` at `field_ty`.
+    fn with_field(mut class_def: ClassDefinition, field_ty: Type) -> ClassDefinition {
+        class_def.fields.push((
+            "value".to_string(),
+            crate::type_checker::context::FieldInfo {
+                ty: field_ty,
+                mutable: false,
+                visibility: MemberVisibility::Public,
+            },
+        ));
+        class_def
+    }
+
+    fn custom_type(name: &str) -> Type {
+        Type::new(TypeKind::Custom(name.to_string(), None), span())
+    }
+
+    fn list_of(element: Type) -> Type {
+        Type::new(
+            TypeKind::List(Box::new(
+                crate::type_checker::TypeChecker::new().create_type_expression(element),
+            )),
+            span(),
+        )
+    }
+
+    #[test]
+    fn a_field_resolves_to_the_argument_at_its_parameter_position() {
+        let mut pair = class("Pair", &["K", "V"], None, false);
+        pair = with_field(pair, generic_type("V"));
+        let defs = definitions(vec![pair]);
+        let int = Type::new(TypeKind::Int, span());
+
+        let fields = instantiated_field_types(&defs, "Pair", &[string_type(), int]);
+
+        assert_eq!(fields[0].kind, TypeKind::Int);
+    }
+
+    #[test]
+    fn a_field_spelled_as_a_bare_custom_name_also_resolves() {
+        // A field declared `value T` can reach lowering as `Custom("T", None)`
+        // rather than `Generic("T")`; both spellings must resolve identically.
+        let box_def = with_field(class("Box", &["T"], None, false), custom_type("T"));
+        let defs = definitions(vec![box_def]);
+
+        let fields = instantiated_field_types(&defs, "Box", &[string_type()]);
+
+        assert_eq!(fields[0].kind, TypeKind::String);
+    }
+
+    #[test]
+    fn an_element_type_nested_in_a_collection_field_resolves() {
+        // `items [T]` is what a collection-backed generic class declares. The
+        // element type has to be substituted too, or the list is dropped
+        // without ever releasing what it holds.
+        let box_def = with_field(
+            class("Box", &["T"], None, false),
+            list_of(generic_type("T")),
+        );
+        let defs = definitions(vec![box_def]);
+
+        let fields = instantiated_field_types(&defs, "Box", &[string_type()]);
+
+        let TypeKind::List(element) = &fields[0].kind else {
+            panic!("expected a list field, got {:?}", fields[0].kind);
+        };
+        let crate::ast::expression::ExpressionKind::Type(element, _) = &element.node else {
+            panic!("expected a resolved element type argument");
+        };
+        assert_eq!(element.kind, TypeKind::String);
+    }
+
+    #[test]
+    fn a_field_naming_a_non_parameter_type_is_left_as_written() {
+        let box_def = with_field(class("Box", &["T"], None, false), custom_type("Widget"));
+        let defs = definitions(vec![box_def]);
+
+        let fields = instantiated_field_types(&defs, "Box", &[string_type()]);
+
+        assert_eq!(fields[0].kind, custom_type("Widget").kind);
+    }
+
+    #[test]
+    fn a_field_reached_without_arguments_is_left_as_written() {
+        // The shared bare-name drop thunk carries no arguments; the field stays
+        // spelled as its parameter rather than being guessed at.
+        let box_def = with_field(class("Box", &["T"], None, false), generic_type("T"));
+        let defs = definitions(vec![box_def]);
+
+        let fields = instantiated_field_types(&defs, "Box", &[]);
+
+        assert_eq!(fields[0].kind, generic_type("T").kind);
+    }
+
+    #[test]
+    fn an_inherited_field_resolves_to_what_the_extends_clause_pins() {
+        let base = with_field(class("Base", &["T"], None, false), generic_type("T"));
+        let mut child = class("Child", &[], Some(("Base", vec![string_type()])), false);
+        child.generics = None;
+        let defs = definitions(vec![base, child]);
+
+        let fields = instantiated_field_types(&defs, "Child", &[]);
+
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].kind, TypeKind::String);
+    }
+
+    #[test]
+    fn an_inherited_field_is_substituted_by_the_parents_arguments_not_the_childs() {
+        // Both classes name their parameter `T`, and the clause binds the
+        // parent's to something else: a single flat substitution would give the
+        // parent's field the child's argument.
+        let base = with_field(class("Base", &["T"], None, false), generic_type("T"));
+        let int = Type::new(TypeKind::Int, span());
+        let child = with_field(
+            class("Child", &["T"], Some(("Base", vec![int])), false),
+            generic_type("T"),
+        );
+        let defs = definitions(vec![base, child]);
+
+        let fields = instantiated_field_types(&defs, "Child", &[string_type()]);
+
+        // The parent's fields come first: `collect_class_fields_all` lists the
+        // root class's before the ones declared below it.
+        assert_eq!(fields[0].kind, TypeKind::Int);
+        assert_eq!(fields[1].kind, TypeKind::String);
+    }
+
+    #[test]
+    fn a_field_of_a_non_generic_ancestor_keeps_its_own_type() {
+        let mut base = class("Base", &[], None, false);
+        base.generics = None;
+        base = with_field(base, string_type());
+        let child = with_field(
+            class("Child", &["T"], Some(("Base", Vec::new())), false),
+            generic_type("T"),
+        );
+        let defs = definitions(vec![base, child]);
+
+        let int = Type::new(TypeKind::Int, span());
+        let fields = instantiated_field_types(&defs, "Child", &[int]);
+
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].kind, TypeKind::String);
+        assert_eq!(fields[1].kind, TypeKind::Int);
     }
 
     #[test]
