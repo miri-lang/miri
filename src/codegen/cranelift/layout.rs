@@ -415,7 +415,15 @@ fn enum_aggregate_size(enum_def: &EnumDefinition, ptr_size: u32) -> u32 {
     let max_payload = enum_def
         .variants
         .values()
-        .map(|fields| (fields.len() as u32) * ptr_size)
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|ty| match &ty.kind {
+                    TypeKind::I128 | TypeKind::U128 => 16u32,
+                    _ => ptr_size,
+                })
+                .sum::<u32>()
+        })
         .max()
         .unwrap_or(0);
     ptr_size + max_payload
