@@ -966,7 +966,11 @@ impl<'a> FunctionTranslator<'a> {
 
         for &val in translated {
             let ty = builder.func.dfg.value_type(val);
-            let align = if is_enum { ptr_size } else { ty.bytes() };
+            let align = if is_enum {
+                ptr_size.max(ty.bytes())
+            } else {
+                ty.bytes()
+            };
             max_align = max_align.max(align);
 
             let align_u64 = align as u64;
@@ -978,7 +982,7 @@ impl<'a> FunctionTranslator<'a> {
             })?;
             field_offsets.push(offset_u32);
             current_offset += if is_enum {
-                ptr_size as u64
+                (ptr_size as u64).max(ty.bytes() as u64)
             } else {
                 ty.bytes() as u64
             };

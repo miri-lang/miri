@@ -1433,8 +1433,6 @@ fn estimated_type_size<'a>(
 }
 
 impl TypeChecker {
-    // ==================== Visible Type Resolution ====================
-
     /// Registers a type definition and marks it as visible to user code.
     ///
     /// All type registrations should go through this method so that
@@ -1475,15 +1473,11 @@ impl TypeChecker {
         self.type_table.visible_type_names.contains(name)
     }
 
-    // ==================== Error Type Helper ====================
-
     /// Creates an error type. Use this when type checking fails.
     #[inline]
     pub(crate) fn error_type() -> Type {
         make_type(TypeKind::Error)
     }
-
-    // ==================== Type Predicates ====================
 
     /// Checks if a type is numeric (any integer or float type).
     pub(crate) fn is_numeric(&self, t: &Type) -> bool {
@@ -1537,8 +1531,6 @@ impl TypeChecker {
             _ => None,
         }
     }
-
-    // ==================== Visibility Checking ====================
 
     /// Checks if a symbol with the given visibility is accessible from the current module.
     pub(crate) fn check_visibility(&self, visibility: &MemberVisibility, module: &str) -> bool {
@@ -1690,8 +1682,6 @@ impl TypeChecker {
         }
         bindings
     }
-
-    // ==================== Type Expression Helpers ====================
 
     /// Creates a type expression from a Type.
     pub(crate) fn create_type_expression(&self, ty: Type) -> Expression {
@@ -1862,8 +1852,6 @@ impl TypeChecker {
         false
     }
 
-    // ==================== Name and Type Extraction ====================
-
     /// Extracts a name from an identifier expression.
     pub(crate) fn extract_name<'a>(&self, expr: &'a Expression) -> Result<&'a str, String> {
         match &expr.node {
@@ -1907,8 +1895,6 @@ impl TypeChecker {
             _ => Err("Expected type expression".to_string()),
         }
     }
-
-    // ==================== Type Resolution ====================
 
     /// Resolves a type expression to a concrete Type.
     ///
@@ -2577,8 +2563,6 @@ impl TypeChecker {
         }
     }
 
-    // ==================== Mutability Checking ====================
-
     /// Checks if an expression is mutable (can be assigned to).
     #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn is_mutable_expression(&self, expr: &Expression, context: &Context) -> bool {
@@ -2616,8 +2600,6 @@ impl TypeChecker {
             _ => false,
         }
     }
-
-    // ==================== Constant Evaluation ====================
 
     /// Tries to evaluate a constant integer expression at compile time.
     ///
@@ -2716,8 +2698,6 @@ impl TypeChecker {
             _ => None,
         }
     }
-
-    // ==================== Error Reporting ====================
 
     /// Reports a type error, deduplicating identical (message, span) pairs.
     /// Reports a syntax error from an imported module, preserving its original
@@ -2987,8 +2967,6 @@ impl TypeChecker {
             repair,
         });
     }
-
-    // ==================== Recursive Type Detection ====================
 
     /// Checks whether a field type contains the struct `target_name` directly
     /// (without going through an optional/pointer indirection), which would
