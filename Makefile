@@ -2,6 +2,13 @@
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
+# Roughly a third of each integration test is spent blocked rather than
+# computing: the test links an executable with `cc` and then waits on the
+# kernel to authorise the exec of a file that did not exist a moment ago. More
+# threads than cores therefore still pay off. Override on a loaded machine:
+# `make test TEST_THREADS=4`.
+TEST_THREADS ?= 8
+
 # Build every runtime static library in RELEASE. The compiler links
 # `src/runtime/<name>/target/release` in preference to `target/debug`
 # (see `runtime_library_dir` in src/pipeline.rs), so the release staticlib
@@ -29,7 +36,7 @@ release: runtimes
 	cargo build --release
 
 test: runtimes
-	cargo test -- --test-threads=4
+	cargo test -- --test-threads=$(TEST_THREADS)
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Testing $$rt"; \
