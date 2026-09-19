@@ -2507,6 +2507,12 @@ impl TypeChecker {
         }
     }
 
+    // TODO: the walk below is unbounded, so two classes that extend each other
+    // spin here forever instead of the cycle being reported — `class A extends
+    // B` beside `class B extends A` hangs the compiler on `A()`, with no
+    // diagnostic. The fix is a report at the class declaration, not only a
+    // bound here: every other base-class walk that bounds itself does so
+    // expecting that report to exist, and nothing produces it.
     fn find_init_method(
         &self,
         def: &crate::type_checker::context::ClassDefinition,

@@ -8,8 +8,8 @@ use std::rc::Rc;
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
-    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeDeclarationKind,
-    TypeKind, VariableDeclaration, WhileStatementType, ITERABLE_TRAIT_NAME,
+    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
+    VariableDeclaration, WhileStatementType,
 };
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -17,7 +17,6 @@ use crate::mir::{
     BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind, Terminator,
     TerminatorKind,
 };
-use crate::type_checker::context::TypeDefinition;
 
 use super::{lower_expression, lower_statement, LoweringContext};
 
@@ -337,49 +336,12 @@ fn resolve_loop_elem_type(
             if BuiltinCollectionKind::from_name(name).is_none()
                 && name != crate::ast::types::TUPLE_TYPE_NAME =>
         {
-            resolve_iterable_trait_element_type(ctx, ty).unwrap_or_else(|| ty.clone())
+            ctx.type_checker
+                .iterable_element_type(ty)
+                .unwrap_or_else(|| ty.clone())
         }
         _ => ty.clone(),
     }
-}
-
-/// Resolve the element type a class yields as `Iterable<T>`, read from the trait
-/// arguments recorded on its definition. For generic classes, substitutes the trait's
-/// type argument using the instantiation's type parameters.
-/// E.g., Class<int> implementing Iterable<T> becomes Iterable<int>.
-/// This mirrors the parallel fix in src/type_checker/utils.rs and must stay in sync:
-/// both sites substitute the element type before returning.
-/// `None` when the class does not implement the trait or leaves its type argument unspecified.
-fn resolve_iterable_trait_element_type(ctx: &LoweringContext, class_ty: &Type) -> Option<Type> {
-    let TypeKind::Custom(class_name, args) = &class_ty.kind else {
-        return None;
-    };
-    let Some(TypeDefinition::Class(class_def)) =
-        ctx.type_checker.type_definitions().get(class_name)
-    else {
-        return None;
-    };
-    let trait_args = class_def.trait_args.get(ITERABLE_TRAIT_NAME)?;
-
-    // If trait_args is empty (malformed trait declaration), fall back to Generic("T")
-    // to match the behavior in src/type_checker/utils.rs and ensure type checker and
-    // MIR lowering agree on the element type.
-    let elem_ty = trait_args.first().cloned().unwrap_or_else(|| {
-        Type::new(
-            TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
-            class_ty.span,
-        )
-    });
-
-    if let Some(class_generics) = &class_def.generics {
-        if args.is_some() {
-            let subs =
-                super::build_class_generic_substitution(ctx.type_checker, class_generics, class_ty);
-            return Some(super::apply_generic_sub(&elem_ty, &subs));
-        }
-    }
-
-    Some(elem_ty)
 }
 
 /// The type of the second loop variable: a map's value, else a list index.
@@ -437,7 +399,12 @@ fn setup_loop_variable(
     }
 }
 
-/// Determine the iterable class and its method symbols if it implements Iterable.
+/// The class a `for` loop iterates through `length` and `element_at` calls,
+/// or `None` when the iterable is indexed directly.
+///
+/// Iterability is decided by the type checker's own rule, so a loop the
+/// checker typed is never lowered as a bare indexed walk — which would read the
+/// object's own words as elements.
 fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<String> {
     ctx.type_checker
         .get_type(iterable_id)
@@ -464,15 +431,23 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
             }
             _ => None,
         })
-        // TODO: a class reaching `Iterable` through a trait that extends it or
-        // through a class it extends is not found here; the type checker's
-        // element-type resolution refuses it first, and both must move together.
-        .filter(|name| {
-            matches!(
-                ctx.type_checker.type_definitions().get(name),
-                Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == ITERABLE_TRAIT_NAME)
-            )
-        })
+        .filter(|name| ctx.type_checker.class_is_iterable(name))
+}
+
+/// The class whose body a `for` loop over `class_name` calls for `method_name`.
+///
+/// A class that inherits `length` or `element_at` gets no copy of it: the body
+/// belongs to the nearest ancestor that declares it and is compiled under that
+/// ancestor's name. A class that declares or overrides the method answers for
+/// itself, so the two are resolved separately — an override of one does not
+/// move the other.
+fn iterable_method_owner(ctx: &LoweringContext, class_name: &str, method_name: &str) -> String {
+    crate::type_checker::context::class_method_declaration(
+        class_name,
+        method_name,
+        ctx.type_checker.type_definitions(),
+    )
+    .map_or_else(|| class_name.to_string(), |(owner, _)| owner.to_string())
 }
 
 /// Emit length check and loop header condition.
@@ -492,7 +467,8 @@ fn emit_loop_length(
         });
         return;
     };
-    let length_symbol = format!("{}_length", class_name);
+    let owner = iterable_method_owner(ctx, class_name, "length");
+    let length_symbol = format!("{owner}_length");
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
@@ -568,8 +544,9 @@ fn emit_element_at_call(
     class_name: &str,
     span: &Span,
 ) {
-    let mut element_at_symbol = String::with_capacity(class_name.len() + 11);
-    element_at_symbol.push_str(class_name);
+    let owner = iterable_method_owner(ctx, class_name, "element_at");
+    let mut element_at_symbol = String::with_capacity(owner.len() + 11);
+    element_at_symbol.push_str(&owner);
     element_at_symbol.push_str("_element_at");
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
