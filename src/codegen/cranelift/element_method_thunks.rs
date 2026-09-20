@@ -72,6 +72,14 @@ impl ElementMethod {
     ///
     /// Only a class does: a value type's bytes already answer it, and an enum
     /// may be stored as a bare discriminant the thunk's null guard would misread.
+    ///
+    /// TODO: an enum that declares `equals` is therefore matched by its bytes
+    /// anyway, so a set keeps two elements its own `equals` calls the same one,
+    /// with nothing reported. Widening this needs the enum's element methods
+    /// given a body per instantiation in the same pass: one shared body serves
+    /// every instantiation today, while the name built for a recorded one is
+    /// mangled, so a bare widening emits a symbol nothing defines and turns a
+    /// wrong answer into a link failure.
     pub(crate) fn is_answered_by(
         self,
         type_name: &str,
