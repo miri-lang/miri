@@ -147,3 +147,102 @@ fn main()
         "0.75\n42",
     );
 }
+
+#[test]
+fn index_compound_assignment_keeps_a_float_element() {
+    // The temp holding the arithmetic result was typed `int` whatever the
+    // element was, so a float element's sum was truncated on its way into the
+    // temp and then stored back. The field axis reads its own slot's type; the
+    // index axis now reads the collection's element type.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List([1.5, 2.0])
+    xs[0] += 2.25
+    println(f"{xs[0]}")
+"#,
+        "3.75",
+    );
+}
+
+#[test]
+fn index_compound_assignment_honours_every_operator_on_floats() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List([10.0])
+    xs[0] -= 2.5
+    let a = xs[0]
+    println(f"{a}")
+    xs[0] *= 2.0
+    let b = xs[0]
+    println(f"{b}")
+    xs[0] /= 4.0
+    let c = xs[0]
+    println(f"{c}")
+"#,
+        "7.5
+15.0
+3.75",
+    );
+}
+
+#[test]
+fn index_compound_assignment_keeps_an_f32_element() {
+    // The element is written before it is combined, rather than coming from the
+    // literal: a `List<f32>` built from a literal reads back zeros, which is a
+    // defect in how such a list is constructed and has nothing to do with the
+    // arithmetic being tested here.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List<f32>([0.0, 0.0])
+    xs[0] = 1.5
+    xs[0] += 2.25
+    println(f"{xs[0]}")
+"#,
+        "3.75",
+    );
+}
+
+#[test]
+fn index_compound_assignment_keeps_a_float_array_element() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+fn main()
+    var xs = Array<float, 2>()
+    xs[0] = 1.5
+    xs[0] += 2.25
+    println(f"{xs[0]}")
+"#,
+        "3.75",
+    );
+}
+
+#[test]
+fn index_compound_assignment_leaves_integer_elements_alone() {
+    // The integer case was always right and has to stay right: reading the
+    // element type must not change what an `int` element does.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List([10, 20])
+    xs[0] += 5
+    let a = xs[0]
+    xs[1] %= 7
+    let b = xs[1]
+    println(f"{a} {b}")
+"#,
+        "15 6",
+    );
+}

@@ -794,12 +794,14 @@ fn emit_map_get_checked_call(
     Operand::Copy(Place::new(temp))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assign_to_index_array(
     ctx: &mut LoweringContext,
     obj: &Expression,
     idx: &Expression,
     op: &crate::ast::operator::AssignmentOp,
     val: Operand,
+    elem_ty: Option<&Type>,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
@@ -834,7 +836,7 @@ fn assign_to_index_array(
         | crate::ast::operator::AssignmentOp::AssignMul
         | crate::ast::operator::AssignmentOp::AssignDiv
         | crate::ast::operator::AssignmentOp::AssignMod => {
-            assign_to_index_compound(ctx, &target_place, op, val.clone(), expr)?;
+            assign_to_index_compound(ctx, &target_place, op, val.clone(), elem_ty, expr)?;
         }
     }
 
@@ -877,17 +879,17 @@ fn assign_to_index_compound(
     target_place: &Place,
     op: &crate::ast::operator::AssignmentOp,
     val: Operand,
+    elem_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     let bin_op = compound_binary_op(op)?;
 
     let lhs_op = Operand::Copy(target_place.clone());
-    // TODO: the temp holding the result is typed `int` whatever the element is,
-    // so `xs[0] += 2.25` on a list of floats truncates the sum and stores 3
-    // where 3.75 belongs. It needs the indexed collection's element type, the
-    // way a field's compound assignment reads the field's own slot in
-    // `compound_field_result_type`.
-    let _temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+    // The result is a value of the element's own type. Typing it `int`
+    // regardless truncated a float element's sum on its way into the temp, and
+    // the truncated value was what got stored back.
+    let result_ty = compound_field_result_type(elem_ty, expr.span);
+    let _temp = ctx.push_temp(result_ty, expr.span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
@@ -1030,7 +1032,13 @@ pub(crate) fn lower_assignment_expr(
                     Some(obj_ty) => lower_stored_value(ctx, rhs, obj_ty, ELEMENT_SLOT)?.0,
                     None => lower_expression(ctx, rhs, None)?,
                 };
-                assign_to_index_array(ctx, obj, idx, op, val, expr, dest)
+                // A compound write combines into a value of the element's own
+                // type, so the element type travels with the call the way a
+                // field's declaring slot does.
+                let elem_ty = obj_ty
+                    .as_ref()
+                    .and_then(|ty| collection_slot_type(ctx, ty, ELEMENT_SLOT));
+                assign_to_index_array(ctx, obj, idx, op, val, elem_ty.as_ref(), expr, dest)
             } else {
                 Err(LoweringError::unsupported_lhs(
                     "Expected Index expression",
