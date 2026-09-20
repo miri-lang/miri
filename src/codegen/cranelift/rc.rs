@@ -896,18 +896,42 @@ impl<'a> FunctionTranslator<'a> {
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> String {
-        let monomorphized = Self::extract_type_args_from_exprs(type_args).is_none_or(|args| {
-            args.iter().all(|arg| {
-                crate::mir::lowering::is_monomorphizable_type_argument(
-                    &arg.kind,
-                    type_ctx.type_definitions,
-                )
-            })
+        // Every argument has to be a written type: a body is monomorphized for
+        // types, so an instantiation carrying a value — the size of a value
+        // generic — gets no per-instantiation method body and must be named at
+        // the shared one.
+        let written = match type_args {
+            None => Vec::new(),
+            Some(args) => match Self::extract_type_args_from_exprs(Some(args)) {
+                Some(written) => written,
+                None => return class_name.to_string(),
+            },
+        };
+        let monomorphized = written.iter().all(|arg| {
+            crate::mir::lowering::is_monomorphizable_type_argument(
+                &arg.kind,
+                type_ctx.type_definitions,
+            )
         });
         if !monomorphized {
             return class_name.to_string();
         }
         Self::generic_drop_thunk_name_part(class_name, type_args, type_ctx)
+    }
+
+    /// The type an instantiation argument stands for, as the registry recorded
+    /// it: a written type, or the marker a value argument denotes.
+    ///
+    /// A value-generic class is recorded at arguments that include the size,
+    /// wrapped in a marker type. Skipping the value here would mangle a
+    /// different name than the thunk generated for that instantiation, and the
+    /// call would fall back to the shared thunk — which skips a field still
+    /// written at a parameter, leaving a managed one unreleased.
+    fn instantiation_argument(arg: &Expression) -> Option<Type> {
+        if let ExpressionKind::Type(ty, _) = &arg.node {
+            return Some((**ty).clone());
+        }
+        crate::type_checker::generics::value_generic_slot(arg)
     }
 
     /// Extract Type arguments from Expression type arguments.
@@ -955,10 +979,10 @@ impl<'a> FunctionTranslator<'a> {
         };
         let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
         for arg in args {
-            let ExpressionKind::Type(ty, _) = &arg.node else {
+            let Some(ty) = Self::instantiation_argument(arg) else {
                 return class_name.to_string();
             };
-            concrete.push((**ty).clone());
+            concrete.push(ty);
         }
         let want = mangle_class_instantiation(class_name, &concrete);
         let recorded = type_ctx
