@@ -458,6 +458,68 @@ class B extends A
 }
 
 #[test]
+fn test_circular_inheritance_reported_when_the_class_is_also_constructed() {
+    // Declaring the cycle was always reported. Constructing one of the classes
+    // sent the checker down a base-class walk with no bound, which spun instead
+    // of letting the report it had already made be printed — so the compiler
+    // never finished and said nothing.
+    let code = "
+class A extends B
+    fn f() int
+        return 1
+
+class B extends A
+    fn g() int
+        return 2
+
+fn main()
+    let a = A()
+    println(f\"{a.f()}\")
+    ";
+    type_checker_error_test(code, "Circular inheritance");
+}
+
+#[test]
+fn test_circular_inheritance_through_three_classes_is_reported() {
+    let code = "
+class A extends B
+    fn f() int
+        return 1
+
+class B extends C
+    fn g() int
+        return 2
+
+class C extends A
+    fn h() int
+        return 3
+
+fn main()
+    let a = A()
+    println(f\"{a.f()}\")
+    ";
+    type_checker_error_test(code, "Circular inheritance");
+}
+
+#[test]
+fn test_circular_inheritance_with_fields_is_reported_when_constructed() {
+    // Fields bring the ancestor-field collection into the walk as well, which
+    // was unbounded on the same shape.
+    let code = "
+class A extends B
+    var x int
+
+class B extends A
+    var y int
+
+fn main()
+    let a = A()
+    println(f\"{a.x}\")
+    ";
+    type_checker_error_test(code, "Circular inheritance");
+}
+
+#[test]
 fn test_class_deep_inheritance_chain() {
     type_checker_test(
         "
@@ -590,4 +652,18 @@ class Dog extends Animal
 let d = Dog()
 ",
     );
+}
+
+#[test]
+fn test_a_class_extending_itself_is_reported_when_constructed() {
+    let code = "
+class Solo extends Solo
+    fn f() int
+        return 1
+
+fn main()
+    let s = Solo()
+    println(f\"{s.f()}\")
+    ";
+    type_checker_error_test(code, "Circular inheritance");
 }
