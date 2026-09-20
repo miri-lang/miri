@@ -82,11 +82,9 @@ impl ElementOrder {
             return self.sorts_after_through_callback(left, right);
         }
         let ordering = match self.kind {
-            BY_UNSIGNED_VALUE => {
-                read_unsigned(left, elem_size).cmp(&read_unsigned(right, elem_size))
-            }
+            BY_UNSIGNED_VALUE => compare_unsigned(left, right, elem_size),
             BY_FLOAT_VALUE => compare_floats(left, right, elem_size),
-            _ => read_signed(left, elem_size).cmp(&read_signed(right, elem_size)),
+            _ => compare_signed(left, right, elem_size),
         };
         ordering == Ordering::Greater
     }
@@ -99,6 +97,37 @@ impl ElementOrder {
         compare(left_value, right_value) > 0
     }
 }
+
+/// Orders two signed integer elements by value.
+///
+/// A sixteen-byte slot is compared at its own width; reading it into a 64-bit
+/// word would order two values by their low eight bytes and call any pair that
+/// agrees there equal.
+unsafe fn compare_signed(left: *const u8, right: *const u8, elem_size: usize) -> Ordering {
+    if elem_size == WIDE_ELEMENT_BYTES {
+        return (left as *const i128)
+            .read_unaligned()
+            .cmp(&(right as *const i128).read_unaligned());
+    }
+    read_signed(left, elem_size).cmp(&read_signed(right, elem_size))
+}
+
+/// Orders two unsigned integer elements by value.
+///
+/// Compared at sixteen bytes for the same reason as the signed reading, and as
+/// `u128` so a value with the high bit set is the largest rather than the
+/// smallest.
+unsafe fn compare_unsigned(left: *const u8, right: *const u8, elem_size: usize) -> Ordering {
+    if elem_size == WIDE_ELEMENT_BYTES {
+        return (left as *const u128)
+            .read_unaligned()
+            .cmp(&(right as *const u128).read_unaligned());
+    }
+    read_unsigned(left, elem_size).cmp(&read_unsigned(right, elem_size))
+}
+
+/// The width of an element that holds a 128-bit scalar.
+const WIDE_ELEMENT_BYTES: usize = 16;
 
 /// Reads an element's bytes as a signed 64-bit integer, sign-extending the
 /// common widths. Any other width is zero-padded.
@@ -126,10 +155,8 @@ unsafe fn read_unsigned(ptr: *const u8, elem_size: usize) -> u64 {
 
 /// The first eight bytes of an element, zero-padded when it is narrower.
 ///
-/// TODO: a 128-bit integer element is ordered by its low eight bytes only, so
-/// two values that differ above bit 63 compare by what remains. Reading all
-/// sixteen needs 128-bit values to survive storage first: today one above 64
-/// bits already reads back as zero before any sort sees it.
+/// Reached only by a width that is neither a CPU integer width nor the
+/// sixteen-byte slot, both of which are read at their own width before here.
 unsafe fn padded_word(ptr: *const u8, elem_size: usize) -> [u8; 8] {
     let mut buf = [0u8; 8];
     std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), elem_size.min(8));

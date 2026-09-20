@@ -248,6 +248,15 @@ pub mod rt {
     /// coercions, so a value >= 2^63 formats as its unsigned magnitude rather
     /// than a negative `i64`.
     pub const UINT_TO_STRING: &str = "miri_rt_uint_to_string";
+    /// Compiler-internal: used by the codegen for signed 128-bit int → String
+    /// coercions. Takes the value's address, because 128 bits do not fit the
+    /// value word [`INT_TO_STRING`] is called with.
+    pub const I128_TO_STRING: &str = "miri_rt_i128_to_string";
+    /// Compiler-internal: used by the codegen for unsigned 128-bit int → String
+    /// coercions, so a value >= 2^127 formats as its magnitude rather than a
+    /// negative `i128`. Takes the value's address for the same reason as
+    /// [`I128_TO_STRING`].
+    pub const U128_TO_STRING: &str = "miri_rt_u128_to_string";
 
     // ── Filesystem ────────────────────────────────────────────────────────────
     pub const FS_STATUS: &str = "miri_rt_fs_status";
@@ -461,6 +470,8 @@ pub mod rt {
         F32_TO_STRING,
         INT_TO_STRING,
         UINT_TO_STRING,
+        I128_TO_STRING,
+        U128_TO_STRING,
         // Time
         NANOTIME,
         SLEEP_NANOS,

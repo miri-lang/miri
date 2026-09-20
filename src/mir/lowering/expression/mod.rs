@@ -123,8 +123,10 @@ pub fn lower_expression(
 ///
 /// Handles `String` (identity), `Boolean` (cast to int → `miri_rt_bool_to_string`),
 /// `F32` (`miri_rt_f32_to_string`), `Float`/`F64` (`miri_rt_float_to_string`),
-/// signed integers (`miri_rt_int_to_string`), and unsigned integers
-/// (`miri_rt_uint_to_string`). Returns an error for unsupported types.
+/// signed integers up to 64 bits (`miri_rt_int_to_string`), unsigned integers up
+/// to 64 bits (`miri_rt_uint_to_string`), and the 128-bit widths, which are
+/// passed by address (`miri_rt_i128_to_string` / `miri_rt_u128_to_string`)
+/// because they do not fit a value word. Returns an error for unsupported types.
 pub(super) fn emit_to_string(
     ctx: &mut LoweringContext,
     operand: Operand,
@@ -174,6 +176,35 @@ pub(super) fn emit_to_string(
             let call_args = vec![operand];
             emit_runtime_to_string(ctx, rt::FLOAT_TO_STRING, call_args, span)
         }
+        TypeKind::I128 | TypeKind::U128 => {
+            // 128 bits do not fit the value word the narrower formatters are
+            // called with, so the value travels by address: casting it into a
+            // temp of its own width and handing over that temp's address keeps
+            // every byte, where a value-word call would deliver only the low
+            // one. The cast extends a narrower operand by its own signedness so
+            // the upper half is the value's, not whatever lay beside it.
+            let wide_ty = Type::new(type_kind.clone(), *span);
+            let wide_temp = ctx.push_temp(wide_ty.clone(), *span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(wide_temp),
+                    Rvalue::Cast(Box::new(operand), wide_ty.clone()),
+                ),
+                span: *span,
+            });
+            let addr = crate::mir::lowering::dispatch::spill_operand_to_address(
+                ctx,
+                Operand::Copy(Place::new(wide_temp)),
+                wide_ty,
+                *span,
+            );
+            let runtime_fn = if matches!(type_kind, TypeKind::U128) {
+                rt::U128_TO_STRING
+            } else {
+                rt::I128_TO_STRING
+            };
+            emit_runtime_to_string(ctx, runtime_fn, vec![addr], span)
+        }
         TypeKind::Int
         | TypeKind::I64
         | TypeKind::U64
@@ -183,8 +214,6 @@ pub(super) fn emit_to_string(
         | TypeKind::U32
         | TypeKind::U16
         | TypeKind::U8
-        | TypeKind::I128
-        | TypeKind::U128
         | TypeKind::Error => {
             // Widen to the 64-bit int slot the runtime formatters expect. The
             // cast is signedness-aware, so unsigned types zero-extend and keep
@@ -193,7 +222,7 @@ pub(super) fn emit_to_string(
             // negative `i64`; signed types keep the signed helper.
             let is_unsigned = matches!(
                 type_kind,
-                TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+                TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64
             );
             let int_ty = Type::new(TypeKind::Int, *span);
             let int_temp = ctx.push_temp(int_ty.clone(), *span);
