@@ -21,7 +21,7 @@ use super::helpers::{
     coerce_rvalue_in, gpu_math_return_type, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
-use super::inline_element_take::{inline_element, lower_inline_element_take, ListRemoval};
+use super::inline_element_take::{inline_element, lower_inline_element_read, InlineElementRead};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
@@ -1045,9 +1045,9 @@ pub(super) fn try_lower_collection_intrinsic(
     // reads one value word out of the slot, which for an inline element is a
     // prefix of its components rather than the element.
     if builtin == Some(BuiltinCollectionKind::List) {
-        if let Some(removal) = ListRemoval::of(method_name, args) {
+        if let Some(removal) = InlineElementRead::of(method_name, args) {
             if let Some(element) = inline_element(ctx, obj_ty) {
-                return lower_inline_element_take(ctx, obj, obj_ty, &element, removal, span, dest)
+                return lower_inline_element_read(ctx, obj, obj_ty, &element, removal, span, dest)
                     .map(Some);
             }
         }

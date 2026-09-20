@@ -270,3 +270,118 @@ fn main()
 ";
     assert_runs_with_output(source, "negative none\npast-end none\n2");
 }
+
+#[test]
+fn reading_the_first_and_last_vector_of_a_list_reads_back_every_component() {
+    // `first` and `last` are written once over an opaque element type, so the
+    // body reads one value word out of the slot — for a vector that is a prefix
+    // of its components, and wrapping it as an optional hands back something
+    // whose fields cannot be read.
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    match vs.first()
+        Some(v): println(f"{v.x} {v.y} {v.z}")
+        None: println("none")
+    match vs.last()
+        Some(v): println(f"{v.x} {v.y} {v.z}")
+        None: println("none")
+    println(f"{vs.length()}")
+"#,
+        "1.0 2.0 3.0
+4.0 5.0 6.0
+2",
+    );
+}
+
+#[test]
+fn reading_the_first_vector_does_not_remove_it() {
+    // A peek leaves the list as it was: the element is copied out, not taken.
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    match vs.first()
+        Some(v): println(f"{v.y}")
+        None: println("none")
+    match vs.first()
+        Some(v): println(f"{v.y}")
+        None: println("none")
+    println(f"{vs.length()}")
+"#,
+        "2.0
+2.0
+2",
+    );
+}
+
+#[test]
+fn reading_the_first_and_last_vector_of_an_empty_list_reports_none() {
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List<Vec3<f32>>()
+    match vs.first()
+        Some(v): println(f"{v.y}")
+        None: println("first none")
+    match vs.last()
+        Some(v): println(f"{v.y}")
+        None: println("last none")
+"#,
+        "first none
+last none",
+    );
+}
+
+#[test]
+fn reading_the_first_and_last_vec2_and_vec4_reads_back_every_component() {
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var twos = List([Vec2<f32>(1.0, 2.0), Vec2<f32>(3.0, 4.0)])
+    match twos.first()
+        Some(v): println(f"{v.x} {v.y}")
+        None: println("none")
+    var fours = List([Vec4<f32>(1.0, 2.0, 3.0, 4.0), Vec4<f32>(5.0, 6.0, 7.0, 8.0)])
+    match fours.last()
+        Some(v): println(f"{v.x} {v.y} {v.z} {v.w}")
+        None: println("none")
+"#,
+        "1.0 2.0
+5.0 6.0 7.0 8.0",
+    );
+}
+
+#[test]
+fn a_single_element_list_reads_the_same_vector_as_first_and_last() {
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(7.0, 8.0, 9.0)])
+    match vs.first()
+        Some(v): println(f"{v.y}")
+        None: println("none")
+    match vs.last()
+        Some(v): println(f"{v.y}")
+        None: println("none")
+"#,
+        "8.0
+8.0",
+    );
+}
