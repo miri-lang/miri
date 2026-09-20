@@ -356,8 +356,12 @@ fn rule2_return_tuple_of_managed_params_escapes_each() {
 // ── Rule 3: `return p[i]` — managed vs primitive element ──────────────────
 
 #[test]
-fn rule3_index_managed_element_escapes() {
+fn rule3_index_managed_element_aliases_without_consuming() {
     // `return p[i]` where p has type List<List<int>>; element type managed.
+    //
+    // The element reaches the return, not the list, so the return aliases the
+    // list's heap while the list itself is untouched — a caller goes on using it.
+    // Only a parameter returned as a whole value is consumed.
     let mut types: HashMap<usize, Type> = HashMap::new();
     let params = vec![param("p"), param("i")];
     let p = ident("p", managed_type(), &mut types);
@@ -366,10 +370,11 @@ fn rule3_index_managed_element_escapes() {
 
     let flow = analyze_return_value(&ret, &params, &types, &HashMap::new(), &empty_summaries());
 
-    assert!(flow.direct_escapes.contains(&0));
+    assert!(!flow.direct_escapes.contains(&0));
     assert!(flow.return_aliases.contains(&0));
     // The integer index parameter does not flow into the return.
     assert!(!flow.direct_escapes.contains(&1));
+    assert!(!flow.return_aliases.contains(&1));
 }
 
 #[test]
@@ -390,8 +395,12 @@ fn rule3_index_primitive_element_does_not_escape() {
 // ── Rule 4: `return p.field` — managed vs primitive field ────────────────
 
 #[test]
-fn rule4_member_managed_field_escapes() {
+fn rule4_member_managed_field_aliases_without_consuming() {
     // `return p.cache` where cache: List<int>.
+    //
+    // The field reaches the return, not the object holding it. This is what lets
+    // a class compose two of its own reads: a getter that hands back a field
+    // leaves the object readable afterwards.
     let mut types: HashMap<usize, Type> = HashMap::new();
     let params = vec![param("p")];
     let p = ident("p", managed_type(), &mut types);
@@ -399,7 +408,7 @@ fn rule4_member_managed_field_escapes() {
 
     let flow = analyze_return_value(&ret, &params, &types, &HashMap::new(), &empty_summaries());
 
-    assert!(flow.direct_escapes.contains(&0));
+    assert!(!flow.direct_escapes.contains(&0));
     assert!(flow.return_aliases.contains(&0));
 }
 

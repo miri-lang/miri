@@ -770,3 +770,156 @@ run(List<fn(xs [int]) int>(), List([1, 2, 3]))
         "helper=3\nstill_alive=3",
     );
 }
+
+#[test]
+fn test_a_getter_returning_a_field_does_not_consume_the_receiver() {
+    // Returning one of the receiver's fields hands out a reference to the field,
+    // not the object, so the object is still readable afterwards. Treating it as
+    // a consume made a method that composes two of its own reads unwritable.
+    assert_runs_with_output(
+        r#"
+class Holder
+    v String
+    tag String
+
+    fn init(v String, tag String)
+        self.v = v
+        self.tag = tag
+
+    public fn get() String
+        return self.v
+
+    public fn both() String
+        return self.get() + self.tag
+
+fn main()
+    println(Holder("A".to_lower(), "B".to_lower()).both())
+"#,
+        "ab",
+    );
+}
+
+#[test]
+fn test_a_getter_called_at_a_call_site_does_not_consume_the_binding() {
+    assert_runs_with_output(
+        r#"
+class Holder
+    v String
+    tag String
+
+    fn init(v String, tag String)
+        self.v = v
+        self.tag = tag
+
+    public fn get() String
+        return self.v
+
+fn main()
+    let o = Holder("A".to_lower(), "B".to_lower())
+    println(o.get() + o.tag)
+    println(o.get())
+"#,
+        "ab
+a",
+    );
+}
+
+#[test]
+fn test_a_method_returning_the_receiver_itself_still_consumes_it() {
+    // The receiver is the returned value here, not a projection of it, so the
+    // caller really cannot use it again and must still be refused.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+class Holder
+    items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    public fn into_self() Holder
+        return self
+
+fn main()
+    let o = Holder(List([1, 2]))
+    let taken = o.into_self()
+    println(f"{o.items.length()}")
+"#,
+        "was consumed by",
+    );
+}
+
+#[test]
+fn test_a_getter_result_outliving_its_receiver_is_still_valid() {
+    // The field reference the getter hands back is independent of the object it
+    // came from, which is what makes not consuming the receiver sound.
+    assert_runs_with_output(
+        r#"
+class Holder
+    v String
+
+    fn init(v String)
+        self.v = v
+
+    public fn get() String
+        return self.v
+
+fn main()
+    var kept = ""
+    if true
+        let h = Holder("a" + "b")
+        kept = h.get()
+    println(kept)
+"#,
+        "ab",
+    );
+}
+
+#[test]
+fn test_calling_a_getter_twice_hands_back_the_field_each_time() {
+    // Each call retains the field it returns, so two results coexist and the
+    // object is still whole afterwards. This is the shape that would double-free
+    // if the reference the getter hands out were not its own.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Holder
+    items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    public fn take() [int]
+        return self.items
+
+fn main()
+    let o = Holder(List([1, 2]))
+    let a = o.take()
+    let b = o.take()
+    println(f"{a.length()} {b.length()} {o.items.length()}")
+"#,
+        "2 2 2",
+    );
+}
+
+#[test]
+fn test_a_whole_value_handed_to_a_consuming_function_is_still_refused() {
+    // The projection rule must not soften the ordinary case: a value passed on
+    // as itself is gone, and using it afterwards is still an error.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+fn sink(x [int]) [int]
+    return x
+
+fn main()
+    let l = List([1, 2])
+    let taken = sink(l)
+    println(f"{l.length()}")
+"#,
+        "was consumed by",
+    );
+}
