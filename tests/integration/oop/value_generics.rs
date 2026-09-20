@@ -63,3 +63,121 @@ let w = Wrap<int, 4>(data: [1, 2, 3])
         "Type mismatch for field 'data'",
     );
 }
+
+/// A class that declares a value parameter alongside a type parameter still
+/// has to release a managed field. The value argument is a literal rather than
+/// a type, and naming the instantiation's drop thunk means accounting for that
+/// — otherwise the shared thunk answers instead, and that one skips a field
+/// still written at a parameter.
+#[test]
+fn a_value_generic_class_releases_a_bare_parameter_field() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size>
+    var tag T
+
+fn main()
+    var b = Buf<String, 2>(tag: "x" + "y")
+    println(f"{b.tag}")
+"#,
+        "xy",
+    );
+}
+
+#[test]
+fn a_value_generic_class_releases_a_managed_field_beside_a_sized_array() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size>
+    var items Array<T, Size>
+    var tag T
+
+fn main()
+    var b = Buf<String, 2>(items: ["a" + "b", "c" + "d"], tag: "x" + "y")
+    println(f"{b.tag}")
+"#,
+        "xy",
+    );
+}
+
+#[test]
+fn a_value_generic_class_releases_its_fields_in_either_order() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size>
+    var tag T
+    var items Array<T, Size>
+
+fn main()
+    var b = Buf<String, 2>(tag: "x" + "y", items: ["a" + "b", "c" + "d"])
+    println(f"{b.tag}")
+"#,
+        "xy",
+    );
+}
+
+/// The value parameter is declared first, so anything that pairs arguments to
+/// parameters by position has to stay right when the one it cannot resolve
+/// comes before the one it can.
+#[test]
+fn a_value_parameter_declared_first_still_leaves_the_type_parameter_bound() {
+    assert_heap_guard_output(
+        r#"
+class Buf<Size, T>
+    var tag T
+
+fn main()
+    var b = Buf<2, String>(tag: "x" + "y")
+    println(f"{b.tag}")
+"#,
+        "xy",
+    );
+}
+
+#[test]
+fn a_value_generic_class_at_a_scalar_argument_stays_balanced() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size>
+    var items Array<T, Size>
+    var tag T
+
+fn main()
+    var b = Buf<int, 2>(items: [1, 2], tag: 3)
+    println(f"{b.tag}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn a_three_parameter_mix_releases_the_managed_field_after_the_value() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size, U>
+    var items Array<T, Size>
+    var extra U
+
+fn main()
+    var b = Buf<int, 2, String>(items: [1, 2], extra: "x" + "y")
+    println(f"{b.extra}")
+"#,
+        "xy",
+    );
+}
+
+#[test]
+fn two_instantiations_of_one_value_generic_class_each_release_their_own_field() {
+    assert_heap_guard_output(
+        r#"
+class Buf<T, Size>
+    var tag T
+
+fn main()
+    var a = Buf<String, 2>(tag: "x" + "y")
+    var b = Buf<String, 3>(tag: "z" + "w")
+    println(f"{a.tag} {b.tag}")
+"#,
+        "xy zw",
+    );
+}
