@@ -1371,6 +1371,7 @@ impl TypeChecker {
                         body: decl.body.as_ref().map(|b| b.as_ref()),
                         properties: &decl.properties,
                         span: stmt.span,
+                        is_member: true,
                     },
                     context,
                 );
