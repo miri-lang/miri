@@ -44,11 +44,11 @@ mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 pub(crate) mod hygiene;
+pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
-pub(crate) mod ordering_requirements;
 pub mod statements;
 mod type_table;
 pub mod use_after_move;
@@ -107,14 +107,14 @@ pub struct TypeChecker {
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
-    /// Generic parameters each body applies an ordering operator to, keyed by
-    /// the declaration that wrote the comparison. Recorded while the generic
-    /// body is checked and answered at every site that pins the parameter — see
-    /// [`ordering_requirements`].
-    pub(crate) ordering_requirements: ordering_requirements::OrderingRequirements,
+    /// What each body requires of its own generic parameters, keyed by the
+    /// declaration that stated it. Recorded while the generic body is checked
+    /// and answered at every site that pins the parameter — see
+    /// [`instantiation_requirements`].
+    pub(crate) instantiation_requirements: instantiation_requirements::InstantiationRequirements,
     /// Every site that pins a generic body's parameters, recorded during the
     /// body pass and answered once all requirements are known.
-    pub(crate) pinning_sites: Vec<ordering_requirements::PinningSite>,
+    pub(crate) pinning_sites: Vec<instantiation_requirements::PinningSite>,
     /// Source text of the entry-point file, populated by the pipeline right
     /// before MIR lowering. Used by lowering passes (notably the testing
     /// intrinsic lowering) to convert byte spans into human-readable line
@@ -220,7 +220,7 @@ impl TypeChecker {
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
-            ordering_requirements: HashMap::new(),
+            instantiation_requirements: HashMap::new(),
             pinning_sites: Vec::new(),
             entry_source: None,
             entry_source_path: None,
