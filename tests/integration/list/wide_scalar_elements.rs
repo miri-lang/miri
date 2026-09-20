@@ -331,3 +331,47 @@ fn main()
 true",
     );
 }
+
+#[test]
+fn test_sorting_a_wide_element_list_orders_above_the_low_word() {
+    // Two 128-bit values that agree in their low eight bytes and differ only
+    // above bit 63 must still sort by the whole value. Ordering by the low word
+    // alone would call them equal and leave the pair in input order.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    let one i128 = 1
+    var l = List<i128>()
+    l.push(big)
+    l.push(one)
+    l.sort()
+    println(f"{l[0] == one} {l[1] == big}")
+"#,
+        "true true",
+    );
+}
+
+#[test]
+fn test_sorting_wide_unsigned_elements_orders_by_magnitude() {
+    // Both values fill their low eight bytes with ones and differ only above
+    // bit 63, so the unsigned reading has to span all sixteen bytes. A pair
+    // whose low words already order correctly would pass without the fix.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let all_ones u128 = ~(0 as u128)
+    let low_ones u128 = 18446744073709551615
+    var l = List<u128>()
+    l.push(all_ones)
+    l.push(low_ones)
+    l.sort()
+    println(f"{l[0] == low_ones} {l[1] == all_ones}")
+"#,
+        "true true",
+    );
+}

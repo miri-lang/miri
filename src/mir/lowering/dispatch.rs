@@ -709,7 +709,7 @@ fn widen_operand_to_slot(
 /// value that has no address of its own needs one. The reference is only read
 /// during the call, which copies the bytes out, so the temp outliving the call
 /// is all the address needs.
-fn spill_operand_to_address(
+pub(super) fn spill_operand_to_address(
     ctx: &mut LoweringContext,
     op: Operand,
     ty: Type,
