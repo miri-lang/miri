@@ -109,10 +109,14 @@ fn finish_index_read(
         Ok(Operand::Copy(d))
     } else if obj_op_is_copy {
         // Materialize the element first so the collection is freed AFTER the read.
+        //
+        // The type is read through the active instantiation substitution. A read
+        // inside a generic body is recorded once, against the body's own
+        // parameter, so raw it types the temp `List<T>` — and a `T` element is
+        // managed by nothing, so a write through that temp releases neither what
+        // it replaces nor what it holds.
         let elem_ty = ctx
-            .type_checker
-            .get_type(expr.id)
-            .cloned()
+            .recorded_type(expr.id)
             .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
         let elem_temp = ctx.push_temp(elem_ty, expr.span);
         ctx.push_statement(crate::mir::Statement {
@@ -153,11 +157,12 @@ fn lower_map_index_read(
         literal: crate::ast::literal::Literal::Identifier(rt::MAP_GET_CHECKED.to_string()),
     }));
 
-    let result_ty = if let Some(t) = ctx.type_checker.get_type(expr.id) {
-        t.clone()
-    } else {
-        Type::new(TypeKind::Int, expr.span)
-    };
+    // Read through the active instantiation substitution, for the reason the
+    // list read gives: a value type recorded against a generic parameter says
+    // nothing about whether the entry is managed.
+    let result_ty = ctx
+        .recorded_type(expr.id)
+        .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
 
     // Indexing reads through to the entry the map still owns, so the result is a
     // borrow: the intrinsic does not raise the count, and releasing it would take

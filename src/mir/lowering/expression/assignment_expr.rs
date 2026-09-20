@@ -853,13 +853,15 @@ fn assign_to_index_array(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    // A receiver that is itself an indexed read (`self.rows[r][c] = x`) lowers
+    // to a retained copy of the inner collection, held in a temp that exists
+    // only for this write. The mark taken here is what tells that temp from a
+    // receiver the program already had — a binding, or a field of one — which
+    // outlives the write and must keep its reference.
+    let receiver_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_index_assign_receiver(ctx, obj, expr.span)?;
-    // TODO: a receiver that is itself an indexed read (`self.rows[r][c] = x`)
-    // lowers to a retained copy into a temp that nothing releases, so the inner
-    // collection and what it holds leak. The temp needs the watermark and
-    // `emit_temp_drop` that `assign_to_index_map` gives its key, without
-    // dropping a receiver that was already a place.
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
+    let receiver_local = obj_place.local;
 
     let index_operand = lower_expression(ctx, idx, None)?;
     let index_local = normalize_index(ctx, index_operand, idx)?;
@@ -887,6 +889,10 @@ fn assign_to_index_array(
             assign_to_index_compound(ctx, &target_place, op, val.clone(), elem_ty, expr)?;
         }
     }
+
+    // The write is done, so the copy taken to reach through has nothing left to
+    // do. A receiver older than the mark is the program's own and is left alone.
+    ctx.emit_temp_drop(receiver_local, receiver_watermark, expr.span);
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
