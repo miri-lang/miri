@@ -184,10 +184,14 @@ fn main()
     xs[0] /= 4.0
     let c = xs[0]
     println(f"{c}")
+    xs[0] %= 2.0
+    let d = xs[0]
+    println(f"{d}")
 "#,
         "7.5
 15.0
-3.75",
+3.75
+1.75",
     );
 }
 
@@ -333,6 +337,23 @@ use system.collections.list
 
 fn main()
     var xs = List(["a" + "1", "b" + "2"])
+    xs[0] += "y" + "z"
+    println(f"{xs[0]} {xs[1]}")
+"#,
+        "a1yz b2",
+    );
+}
+
+/// The array axis of the same write. A list holds its elements behind a
+/// heap vector and an array holds them inline, so the element a compound
+/// assignment reads and stores back is reached differently for each; the
+/// reference the combined value carries has to balance either way.
+#[test]
+fn string_add_assign_on_an_array_element_concatenates() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    var xs = ["a" + "1", "b" + "2"]
     xs[0] += "y" + "z"
     println(f"{xs[0]} {xs[1]}")
 "#,
