@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Finding the generic-class instantiations a type spells.
+//! Finding the generic instantiations a type spells.
 //!
 //! The pipeline fills the instantiation registry from the types the checker
 //! inferred. A body lowered for one instantiation of a generic function or
@@ -14,7 +14,6 @@ use super::context::LoweringContext;
 use super::method_dispatch::resolve_generic_argument;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::body::GenericClassInstantiation;
-use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 
 /// How deep [`collect_generic_instantiations`] descends through a type's own
@@ -28,10 +27,17 @@ const MAX_INSTANTIATION_NESTING: usize = 64;
 /// mangler has no name for the type anyway, so nothing below it could be given
 /// a body.
 ///
-/// For the same reason a class spelled at an argument the mangler has no token
+/// For the same reason a type spelled at an argument the mangler has no token
 /// for is left out, though its arguments are still searched. Inside a generic
 /// class `self` has the class at its own parameters (`Box<T>`): that is the
 /// generic definition, not an instantiation any call could reach.
+///
+/// A generic struct and a generic enum are collected alongside a generic class.
+/// All three are released through a drop thunk emitted per instantiation, so
+/// the field a given instantiation actually stores is the one decremented, and
+/// that thunk exists only for an instantiation recorded here. Only the class
+/// entries drive method-body monomorphization; those passes select classes
+/// themselves.
 pub(crate) fn collect_generic_instantiations(
     type_checker: &TypeChecker,
     kind: &TypeKind,
@@ -52,11 +58,10 @@ fn collect_nested_instantiations(
     let TypeKind::Custom(name, Some(args)) = kind else {
         return;
     };
-    let Some(TypeDefinition::Class(def)) = type_checker.type_definitions().get(name.as_str())
-    else {
+    let Some(def) = type_checker.type_definitions().get(name.as_str()) else {
         return;
     };
-    let Some(generics) = def.generics.as_ref() else {
+    let Some(generics) = def.generics() else {
         return;
     };
     let resolved: Option<Vec<Type>> = args

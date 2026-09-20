@@ -306,3 +306,32 @@ fn main()
         "true,false",
     );
 }
+
+#[test]
+fn a_generic_enum_method_returning_a_list_of_its_own_type_links_and_runs() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+enum Holder<T>
+    One(T)
+    Two(T, T)
+
+    fn alone() List<Self>
+        var out = List<Self>()
+        out.push(self)
+        return out
+
+    fn size() int
+        match self
+            Holder.One(_): 1
+            Holder.Two(_, _): 2
+
+fn main()
+    let a Holder<String> = Holder.Two("a" + "b", "c" + "d")
+    let xs = a.alone()
+    println(f"{xs.length()} {xs[0].size()}")
+"#,
+        "1 2",
+    );
+}

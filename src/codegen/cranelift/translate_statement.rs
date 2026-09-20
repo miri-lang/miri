@@ -1374,109 +1374,7 @@ impl<'a> FunctionTranslator<'a> {
         for proj in &place.projection {
             match proj {
                 PlaceElem::Field(idx) => {
-                    current = match &current {
-                        TypeKind::Custom(name, type_args_opt) => {
-                            use crate::type_checker::context::TypeDefinition;
-                            match type_ctx.type_definitions.get(name.as_str()) {
-                                Some(TypeDefinition::Struct(def)) => {
-                                    let field_type = def
-                                        .fields
-                                        .get(*idx)
-                                        .map(|(_, ty, _)| ty.kind.clone())
-                                        .unwrap_or(TypeKind::Error);
-
-                                    // TODO: a generic struct reads its field at a
-                                    // bare parameter only, so a managed element
-                                    // nested in a field (`items List<T>`) stays
-                                    // unresolved the way a class field did. It needs
-                                    // the same instantiated read the class branch
-                                    // makes below, once a generic struct holding a
-                                    // managed field links at all — today the drop
-                                    // thunk `__drop_Bag` it references is never
-                                    // defined.
-                                    // Only apply substitution for compiler-known Vec types.
-                                    if crate::ast::types::vec_type_dim(&current).is_some() {
-                                        Self::substitute_first_generic(
-                                            &field_type,
-                                            type_args_opt.as_ref(),
-                                            def.generics.as_ref(),
-                                        )
-                                    } else {
-                                        field_type
-                                    }
-                                }
-                                Some(TypeDefinition::Class(def)) => {
-                                    let all_fields =
-                                        crate::type_checker::context::collect_class_fields_all(
-                                            def,
-                                            type_ctx.type_definitions,
-                                        );
-                                    // Read the field at the instance's type arguments,
-                                    // the way Perceus reads it: `value T` at a scalar
-                                    // stores at that scalar's width, and `items List<T>`
-                                    // at `String` holds managed elements, so a store
-                                    // through `self.items[i]` releases what it replaces.
-                                    match (all_fields.get(*idx), type_args_opt, &def.generics) {
-                                        (Some((_, fi)), Some(args), Some(generics)) => {
-                                            crate::mir::lowering::instantiated_class_field_type(
-                                                generics.iter().map(|g| g.name.as_str()),
-                                                args,
-                                                &fi.ty,
-                                            )
-                                            .kind
-                                        }
-                                        (Some((_, fi)), _, _) => fi.ty.kind.clone(),
-                                        (None, _, _) => TypeKind::Error,
-                                    }
-                                }
-                                None
-                                | Some(TypeDefinition::Enum(_))
-                                | Some(TypeDefinition::Generic(_))
-                                | Some(TypeDefinition::Alias(_))
-                                | Some(TypeDefinition::Trait(_)) => TypeKind::Error,
-                            }
-                        }
-                        // Closure env field: capture `idx` is looked up in the
-                        // per-closure capture-type table stored in the TypeCtx.
-                        TypeKind::Function(_) => type_ctx
-                            .closure_capture_ast_types
-                            .get(&place.local)
-                            .and_then(|caps| caps.get(*idx))
-                            .map(|ty| ty.kind.clone())
-                            .unwrap_or(TypeKind::Error),
-                        TypeKind::Int
-                        | TypeKind::I8
-                        | TypeKind::I16
-                        | TypeKind::I32
-                        | TypeKind::I64
-                        | TypeKind::I128
-                        | TypeKind::U8
-                        | TypeKind::U16
-                        | TypeKind::U32
-                        | TypeKind::U64
-                        | TypeKind::U128
-                        | TypeKind::Float
-                        | TypeKind::F16
-                        | TypeKind::F32
-                        | TypeKind::F64
-                        | TypeKind::String
-                        | TypeKind::Boolean
-                        | TypeKind::Identifier
-                        | TypeKind::RawPtr
-                        | TypeKind::List(_)
-                        | TypeKind::Array(_, _)
-                        | TypeKind::Map(_, _)
-                        | TypeKind::Set(_)
-                        | TypeKind::Tuple(_)
-                        | TypeKind::Result(_, _)
-                        | TypeKind::Future(_)
-                        | TypeKind::Generic(_, _, _)
-                        | TypeKind::Meta(_)
-                        | TypeKind::Option(_)
-                        | TypeKind::Void
-                        | TypeKind::Error
-                        | TypeKind::Linear(_) => TypeKind::Error,
-                    };
+                    current = Self::projected_field_kind(&current, *idx, place, type_ctx);
                 }
                 PlaceElem::Index(_) => {
                     current = Self::extract_collection_elem_type_kind(&current);
@@ -1486,6 +1384,147 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         current
+    }
+
+    /// The kind of field `idx` of a value of kind `container`.
+    ///
+    /// Only the two kinds that carry named fields answer: a declared type and a
+    /// closure, whose captures are held in the per-closure table rather than in
+    /// any declaration. Everything else has no field to reach, so the place is
+    /// malformed and resolves to `Error`.
+    fn projected_field_kind(
+        container: &TypeKind,
+        idx: usize,
+        place: &Place,
+        type_ctx: &TypeCtx,
+    ) -> TypeKind {
+        match container {
+            TypeKind::Custom(name, type_args) => {
+                Self::declared_field_kind(container, name, type_args.as_ref(), idx, type_ctx)
+            }
+            // Closure env field: capture `idx` is looked up in the
+            // per-closure capture-type table stored in the TypeCtx.
+            TypeKind::Function(_) => type_ctx
+                .closure_capture_ast_types
+                .get(&place.local)
+                .and_then(|caps| caps.get(idx))
+                .map(|ty| ty.kind.clone())
+                .unwrap_or(TypeKind::Error),
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => TypeKind::Error,
+        }
+    }
+
+    /// The kind of field `idx` of the declared type `name`, read at the type
+    /// arguments the value carries.
+    ///
+    /// A struct and a class both read their field at the instance's arguments:
+    /// `value T` at a scalar stores at that scalar's width, and `items List<T>`
+    /// at `String` holds managed elements, so a store through the field
+    /// releases what it replaces. An enum reaches its payload by matching, not
+    /// by field index, and the remaining kinds declare no fields at all.
+    fn declared_field_kind(
+        container: &TypeKind,
+        name: &str,
+        type_args: Option<&Vec<Expression>>,
+        idx: usize,
+        type_ctx: &TypeCtx,
+    ) -> TypeKind {
+        use crate::type_checker::context::TypeDefinition;
+        match type_ctx.type_definitions.get(name) {
+            Some(TypeDefinition::Struct(def)) => {
+                // A vector's component is named by its first parameter alone and
+                // its layout is the compiler's, not the declaration's, so it
+                // keeps the narrower substitution it has always used.
+                if crate::ast::types::vec_type_dim(container).is_some() {
+                    let field_type = def
+                        .fields
+                        .get(idx)
+                        .map(|(_, ty, _)| ty.kind.clone())
+                        .unwrap_or(TypeKind::Error);
+                    return Self::substitute_first_generic(
+                        &field_type,
+                        type_args,
+                        def.generics.as_ref(),
+                    );
+                }
+                Self::field_kind_at_instantiation(
+                    def.fields.get(idx).map(|(_, ty, _)| ty),
+                    type_args,
+                    def.generics.as_deref(),
+                )
+            }
+            Some(TypeDefinition::Class(def)) => {
+                let all_fields = crate::type_checker::context::collect_class_fields_all(
+                    def,
+                    type_ctx.type_definitions,
+                );
+                Self::field_kind_at_instantiation(
+                    all_fields.get(idx).map(|(_, info)| &info.ty),
+                    type_args,
+                    def.generics.as_deref(),
+                )
+            }
+            None
+            | Some(TypeDefinition::Enum(_))
+            | Some(TypeDefinition::Generic(_))
+            | Some(TypeDefinition::Alias(_))
+            | Some(TypeDefinition::Trait(_)) => TypeKind::Error,
+        }
+    }
+
+    /// The declared field type with the type parameters it is written in
+    /// replaced by the instance's arguments, or the declared kind unchanged
+    /// when the type declares no parameters or the value carries no arguments.
+    fn field_kind_at_instantiation(
+        declared: Option<&crate::ast::types::Type>,
+        type_args: Option<&Vec<Expression>>,
+        generics: Option<&[crate::type_checker::context::GenericDefinition]>,
+    ) -> TypeKind {
+        let Some(declared) = declared else {
+            return TypeKind::Error;
+        };
+        match (type_args, generics) {
+            (Some(args), Some(generics)) => {
+                crate::mir::lowering::instantiated_class_field_type(
+                    generics.iter().map(|g| g.name.as_str()),
+                    args,
+                    declared,
+                )
+                .kind
+            }
+            _ => declared.kind.clone(),
+        }
     }
 
     /// Resolves the element type of a collection kind, returning an owned
