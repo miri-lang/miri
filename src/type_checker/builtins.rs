@@ -44,11 +44,18 @@ fn register_primitive_types(_types: &mut HashMap<String, TypeDefinition>) {
     // (Int, Float, Bool, String) or defined in the standard library.
 }
 
-/// Registers GPU-related built-in types (`Dim3`, `GpuContext`, `Kernel`).
+/// Registers GPU-related built-in types (`Dim3`, `GpuContext`, `Kernel`, `WarpContext`, `FrameInput`).
 fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
-    let int_type = || crate::ast::factory::make_type(TypeKind::Int);
+    register_warp_context_type(types);
+    register_dim3_type(types);
+    register_gpu_context_type(types);
+    register_kernel_type(types);
+    register_frame_input_type(types);
+}
 
-    // WarpContext: Subgroup (warp) operations available within GPU kernels.
+/// WarpContext: Subgroup (warp) operations available within GPU kernels.
+fn register_warp_context_type(types: &mut HashMap<String, TypeDefinition>) {
+    let int_type = || crate::ast::factory::make_type(TypeKind::Int);
     let warp_context_def = TypeDefinition::Struct(StructDefinition {
         fields: vec![
             ("size".to_string(), int_type(), MemberVisibility::Public),
@@ -60,8 +67,11 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         module: "std".to_string(),
     });
     types.insert(WARP_CONTEXT_TYPE_NAME.to_string(), warp_context_def);
+}
 
-    // Dim3: 3D dimension type for GPU operations
+/// Dim3: 3D dimension type for GPU operations.
+fn register_dim3_type(types: &mut HashMap<String, TypeDefinition>) {
+    let int_type = || crate::ast::factory::make_type(TypeKind::Int);
     let dim3_def = TypeDefinition::Struct(StructDefinition {
         fields: vec![
             ("x".to_string(), int_type(), MemberVisibility::Public),
@@ -74,8 +84,10 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         module: "std".to_string(),
     });
     types.insert(DIM3_TYPE_NAME.to_string(), dim3_def);
+}
 
-    // GpuContext: Context available within GPU kernels
+/// GpuContext: Context available within GPU kernels.
+fn register_gpu_context_type(types: &mut HashMap<String, TypeDefinition>) {
     let dim3_type =
         || crate::ast::factory::make_type(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None));
     let warp_type = || {
@@ -118,8 +130,10 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
             module: "std".to_string(),
         }),
     );
+}
 
-    // Kernel: Opaque handle for GPU kernels
+/// Kernel: Opaque handle for GPU kernels.
+fn register_kernel_type(types: &mut HashMap<String, TypeDefinition>) {
     types.insert(
         KERNEL_TYPE_NAME.to_string(),
         TypeDefinition::Struct(StructDefinition {
@@ -130,12 +144,14 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
             module: "std".to_string(),
         }),
     );
+}
 
-    // FrameInput: per-frame host input available inside `gpu frame` bodies.
-    // Derived from FRAME_INPUT_FIELDS descriptor to maintain single source of truth.
+/// FrameInput: per-frame host input available inside `gpu frame` bodies.
+/// Derived from FRAME_INPUT_FIELDS descriptor to maintain single source of truth.
+fn register_frame_input_type(types: &mut HashMap<String, TypeDefinition>) {
     let field_type = |kind: FrameFieldKind| match kind {
         FrameFieldKind::F32 => crate::ast::factory::make_type(TypeKind::F32),
-        FrameFieldKind::Int => int_type(),
+        FrameFieldKind::Int => crate::ast::factory::make_type(TypeKind::Int),
         FrameFieldKind::Bool => crate::ast::factory::make_type(TypeKind::Boolean),
     };
     let fields: Vec<_> = FRAME_INPUT_FIELDS
