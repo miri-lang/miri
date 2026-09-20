@@ -124,3 +124,51 @@ fn main()
         "Runtime error: Array index out of bounds",
     );
 }
+
+#[test]
+fn array_with_type_arguments_rejects_a_wrong_argument_count() {
+    // The constructor takes either nothing or one argument per element. One
+    // argument for three elements is neither, and used to be accepted here and
+    // refused only once MIR lowering was reached — late, and reported as an
+    // internal failure of the compiler rather than as something the source got
+    // wrong.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    let a = Array<int, 3>(5)
+    println(f\"{a.length()}\")
+",
+        "takes either no argument or exactly 3 of them",
+    );
+}
+
+#[test]
+fn array_with_type_arguments_still_constructs_when_empty() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+fn main()
+    let a = Array<int, 3>()
+    println(f\"{a.length()}\")
+",
+        "3",
+    );
+}
+
+#[test]
+fn every_builtin_collection_constructor_checks_its_argument_with_type_arguments() {
+    // The class gate. Writing type arguments must not weaken the positional
+    // argument check for any of them — the defect was found one constructor at
+    // a time, and this is what stops the next one being found the same way.
+    for source in [
+        "use system.collections.list\n\nfn main()\n    let c = List<int>(5)\n    println(f\"{c.length()}\")\n",
+        "use system.collections.set\n\nfn main()\n    let c = Set<int>(5)\n    println(f\"{c.length()}\")\n",
+        "use system.collections.map\n\nfn main()\n    let c = Map<int, int>(5)\n    println(f\"{c.length()}\")\n",
+        "use system.collections.array\n\nfn main()\n    let c = Array<int, 3>(5)\n    println(f\"{c.length()}\")\n",
+    ] {
+        assert_compiler_error(source, "");
+    }
+}
