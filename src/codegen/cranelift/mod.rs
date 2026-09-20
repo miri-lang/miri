@@ -142,6 +142,9 @@ impl CraneliftBackend {
             .set("is_pic", "true")
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
+        enable_wide_scalar_abi(&mut settings_builder)
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
+
         let flags = settings::Flags::new(settings_builder);
 
         let isa = cranelift_codegen::isa::lookup(target)
@@ -280,6 +283,24 @@ impl Backend for CraneliftBackend {
     }
 }
 
+/// Let a 128-bit scalar appear in a function signature.
+///
+/// The x86-64 ABIs each describe a different way of handing over a 128-bit
+/// integer — a vector register, a pair of general registers, or a pointer to a
+/// copy — so the backend refuses to pick one on its own and aborts the process
+/// the moment such a parameter or return value reaches signature lowering.
+/// Asking for the LLVM lowering settles it: the value travels as two 64-bit
+/// halves placed exactly where two consecutive 64-bit arguments would go, and
+/// both halves move to the stack together when either one has to. That is what
+/// a C compiler does with `__int128` on the same platform, so a `i128` or
+/// `u128` crossing into the runtime keeps matching the Rust side that receives
+/// it. AArch64 lowers the same signature without being asked and is unaffected.
+fn enable_wide_scalar_abi(builder: &mut settings::Builder) -> Result<(), String> {
+    builder
+        .set("enable_llvm_abi_extensions", "true")
+        .map_err(|e| e.to_string())
+}
+
 /// The environment variable that opts a failing build into a backend IR dump.
 const DUMP_IR_ENV: &str = "MIRI_DUMP_BACKEND_IR";
 
@@ -321,6 +342,7 @@ impl CraneliftBackend {
                 .set("is_pic", "true")
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
         }
+        enable_wide_scalar_abi(&mut settings_builder).map_err(CodegenError::Module)?;
         let flags = settings::Flags::new(settings_builder);
         cranelift_codegen::isa::lookup(self.isa.triple().clone())
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
