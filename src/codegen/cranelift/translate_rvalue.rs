@@ -707,11 +707,13 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementCallbackSetters,
     ) -> Result<(), CodegenError> {
-        // TODO: unlike every sibling registration site, this one does not screen
-        // `elem_kind` through `is_unresolved_generic_elem` first, so an aggregate
-        // literal whose elements are a bare generic parameter (`var arr = [a, a]`
-        // inside `fn f<T>`) registers `__decref_T` — a symbol nothing defines,
-        // which fails the link rather than the compile.
+        // A bare generic parameter has no concrete type here and so no release
+        // helper to name: registering one would emit a symbol nothing defines
+        // and fail the link. The instantiation registers the real one. Every
+        // sibling registration site screens the element the same way.
+        if FunctionTranslator::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+            return Ok(());
+        }
         if let Some(addr) =
             Self::elem_decref_addr_for_kind(builder, ctx, elem_kind, ptr_type, type_ctx)?
         {
