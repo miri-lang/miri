@@ -334,9 +334,9 @@ true",
 
 #[test]
 fn test_sorting_a_wide_element_list_orders_above_the_low_word() {
-    // Two 128-bit values that agree in their low eight bytes and differ only
-    // above bit 63 must still sort by the whole value. Ordering by the low word
-    // alone would call them equal and leave the pair in input order.
+    // Two 128-bit values that differ above bit 63 must sort by the whole value.
+    // Ordering by the low word alone reads i128::MAX's low eight bytes as -1 and
+    // puts it first.
     assert_runs_with_output(
         r#"
 use system.collections.list
@@ -349,6 +349,24 @@ fn main()
     l.push(one)
     l.sort()
     println(f"{l[0] == one} {l[1] == big}")
+"#,
+        "true true",
+    );
+    // The hardest pair: i128::MAX and -1 fill their low eight bytes with the
+    // same ones, so a low-word comparison calls them equal and no swap happens
+    // at all.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    let neg i128 = -1
+    var l = List<i128>()
+    l.push(big)
+    l.push(neg)
+    l.sort()
+    println(f"{l[0] == neg} {l[1] == big}")
 "#,
         "true true",
     );
