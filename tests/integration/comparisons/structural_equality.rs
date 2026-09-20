@@ -516,3 +516,86 @@ fn main()
         "int payload equal\nint payload differs\nmanaged payload equal",
     );
 }
+
+#[test]
+fn test_generic_struct_compares_its_substituted_fields() {
+    // A field declared at the struct's own type parameter has to be compared at
+    // the type the instantiation supplies. Reading it at the declared spelling
+    // leaves a bare parameter, which has no comparison of its own.
+    assert_runs_with_output(
+        r#"
+struct Pair<T>
+    first T
+    second T
+
+fn main()
+    let a = Pair<int>(1, 2)
+    let same = Pair<int>(1, 2)
+    let other = Pair<int>(1, 3)
+    if a == same
+        println("int pair equal")
+    if a != other
+        println("int pair differs")
+
+    let f = Pair<f32>(1.5, 2.5)
+    let f_same = Pair<f32>(1.5, 2.5)
+    let f_other = Pair<f32>(1.5, 9.5)
+    if f == f_same
+        println("float pair equal")
+    if f != f_other
+        println("float pair differs")
+"#,
+        "int pair equal\nint pair differs\nfloat pair equal\nfloat pair differs",
+    );
+}
+
+#[test]
+fn test_generic_struct_compares_a_managed_substituted_field() {
+    // The substituted field is a String here, so the comparison takes the
+    // runtime-helper path and the field temps are reference counted.
+    assert_runs_with_output(
+        r#"
+fn s(tail String) String
+    return "wrap" + tail
+
+struct Holder<T>
+    value T
+    tag int
+
+fn main()
+    let a = Holder<String>(s("ped"), 1)
+    let same = Holder<String>(s("ped"), 1)
+    let other = Holder<String>(s("per"), 1)
+    if a == same
+        println("managed field equal")
+    if a != other
+        println("managed field differs")
+"#,
+        "managed field equal\nmanaged field differs",
+    );
+}
+
+#[test]
+fn test_generic_struct_compares_a_nested_generic_field() {
+    // The argument the outer struct is reached at is itself a generic
+    // instantiation, so the substitution has to survive one more level down.
+    assert_runs_with_output(
+        r#"
+struct Inner<T>
+    value T
+
+struct Outer<T>
+    held Inner<T>
+
+fn main()
+    let a = Outer<int>(Inner<int>(7))
+    let same = Outer<int>(Inner<int>(7))
+    let other = Outer<int>(Inner<int>(8))
+    if a == same
+        println("nested equal")
+    if a != other
+        println("nested differs")
+"#,
+        "nested equal\nnested differs",
+    );
+}

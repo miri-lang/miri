@@ -24,6 +24,8 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod inherited_instantiation;
+mod inline_element;
+mod inline_element_search;
 mod inline_element_take;
 pub mod kernel_launch;
 pub mod loops;
@@ -340,22 +342,25 @@ pub(crate) fn substitute_call_mapping(
         .collect()
 }
 
-/// The type a field declared as `field_ty` has inside an instance whose type
-/// arguments are `args`, for a class declaring the parameters `params`.
+/// The type a member declared as `field_ty` has inside an instance whose type
+/// arguments are `args`, for a type declaring the parameters `params` — a class
+/// or struct field, or an enum variant's payload.
 ///
-/// A class field is declared in the class's own parameters (`value T`,
-/// `items List<T>`), which name nothing concrete. Substituting the whole field
-/// type, not only a bare parameter, is what reaches an element type nested
-/// inside a collection field. An argument that is a value rather than a type
-/// (the size of a value generic) leaves its parameter unsubstituted, and a
-/// nullable argument (`T` at `int?`) substitutes as the option it denotes.
+/// Such a member is declared in the owner's own parameters (`value T`,
+/// `items List<T>`), which name nothing concrete. Substituting the whole member
+/// type, not only a bare parameter, is what reaches a type nested inside it —
+/// an element type inside a collection field, or the argument of another
+/// generic type the member is declared at. An argument that is a value rather
+/// than a type (the size of a value generic) leaves its parameter
+/// unsubstituted, and a nullable argument (`T` at `int?`) substitutes as the
+/// option it denotes.
 // TODO: a class declaring both a value parameter and a type parameter — a
 // `Buf<T, Size>` holding `Array<T, Size>` alongside a bare `T` — leaks the bare
 // field's value at a managed instantiation, while either field alone is
 // balanced. Whether the value argument being dropped here misaligns the pairing
 // for the parameters that follow it is unproven; the codegen drop thunk zips the
 // same parameters against resolved types of its own and must agree.
-pub(crate) fn instantiated_class_field_type<'a>(
+pub(crate) fn instantiated_member_type<'a>(
     params: impl IntoIterator<Item = &'a str>,
     args: &[Expression],
     field_ty: &Type,
@@ -391,7 +396,7 @@ pub(crate) fn field_type_in_instance(
     ) else {
         return field_ty.clone();
     };
-    instantiated_class_field_type(params.iter().map(String::as_str), args, field_ty)
+    instantiated_member_type(params.iter().map(String::as_str), args, field_ty)
 }
 
 /// The type a type argument denotes, or `None` when the argument is a value

@@ -1301,3 +1301,64 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "2.0 3.0 4.0");
 }
+
+#[test]
+fn cpu_vec3_f32_compares_component_wise() {
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let p = Vec3<f32>(1.0, 2.0, 3.0)
+    let same = Vec3<f32>(1.0, 2.0, 3.0)
+    let last_differs = Vec3<f32>(1.0, 2.0, 4.0)
+    let first_differs = Vec3<f32>(9.0, 2.0, 3.0)
+    println(f"{p == same}")
+    println(f"{p == last_differs}")
+    println(f"{p == first_differs}")
+    println(f"{p != same}")
+    println(f"{p != last_differs}")
+"#,
+        "true\nfalse\nfalse\nfalse\ntrue",
+    );
+}
+
+#[test]
+fn cpu_vec2_and_vec4_compare_component_wise() {
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let a = Vec2<i32>(1, 2)
+    println(f"{a == Vec2<i32>(1, 2)}")
+    println(f"{a == Vec2<i32>(1, 3)}")
+
+    let b = Vec4<u32>(1, 2, 3, 4)
+    println(f"{b == Vec4<u32>(1, 2, 3, 4)}")
+    println(f"{b == Vec4<u32>(1, 2, 3, 5)}")
+"#,
+        "true\nfalse\ntrue\nfalse",
+    );
+}
+
+#[test]
+fn cpu_vector_with_eight_byte_components_compares_component_wise() {
+    // An 8-byte component is compared at its own width: narrowing it to the
+    // low word would call two vectors equal that differ only above it.
+    assert_runs_with_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let p = Vec3<f64>(1.5, 2.5, 3.5)
+    println(f"{p == Vec3<f64>(1.5, 2.5, 3.5)}")
+    println(f"{p == Vec3<f64>(1.5, 2.5, 9.5)}")
+
+    let q = Vec2<i64>(4294967296, 2)
+    println(f"{q == Vec2<i64>(4294967296, 2)}")
+    println(f"{q == Vec2<i64>(0, 2)}")
+"#,
+        "true\nfalse\ntrue\nfalse",
+    );
+}
