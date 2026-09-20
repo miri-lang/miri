@@ -298,7 +298,13 @@ pub fn collect_class_fields_all<'a>(
 ) -> Vec<(&'a str, &'a FieldInfo)> {
     let mut chain: Vec<&ClassDefinition> = vec![class_def];
     let mut current = class_def;
-    while let Some(base_name) = &current.base_class {
+    // Bounded by the number of definitions, like every other walk of this chain:
+    // a circular `extends` is reported at the declaration, and that report has to
+    // survive long enough to be printed.
+    for _ in 0..=type_definitions.len() {
+        let Some(base_name) = &current.base_class else {
+            break;
+        };
         match type_definitions.get(base_name) {
             Some(TypeDefinition::Class(base)) => {
                 chain.push(base);
@@ -409,7 +415,9 @@ pub fn class_method_declaration<'a>(
 /// and store a vtable pointer as the first word (offset 0) of their heap payload.
 pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
     let mut current: &str = class_name;
-    loop {
+    // Bounded for the same reason the sibling walks are: a circular `extends`
+    // must not outlive the report made where the class is declared.
+    for _ in 0..=type_defs.len() {
         match type_defs.get(current) {
             Some(TypeDefinition::Class(cd)) => {
                 if cd.is_abstract || !cd.traits.is_empty() {
@@ -423,6 +431,7 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
             _ => return false,
         }
     }
+    false
 }
 
 /// Returns the vtable slot index for `method_name` in the vtable of a class

@@ -2514,12 +2514,7 @@ impl TypeChecker {
         }
     }
 
-    // TODO: the walk below is unbounded, so two classes that extend each other
-    // spin here forever instead of the cycle being reported — `class A extends
-    // B` beside `class B extends A` hangs the compiler on `A()`, with no
-    // diagnostic. The fix is a report at the class declaration, not only a
-    // bound here: every other base-class walk that bounds itself does so
-    // expecting that report to exist, and nothing produces it.
+    /// The `init` this class declares, or the nearest one it inherits.
     fn find_init_method(
         &self,
         def: &crate::type_checker::context::ClassDefinition,
@@ -2529,7 +2524,14 @@ impl TypeChecker {
         } else {
             let mut found = None;
             let mut base = def.base_class.clone();
-            while let Some(bname) = base {
+            // As many steps as there are definitions, and no more: a circular
+            // `extends` is reported where the class is declared, but that report
+            // does not stop checking, so this walk still has to finish for the
+            // report to be printed at all.
+            for _ in 0..=self.type_table.global_type_definitions.len() {
+                let Some(bname) = base else {
+                    break;
+                };
                 match self.type_table.global_type_definitions.get(&bname) {
                     Some(TypeDefinition::Class(b)) => {
                         if let Some(m) = b.methods.get("init") {
