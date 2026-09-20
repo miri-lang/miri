@@ -88,10 +88,8 @@ fn main()
 }
 
 /// An optional key written as `Some(..)`, or as a bare value the write wraps
-/// into a fresh `Some`, is released the same way.
-///
-/// Entries are read back by iteration rather than `get`: an optional key is
-/// still compared by address, so a lookup misses whatever was stored.
+/// into a fresh `Some`, is released the same way — and each entry is reachable
+/// afterwards through a key built separately from the one that was stored.
 #[test]
 fn map_index_write_releases_a_fresh_optional_key() {
     assert_heap_guard_output(
@@ -102,12 +100,11 @@ fn main()
     var m = Map<int?, String>()
     m[Some(2)] = "two"
     m[3] = "three"
-    var total = 0
-    for k, v in m
-        total = total + (k ?? 0) * v.length()
-    println(f"{m.length()} {total}")
+    let two = m.get(Some(2)) ?? "?"
+    let three = m.get(Some(3)) ?? "?"
+    println(f"{m.length()} {two} {three}")
 "#,
-        "2 21",
+        "2 two three",
     );
 }
 

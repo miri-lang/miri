@@ -592,3 +592,141 @@ fn test_set_add_releases_the_reference_a_rejected_duplicate_donated() {
         miri_rt_set_free(set);
     }
 }
+
+/// A boxed value in an allocation of its own, holding `value` in its first
+/// eight bytes — the shape codegen gives a `Some`.
+unsafe fn owned_box(value: u64) -> usize {
+    let boxed = Box::into_raw(Box::new(value));
+    boxed as usize
+}
+
+unsafe fn release_box(ptr: usize) {
+    drop(Box::from_raw(ptr as *mut u64));
+}
+
+#[test]
+fn test_set_of_optionals_matches_equal_values_in_separate_boxes() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_BYTES,
+                1,
+                8,
+            ),
+        );
+        let stored = owned_box(2);
+        let probe = owned_box(2);
+        let other = owned_box(3);
+        assert_ne!(stored, probe, "the probe must be a separate box");
+
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(
+            miri_rt_set_add(set, probe),
+            0,
+            "an equal value in another box is a duplicate"
+        );
+        assert_eq!(miri_rt_set_len(set), 1);
+        assert_eq!(miri_rt_set_contains(set, probe), 1);
+        assert_eq!(miri_rt_set_contains(set, other), 0);
+
+        miri_rt_set_free(set);
+        release_box(stored);
+        release_box(probe);
+        release_box(other);
+    }
+}
+
+#[test]
+fn test_set_of_optionals_keeps_an_absent_value_apart_from_a_present_one() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_BYTES,
+                1,
+                8,
+            ),
+        );
+        let zero = owned_box(0);
+
+        assert_eq!(miri_rt_set_add(set, 0), 1, "an absent value is a value");
+        assert_eq!(miri_rt_set_add(set, 0), 0, "and it is one value");
+        assert_eq!(
+            miri_rt_set_add(set, zero),
+            1,
+            "a box holding zero is not the absence of a box"
+        );
+        assert_eq!(miri_rt_set_len(set), 2);
+        assert_eq!(miri_rt_set_contains(set, 0), 1);
+
+        miri_rt_set_free(set);
+        release_box(zero);
+    }
+}
+
+/// The rule applied to the boxed value is the one the kind names, so a box
+/// holding a string is matched by that string's content.
+#[test]
+fn test_set_of_optional_strings_matches_boxed_content() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_STRING_CONTENT,
+                1,
+                8,
+            ),
+        );
+        let stored_text = owned_string("pear");
+        let probe_text = owned_string("pear");
+        let stored = owned_box(stored_text as u64);
+        let probe = owned_box(probe_text as u64);
+
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(miri_rt_set_add(set, probe), 0);
+        assert_eq!(miri_rt_set_len(set), 1);
+        assert_eq!(miri_rt_set_contains(set, probe), 1);
+
+        miri_rt_set_free(set);
+        release_box(stored);
+        release_box(probe);
+        release_string(stored_text);
+        release_string(probe_text);
+    }
+}
+
+/// A value narrower than its box is read at its own width: the bytes past it
+/// are whatever the allocation held, and reading them would separate two equal
+/// values.
+#[test]
+fn test_set_of_optionals_reads_a_narrow_value_at_its_own_width() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_BYTES,
+                1,
+                4,
+            ),
+        );
+        let stored = owned_box(0x1111_1111_0000_0007);
+        let probe = owned_box(0x2222_2222_0000_0007);
+
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(
+            miri_rt_set_add(set, probe),
+            0,
+            "the four bytes past the value must not be read"
+        );
+        assert_eq!(miri_rt_set_len(set), 1);
+
+        miri_rt_set_free(set);
+        release_box(stored);
+        release_box(probe);
+    }
+}
