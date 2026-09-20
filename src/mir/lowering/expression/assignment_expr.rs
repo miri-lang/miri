@@ -16,7 +16,8 @@ use crate::runtime_fns::rt;
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{
-    donate_operand_to_container, lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
+    collection_slot_type, donate_operand_to_container, lower_stored_value, ELEMENT_SLOT,
+    MAP_VALUE_SLOT,
 };
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
@@ -198,14 +199,7 @@ fn assign_to_var_compound(
     val: Operand,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = match op {
-        crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
-        crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
-        crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
-        crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
-        crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
-        _ => unreachable!(),
-    };
+    let bin_op = compound_binary_op(op)?;
 
     let lhs_op = Operand::Copy(Place::new(local));
     let result_ty = ctx.body.local_decls[local.0].ty.clone();
@@ -531,14 +525,7 @@ fn assign_to_member_compound(
     slot_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = match op {
-        crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
-        crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
-        crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
-        crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
-        crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
-        _ => unreachable!(),
-    };
+    let bin_op = compound_binary_op(op)?;
 
     let lhs_op = Operand::Copy(target_place.clone());
     let result_ty = compound_field_result_type(slot_ty, expr.span);
@@ -670,6 +657,143 @@ fn assign_to_index_map(
     }
 }
 
+/// Lower `m[k] <op>= v`: read the entry, combine it, store the result.
+///
+/// A compound write is a read-modify-write, and its read half is the same
+/// checked read `m[k]` performs — so a key the map does not hold reports that it
+/// was not found rather than being quietly created. Storing the right-hand side
+/// on its own, which is what dropping the operator amounted to, lost the old
+/// value with no diagnostic; creating the entry instead would be the same class
+/// of surprise one step further on.
+///
+/// The key is lowered once and used twice: read by the lookup, which only
+/// borrows it, and donated to the store, which keeps it.
+#[allow(clippy::too_many_arguments)]
+fn compound_assign_to_index_map(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    idx: &Expression,
+    op: &crate::ast::operator::AssignmentOp,
+    rhs: &Expression,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let bin_op = compound_binary_op(op)?;
+    // The combined value is typed by the map's own value slot, not by whatever
+    // the right-hand side happens to be, so combining an `int` into a float
+    // value keeps the float.
+    let value_ty = collection_slot_type(ctx, obj_ty, MAP_VALUE_SLOT)
+        .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
+
+    let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    let key_watermark = ctx.body.local_decls.len();
+    let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
+    let key_place = ensure_place(ctx, key_op, idx.span);
+
+    let old = emit_map_get_checked_call(
+        ctx,
+        obj_op.clone(),
+        Operand::Copy(key_place.clone()),
+        &value_ty,
+        expr,
+    );
+
+    let value_watermark = ctx.body.local_decls.len();
+    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let combined = ctx.push_temp(value_ty.clone(), expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(combined),
+            Rvalue::BinaryOp(bin_op, Box::new(old), Box::new(rhs_op)),
+        ),
+        span: expr.span,
+    });
+
+    // Combining produces a value of its own, already owning the one reference
+    // the map is about to take. Donating hands that one over and releases the
+    // temp it came from, where retaining it as well would leave a count the
+    // temp has no scope to give back.
+    let (donated_key, key_src) =
+        donate_operand_to_container(ctx, Operand::Copy(key_place), key_ty, idx.span);
+    let (donated_val, val_src) = donate_operand_to_container(
+        ctx,
+        Operand::Copy(Place::new(combined)),
+        value_ty.clone(),
+        expr.span,
+    );
+    emit_map_set_call(ctx, obj_op, donated_key, donated_val.clone(), expr);
+    if let Some(src) = key_src {
+        ctx.emit_temp_drop(src, key_watermark, idx.span);
+    }
+    if let Some(src) = val_src {
+        ctx.emit_temp_drop(src, value_watermark, expr.span);
+    }
+
+    if let Some(d) = dest {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(donated_val)),
+            span: expr.span,
+        });
+        Ok(Operand::Copy(d))
+    } else {
+        Ok(donated_val)
+    }
+}
+
+/// The binary operation a compound assignment combines with.
+fn compound_binary_op(op: &crate::ast::operator::AssignmentOp) -> Result<BinOp, LoweringError> {
+    match op {
+        crate::ast::operator::AssignmentOp::AssignAdd => Ok(BinOp::Add),
+        crate::ast::operator::AssignmentOp::AssignSub => Ok(BinOp::Sub),
+        crate::ast::operator::AssignmentOp::AssignMul => Ok(BinOp::Mul),
+        crate::ast::operator::AssignmentOp::AssignDiv => Ok(BinOp::Div),
+        crate::ast::operator::AssignmentOp::AssignMod => Ok(BinOp::Rem),
+        crate::ast::operator::AssignmentOp::Assign => Err(LoweringError::unsupported_lhs(
+            "a plain assignment combines with nothing",
+            crate::error::syntax::Span::new(0, 0),
+        )),
+    }
+}
+
+/// Read `m[k]` the way an index read does, aborting when the key is absent.
+fn emit_map_get_checked_call(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    key_op: Operand,
+    value_ty: &Type,
+    expr: &Expression,
+) -> Operand {
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Identifier, expr.span),
+        literal: crate::ast::literal::Literal::Identifier(rt::MAP_GET_CHECKED.to_string()),
+    }));
+
+    // The lookup hands back what the map still owns without raising its count,
+    // so the temp holding it is a borrow: releasing it would take a reference
+    // away from the entry the map is still holding.
+    let temp = ctx.push_temp(value_ty.clone(), expr.span);
+    if ctx.is_perceus_managed(&value_ty.kind) {
+        ctx.mark_borrowed_temp(temp);
+    }
+
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(crate::mir::Terminator::new(
+        crate::mir::TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, key_op],
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(temp),
+            target: Some(target_bb),
+        },
+        expr.span,
+    ));
+    ctx.set_current_block(target_bb);
+    Operand::Copy(Place::new(temp))
+}
+
 fn assign_to_index_array(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -755,14 +879,7 @@ fn assign_to_index_compound(
     val: Operand,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = match op {
-        crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
-        crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
-        crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
-        crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
-        crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
-        _ => unreachable!(),
-    };
+    let bin_op = compound_binary_op(op)?;
 
     let lhs_op = Operand::Copy(target_place.clone());
     // TODO: the temp holding the result is typed `int` whatever the element is,
@@ -899,9 +1016,11 @@ pub(crate) fn lower_assignment_expr(
                 let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
                 if let Some(obj_ty) = &obj_ty {
                     if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
-                        // TODO: `op` is not consulted here, so a compound write
-                        // (`m[k] += 1`) stores the right-hand side as if it were
-                        // a plain `=` instead of combining it with the old value.
+                        if !matches!(op, crate::ast::operator::AssignmentOp::Assign) {
+                            return compound_assign_to_index_map(
+                                ctx, obj, obj_ty, idx, op, rhs, expr, dest,
+                            );
+                        }
                         let val = lower_stored_value(ctx, rhs, obj_ty, MAP_VALUE_SLOT)?;
                         return assign_to_index_map(ctx, obj, obj_ty, idx, val, expr, dest);
                     }
