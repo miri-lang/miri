@@ -38,7 +38,10 @@ fn test_not() {
 
 #[test]
 fn test_double_negation() {
-    // --1 creates two Neg operations, one nested inside the other
+    // --1 creates two Neg operations, one nested inside the other, and the
+    // second one's result is written into the destination the caller asked
+    // for. Computing it and leaving the destination untouched would leave
+    // that place holding whatever it was initialised with.
     mir_snapshot_test(
         "fn main(): --1",
         r#"
@@ -49,6 +52,7 @@ fn test_double_negation() {
             bb0: {
                 _1 = Neg(const Integer(I8(1)));
                 _2 = Neg(_1);
+                _0 = _2;
                 return;
             }
         "#,

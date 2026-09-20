@@ -33,7 +33,7 @@ use super::operators::missing_ordering_at_instantiation_message;
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
-use crate::ast::BinaryOp;
+use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
@@ -74,6 +74,31 @@ pub(crate) enum Obligation {
     /// The body applies an arithmetic operator to operands at least one of
     /// which spells one of its own parameters.
     Arithmetic(WrittenArithmetic),
+    /// The body applies a unary operator to an operand that spells one of its
+    /// own parameters.
+    Unary(WrittenUnary),
+    /// The body casts a value whose type spells one of its own parameters.
+    Cast(WrittenCast),
+}
+
+/// A unary operator a body applied, with its operand as that body wrote it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WrittenUnary {
+    op: UnaryOp,
+    operand: Type,
+}
+
+/// A cast a body wrote, with its source as that body wrote it.
+///
+/// Only the source is carried. A cast's target is written in the body as a type
+/// name, and a target spelling a parameter is refused where it is written
+/// rather than deferred — so the target an instantiation sees is the one the
+/// body already stated, and the question left for the site is whether the value
+/// it supplies is a number.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WrittenCast {
+    source: Type,
+    target: Type,
 }
 
 /// An arithmetic operator a body applied, with both operands as that body
@@ -129,14 +154,16 @@ fn concretely_pinned(pins: &HashMap<String, Pin>) -> HashMap<String, Type> {
 /// site chose a type for. Parameters are considered in name order, so a body
 /// written against several is always reported against the same one.
 fn pinned_parameter_spelled_in<'p>(
-    written: &WrittenArithmetic,
+    operands: &[&Type],
     pins: &'p HashMap<String, Pin>,
 ) -> Option<&'p str> {
     let mut parameters: Vec<&str> = pins.keys().map(String::as_str).collect();
     parameters.sort_unstable();
     parameters.into_iter().find(|parameter| {
         let spelled = |kind: &TypeKind| generic_parameter_name(kind) == Some(*parameter);
-        spells_a_type(&written.left.kind, &spelled) || spells_a_type(&written.right.kind, &spelled)
+        operands
+            .iter()
+            .any(|operand| spells_a_type(&operand.kind, &spelled))
     })
 }
 
@@ -181,8 +208,34 @@ impl Obligation {
             Obligation::Arithmetic(written) => {
                 written.delegated_through(pins).map(Obligation::Arithmetic)
             }
+            Obligation::Unary(written) => {
+                delegated_operand_of(&written.operand, pins).map(|operand| {
+                    Obligation::Unary(WrittenUnary {
+                        op: written.op,
+                        operand,
+                    })
+                })
+            }
+            Obligation::Cast(written) => {
+                delegated_operand_of(&written.source, pins).map(|source| {
+                    Obligation::Cast(WrittenCast {
+                        source,
+                        target: written.target.clone(),
+                    })
+                })
+            }
         }
     }
+}
+
+/// The single operand of a one-operand obligation, restated in the pinning
+/// body's own parameter names, or `None` when the site pins it to a concrete
+/// type and so answers it itself rather than handing it on.
+fn delegated_operand_of(operand: &Type, pins: &HashMap<String, Pin>) -> Option<Type> {
+    if !hands_on_a_parameter(operand, pins) {
+        return None;
+    }
+    delegated_operand(operand, pins)
 }
 
 /// What a site pins one generic parameter to.
@@ -215,13 +268,15 @@ pub(crate) struct PinningSite {
 ///
 /// A requirement can only be added, and the obligations that can be added form
 /// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
-/// body it is recorded against, and the program declares finitely many. An
-/// [`Obligation::Arithmetic`] carries operand types, which could grow around a
-/// delegation cycle; [`WrittenArithmetic::delegated_through`] answers that by
-/// handing on only operands that are a bare parameter name or a type written in
-/// the program, and dropping any that would be built larger. Both sets being
-/// finite, the loop ends, including when bodies delegate to each other in a
-/// cycle.
+/// body it is recorded against, and the program declares finitely many. The
+/// three that carry types — [`Obligation::Arithmetic`], [`Obligation::Unary`]
+/// and [`Obligation::Cast`] — carry operands that could grow around a
+/// delegation cycle; every one of them hands an operand on through
+/// [`delegated_operand`], which passes only a bare parameter name or a type
+/// written in the program and drops any that would be built larger. A cast's
+/// target is never restated at all, because a body writes it as a type name
+/// rather than deferring it. Each set being finite, the loop ends, including
+/// when bodies delegate to each other in a cycle.
 fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[PinningSite]) {
     loop {
         let mut inherited: Vec<(GenericBodyId, Obligation)> = Vec::new();
@@ -390,6 +445,64 @@ impl TypeChecker {
         );
     }
 
+    /// Record that the body being checked applies `op` to an operand of this
+    /// type, when the type spells one of that body's own generic parameters.
+    ///
+    /// Called for an operator the body's own check admitted, which for a
+    /// parameter it admits on the grounds that the type is decided elsewhere.
+    pub(crate) fn record_unary_requirement(
+        &mut self,
+        op: &UnaryOp,
+        operand: &Type,
+        context: &Context,
+    ) {
+        let Some(body) = self.body_stating_a_requirement_about(operand, context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::Unary(WrittenUnary {
+                op: *op,
+                operand: operand.clone(),
+            }),
+        );
+    }
+
+    /// Record that the body being checked casts a value of this type to
+    /// `target`, when the source spells one of that body's own generic
+    /// parameters.
+    pub(crate) fn record_cast_requirement(
+        &mut self,
+        source: &Type,
+        target: &Type,
+        context: &Context,
+    ) {
+        let Some(body) = self.body_stating_a_requirement_about(source, context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::Cast(WrittenCast {
+                source: source.clone(),
+                target: target.clone(),
+            }),
+        );
+    }
+
+    /// The body a requirement about `ty` would be recorded against, when `ty`
+    /// spells one of that body's own generic parameters and there is a body to
+    /// record against at all.
+    fn body_stating_a_requirement_about(
+        &self,
+        ty: &Type,
+        context: &Context,
+    ) -> Option<GenericBodyId> {
+        let spells_a_parameter = spells_a_type(&ty.kind, &|kind| {
+            parameter_in_scope(kind, context).is_some()
+        });
+        spells_a_parameter.then(|| current_body(context)).flatten()
+    }
+
     /// Record that the body being checked hands a container to a call that
     /// orders that container's elements, when the element type is one of the
     /// body's own generic parameters.
@@ -551,8 +664,68 @@ impl TypeChecker {
             match obligation {
                 Obligation::Ordering { parameter } => self.answer_ordering(parameter, site),
                 Obligation::Arithmetic(written) => self.answer_arithmetic(written, site, context),
+                Obligation::Unary(written) => self.answer_unary(written, site),
+                Obligation::Cast(written) => self.answer_cast(written, site),
             }
         }
+    }
+
+    /// Report `site` when the unary operator the body wrote has no meaning at
+    /// the type the site pins its operand to.
+    ///
+    /// The judgment is the body's own unary check, replayed against the pinned
+    /// operand, for the reason [`answer_arithmetic`](Self::answer_arithmetic)
+    /// replays the arithmetic one: a second opinion about which types a unary
+    /// operator applies to would have to reproduce every ground on which it is
+    /// admitted, and would refuse working programs on the ones it missed.
+    fn answer_unary(&mut self, written: &WrittenUnary, site: &PinningSite) {
+        let pinned = concretely_pinned(&site.pins);
+        let operand = self.substitute_type(&written.operand, &pinned);
+        if self.is_unsettled(&operand) {
+            return;
+        }
+        let Err(message) = self.check_unary_op_types(&written.op, &operand) else {
+            return;
+        };
+        let Some(parameter) = pinned_parameter_spelled_in(&[&written.operand], &site.pins) else {
+            return;
+        };
+        let help = format!(
+            "'{}' applies '{}' to its '{}' parameter, so the type it is instantiated with has to \
+             support it",
+            site.callee.1,
+            crate::ast::formatter::helpers::unary_operator(written.op),
+            parameter
+        );
+        self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, site.span, help);
+    }
+
+    /// Report `site` when it pins the parameter a cast reads to a type that is
+    /// not a number, which is the whole of what a numeric cast asks of its
+    /// source.
+    fn answer_cast(&mut self, written: &WrittenCast, site: &PinningSite) {
+        let pinned = concretely_pinned(&site.pins);
+        let source = self.substitute_type(&written.source, &pinned);
+        if self.is_unsettled(&source) || self.casts_from(&source) {
+            return;
+        }
+        let Some(parameter) = pinned_parameter_spelled_in(&[&written.source], &site.pins) else {
+            return;
+        };
+        let help = format!(
+            "'{}' casts its '{}' parameter to '{}', so the type it is instantiated with has to be \
+             a number",
+            site.callee.1, parameter, written.target
+        );
+        self.report_error_with_help(
+            DiagnosticCode::TypInvalidCast,
+            format!(
+                "cannot cast from non-numeric type '{}' to '{}'",
+                source, written.target
+            ),
+            site.span,
+            help,
+        );
     }
 
     /// Report `site` when the operator the body wrote has no meaning at the
@@ -578,7 +751,9 @@ impl TypeChecker {
         let Err(message) = self.check_arithmetic_op(&left, &written.op, &right, context) else {
             return;
         };
-        let Some(parameter) = pinned_parameter_spelled_in(written, &site.pins) else {
+        let Some(parameter) =
+            pinned_parameter_spelled_in(&[&written.left, &written.right], &site.pins)
+        else {
             return;
         };
         let help = format!(

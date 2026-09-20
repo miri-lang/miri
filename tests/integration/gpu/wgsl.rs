@@ -119,6 +119,48 @@ fn main()
         );
     }
 
+    /// `f16` carries no literal syntax, so a cast is the only way to turn a
+    /// number into one. Casting in and back out must be admitted and must emit
+    /// the `enable f16;` directive the narrowed value requires.
+    #[test]
+    fn casting_through_f16_emits_naga_valid_wgsl() {
+        let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let src = [1.5, 2.5, 3.5, 4.5]
+    gpu var dst = Array<f16, 4>()
+    gpu forall i in 0..4
+        dst[i] = src[i] as f16
+";
+        assert_gpu_wgsl_valid(source);
+        let wgsl = super::super::helpers::compile_to_wgsl(source);
+        assert!(
+            wgsl.starts_with("enable f16;"),
+            "a kernel casting to f16 must begin with the `enable f16;` directive, got:\n{}",
+            wgsl
+        );
+    }
+
+    /// The reverse direction: an `f16` buffer read back out through a cast to a
+    /// wider float.
+    #[test]
+    fn casting_out_of_f16_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let src = Array<f16, 4>()
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        dst[i] = src[i] as float
+",
+        );
+    }
+
     #[test]
     fn f16_buffer_add_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(

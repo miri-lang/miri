@@ -106,7 +106,10 @@ impl TypeChecker {
 
         let expr_ty = self.infer_expression(operand, context);
         match self.check_unary_op_types(op, &expr_ty) {
-            Ok(t) => t,
+            Ok(t) => {
+                self.record_unary_requirement(op, &expr_ty, context);
+                t
+            }
             Err(msg) => {
                 self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
                 ast_factory::make_type(TypeKind::Error)
