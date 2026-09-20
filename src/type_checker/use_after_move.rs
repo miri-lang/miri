@@ -440,13 +440,6 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.owned_locals = prev_owned;
     }
 
-    // TODO: a getter that returns one of its receiver's fields consumes the
-    // receiver, so reading a second field afterwards is refused —
-    // `self.get() + self.tag` inside the class, and `o.get() + o.tag` at a call
-    // site, both report the receiver as moved. Returning a field makes the
-    // field escape, not the object; the summary that drives this decision has
-    // to tell the two apart before a class can compose two of its own reads
-    // without a `.clone()`.
     fn report_use_after_consume(
         &mut self,
         name: &str,

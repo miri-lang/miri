@@ -220,9 +220,14 @@ pub struct ReturnFlow {
 ///    `Some(p)`) → recurse into each element with the same alias context;
 ///    every flowed-into managed param is added to both sets.
 /// 3. `return p[i]` — index expression's *result type* decides:
-///    - Managed element type → both sets contain `p`.
+///    - Managed element type → `return_aliases` contains `p`, and
+///      `direct_escapes` does **not**: what reaches the return is the element,
+///      so the caller keeps `p` and goes on using it, while a caller that lets
+///      the return escape must still treat `p` as escaping.
 ///    - Auto-copy element type → neither set contains `p` (indexing copies).
 /// 4. `return p.field` — same split based on the member access's result type.
+///    This is what lets a class compose two of its own reads: a getter that
+///    returns a field does not consume the object it read it from.
 /// 5. `return f(p)` where `f`'s param 0 ∈ `direct_escapes` → `p` ∈
 ///    `direct_escapes` of the caller (consumed via `f`'s sink chain), but only
 ///    in `return_aliases` if rule 7 also applies.
@@ -399,6 +404,31 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         }
     }
 
+    /// Record a parameter that reaches the return only *through a projection* —
+    /// one of its fields or elements — rather than as the whole value.
+    ///
+    /// Such a parameter is aliased by the return without being consumed by it:
+    /// the value handed back is part of the parameter's heap, so a caller that
+    /// lets it escape must treat the parameter as escaping too, but the
+    /// parameter itself is untouched and stays usable. Reference counting gives
+    /// the projection its own reference, so it outliving the parameter is sound.
+    ///
+    /// Answers whether it recorded anything, so the caller knows not to walk the
+    /// base a second time as a whole value — which is what would consume it.
+    fn record_projected_param(&self, obj: &Expression, flow: &mut ReturnFlow) -> bool {
+        let ExpressionKind::Identifier(name, _) = &obj.node else {
+            return false;
+        };
+        let Some(idx) = self.param_index(name) else {
+            return false;
+        };
+        if !self.is_managed_expr(obj) {
+            return false;
+        }
+        flow.return_aliases.insert(idx);
+        true
+    }
+
     fn classify_index(
         &self,
         obj: &Expression,
@@ -408,8 +438,11 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         flow: &mut ReturnFlow,
     ) {
         let alias_through = aliases_return && self.is_managed_expr(expr);
-        self.classify(obj, alias_through, flow);
         self.classify(idx_expr, false, flow);
+        if alias_through && self.record_projected_param(obj, flow) {
+            return;
+        }
+        self.classify(obj, alias_through, flow);
     }
 
     fn classify_member(
@@ -420,6 +453,9 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         flow: &mut ReturnFlow,
     ) {
         let alias_through = aliases_return && self.is_managed_expr(expr);
+        if alias_through && self.record_projected_param(obj, flow) {
+            return;
+        }
         self.classify(obj, alias_through, flow);
     }
 
