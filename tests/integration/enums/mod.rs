@@ -12,4 +12,5 @@ pub mod generic_own_type_signature;
 pub mod managed;
 pub mod matching;
 pub mod methods;
+pub mod payload_less_generic_variant;
 pub mod statics;

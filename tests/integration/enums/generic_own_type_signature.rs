@@ -335,3 +335,34 @@ fn main()
         "1 2",
     );
 }
+
+/// The fixture above carries two payload-bearing variants because a
+/// payload-less one could not be written into an annotated slot at all. It can
+/// now, so the own-type signatures are checked against one here: `Self` has to
+/// mean the receiver's instantiation whether or not the variant reached
+/// carries a value to infer it from.
+#[test]
+fn a_self_signature_accepts_a_payload_less_variant_of_the_same_instantiation() {
+    assert_runs_with_output(
+        r#"
+enum Holder<T>
+    Of(T)
+    Nothing
+
+    fn same_size(other Self) bool
+        return self.size() == other.size()
+
+    fn size() int
+        match self
+            Holder.Of(_): 1
+            Holder.Nothing: 0
+
+fn main()
+    let a Holder<int> = Holder.Nothing
+    let b Holder<int> = Holder.Nothing
+    let c Holder<int> = Holder.Of(7)
+    println(f"{a.same_size(b)},{a.same_size(c)}")
+"#,
+        "true,false",
+    );
+}

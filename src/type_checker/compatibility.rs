@@ -168,6 +168,15 @@ impl TypeChecker {
                 if n1 == "Result" {
                     return Some(self.check_result_args_compatible(args1, args2, context));
                 }
+                // A generic enum spelled with no arguments is one whose
+                // instantiation is not yet known: a variant carrying no payload
+                // gives nothing to infer the arguments from. The slot it is
+                // written into names them, so the two agree — where the variant
+                // does carry a payload, the arguments come with it and are
+                // compared below like any others.
+                if self.enum_instantiation_is_open(n1, args1, args2, context) {
+                    return Some(true);
+                }
                 // Same type name - check generic arguments
                 return Some(self.check_generic_args_compatible(args1, args2, context));
             }
@@ -178,6 +187,27 @@ impl TypeChecker {
             }
         }
         None
+    }
+
+    /// Whether one of these spellings of `name` is a generic enum whose
+    /// instantiation is still open, the other naming it.
+    ///
+    /// Only an enum: a class written without its arguments is reported where it
+    /// is declared, and accepting one here would hide that.
+    fn enum_instantiation_is_open(
+        &self,
+        name: &str,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> bool {
+        if args1.is_some() == args2.is_some() {
+            return false;
+        }
+        let definition = context
+            .resolve_type_definition(name)
+            .or_else(|| self.type_table.global_type_definitions.get(name));
+        matches!(definition, Some(TypeDefinition::Enum(def)) if def.generics.is_some())
     }
 
     /// Checks if generic arguments are compatible.
