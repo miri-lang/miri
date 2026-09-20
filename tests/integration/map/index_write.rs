@@ -241,7 +241,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "compound assignment to a String is broken wherever it is written, not only in a map: `var s = \"a\" + \"b\"` then `s += \"c\" + \"d\"` on a plain local leaks a reference and then crashes with SIGBUS. The map write combines with that same operation, so its managed-value case cannot work until the general one does"]
 fn map_index_compound_write_concatenates_a_managed_value() {
     // The value read out is a borrow of what the map still holds, and the
     // combined value is a fresh allocation that replaces it, so the entry the
