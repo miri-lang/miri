@@ -793,12 +793,10 @@ pub fn lower_generic_instantiation_with_compilation_ids(
 /// lowered means the body's `forall` capture resolves to that same device
 /// buffer — the whole GPU launch path is reused unchanged. No generic
 /// substitution applies (`subs` is empty); the specialization axis is residency.
-// TODO: two specializations of one function re-lower its body, and a lambda in
-// that body is emitted under the same symbol both times, which codegen refuses
-// as a duplicate definition. `closure_symbol` tells copies apart by the
-// substitution and the receiver; a specialized free function has neither, so
-// the residency axis (`param_handles`) has to reach the symbol as well.
-// Unprobed — needs a GPU host to reproduce.
+/// The closures written in the body are emitted again for each specialization,
+/// so `param_handles` reaches their symbols too: a specialized free function
+/// substitutes no generic and has no receiver, leaving the residency pattern as
+/// the only thing that tells one lowering's copies from another's.
 pub fn lower_residency_instantiation_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,
@@ -874,6 +872,11 @@ fn lower_instantiation_core(
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
     stamp_residency_param_handles(&mut ctx, param_handles);
+    ctx.residency_handles = param_handles
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, handle)| handle.map(|handle| (idx, handle)))
+        .collect();
     assign_gpu_param_storage_classes(&mut ctx, params.len());
 
     if inject_allocator {
