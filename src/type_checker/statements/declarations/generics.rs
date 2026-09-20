@@ -57,12 +57,9 @@ impl TypeChecker {
     ///
     /// The generic parameters must already be defined in `context`.
     ///
-    /// TODO: a class carrying a value generic (`class Wrap<T, Size>`) cannot be
-    /// named at its own parameters in a signature at all — `Wrap<T, Size>`,
-    /// `Self` and the bare `Wrap` alike are refused with *Unknown type:
-    /// __value_generic__*, the substitution sentinel reaching type resolution.
-    /// A value generic only ever stands for a value, so it needs a spelling of
-    /// its own here rather than the type parameter this builds.
+    /// A value parameter is built the same way. It stands for a value, and
+    /// substitution replaces it with the marker wrapping that value, which
+    /// resolution returns unchanged rather than looking up as a name.
     pub(crate) fn type_at_own_parameters(
         &self,
         name: &str,

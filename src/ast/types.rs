@@ -83,6 +83,18 @@ pub const OPTION_TYPE_NAME: &str = "Option";
 /// stdlib method-registry lookups.
 pub const STRING_TYPE_NAME: &str = "String";
 
+/// Name under which a value generic travels inside a type-substitution map.
+///
+/// A class may declare a parameter that stands for a value rather than a type
+/// (`class Wrap<T, Size>`), and substitution carries one map. Wrapping the
+/// value's expression as `Custom(VALUE_GENERIC_MARKER, [expr])` lets it ride in
+/// that map without a second one threaded through every caller.
+///
+/// It names no type a reader can write, so it is never shown: a type carrying
+/// one renders the value it stands for, and resolution returns it unchanged
+/// rather than looking the name up.
+pub const VALUE_GENERIC_MARKER: &str = "__value_generic__";
+
 /// Canonical class name for the built-in `Regex` compiled pattern type.
 ///
 /// Regex literals (`re"pattern"`) are typed as `TypeKind::Custom(REGEX_TYPE_NAME, None)`.
@@ -778,6 +790,14 @@ fn fmt_function(f: &mut fmt::Formatter<'_>, func: &FunctionTypeData) -> fmt::Res
 }
 
 fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]>) -> fmt::Result {
+    // A value generic stands for the value it wraps, and its marker names no
+    // type anyone wrote. Showing the marker would put a compiler-internal name
+    // in front of a reader who asked about their own `Wrap<int, 3>`.
+    if name == VALUE_GENERIC_MARKER {
+        if let Some([value]) = args {
+            return write!(f, "{}", value.node);
+        }
+    }
     f.write_str(name)?;
     let Some(args) = args else { return Ok(()) };
     let (open, close) = if BuiltinCollectionKind::from_name(name).is_some() {

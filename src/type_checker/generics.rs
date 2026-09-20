@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// generics out of the same map in size-expression positions
 /// (`substitute_value_generic_in_expr`) without threading a second mapping
 /// through every callsite of `substitute_type`.
-pub(crate) const VALUE_GENERIC_MARKER: &str = "__value_generic__";
+pub(crate) use crate::ast::types::VALUE_GENERIC_MARKER;
 
 /// Upper bound on `substitute_type` recursion depth. Bounds stack usage when a
 /// deeply nested generic type (hostile or generated) flows through
