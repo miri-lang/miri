@@ -257,14 +257,31 @@ fn enum_field_layout(
     }
 }
 
-fn class_field_layout(
+/// Where each field of a class instance sits, and how much memory the fields
+/// need.
+///
+/// Both answers come from one walk so they cannot disagree. Sizing an instance
+/// from anything other than the fields it holds — the widths of the values a
+/// constructor happens to hand over, say — gives an object whose allocation is
+/// smaller than the offsets written into it, and the write past the end lands
+/// in whatever the allocator put next.
+pub struct ClassPayloadLayout {
+    /// Offset and Cranelift type of each field, in the order
+    /// [`collect_class_fields_all`] lists them.
+    pub fields: Vec<(i32, CraneliftType)>,
+    /// Bytes the payload occupies, counting the vtable slot a dispatching
+    /// class carries ahead of its first field.
+    pub size: u32,
+}
+
+/// Lay out one class instance's payload. See [`ClassPayloadLayout`].
+pub fn class_payload_layout(
     name: &str,
     class_def: &ClassDefinition,
     type_args: Option<&[Expression]>,
-    field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
-) -> (i32, CraneliftType) {
+) -> ClassPayloadLayout {
     let ptr_size = ptr_ty.bytes() as i32;
     // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
     // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
@@ -275,8 +292,10 @@ fn class_field_layout(
     } else {
         0
     };
+    let mut fields = Vec::with_capacity(all_fields.len());
     let mut offset: i32 = vtable_offset;
-    for (i, (_field_name, field_info)) in all_fields.iter().enumerate() {
+    let mut max_align = ptr_size;
+    for (_field_name, field_info) in all_fields.iter() {
         // A generic-parameter field is monomorphized to its concrete type
         // argument so it lays out at the instantiation's scalar width.
         let field_kind = substitute_generic_field_kind(
@@ -286,13 +305,33 @@ fn class_field_layout(
         );
         let cl_ty = translate_type_kind(&field_kind, ptr_ty);
         let alignment = type_alignment(cl_ty);
+        max_align = max_align.max(alignment);
         offset = align_to(offset, alignment);
-        if i == field_idx {
-            return (offset, cl_ty);
-        }
+        fields.push((offset, cl_ty));
         offset += cl_ty.bytes() as i32;
     }
-    (offset, ptr_ty)
+    ClassPayloadLayout {
+        fields,
+        size: align_to(offset, max_align) as u32,
+    }
+}
+
+fn class_field_layout(
+    name: &str,
+    class_def: &ClassDefinition,
+    type_args: Option<&[Expression]>,
+    field_idx: usize,
+    type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    let layout = class_payload_layout(name, class_def, type_args, type_definitions, ptr_ty);
+    match layout.fields.get(field_idx) {
+        Some(&placed) => placed,
+        // An index past the last field belongs to no declared field. The slot
+        // after the payload is the closest thing to an answer, and a caller
+        // reaching it is already asking about a field the class does not have.
+        None => (layout.size as i32, ptr_ty),
+    }
 }
 
 /// Compute total size of an aggregate for stack slot allocation.

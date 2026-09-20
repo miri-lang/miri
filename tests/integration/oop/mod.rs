@@ -16,6 +16,7 @@ pub mod inherited_arg_count;
 pub mod inherited_field_types;
 pub mod inherited_through_extends_arguments;
 pub mod inherited_traits;
+pub mod instance_allocation;
 pub mod invalid_targets;
 pub mod static_members;
 pub mod super_calls;
