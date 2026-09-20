@@ -73,6 +73,60 @@ struct EnumInterpolateState {
     visited: std::collections::HashSet<String>,
 }
 
+/// An integer literal past the default `int` range, held until the type it was
+/// written into is known.
+#[derive(Debug)]
+pub(crate) struct DeferredIntLiteralRange {
+    /// The literal expression, so its finally-recorded type can be looked up.
+    pub(crate) expr_id: usize,
+    pub(crate) value: i128,
+    pub(crate) span: Span,
+}
+
+/// True when an integer type can hold `value`.
+///
+/// `value` carries what the parser read, which is an `i128`, so an unsigned type
+/// holds it exactly when it is not negative and within that type's width. The
+/// 128-bit unsigned case is every non-negative `i128` by construction.
+fn integer_kind_holds(kind: &TypeKind, value: i128) -> bool {
+    match kind {
+        TypeKind::I8 => i8::try_from(value).is_ok(),
+        TypeKind::I16 => i16::try_from(value).is_ok(),
+        TypeKind::I32 => i32::try_from(value).is_ok(),
+        TypeKind::Int | TypeKind::I64 => i64::try_from(value).is_ok(),
+        TypeKind::I128 => true,
+        TypeKind::U8 => u8::try_from(value).is_ok(),
+        TypeKind::U16 => u16::try_from(value).is_ok(),
+        TypeKind::U32 => u32::try_from(value).is_ok(),
+        TypeKind::U64 => u64::try_from(value).is_ok(),
+        TypeKind::U128 => value >= 0,
+        // A non-integer recorded type means the literal is being reported for a
+        // different reason elsewhere; judge it against the default.
+        _ => i64::try_from(value).is_ok(),
+    }
+}
+
+/// The name and maximum of the integer type a literal was written into, or
+/// `None` when nothing typed it and the default `int` is the bound.
+///
+/// The maximum is rendered rather than compared as a number because `u64::MAX`
+/// and `u128::MAX` do not fit the `i128` the literal is carried in.
+fn integer_kind_bound(kind: &TypeKind) -> Option<(&'static str, String)> {
+    match kind {
+        TypeKind::I8 => Some(("i8", i8::MAX.to_string())),
+        TypeKind::I16 => Some(("i16", i16::MAX.to_string())),
+        TypeKind::I32 => Some(("i32", i32::MAX.to_string())),
+        TypeKind::I64 => Some(("i64", i64::MAX.to_string())),
+        TypeKind::I128 => Some(("i128", i128::MAX.to_string())),
+        TypeKind::U8 => Some(("u8", u8::MAX.to_string())),
+        TypeKind::U16 => Some(("u16", u16::MAX.to_string())),
+        TypeKind::U32 => Some(("u32", u32::MAX.to_string())),
+        TypeKind::U64 => Some(("u64", u64::MAX.to_string())),
+        TypeKind::U128 => Some(("u128", u128::MAX.to_string())),
+        _ => None,
+    }
+}
+
 impl TypeChecker {
     /// Rejects an integer literal whose value does not fit the default `int`
     /// type (`i64`), which would otherwise be silently truncated to a garbage
@@ -119,24 +173,61 @@ impl TypeChecker {
             return;
         }
 
-        // TODO: the bound is the default `int` whatever the literal is written
-        // into, so a value above the 64-bit range cannot be spelled where an
-        // `i128`/`u128` is expected — only bound to an annotated `let` first.
-        // The expected type should pick the bound.
+        // The bound cannot be decided here: at an argument or element position
+        // the literal is inferred before the type it is written into is known,
+        // so a value past the default `int` is only *provisionally* out of
+        // range. It is held and judged against the type finally recorded for it,
+        // once the widening pass has had its say.
         let max = if self.negated_int_literals.contains(&expr_id) {
             i64::MAX as i128 + 1
         } else {
             i64::MAX as i128
         };
         if value > max {
-            self.report_error(
-                DiagnosticCode::TypIntegerLiteralOutOfRange,
-                format!(
-                    "Integer literal '{}' is out of range for the default int type (i64, max {})",
+            self.deferred_int_literal_ranges
+                .push(DeferredIntLiteralRange {
+                    expr_id,
                     value,
+                    span,
+                });
+        }
+    }
+
+    /// Reports every held integer literal that the type finally recorded for it
+    /// cannot hold, naming that type rather than the default `int`.
+    ///
+    /// Runs once the bodies are checked, so a literal that took a wider type
+    /// from the parameter, field, element or annotation it was written into has
+    /// already been recorded at that width and is no longer out of range.
+    pub(crate) fn report_deferred_int_literal_ranges(&mut self) {
+        for held in std::mem::take(&mut self.deferred_int_literal_ranges) {
+            let recorded = self
+                .type_table
+                .types
+                .get(&held.expr_id)
+                .map(|ty| ty.kind.clone())
+                .unwrap_or(TypeKind::Int);
+            if integer_kind_holds(&recorded, held.value) {
+                continue;
+            }
+            // The type the source asked for is named where there is one, so the
+            // bound in the message is the one that actually applies. A literal
+            // nothing typed keeps the wording it always had.
+            let message = match integer_kind_bound(&recorded) {
+                Some((name, max)) => format!(
+                    "Integer literal '{}' is out of range for {} (max {})",
+                    held.value, name, max
+                ),
+                None => format!(
+                    "Integer literal '{}' is out of range for the default int type (i64, max {})",
+                    held.value,
                     i64::MAX
                 ),
-                span,
+            };
+            self.report_error(
+                DiagnosticCode::TypIntegerLiteralOutOfRange,
+                message,
+                held.span,
             );
         }
     }

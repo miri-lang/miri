@@ -1735,6 +1735,9 @@ impl TypeChecker {
                     arg_expr
                         .and_then(|e| {
                             self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
+                                .or_else(|| {
+                                    self.widen_int_literals(e, &concrete_param_type, &arg_type)
+                                })
                         })
                         .unwrap_or(arg_type)
                 };
@@ -2230,6 +2233,10 @@ impl TypeChecker {
             }
             let elem_type = self.resolve_type_expression(&args[0], context);
             if let Some((arg_expr, arg_type)) = positional_args.first() {
+                // The type argument is the declared element width, so the
+                // literals written in the argument take it — otherwise each
+                // keeps the default `int` and fills only part of a wider slot.
+                self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type);
                 if !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
                     self.report_error(
                         DiagnosticCode::TypBuiltinConstructor,
@@ -2607,6 +2614,7 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
+                            .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
@@ -2692,6 +2700,7 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
+                            .or_else(|| self.widen_int_literals(e, &concrete_param_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_param_type, &arg_type, context) {
@@ -2785,6 +2794,7 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
+                            .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {

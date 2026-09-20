@@ -1614,14 +1614,33 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Materialize an integer literal as a Cranelift value. 128-bit literals
-    /// build via `iconcat` of lo/hi `I64` halves to avoid truncation; smaller
-    /// widths sign-extend to `i64` then `iconst` to the declared `cl_type`.
+    /// Materialize an integer literal as a Cranelift value.
+    ///
+    /// A 128-bit slot is built via `iconcat` of lo/hi `I64` halves whatever the
+    /// literal's own width, because there is no `iconst` at that width: a small
+    /// literal written into a 128-bit slot (`let a i128 = 1`) reaches here as a
+    /// narrow variant and still has to be materialized as sixteen bytes. The
+    /// value is extended by its own signedness first, so a negative literal
+    /// fills the upper half with ones rather than zeros. Narrower slots
+    /// sign-extend to `i64` then `iconst` to the declared `cl_type`.
     fn translate_int_literal(
         builder: &mut FunctionBuilder,
         int_lit: &IntegerLiteral,
         cl_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
+        if cl_type == cl_types::I128 {
+            let bits = match int_lit {
+                // Taken as written rather than through `i128`, whose range ends
+                // halfway through this one.
+                IntegerLiteral::U128(v) => *v,
+                other => other.to_i128() as u128,
+            };
+            let lo = (bits & 0xFFFF_FFFF_FFFF_FFFF) as i64;
+            let hi = (bits >> 64) as i64;
+            let lo_val = builder.ins().iconst(cl_types::I64, lo);
+            let hi_val = builder.ins().iconst(cl_types::I64, hi);
+            return Ok(builder.ins().iconcat(lo_val, hi_val));
+        }
         match int_lit {
             IntegerLiteral::I128(v) => {
                 let lo = (*v as u128 & 0xFFFF_FFFF_FFFF_FFFF) as i64;

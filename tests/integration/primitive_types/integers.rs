@@ -180,3 +180,83 @@ println(f"{med} {med + 1}")
         "9223372036854775808 9223372036854775809",
     );
 }
+
+#[test]
+fn test_negated_wide_literal_keeps_its_magnitude() {
+    // A negative literal whose magnitude exceeds i64::MAX must reach its slot
+    // intact. Materializing the magnitude at 64 bits and negating it there
+    // flips the sign: 0x8000_0000_0000_0001 read as an i64 is negative, so
+    // negating it yields a positive number.
+    assert_runs_with_output(
+        r#"
+let zero i128 = 0
+let b i128 = -9223372036854775809
+println(f"{b} {b < zero}")
+"#,
+        "-9223372036854775809 true",
+    );
+    assert_runs_with_output(
+        r#"
+let zero i128 = 0
+let c i128 = -18446744073709551617
+println(f"{c} {c < zero}")
+"#,
+        "-18446744073709551617 true",
+    );
+    // The full negative range bar i128::MIN, whose magnitude cannot be written.
+    assert_runs_with_output(
+        r#"
+let zero i128 = 0
+let d i128 = -170141183460469231731687303715884105727
+println(f"{d} {d < zero}")
+"#,
+        "-170141183460469231731687303715884105727 true",
+    );
+    // A magnitude that fits i64 was always correct and must stay so.
+    assert_runs_with_output(
+        r#"
+let zero i128 = 0
+let a i128 = -9223372036854775807
+println(f"{a} {a < zero}")
+"#,
+        "-9223372036854775807 true",
+    );
+}
+
+#[test]
+fn test_a_wide_literal_is_accepted_in_an_argument_position() {
+    // The expected type at an argument position decides the literal's width, so
+    // a value above i64::MAX is spellable there and not only as an annotated
+    // binding — and it must arrive whole.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    var l = List<i128>([0, 0])
+    l.set(0, 170141183460469231731687303715884105727)
+    println(f"{l[0] == big}")
+"#,
+        "true",
+    );
+}
+
+#[test]
+fn test_an_out_of_range_literal_names_the_type_it_was_written_into() {
+    // The bound reported is the one the source asked for, not the default the
+    // literal was inferred as before its context was known.
+    assert_compiler_error(
+        r#"
+let x i64 = 170141183460469231731687303715884105727
+"#,
+        "out of range for i64 (max 9223372036854775807)",
+    );
+    // A literal nothing typed is still judged against the default `int`.
+    assert_compiler_error(
+        r#"
+let x = 170141183460469231731687303715884105727
+"#,
+        "out of range for the default int type (i64, max 9223372036854775807)",
+    );
+}

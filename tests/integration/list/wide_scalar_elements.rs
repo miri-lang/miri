@@ -218,7 +218,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "an integer literal is typed as the default int whatever it is written into, so the elements of List<i128>([1, 2, 3]) reach the list's wider slots without being extended and only their low word is written; a literal already typed i128 round-trips (see the sibling tests)"]
 fn test_list_built_from_int_literals_widens_them_to_the_slot() {
     assert_runs_with_output(
         r#"

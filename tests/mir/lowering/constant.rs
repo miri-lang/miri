@@ -31,7 +31,7 @@ fn const_typed_integer() {
 
             bb0: {
                 StorageLive(_1);
-                _1 = const Integer(I8(42)) as i32;
+                _1 = const Integer(I8(42));
                 StorageDead(_1);
                 return;
             }

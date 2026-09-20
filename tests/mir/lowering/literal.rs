@@ -26,7 +26,7 @@ fn test_lower_negative_integer() {
             let _0: int;
 
             bb0: {
-                _0 = Neg(const Integer(I8(10)));
+                _0 = const Integer(I64(-10));
                 return;
             }
         "#,
