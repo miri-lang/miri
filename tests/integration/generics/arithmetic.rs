@@ -183,3 +183,52 @@ fn main()
         "5.25",
     );
 }
+
+/// Arithmetic on an unbounded type parameter is admitted in the body on the
+/// stated grounds that the operand is checked where the parameter is resolved.
+/// It is not: nothing re-checks the operator against the type an instantiation
+/// supplies, so a parameter instantiated at a type with no arithmetic reaches
+/// code generation and the program faults.
+///
+/// Ignored until a generic body's requirements on its parameters are checked at
+/// each instantiation. That decision also settles whether unary minus and a
+/// numeric cast — refused on a parameter today, while `a + b` is allowed — are
+/// admitted on the same terms.
+#[test]
+#[ignore]
+fn arithmetic_on_a_generic_parameter_is_refused_at_a_class_with_no_operator() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn add<T>(a T, b T) T
+    return a + b
+
+fn main()
+    let s = add(Plain(1), Plain(2))
+    println(f"{s.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+#[ignore]
+fn arithmetic_on_a_generic_parameter_is_refused_at_a_boolean() {
+    // Today this answers `true`: the operands are or-ed as bits, which is not
+    // addition and is not what the program asked for.
+    assert_compiler_error(
+        r#"
+fn add<T>(a T, b T) T
+    return a + b
+
+fn main()
+    let s = add(true, false)
+    println(f"{s}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
