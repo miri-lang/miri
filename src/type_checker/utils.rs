@@ -1509,8 +1509,25 @@ impl TypeChecker {
 
     /// Checks if a type is numeric (any integer or float type).
     pub(crate) fn is_numeric(&self, t: &Type) -> bool {
+        self.is_numeric_type(&t.kind)
+    }
+
+    /// Whether values of `kind` are numbers.
+    ///
+    /// The one authority on the question, so that every caller gets the same
+    /// answer: which types are numbers decides what arithmetic and casts admit,
+    /// and two predicates drifting apart makes a type a number or not depending
+    /// on which one the compiler happened to ask.
+    ///
+    /// `f16` is a number here even though only the device can hold one. A host
+    /// program naming it is refused for the reason that is true of it — the
+    /// type has no host representation — by the check that knows about
+    /// execution contexts, rather than by a numeric test that would report the
+    /// wrong reason and would also refuse `f16` in the kernels where it is
+    /// exactly the right type.
+    pub(crate) fn is_numeric_type(&self, kind: &TypeKind) -> bool {
         matches!(
-            t.kind,
+            kind,
             TypeKind::Int
                 | TypeKind::Float
                 | TypeKind::I8

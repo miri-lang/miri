@@ -170,3 +170,19 @@ fn test_cast_rejects_bool() {
 //         "#;
 //     assert_gpu_runs_with_output(source, "2 3 4");
 // }
+
+/// `f16` is a number that only the device can hold. A host program naming it is
+/// refused for that reason — the type has no host representation — and not on
+/// the grounds that it is not numeric, which would be false and would send the
+/// reader looking for the wrong mistake.
+#[test]
+fn test_cast_from_f16_on_the_host_reports_the_missing_host_representation() {
+    assert_compiler_error(
+        r#"
+        let x f16 = 1.5
+        let y = x as float
+        println(f'{y}')
+        "#,
+        "GPU-only type with no host representation",
+    );
+}

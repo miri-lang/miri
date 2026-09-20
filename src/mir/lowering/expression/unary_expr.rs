@@ -4,12 +4,55 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::types::Type;
 use crate::error::lowering::LoweringError;
 use crate::mir::{Operand, Place, Rvalue, StatementKind as MirStatementKind, UnOp};
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
+
+/// Put `value` where the caller asked for it, and name it the way the caller
+/// will read it.
+///
+/// An operator that answers its operand unchanged still has to honour a
+/// destination: a caller that supplied one reads that place afterwards, so
+/// handing back the operand without writing it leaves the place holding
+/// whatever it was initialised with. With no destination the value is already
+/// the answer.
+fn into_destination(
+    ctx: &mut LoweringContext,
+    value: Operand,
+    dest: Option<Place>,
+    expr: &Expression,
+) -> Operand {
+    let Some(place) = dest else {
+        return value;
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(place.clone(), Rvalue::Use(value)),
+        span: expr.span,
+    });
+    Operand::Copy(place)
+}
+
+/// The type an instantiated body gives `expr`, for the temp a unary operator
+/// writes its result into.
+///
+/// The type checker records the type of `-a` in a generic body once, against
+/// the parameter. Read raw inside a body instantiated at `float`, the temp
+/// still carries the parameter, which code generation resolves to the
+/// pointer-width integer fallback: the negated float is truncated on its way
+/// into the temp, and a later read of that temp mixes widths. Outside an
+/// instantiated body the substitution is empty and this is the recorded type
+/// unchanged. `binary_expr::binary_result_type` keeps the same contract for
+/// the binary operators.
+fn instantiated_type(ctx: &LoweringContext, expr: &Expression) -> Type {
+    crate::mir::lowering::apply_generic_sub(
+        &resolve_type(ctx.type_checker, expr),
+        &ctx.generic_subs,
+    )
+}
 
 /// Lower `--x` as `-(-x)`. The type-checker's resolved type is used for the
 /// temps so projected operands (e.g. `self.field`) keep their scalar width.
@@ -19,7 +62,7 @@ fn lower_double_negate(
     operand: &Expression,
     expr: &Expression,
 ) -> Operand {
-    let first_neg_ty = resolve_type(ctx.type_checker, operand);
+    let first_neg_ty = instantiated_type(ctx, operand);
     let first_neg = ctx.push_temp(first_neg_ty.clone(), expr.span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
@@ -110,24 +153,26 @@ pub(crate) fn lower_unary_expr(
         crate::ast::operator::UnaryOp::Await => UnOp::Await,
         // Decrement (--x) is treated as double negation: -(-x) = x.
         crate::ast::operator::UnaryOp::Decrement => {
-            return Ok(lower_double_negate(ctx, op_val, operand, expr));
+            let doubly_negated = lower_double_negate(ctx, op_val, operand, expr);
+            return Ok(into_destination(ctx, doubly_negated, dest, expr));
         }
         // Increment (++x) is a no-op for value (not implemented as mutation)
         crate::ast::operator::UnaryOp::Increment => {
-            return Ok(op_val);
+            return Ok(into_destination(ctx, op_val, dest, expr));
         }
         // Plus is identity
         crate::ast::operator::UnaryOp::Plus => {
-            return Ok(op_val);
+            return Ok(into_destination(ctx, op_val, dest, expr));
         }
         crate::ast::operator::UnaryOp::BitwiseNot => UnOp::BitwiseNot,
     };
 
-    // Use the type-checker's resolved type for the unary expression.
-    // Reading the base local's type would lose projections (e.g. `-self.field`
-    // would yield the class type rather than the field's scalar type),
-    // causing Perceus to mis-type the result temp.
-    let result_ty = resolve_type(ctx.type_checker, expr);
+    // Use the type-checker's resolved type for the unary expression, read
+    // through the active instantiation. Reading the base local's type would
+    // lose projections (e.g. `-self.field` would yield the class type rather
+    // than the field's scalar type), causing Perceus to mis-type the result
+    // temp.
+    let result_ty = instantiated_type(ctx, expr);
 
     let (target, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))

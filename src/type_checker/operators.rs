@@ -447,7 +447,25 @@ impl TypeChecker {
         expr_type: &Type,
     ) -> Result<Type, String> {
         match op {
-            UnaryOp::Negate | UnaryOp::Plus | UnaryOp::Decrement | UnaryOp::Increment => {
+            // A parameter has no type to judge here, the way it has none for
+            // binary arithmetic: the body states that it negates the parameter,
+            // and every site that pins it answers for the type it pins it to —
+            // see `instantiation_requirements`.
+            UnaryOp::Negate | UnaryOp::Plus => {
+                if self.is_numeric(expr_type) || matches!(expr_type.kind, TypeKind::Generic(..)) {
+                    Ok(expr_type.clone())
+                } else {
+                    Err(format!(
+                        "Unary operator requires numeric type, got {}",
+                        expr_type
+                    ))
+                }
+            }
+            // `++x` and `--x` are not admitted on a parameter. `++x` answers
+            // the operand unchanged and `--x` lowers as a double negation, so
+            // each would need its own account of what an instantiation owes
+            // before it could be deferred the way negation is.
+            UnaryOp::Decrement | UnaryOp::Increment => {
                 if self.is_numeric(expr_type) {
                     Ok(expr_type.clone())
                 } else {
