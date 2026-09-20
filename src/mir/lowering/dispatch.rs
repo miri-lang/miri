@@ -1502,18 +1502,7 @@ fn lower_and_coerce_args(
         if let Some(params) = param_types {
             if i < params.len() {
                 let target_ty = ctx.declared_type(&params[i].typ);
-                let op_ty = argument_type(ctx, &op, arg);
-                if op_ty.kind != target_ty.kind && !spellings_of_one_value(&op_ty, &target_ty) {
-                    let temp = ctx.push_temp(target_ty.clone(), arg.span);
-                    retain_still_held_value(ctx, &op, &op_ty, arg.span);
-                    let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, arg.span);
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: StatementKind::Assign(Place::new(temp), rvalue),
-                        span: arg.span,
-                    });
-                    release_coerced_source(ctx, &op, &op_ty, &target_ty, watermark, arg.span);
-                    op = Operand::Copy(Place::new(temp));
-                }
+                op = coerce_arg_to_declared(ctx, op, arg, &target_ty, watermark);
             }
         }
 
@@ -1524,6 +1513,37 @@ fn lower_and_coerce_args(
         arg_ops.push(op);
     }
     Ok(arg_ops)
+}
+
+/// Bring a lowered argument to the type the callee declares for it.
+///
+/// An argument written at a shallower optional depth than the parameter, or at
+/// any other type the two are not spellings of, is boxed into a temp of the
+/// declared type; anything already at that type passes through untouched, since
+/// boxing it again would put the value a layer too deep.
+///
+/// `watermark` is the local count from before the argument was lowered, so a
+/// source the coercion stops owning is released against its own scope.
+pub(super) fn coerce_arg_to_declared(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    arg: &Expression,
+    target_ty: &Type,
+    watermark: usize,
+) -> Operand {
+    let op_ty = argument_type(ctx, &op, arg);
+    if op_ty.kind == target_ty.kind || spellings_of_one_value(&op_ty, target_ty) {
+        return op;
+    }
+    let temp = ctx.push_temp(target_ty.clone(), arg.span);
+    retain_still_held_value(ctx, &op, &op_ty, arg.span);
+    let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, target_ty, arg.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(temp), rvalue),
+        span: arg.span,
+    });
+    release_coerced_source(ctx, &op, &op_ty, target_ty, watermark, arg.span);
+    Operand::Copy(Place::new(temp))
 }
 
 fn fill_default_args(
