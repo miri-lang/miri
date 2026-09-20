@@ -8,8 +8,8 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::body::BindingResidency as MirResidency;
 use crate::mir::{
-    BinOp, Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind,
-    Terminator, TerminatorKind,
+    Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::runtime_fns::rt;
 
@@ -199,25 +199,22 @@ fn assign_to_var_compound(
     val: Operand,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = compound_binary_op(op)?;
-
     let lhs_op = Operand::Copy(Place::new(local));
     let result_ty = ctx.body.local_decls[local.0].ty.clone();
-    let temp = ctx.push_temp(result_ty, expr.span);
+    let watermark = ctx.body.local_decls.len();
+    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
+
+    // `x op= y` stores what `x op y` yields, so the store is the plain one and
+    // takes its reference counting: the target releases what it held and takes
+    // the combined value, which is a fresh allocation when the operator was a
+    // method call.
+    if ctx.is_perceus_managed(&result_ty.kind) {
+        assign_to_var_simple(ctx, local, combined, expr, None, &watermark)?;
+        return Ok(());
+    }
 
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(temp),
-            Rvalue::BinaryOp(bin_op, Box::new(lhs_op), Box::new(val.clone())),
-        ),
-        span: expr.span,
-    });
-
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(local),
-            Rvalue::Use(Operand::Copy(Place::new(temp))),
-        ),
+        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(combined)),
         span: expr.span,
     });
 
@@ -525,27 +522,28 @@ fn assign_to_member_compound(
     slot_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = compound_binary_op(op)?;
-
     let lhs_op = Operand::Copy(target_place.clone());
     let result_ty = compound_field_result_type(slot_ty, expr.span);
-    let temp = ctx.push_temp(result_ty, expr.span);
+    let watermark = ctx.body.local_decls.len();
+    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
 
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(temp),
-            Rvalue::BinaryOp(bin_op, Box::new(lhs_op), Box::new(val.clone())),
-        ),
-        span: expr.span,
-    });
+    // The store into the field is the plain one, for the reason the variable
+    // target gives: a managed field releases what it held and takes the
+    // combined value rather than copying it again.
+    if ctx.is_perceus_managed(&result_ty.kind) {
+        assign_to_member_simple(ctx, target_place, slot_ty, combined.clone(), expr)?;
+    } else {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(target_place.clone(), Rvalue::Use(combined.clone())),
+            span: expr.span,
+        });
+    }
 
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            target_place.clone(),
-            Rvalue::Use(Operand::Copy(Place::new(temp))),
-        ),
-        span: expr.span,
-    });
+    // The store took its own reference, so the temp the combination landed in
+    // has one left to give back — the same balance the element target keeps.
+    if let Operand::Copy(place) | Operand::Move(place) = &combined {
+        ctx.emit_temp_drop(place.local, watermark, expr.span);
+    }
 
     Ok(())
 }
@@ -679,7 +677,6 @@ fn compound_assign_to_index_map(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let bin_op = compound_binary_op(op)?;
     // The combined value is typed by the map's own value slot, not by whatever
     // the right-hand side happens to be, so combining an `int` into a float
     // value keeps the float.
@@ -699,16 +696,8 @@ fn compound_assign_to_index_map(
         expr,
     );
 
-    let value_watermark = ctx.body.local_decls.len();
     let rhs_op = lower_expression(ctx, rhs, None)?;
-    let combined = ctx.push_temp(value_ty.clone(), expr.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(combined),
-            Rvalue::BinaryOp(bin_op, Box::new(old), Box::new(rhs_op)),
-        ),
-        span: expr.span,
-    });
+    let combined = combine_compound_operands(ctx, &value_ty, op, old, rhs_op, expr)?;
 
     // Combining produces a value of its own, already owning the one reference
     // the map is about to take. Donating hands that one over and releases the
@@ -716,18 +705,15 @@ fn compound_assign_to_index_map(
     // temp has no scope to give back.
     let (donated_key, key_src) =
         donate_operand_to_container(ctx, Operand::Copy(key_place), key_ty, idx.span);
-    let (donated_val, val_src) = donate_operand_to_container(
-        ctx,
-        Operand::Copy(Place::new(combined)),
-        value_ty.clone(),
-        expr.span,
-    );
+    // The store keeps the value, so it is handed a reference of its own, the
+    // way the plain `m[k] = v` hands it one. The temp the combination landed in
+    // keeps the reference it already held and gives that one back at the end of
+    // its scope.
+    inc_ref_if_managed(ctx, &combined, &value_ty, expr);
+    let donated_val = combined;
     emit_map_set_call(ctx, obj_op, donated_key, donated_val.clone(), expr);
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
-    }
-    if let Some(src) = val_src {
-        ctx.emit_temp_drop(src, value_watermark, expr.span);
     }
 
     if let Some(d) = dest {
@@ -741,19 +727,75 @@ fn compound_assign_to_index_map(
     }
 }
 
-/// The binary operation a compound assignment combines with.
-fn compound_binary_op(op: &crate::ast::operator::AssignmentOp) -> Result<BinOp, LoweringError> {
-    match op {
-        crate::ast::operator::AssignmentOp::AssignAdd => Ok(BinOp::Add),
-        crate::ast::operator::AssignmentOp::AssignSub => Ok(BinOp::Sub),
-        crate::ast::operator::AssignmentOp::AssignMul => Ok(BinOp::Mul),
-        crate::ast::operator::AssignmentOp::AssignDiv => Ok(BinOp::Div),
-        crate::ast::operator::AssignmentOp::AssignMod => Ok(BinOp::Rem),
-        crate::ast::operator::AssignmentOp::Assign => Err(LoweringError::unsupported_lhs(
+/// The binary operator a compound assignment names.
+fn compound_binary_op(
+    op: &crate::ast::operator::AssignmentOp,
+) -> Result<crate::ast::operator::BinaryOp, LoweringError> {
+    op.binary_op().ok_or_else(|| {
+        LoweringError::unsupported_lhs(
             "a plain assignment combines with nothing",
             crate::error::syntax::Span::new(0, 0),
-        )),
+        )
+    })
+}
+
+/// The rvalue a compound assignment stores back into its target: `x op y` for
+/// the `x` and `y` it combines.
+///
+/// A type that declares the operator as a trait method — a string's `concat`,
+/// a user class's own — is combined by *calling* it, exactly as the written-out
+/// operator is; only a type declaring none combines with a machine
+/// instruction. Reading the two spellings differently is what made `s += t`
+/// add two addresses while `s + t` concatenated, and it is why all four
+/// compound targets (a variable, a field, an element, a map value) come
+/// through here rather than building the operation themselves.
+///
+/// Operand temps are left to whoever created them: the watermark taken here is
+/// the current one, so the call releases none of them, which is what the
+/// machine-instruction path did before and after.
+fn combine_compound_operands(
+    ctx: &mut LoweringContext,
+    slot_ty: &Type,
+    op: &crate::ast::operator::AssignmentOp,
+    lhs_op: Operand,
+    rhs_op: Operand,
+    expr: &Expression,
+) -> Result<Operand, LoweringError> {
+    let binary_op = compound_binary_op(op)?;
+    let arg_watermark = ctx.body.local_decls.len();
+    let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
+        lhs_op: lhs_op.clone(),
+        rhs_op: rhs_op.clone(),
+    };
+    // A method call already leaves its result in a temp of the method's own
+    // return type. Copying that into a second temp would take a reference the
+    // first one never gives back, so the call's own result is the value.
+    if let Some(result) =
+        crate::mir::lowering::expression::binary_expr::try_lower_operator_trait_call(
+            ctx,
+            slot_ty,
+            &binary_op,
+            operands,
+            expr,
+            None,
+            arg_watermark,
+        )?
+    {
+        return Ok(result);
     }
+    // A machine instruction has no result slot of its own. The temp it lands in
+    // is typed by the target, because the operation's recorded type is the
+    // pointer-width fallback and would truncate a float sum on its way back.
+    let bin_op = crate::mir::lowering::expression::binary_expr::op_to_binop(&binary_op, expr.span)?;
+    let temp = ctx.push_temp(slot_ty.clone(), expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(temp),
+            Rvalue::BinaryOp(bin_op, Box::new(lhs_op), Box::new(rhs_op)),
+        ),
+        span: expr.span,
+    });
+    Ok(Operand::Copy(Place::new(temp)))
 }
 
 /// Read `m[k]` the way an index read does, aborting when the key is absent.
@@ -882,30 +924,25 @@ fn assign_to_index_compound(
     elem_ty: Option<&Type>,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let bin_op = compound_binary_op(op)?;
-
     let lhs_op = Operand::Copy(target_place.clone());
     // The result is a value of the element's own type. Typing it `int`
     // regardless truncated a float element's sum on its way into the temp, and
     // the truncated value was what got stored back.
     let result_ty = compound_field_result_type(elem_ty, expr.span);
-    let _temp = ctx.push_temp(result_ty, expr.span);
+    let watermark = ctx.body.local_decls.len();
+    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
 
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(_temp),
-            Rvalue::BinaryOp(bin_op, Box::new(lhs_op), Box::new(val.clone())),
-        ),
+        kind: MirStatementKind::Assign(target_place.clone(), Rvalue::Use(combined.clone())),
         span: expr.span,
     });
 
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            target_place.clone(),
-            Rvalue::Use(Operand::Copy(Place::new(_temp))),
-        ),
-        span: expr.span,
-    });
+    // The store took its own reference to the combined value, so the temp that
+    // held it has one left to give back. A machine result is not managed and
+    // the release is skipped for it.
+    if let Operand::Copy(place) | Operand::Move(place) = &combined {
+        ctx.emit_temp_drop(place.local, watermark, expr.span);
+    }
 
     Ok(())
 }
