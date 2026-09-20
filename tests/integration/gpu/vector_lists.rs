@@ -385,3 +385,171 @@ fn main()
 8.0",
     );
 }
+
+#[test]
+fn searching_a_list_of_vectors_finds_the_element_that_matches_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 3.0))}')
+    println(f'{vs.contains(Vec3<f32>(4.0, 5.0, 6.0))}')
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 9.0))}')
+    println(f'{vs.contains(Vec3<f32>(7.0, 8.0, 9.0))}')
+";
+    assert_runs_with_output(source, "true\ntrue\nfalse\nfalse");
+}
+
+#[test]
+fn a_vector_that_matches_only_its_leading_components_is_not_found() {
+    // The element is wider than one value word, so a search comparing only the
+    // leading word would call these two vectors the same. The matching vector
+    // is searched for beside it: answering `false` to both is what the search
+    // did before it read past the first component, so the negative alone would
+    // hold without the comparison reaching the trailing ones.
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0)])
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 4.0))}')
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 3.0))}')
+    match vs.index_of(Vec3<f32>(1.0, 2.0, 4.0))
+        Some(i): println(f'found at {i}')
+        None: println('not found')
+    match vs.index_of(Vec3<f32>(1.0, 2.0, 3.0))
+        Some(i): println(f'found at {i}')
+        None: println('not found')
+";
+    assert_runs_with_output(source, "false\ntrue\nnot found\nfound at 0");
+}
+
+#[test]
+fn the_index_of_a_vector_is_the_first_slot_holding_it() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(1.0, 2.0, 3.0)])
+    match vs.index_of(Vec3<f32>(1.0, 2.0, 3.0))
+        Some(i): println(f'{i}')
+        None: println('none')
+    match vs.index_of(Vec3<f32>(4.0, 5.0, 6.0))
+        Some(i): println(f'{i}')
+        None: println('none')
+    match vs.index_of(Vec3<f32>(9.0, 9.0, 9.0))
+        Some(i): println(f'{i}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "0\n1\nnone");
+}
+
+#[test]
+fn searching_an_empty_list_of_vectors_finds_nothing() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List<Vec3<f32>>()
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 3.0))}')
+    match vs.index_of(Vec3<f32>(1.0, 2.0, 3.0))
+        Some(i): println(f'{i}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "false\nnone");
+}
+
+#[test]
+fn removing_a_vector_by_value_takes_the_first_one_that_matches() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(1.0, 2.0, 3.0)])
+    println(f'{vs.remove(Vec3<f32>(1.0, 2.0, 3.0))}')
+    println(f'{vs.length()}')
+    println(f'{vs[0].x} {vs[0].y} {vs[0].z} | {vs[1].x} {vs[1].y} {vs[1].z}')
+    println(f'{vs.remove(Vec3<f32>(9.0, 9.0, 9.0))}')
+    println(f'{vs.length()}')
+";
+    assert_runs_with_output(source, "true\n2\n4.0 5.0 6.0 | 1.0 2.0 3.0\nfalse\n2");
+}
+
+#[test]
+fn searching_a_list_of_vec2_and_vec4_compares_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let twos = List([Vec2<i32>(7, 8), Vec2<i32>(9, 10)])
+    println(f'{twos.contains(Vec2<i32>(9, 10))}')
+    println(f'{twos.contains(Vec2<i32>(9, 11))}')
+    let fours = List([Vec4<f32>(1.0, 2.0, 3.0, 4.0), Vec4<f32>(5.0, 6.0, 7.0, 8.0)])
+    println(f'{fours.contains(Vec4<f32>(5.0, 6.0, 7.0, 8.0))}')
+    println(f'{fours.contains(Vec4<f32>(5.0, 6.0, 7.0, 9.0))}')
+";
+    assert_runs_with_output(source, "true\nfalse\ntrue\nfalse");
+}
+
+#[test]
+fn searching_a_list_of_vectors_with_64_bit_components_compares_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f64>(1.5, 2.5, 3.5), Vec3<f64>(4.5, 5.5, 6.5)])
+    println(f'{vs.contains(Vec3<f64>(4.5, 5.5, 6.5))}')
+    println(f'{vs.contains(Vec3<f64>(4.5, 5.5, 9.5))}')
+    match vs.index_of(Vec3<f64>(1.5, 2.5, 3.5))
+        Some(i): println(f'{i}')
+        None: println('none')
+";
+    assert_runs_with_output(source, "true\nfalse\n0");
+}
+
+#[test]
+fn searching_a_list_of_vectors_leaves_it_unchanged() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 3.0))}')
+    println(f'{vs.contains(Vec3<f32>(1.0, 2.0, 3.0))}')
+    println(f'{vs.length()}')
+    println(f'{vs[0].x} {vs[0].y} {vs[0].z} | {vs[1].x} {vs[1].y} {vs[1].z}')
+";
+    assert_runs_with_output(source, "true\ntrue\n2\n1.0 2.0 3.0 | 4.0 5.0 6.0");
+}
+
+#[test]
+fn a_search_over_a_list_that_is_not_bound_to_a_name_answers_and_releases_it() {
+    // The receiver is the result of a call rather than a named place, and one
+    // of the searches has its answer discarded, so neither the list nor the
+    // element searched for is left to a scope that would release it.
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn made() List<Vec3<f32>>
+    return List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+
+fn main()
+    println(f'{made().contains(Vec3<f32>(4.0, 5.0, 6.0))}')
+    var vs = made()
+    vs.remove(Vec3<f32>(1.0, 2.0, 3.0))
+    println(f'{vs.length()} {vs[0].x} {vs[0].y} {vs[0].z}')
+    if vs.contains(Vec3<f32>(4.0, 5.0, 6.0))
+        println('still there')
+";
+    assert_runs_with_output(source, "true\n1 4.0 5.0 6.0\nstill there");
+}

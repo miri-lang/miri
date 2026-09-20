@@ -547,7 +547,7 @@ fn emit_enum_equality(
     let variants: Vec<Vec<Type>> = enum_def
         .variants
         .values()
-        .map(|payload_types| concrete_payload_types(payload_types, type_args, generics.as_ref()))
+        .map(|payload_types| substituted_member_types(payload_types, type_args, generics.as_ref()))
         .collect();
 
     emit_tagged_union_equality(ctx, span, enum_name, &variants, lhs_op, rhs_op, is_eq)
@@ -707,25 +707,24 @@ fn emit_discriminant_agreement(
     lhs_discr
 }
 
-/// Substitute the enum's generic parameters into its declared payload types.
-fn concrete_payload_types(
-    payload_types: &[Type],
+/// Substitute a named type's generic parameters into the types it declares its
+/// members at — an enum variant's payloads, or a struct's fields.
+///
+/// A member declared at a type parameter is stored at whatever the value was
+/// instantiated with, so comparing it at the declared spelling would recurse on
+/// a bare parameter, which carries no layout and no comparison of its own.
+fn substituted_member_types(
+    declared_types: &[Type],
     type_args: Option<&[crate::ast::expression::Expression]>,
     generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
 ) -> Vec<Type> {
-    let Some(args) = type_args else {
-        return payload_types.to_vec();
+    let (Some(args), Some(generics)) = (type_args, generics) else {
+        return declared_types.to_vec();
     };
-    payload_types
+    let params = generics.iter().map(|generic| generic.name.as_str());
+    declared_types
         .iter()
-        .map(|ty| {
-            let substituted = crate::type_checker::generics::substitute_generic_field_kind(
-                &ty.kind,
-                Some(args),
-                generics,
-            );
-            Type::new(substituted, ty.span)
-        })
+        .map(|ty| crate::mir::lowering::instantiated_member_type(params.clone(), args, ty))
         .collect()
 }
 
@@ -907,7 +906,7 @@ fn emit_struct_field_equality(
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
-    _args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[crate::ast::expression::Expression]>,
 ) -> Result<crate::mir::Local, LoweringError> {
     let Some(crate::type_checker::context::TypeDefinition::Struct(struct_def)) =
         ctx.type_checker.type_definitions().get(name)
@@ -917,11 +916,13 @@ fn emit_struct_field_equality(
             span,
         ));
     };
-    let field_types: Vec<Type> = struct_def
+    let generics = struct_def.generics.clone();
+    let declared_types: Vec<Type> = struct_def
         .fields
         .iter()
         .map(|(_, field_ty, _)| field_ty.clone())
         .collect();
+    let field_types = substituted_member_types(&declared_types, type_args, generics.as_ref());
 
     let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, span);
     let rhs_place = crate::mir::lowering::helpers::ensure_place(ctx, rhs_op, span);

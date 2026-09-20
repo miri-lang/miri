@@ -1561,7 +1561,7 @@ impl<'a> FunctionTranslator<'a> {
         };
         match (type_args, generics) {
             (Some(args), Some(generics)) => {
-                crate::mir::lowering::instantiated_class_field_type(
+                crate::mir::lowering::instantiated_member_type(
                     generics.iter().map(|g| g.name.as_str()),
                     args,
                     declared,

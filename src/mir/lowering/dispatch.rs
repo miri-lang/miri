@@ -21,7 +21,9 @@ use super::helpers::{
     coerce_rvalue_in, gpu_math_return_type, release_coerced_source, resolve_arg_type,
     spellings_of_one_value, wrap_for_optional_slot,
 };
-use super::inline_element_take::{inline_element, lower_inline_element_read, InlineElementRead};
+use super::inline_element::inline_element;
+use super::inline_element_search::{lower_inline_element_search, InlineElementSearch};
+use super::inline_element_take::{lower_inline_element_read, InlineElementRead};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
 
@@ -1044,14 +1046,28 @@ pub(super) fn try_lower_collection_intrinsic(
         return lower_list_push(ctx, obj, obj_ty, &args[0], span);
     }
 
-    // A list of inline elements cannot use the standard library's `pop` /
-    // `remove_at`: that body is compiled once over an opaque element type and
+    // A list of inline elements cannot use the standard library bodies that
+    // reach an element: each is compiled once over an opaque element type and
     // reads one value word out of the slot, which for an inline element is a
     // prefix of its components rather than the element.
+    //
+    // TODO: the methods intercepted here are the ones that hand an element back
+    // or look one up, and they are not all of them. `map`, `filter`, `reduce`,
+    // `take`, `reversed` and the rest of the default methods on the transform,
+    // fold and sequence traits reach an element the same way and are wrong for
+    // an inline element too — `reversed` and `take` crash outright. An array of
+    // inline elements is wrong the same way and is not intercepted at all, its
+    // storage not being behind a handle. Answering those one call site at a
+    // time does not end: what these bodies need is to be re-lowered per element
+    // type, the way a user's generic function already is.
     if builtin == Some(BuiltinCollectionKind::List) {
-        if let Some(removal) = InlineElementRead::of(method_name, args) {
-            if let Some(element) = inline_element(ctx, obj_ty) {
-                return lower_inline_element_read(ctx, obj, obj_ty, &element, removal, span, dest)
+        if let Some(element) = inline_element(ctx, obj_ty) {
+            if let Some(read) = InlineElementRead::of(method_name, args) {
+                return lower_inline_element_read(ctx, obj, obj_ty, &element, read, span, dest)
+                    .map(Some);
+            }
+            if let Some(search) = InlineElementSearch::of(method_name, args) {
+                return lower_inline_element_search(ctx, obj, obj_ty, &element, search, span, dest)
                     .map(Some);
             }
         }
