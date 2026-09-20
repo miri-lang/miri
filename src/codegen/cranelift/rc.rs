@@ -884,6 +884,13 @@ impl<'a> FunctionTranslator<'a> {
     /// against a parameter — the shared copy of a generic function holding a
     /// `Set<Box<T>>` — records `Box<T>` as well, and naming its instantiation
     /// here would reference a symbol nothing defines.
+    ///
+    /// For the same reason this is only ever asked about a class: a
+    /// per-instantiation method thunk is emitted for no other kind. Every
+    /// caller establishes that first, by asking whether the type answers the
+    /// method at all, so nothing re-checks it here. A kind that starts
+    /// answering one must gain its per-instantiation thunks in the same pass,
+    /// or the name built below will reference a symbol nothing defines.
     fn element_method_thunk_name_part(
         class_name: &str,
         type_args: Option<&[Expression]>,
@@ -918,28 +925,27 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// The `__drop_` suffix to call for a Custom type: the mangled
-    /// `Box__String` for a generic class whose instantiation is recorded, else
+    /// `Box__String` for a generic type whose instantiation is recorded, else
     /// the bare `Box`.
+    ///
+    /// A generic struct and a generic enum mangle exactly as a generic class
+    /// does. All three declare fields whose types are written in their own
+    /// parameters, so the field a given instantiation stores is known only once
+    /// the arguments are substituted, and each gets its own thunk.
     ///
     /// Gated on the instantiation registry so the emitted call always targets a
     /// thunk `generate_type_drop_functions` actually defined — both sides mangle
     /// through the same `mangle_generic_name`, so a registry hit guarantees the
     /// symbol exists.
-    ///
-    /// TODO: only a class is recognized here, so a generic enum element falls to
-    /// the bare name below and the emitted `__decref_Holder` matches no defined
-    /// thunk — `List<Holder<int>>` fails to link. The enum needs the same
-    /// per-instantiation mangling, and a thunk emitted under that name.
     fn generic_drop_thunk_name_part(
         class_name: &str,
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> String {
-        let Some(TypeDefinition::Class(class_def)) = type_ctx.type_definitions.get(class_name)
-        else {
+        let Some(definition) = type_ctx.type_definitions.get(class_name) else {
             return class_name.to_string();
         };
-        if class_def.generics.is_none() {
+        if definition.generics().is_none() {
             return class_name.to_string();
         }
         let Some(args) = type_args else {
@@ -1049,13 +1055,8 @@ impl<'a> FunctionTranslator<'a> {
         };
         match def {
             TypeDefinition::Struct(struct_def) => {
-                let managed_fields: Vec<(usize, TypeKind)> = struct_def
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, ty, _))| is_field_managed(&ty.kind))
-                    .map(|(idx, (_, ty, _))| (idx, ty.kind.clone()))
-                    .collect();
+                let managed_fields =
+                    Self::managed_struct_fields(struct_def, inst_args, type_ctx.type_definitions);
                 Self::emit_struct_like_field_decrefs(
                     builder,
                     ctx,
@@ -1114,6 +1115,63 @@ impl<'a> FunctionTranslator<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// The index and resolved kind of every field of `struct_def` the drop path
+    /// must DecRef.
+    ///
+    /// A field of a generic struct is written in the struct's own parameters
+    /// (`value T`, `items List<T>`), which name nothing concrete on their own.
+    /// The per-instantiation thunk supplies `inst_args`, so each field resolves
+    /// to the kind this instance actually stores: a managed one joins the DecRef
+    /// set at that kind, a scalar one is a genuine no-op and is skipped. The
+    /// shared bare-name thunk passes no arguments and is only reached as a
+    /// collection element's decref helper, where the direct drop already routed
+    /// through the mangled thunk — so a field still written at a parameter is
+    /// skipped rather than released at a type it may not have.
+    fn managed_struct_fields(
+        struct_def: &crate::type_checker::context::StructDefinition,
+        inst_args: Option<&[Type]>,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Vec<(usize, TypeKind)> {
+        let subs = Self::generic_substitution(struct_def.generics.as_deref(), inst_args);
+        let mut managed = Vec::new();
+        for (idx, (_, declared, _)) in struct_def.fields.iter().enumerate() {
+            let resolved = match &subs {
+                Some(subs) => crate::mir::lowering::apply_generic_sub(declared, subs),
+                None => declared.clone(),
+            };
+            if struct_def.generics.is_some()
+                && Self::is_unresolved_generic_elem(&resolved.kind, type_definitions)
+            {
+                continue;
+            }
+            if is_field_managed(&resolved.kind) {
+                managed.push((idx, resolved.kind));
+            }
+        }
+        managed
+    }
+
+    /// Map each declared type parameter to the argument at its position, or
+    /// `None` when there are no parameters, no arguments, or the two disagree
+    /// about how many there are.
+    fn generic_substitution(
+        generics: Option<&[crate::type_checker::context::GenericDefinition]>,
+        inst_args: Option<&[Type]>,
+    ) -> Option<HashMap<String, Type>> {
+        let generics = generics?;
+        let args = inst_args?;
+        if generics.len() != args.len() {
+            return None;
+        }
+        Some(
+            generics
+                .iter()
+                .zip(args)
+                .map(|(param, arg)| (param.name.clone(), arg.clone()))
+                .collect(),
+        )
     }
 
     /// Emit `DecRef` for every managed field of a struct- or class-shaped

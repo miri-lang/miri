@@ -602,10 +602,11 @@ impl CraneliftBackend {
         // Collect all Struct/Class/Enum types and sort for deterministic output.
         // We include types without managed fields so that `__decref_TypeName` can be
         // generated for them — it is needed as elem_drop_fn when such types are
-        // stored in a List, Set, or Map. Generic Classes are accepted: the drop
-        // thunk is keyed by bare type name (no generic args mangled in), so one
-        // thunk serves every instantiation. Struct/Enum stay non-generic because
-        // their field DecRef sequences may depend on element layout.
+        // stored in a List, Set, or Map. A generic struct, class or enum is
+        // accepted: the bare thunk serves as the shared entry point and skips a
+        // field still written at a parameter, while the per-instantiation thunks
+        // below resolve each field against concrete arguments, so the field an
+        // instance actually stores is the one released.
         //
         // Builtin collection class names (`List`, `Map`, `Set`, `Array`, `Tuple`)
         // and `String` are skipped: their drop / decref / clone paths route through
@@ -616,16 +617,13 @@ impl CraneliftBackend {
             .type_definitions
             .iter()
             .filter_map(|(name, def)| {
-                let skip_generic = match def {
-                    TypeDefinition::Struct(sd) => sd.generics.is_some(),
-                    TypeDefinition::Class(_) => false,
-                    TypeDefinition::Enum(ed) => ed.generics.is_some(),
+                match def {
+                    TypeDefinition::Struct(_)
+                    | TypeDefinition::Class(_)
+                    | TypeDefinition::Enum(_) => {}
                     TypeDefinition::Generic(_)
                     | TypeDefinition::Alias(_)
                     | TypeDefinition::Trait(_) => return None,
-                };
-                if skip_generic {
-                    return None;
                 }
                 if BuiltinCollectionKind::from_name(name).is_some()
                     || name == STRING_TYPE_NAME
@@ -788,11 +786,11 @@ impl CraneliftBackend {
     }
 
     /// Generate a per-instantiation `__drop_TypeName__Args` thunk for each
-    /// recorded instantiation of a generic class, so a managed field is DecRef'd
-    /// and a scalar field skipped, each per instantiation. Non-generic classes
-    /// and classes with no recorded instantiations produce nothing here (the bare
-    /// thunk suffices). Instantiations are deduplicated by mangled name so the
-    /// same symbol is never defined twice.
+    /// recorded instantiation of a generic struct, class or enum, so a managed
+    /// field is DecRef'd and a scalar field skipped, each per instantiation.
+    /// Non-generic types and types with no recorded instantiations produce
+    /// nothing here (the bare thunk suffices). Instantiations are deduplicated
+    /// by mangled name so the same symbol is never defined twice.
     fn generate_instantiation_drop_functions(
         &self,
         module: &mut ObjectModule,
@@ -800,10 +798,10 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
     ) -> Result<(), CodegenError> {
-        let Some(TypeDefinition::Class(class_def)) = self.type_definitions.get(type_name) else {
+        let Some(definition) = self.type_definitions.get(type_name) else {
             return Ok(());
         };
-        if class_def.generics.is_none() {
+        if definition.generics().is_none() {
             return Ok(());
         }
         let Some(tuples) = self.generic_class_instantiations.get(type_name) else {

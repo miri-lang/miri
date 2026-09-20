@@ -278,6 +278,24 @@ impl TypeDefinition {
             }
         }
     }
+
+    /// The type parameters this definition declares, or `None` when it declares
+    /// none or stands for a type rather than describing one.
+    ///
+    /// The three kinds that hold fields — a struct, a class and an enum — are
+    /// each instantiated at concrete arguments and each need the instantiation
+    /// found again later, so they answer here through one accessor rather than
+    /// three copies of the same match.
+    pub fn generics(&self) -> Option<&[GenericDefinition]> {
+        match self {
+            TypeDefinition::Struct(definition) => definition.generics.as_deref(),
+            TypeDefinition::Class(definition) => definition.generics.as_deref(),
+            TypeDefinition::Enum(definition) => definition.generics.as_deref(),
+            TypeDefinition::Generic(_) | TypeDefinition::Alias(_) | TypeDefinition::Trait(_) => {
+                None
+            }
+        }
+    }
 }
 
 /// Collect all fields for a class by walking the inheritance chain from root to leaf.
