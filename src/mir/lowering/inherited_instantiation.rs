@@ -98,6 +98,15 @@ pub(crate) fn base_class_instantiation(
 /// the parent's and mean something else entirely.
 ///
 /// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
+// TODO: a generic class inheriting from another loses one inherited field when
+// a reference-counted field is among them. `class Child<X, Y, Z> extends
+// Base<X, Y, Z>` holding a `float`, an `int` and a `String` writes `first`
+// somewhere other than where it is read back, so it returns whatever the
+// allocator left there. Two fields are fine, and three are fine while all of
+// them are scalars, which points at the field kind rather than the count. It
+// only shows reliably under `MIRI_HEAP_GUARD=1`, whose own allocations change
+// what the stale memory holds; without the guard the leftover bytes happen to
+// be the right answer, so a test written without it proves nothing.
 pub(crate) fn instantiated_field_types(
     type_definitions: &HashMap<String, TypeDefinition>,
     class_name: &str,

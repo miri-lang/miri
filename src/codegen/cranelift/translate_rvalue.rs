@@ -4,7 +4,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use crate::codegen::cranelift::layout::field_layout;
+use crate::codegen::cranelift::layout::{class_payload_layout, field_layout, ClassPayloadLayout};
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -774,19 +774,13 @@ impl<'a> FunctionTranslator<'a> {
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
 
-        let tuple_header = if is_tuple { ptr_size as u32 } else { 0 };
-        let vtable_header_size = if needs_vtable_alloc {
-            ptr_size as u32
-        } else {
-            0
-        };
-        let (field_offsets, total_size) = Self::compute_aggregate_layout(
+        let (field_offsets, total_size) = Self::payload_layout(
             builder,
+            kind,
             &translated,
-            tuple_header + vtable_header_size,
+            type_ctx,
+            needs_vtable_alloc,
             is_tuple,
-            matches!(kind, AggregateKind::Enum(_, _) | AggregateKind::Option),
-            ptr_size as u32,
         )?;
 
         let payload_ptr =
@@ -799,7 +793,64 @@ impl<'a> FunctionTranslator<'a> {
             Self::store_vtable_pointer(builder, ctx, &class_name, payload_ptr, ptr_type)?;
         }
 
-        // Resolve declared field types for payload coercion.
+        Self::store_payload_values(
+            builder,
+            kind,
+            translated,
+            &field_offsets,
+            payload_ptr,
+            type_ctx,
+            expected_ty,
+        )?;
+        Ok(payload_ptr)
+    }
+
+    /// Where each translated value is stored inside the payload, and how many
+    /// bytes the payload needs.
+    ///
+    /// A class instance is laid out by its declared fields, because that is
+    /// what every later read and write of one reaches through. The values a
+    /// constructor hands over say nothing about how much room the instance
+    /// needs: a field the constructor leaves to `init` arrives as a placeholder
+    /// one byte wide, and sizing the allocation from those widths hands out an
+    /// object smaller than its own fields. Every other aggregate carries its
+    /// real values here, so their own widths are the layout.
+    fn payload_layout(
+        builder: &FunctionBuilder,
+        kind: &AggregateKind,
+        translated: &[Value],
+        type_ctx: &TypeCtx,
+        needs_vtable_alloc: bool,
+        is_tuple: bool,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        if let Some(layout) = Self::declared_class_layout(kind, type_ctx) {
+            return Self::class_field_offsets(layout, translated.len());
+        }
+        let ptr_size = type_ctx.ptr_type.bytes();
+        let tuple_header = if is_tuple { ptr_size } else { 0 };
+        let vtable_header_size = if needs_vtable_alloc { ptr_size } else { 0 };
+        Self::compute_aggregate_layout(
+            builder,
+            translated,
+            tuple_header + vtable_header_size,
+            is_tuple,
+            matches!(kind, AggregateKind::Enum(_, _) | AggregateKind::Option),
+            ptr_size,
+        )
+    }
+
+    /// Write each translated value into its payload slot, brought to the type
+    /// the slot is declared at where the aggregate knows one.
+    fn store_payload_values(
+        builder: &mut FunctionBuilder,
+        kind: &AggregateKind,
+        translated: Vec<Value>,
+        field_offsets: &[u32],
+        payload_ptr: Value,
+        type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
         let declared_field_types =
             Self::resolve_declared_field_types_for_aggregate(kind, type_ctx, expected_ty);
 
@@ -825,7 +876,59 @@ impl<'a> FunctionTranslator<'a> {
                 .ins()
                 .store(MemFlags::new(), val, payload_ptr, store_offset);
         }
-        Ok(payload_ptr)
+        Ok(())
+    }
+
+    /// The declared payload layout of the class `kind` constructs, or `None`
+    /// when `kind` is not a class or names one this build has no definition for.
+    fn declared_class_layout(
+        kind: &AggregateKind,
+        type_ctx: &TypeCtx,
+    ) -> Option<ClassPayloadLayout> {
+        let AggregateKind::Class(ty) = kind else {
+            return None;
+        };
+        let TypeKind::Custom(class_name, type_args) = &ty.kind else {
+            return None;
+        };
+        let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
+            type_ctx.type_definitions.get(class_name.as_str())
+        else {
+            return None;
+        };
+        Some(class_payload_layout(
+            class_name,
+            class_def,
+            type_args.as_deref(),
+            type_ctx.type_definitions,
+            type_ctx.ptr_type,
+        ))
+    }
+
+    /// The offset each constructor operand is stored at, with the payload size
+    /// that holds them.
+    ///
+    /// The constructor carries one operand per declared field, so a count that
+    /// disagrees means the two sides read different definitions of the class.
+    /// Storing the operands anyway would put them at offsets nothing reads them
+    /// back from, so this reports rather than guesses.
+    fn class_field_offsets(
+        layout: ClassPayloadLayout,
+        operand_count: usize,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        if layout.fields.len() != operand_count {
+            return Err(CodegenError::Internal(format!(
+                "class constructor carries {} values for {} declared fields",
+                operand_count,
+                layout.fields.len()
+            )));
+        }
+        let offsets = layout
+            .fields
+            .iter()
+            .map(|(offset, _)| *offset as u32)
+            .collect();
+        Ok((offsets, layout.size))
     }
 
     /// Returns the class name when `kind` is `AggregateKind::Class(ty)` and

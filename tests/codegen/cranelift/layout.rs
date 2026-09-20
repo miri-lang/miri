@@ -5,7 +5,7 @@ use cranelift_codegen::ir::types;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
-use miri::codegen::cranelift::layout::{aggregate_size, field_layout};
+use miri::codegen::cranelift::layout::{aggregate_size, class_payload_layout, field_layout};
 
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
@@ -825,4 +825,92 @@ fn test_enum_layout_with_32bit_pointers() {
     let (payload_off, _) = field_layout(&kind, 1, &type_defs, ptr32);
     assert_eq!(disc_off, 0);
     assert_eq!(payload_off, 4);
+}
+
+/// A class definition carrying `fields`, extending `base` when one is named.
+fn make_class(name: &str, base: Option<&str>, fields: Vec<(&str, TypeKind)>) -> ClassDefinition {
+    ClassDefinition {
+        name: name.to_string(),
+        generics: None,
+        base_class: base.map(str::to_string),
+        base_class_args: None,
+        traits: vec![],
+        trait_args: std::collections::HashMap::new(),
+        fields: fields
+            .into_iter()
+            .map(|(field_name, kind)| {
+                (
+                    field_name.to_string(),
+                    FieldInfo {
+                        ty: t(kind),
+                        mutable: false,
+                        visibility: MemberVisibility::Public,
+                    },
+                )
+            })
+            .collect(),
+        methods: BTreeMap::new(),
+        module: String::new(),
+        is_abstract: false,
+        has_drop: false,
+    }
+}
+
+#[test]
+fn class_payload_size_covers_every_field_including_inherited_ones() {
+    // The payload an instance is allocated and the offsets its fields are
+    // reached at come from one walk, so that an instance cannot be given less
+    // memory than the fields written into it. A child that counts only what it
+    // declares itself would size this one at 16 bytes and leave the base's two
+    // fields outside the allocation.
+    let ptr = ptr_ty();
+    let mut type_defs = HashMap::new();
+    type_defs.insert(
+        "Base".to_string(),
+        TypeDefinition::Class(make_class(
+            "Base",
+            None,
+            vec![("a", TypeKind::Float), ("b", TypeKind::Float)],
+        )),
+    );
+    type_defs.insert(
+        "Child".to_string(),
+        TypeDefinition::Class(make_class(
+            "Child",
+            Some("Base"),
+            vec![("c", TypeKind::Float), ("d", TypeKind::Float)],
+        )),
+    );
+
+    let TypeDefinition::Class(child) = &type_defs["Child"] else {
+        panic!("Child should be registered as a class");
+    };
+    let layout = class_payload_layout("Child", child, None, &type_defs, ptr);
+
+    assert_eq!(
+        layout.fields.len(),
+        4,
+        "an instance holds the base's fields as well as its own"
+    );
+    assert_eq!(
+        layout.size, 32,
+        "four eight-byte fields need thirty-two bytes"
+    );
+
+    let kind = TypeKind::Custom("Child".to_string(), None);
+    for index in 0..layout.fields.len() {
+        let (offset, cl_ty) = field_layout(&kind, index, &type_defs, ptr);
+        assert_eq!(
+            (offset, cl_ty),
+            layout.fields[index],
+            "field {} is reached at a different place than it is laid out",
+            index
+        );
+        assert!(
+            offset + cl_ty.bytes() as i32 <= layout.size as i32,
+            "field {} ends past the {} bytes the payload is given",
+            index,
+            layout.size
+        );
+    }
 }
