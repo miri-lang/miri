@@ -1254,6 +1254,23 @@ fn lower_callee(ctx: &mut LoweringContext, func: &Expression) -> Result<Operand,
     lower_expression(ctx, func, None)
 }
 
+/// The expression naming what a call targets.
+///
+/// A call may write its type arguments out — `f<int>(x)` — and that spelling
+/// parses as a generic type reference wrapping the name. The arguments it
+/// writes are recorded against the call itself, which is where the
+/// instantiation is read from, so the name is all that is wanted here. Leaving
+/// the wrapper in place asks for a type to be lowered as a value, which is
+/// refused.
+fn callee_name_expression(func: &Expression) -> &Expression {
+    let (ExpressionKind::GenericType(base, _, _) | ExpressionKind::TypeDeclaration(base, _, _, _)) =
+        &func.node
+    else {
+        return func;
+    };
+    base
+}
+
 /// Lower a direct function call (global function, lambda, or generic instantiation).
 fn lower_direct_call(
     ctx: &mut LoweringContext,
@@ -1264,9 +1281,10 @@ fn lower_direct_call(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let func_watermark = ctx.body.local_decls.len();
-    let mut func_op = lower_callee(ctx, func)?;
+    let callee = callee_name_expression(func);
+    let mut func_op = lower_callee(ctx, callee)?;
 
-    apply_generic_mangling(ctx, &func.node, call_expr_id, &mut func_op, func.span);
+    apply_generic_mangling(ctx, &callee.node, call_expr_id, &mut func_op, callee.span);
 
     let is_generic_call = ctx
         .type_checker
@@ -1279,7 +1297,7 @@ fn lower_direct_call(
 
     fill_default_args(ctx, &mut arg_ops, &param_types)?;
 
-    inject_allocator_arg(ctx, &func.node, &func_op, &mut arg_ops);
+    inject_allocator_arg(ctx, &callee.node, &func_op, &mut arg_ops);
 
     // Per-residency device-handle Call-ABI: when a gpu-resident buffer is passed
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized

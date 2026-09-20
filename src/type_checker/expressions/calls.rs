@@ -92,6 +92,12 @@ impl TypeChecker {
             None
         };
 
+        // A call may write its type arguments out — `f<int>(x)`. That spelling
+        // parses as a generic type reference wrapping the name, and inferred as
+        // written it is a type, which makes the call look like a construction:
+        // no function is resolved, so nothing records which instantiation the
+        // call reaches and it falls through to the shared body.
+        let func = Self::called_function_expression(self, func);
         let func_type = self.infer_expression(func, context);
 
         // Restore call_site_arity after member-access inference completes.
@@ -285,6 +291,26 @@ impl TypeChecker {
             return Type::new(TypeKind::F32, result.span);
         }
         result
+    }
+
+    /// The expression a call targets, with a written-out generic spelling of a
+    /// function name unwrapped to the name.
+    ///
+    /// Only a name that is a function is unwrapped. `List<int>()` wraps a type,
+    /// and there the spelling really is what is being constructed.
+    fn called_function_expression<'e>(&self, func: &'e Expression) -> &'e Expression {
+        let (ExpressionKind::GenericType(base, _, _)
+        | ExpressionKind::TypeDeclaration(base, _, _, _)) = &func.node
+        else {
+            return func;
+        };
+        let ExpressionKind::Identifier(name, _) = &base.node else {
+            return func;
+        };
+        match self.type_table.global_scope.get(name) {
+            Some(info) if matches!(info.ty.kind, TypeKind::Function(_)) => base,
+            _ => func,
+        }
     }
 
     /// Dispatches to function or constructor call based on the function type.
