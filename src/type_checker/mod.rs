@@ -397,7 +397,7 @@ impl TypeChecker {
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
         self.report_deferred_int_literal_ranges();
-        self.answer_pinning_sites();
+        self.answer_pinning_sites(&context);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);

@@ -90,8 +90,12 @@ impl TypeChecker {
     }
 
     /// Checks arithmetic operations (+, -, *, /, %).
-    fn check_arithmetic_op(
-        &mut self,
+    ///
+    /// Takes the checker by shared reference so the judgment can be replayed
+    /// where a generic parameter is pinned to a concrete type, against the
+    /// types that pinning produces.
+    pub(crate) fn check_arithmetic_op(
+        &self,
         left: &Type,
         op: &BinaryOp,
         right: &Type,
@@ -135,8 +139,9 @@ impl TypeChecker {
             ));
         }
 
-        // Allow arithmetic on same-typed generic parameters (e.g. T + T in a generic method body).
-        // Concrete enforcement happens at call sites where T is resolved to a numeric type.
+        // A parameter has no type to judge here. The body states what it applies
+        // to the parameter, and every site that pins it answers for the type it
+        // pins it to — see `instantiation_requirements`.
         if matches!(left.kind, TypeKind::Generic(..)) && self.are_compatible(left, right, context) {
             return Ok(left.clone());
         }

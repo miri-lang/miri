@@ -81,9 +81,9 @@ fn blend<T>(a T, b T) T
     return ((a * b) - a) / b
 
 fn main()
-    println(f"{blend(4.0, 2.0)}")
+    println(f"blend={blend(4.0, 2.0)} end")
     "#,
-        "2",
+        "blend=2.0 end",
     );
 }
 
@@ -184,18 +184,12 @@ fn main()
     );
 }
 
-/// Arithmetic on an unbounded type parameter is admitted in the body on the
-/// stated grounds that the operand is checked where the parameter is resolved.
-/// It is not: nothing re-checks the operator against the type an instantiation
-/// supplies, so a parameter instantiated at a type with no arithmetic reaches
-/// code generation and the program faults.
-///
-/// Ignored until a generic body's requirements on its parameters are checked at
-/// each instantiation. That decision also settles whether unary minus and a
-/// numeric cast — refused on a parameter today, while `a + b` is allowed — are
-/// admitted on the same terms.
+/// Arithmetic on an unbounded type parameter is admitted in the body: the
+/// operand has no type to ask yet. The body records what it applies to the
+/// parameter, and every site that pins the parameter to a concrete type answers
+/// for it, so a type with no arithmetic is refused there rather than reaching
+/// code generation.
 #[test]
-#[ignore]
 fn arithmetic_on_a_generic_parameter_is_refused_at_a_class_with_no_operator() {
     assert_compiler_error(
         r#"
@@ -215,11 +209,10 @@ fn main()
     );
 }
 
+/// Without the check the operands are or-ed as bits, which answers `true` and
+/// is not addition.
 #[test]
-#[ignore]
 fn arithmetic_on_a_generic_parameter_is_refused_at_a_boolean() {
-    // Today this answers `true`: the operands are or-ed as bits, which is not
-    // addition and is not what the program asked for.
     assert_compiler_error(
         r#"
 fn add<T>(a T, b T) T
@@ -230,5 +223,279 @@ fn main()
     println(f"{s}")
 "#,
         "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn test_generic_addition_at_string_concatenates() {
+    assert_runs_with_output(
+        r#"
+
+fn add<T>(a T, b T) T
+    return a + b
+
+fn main()
+    let joined = add("x", "y")
+    println(f"{joined}")
+    "#,
+        "xy",
+    );
+}
+
+#[test]
+fn test_generic_addition_at_a_class_that_adds() {
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+class Money implements Addable
+    n int
+
+    fn init(n int)
+        self.n = n
+
+    public fn concat(other Self) Self
+        return Money(self.n + other.n)
+
+fn add<T>(a T, b T) T
+    return a + b
+
+fn main()
+    let total = add(Money(2), Money(3))
+    println(f"{total.n}")
+    "#,
+        "5",
+    );
+}
+
+#[test]
+fn test_sum_over_strings_concatenates_and_over_numbers_adds() {
+    assert_runs_with_output(
+        r#"
+
+fn main()
+    let words = ["a", "b", "c"]
+    let joined = words.sum() ?? "none"
+    println(f"{joined}")
+    let numbers = [1, 2, 3]
+    let total = numbers.sum() ?? 0
+    println(f"{total}")
+    "#,
+        "abc\n6",
+    );
+}
+
+#[test]
+fn subtraction_on_a_generic_parameter_is_refused_at_a_string() {
+    assert_compiler_error(
+        r#"
+fn take<T>(a T, b T) T
+    return a - b
+
+fn main()
+    let s = take("x", "y")
+    println(f"{s}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn multiplication_on_a_generic_parameter_is_refused_at_two_strings() {
+    assert_compiler_error(
+        r#"
+fn scale<T>(a T, b T) T
+    return a * b
+
+fn main()
+    let s = scale("x", "y")
+    println(f"{s}")
+"#,
+        "cannot multiply String by String",
+    );
+}
+
+#[test]
+fn subtraction_on_a_generic_parameter_is_refused_at_a_class_that_only_adds() {
+    assert_compiler_error(
+        r#"
+use system.ops
+
+class Money implements Addable
+    n int
+
+    fn init(n int)
+        self.n = n
+
+    public fn concat(other Self) Self
+        return Money(self.n + other.n)
+
+fn take<T>(a T, b T) T
+    return a - b
+
+fn main()
+    let m = take(Money(3), Money(1))
+    println(f"{m.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn arithmetic_mixing_a_generic_parameter_with_another_type_is_refused() {
+    assert_compiler_error(
+        r#"
+fn mark<T>(a T) T
+    return a + 'x'
+
+fn main()
+    let s = mark(3)
+    println(f"{s}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn arithmetic_a_body_delegates_is_refused_where_the_outer_body_is_pinned() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn add<T>(a T, b T) T
+    return a + b
+
+fn outer<T>(a T, b T) T
+    return add(a, b)
+
+fn main()
+    let s = outer(Plain(1), Plain(2))
+    println(f"{s.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn arithmetic_in_a_body_that_pins_its_own_parameter_is_refused() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn add<T>(a T, b T, again bool) T
+    if again
+        return add(a, b, false)
+    return a + b
+
+fn main()
+    let s = add(Plain(1), Plain(2), true)
+    println(f"{s.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn arithmetic_on_a_generic_field_is_refused_where_the_class_is_pinned() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+class Box<T>
+    v T
+
+    fn init(v T)
+        self.v = v
+
+    fn doubled() T
+        return self.v + self.v
+
+fn main()
+    let b = Box<Plain>(Plain(1))
+    let d = b.doubled()
+    println(f"{d.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn arithmetic_in_a_default_method_is_refused_where_the_trait_is_pinned() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+trait Doubling<T>
+    abstract fn value() T
+
+    public fn doubled() T
+        let v = self.value()
+        return v + v
+
+class Holder<T> implements Doubling<T>
+    p T
+
+    fn init(p T)
+        self.p = p
+
+    public fn value() T
+        return self.p
+
+fn main()
+    let h = Holder<Plain>(Plain(1))
+    let d = h.doubled()
+    println(f"{d.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn summing_a_list_of_a_class_that_does_not_add_is_refused() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn main()
+    let items = [Plain(1), Plain(2)]
+    let total = items.sum()
+    println("done")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn refusing_arithmetic_at_an_instantiation_names_the_body_and_the_parameter() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn add<T>(a T, b T) T
+    return a + b
+
+fn main()
+    let s = add(Plain(1), Plain(2))
+    println(f"{s.n}")
+"#,
+        "'add' applies '+' to its 'T' parameter",
     );
 }

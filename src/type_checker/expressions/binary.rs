@@ -160,7 +160,12 @@ impl TypeChecker {
         }
 
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
-            Ok(t) => t,
+            Ok(result) => {
+                if is_arithmetic_op(op) {
+                    self.record_arithmetic_requirement(&left_ty, op, &right_ty, context);
+                }
+                result
+            }
             Err(msg) => {
                 // Generate context-specific help messages for common errors
                 let remedy = self.binary_op_remedy(&left_ty, op, &right_ty);
