@@ -98,6 +98,16 @@ pub struct LoweringContext<'a> {
     /// that still spells it resolves to no layout at all and reads fields at
     /// the wrong offsets; consult this before a declared type becomes a local.
     pub self_type: Option<Type>,
+
+    /// The gpu-resident parameters this body was specialized for, as argument
+    /// position and device handle.
+    ///
+    /// A `GpuLaunchSafe` function is lowered once per residency pattern its
+    /// callers use, and each lowering emits the closures written in its body
+    /// again. Those copies are otherwise indistinguishable — a specialization
+    /// is a free function and substitutes no generic — so this is the axis that
+    /// tells their symbols apart.
+    pub residency_handles: Vec<(usize, crate::mir::body::DeviceHandleId)>,
     /// Per-compilation allocator of deterministic kernel-name indices. Shared
     /// across every body lowered in one compilation (and inherited by nested
     /// lambda/block contexts) so kernel names are unique within the build and
@@ -151,6 +161,7 @@ impl<'a> LoweringContext<'a> {
             source_path,
             generic_subs: HashMap::new(),
             self_type: None,
+            residency_handles: Vec::new(),
             compilation_ids: new_shared_compilation_ids(),
         };
         // Create the first basic block
@@ -230,10 +241,17 @@ impl<'a> LoweringContext<'a> {
         if let Some(self_type) = &self.self_type {
             type_args.insert(0, (String::new(), self_type.clone()));
         }
-        if type_args.is_empty() {
+        let base = if type_args.is_empty() {
+            base
+        } else {
+            super::method_dispatch::mangle_generic_name(&base, &type_args)
+        };
+        if self.residency_handles.is_empty() {
             return base.into();
         }
-        super::method_dispatch::mangle_generic_name(&base, &type_args).into()
+        // The same suffix the specialized function itself carries, so a reader
+        // following a symbol back to its body sees one spelling for one axis.
+        super::method_dispatch::residency_mangled_name(&base, &self.residency_handles).into()
     }
 
     /// Resolve the `Self` keyword in `ty` against the enclosing class.

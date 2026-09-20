@@ -51,6 +51,7 @@ pub mod read_only_capture;
 pub mod reduce_gpu_residency;
 pub mod reserved_names;
 pub mod residency;
+pub mod residency_closure_symbols;
 pub mod residency_method_call_rejection;
 pub mod residency_polymorphic;
 pub mod run_telemetry_envelope;
