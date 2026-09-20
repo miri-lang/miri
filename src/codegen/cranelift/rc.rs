@@ -912,7 +912,9 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Extract Type arguments from Expression type arguments.
     /// Returns `None` if no args or extraction fails; `Some(Vec)` otherwise.
-    fn extract_type_args_from_exprs(type_args: Option<&[Expression]>) -> Option<Vec<Type>> {
+    pub(crate) fn extract_type_args_from_exprs(
+        type_args: Option<&[Expression]>,
+    ) -> Option<Vec<Type>> {
         let args = type_args?;
         let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
         for arg in args {
