@@ -19,17 +19,24 @@
 //! body's required parameter to one of its own parameters carries that
 //! requirement too — and every site is answered against the settled set.
 //!
-//! Ordering is the first requirement carried here, not the subject: a body that
-//! compares values of a parameter states it, and a site pinning that parameter
-//! to a type without `compare` is refused.
+//! Two requirements are carried here. A body that compares values of a
+//! parameter states that it orders them, and a site pinning that parameter to a
+//! type without `compare` is refused. A body that applies an arithmetic
+//! operator states the operator with both operand types as it wrote them, and a
+//! site answers by substituting what it pins into those operands and replaying
+//! the operator check against the result — so an instantiation is refused
+//! exactly where the written operation is, through every way arithmetic is
+//! admitted rather than through a second opinion about which types have it.
 
 use super::context::{Context, TypeDefinition};
 use super::operators::missing_ordering_at_instantiation_message;
 use super::TypeChecker;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
+use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 /// The declaration a requirement was recorded against: the type that declares
 /// the method, or [`FREE_FUNCTION_OWNER`] for a plain function, paired with the
@@ -41,14 +48,120 @@ pub(crate) const FREE_FUNCTION_OWNER: &str = "";
 
 /// Every requirement recorded across the program, keyed by the body that stated
 /// it.
-pub(crate) type InstantiationRequirements = HashMap<GenericBodyId, BTreeSet<Obligation>>;
+///
+/// A body's obligations are held in the order they were stated: one of them
+/// carries operand types, which have no ordering to key a sorted set by, and a
+/// body states a handful at most, so membership is a scan. Stating order is
+/// what the pass produces, so the diagnostics answered from it are stable.
+pub(crate) type InstantiationRequirements = HashMap<GenericBodyId, Vec<Obligation>>;
+
+/// Add `obligation` to what a body has stated, unless it already states it.
+/// Reports whether the set grew.
+fn state_obligation(stated: &mut Vec<Obligation>, obligation: Obligation) -> bool {
+    if stated.contains(&obligation) {
+        return false;
+    }
+    stated.push(obligation);
+    true
+}
 
 /// What a body needs of its own generic parameters, stated as the operation
 /// the body wrote.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Obligation {
     /// The body compares values of this parameter.
     Ordering { parameter: String },
+    /// The body applies an arithmetic operator to operands at least one of
+    /// which spells one of its own parameters.
+    Arithmetic(WrittenArithmetic),
+}
+
+/// An arithmetic operator a body applied, with both operands as that body
+/// wrote them.
+///
+/// Both types are carried because the operator's meaning is not a property of
+/// one of them: an operand written as a literal of another type, a parameter
+/// wrapped in a vector, and the two sides of a mixed integer-and-float
+/// operation are all invisible to a requirement that named a parameter alone.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WrittenArithmetic {
+    left: Type,
+    op: BinaryOp,
+    right: Type,
+}
+
+impl WrittenArithmetic {
+    /// The same operation restated in the pinning body's own parameter names.
+    ///
+    /// An operand is restated only when it is a bare parameter the site pins,
+    /// or a type that spells no parameter the site pins: each yields a name or
+    /// a type the program already writes, so delegation hands on one of
+    /// finitely many operations however long the chain. An operand that wraps a
+    /// pinned parameter is dropped instead — `List<T>` handed to a body that
+    /// pins `T` to `List<U>` would grow on every hop around a delegation cycle,
+    /// which is the growth [`settle_requirements`] cannot terminate over.
+    ///
+    /// An operation whose parameters the site all pins to concrete types is
+    /// answered at the site itself, so it too hands nothing on.
+    fn delegated_through(&self, pins: &HashMap<String, Pin>) -> Option<WrittenArithmetic> {
+        if !hands_on_a_parameter(&self.left, pins) && !hands_on_a_parameter(&self.right, pins) {
+            return None;
+        }
+        Some(WrittenArithmetic {
+            left: delegated_operand(&self.left, pins)?,
+            op: self.op,
+            right: delegated_operand(&self.right, pins)?,
+        })
+    }
+}
+
+/// Each parameter the site pins to a type it names directly.
+fn concretely_pinned(pins: &HashMap<String, Pin>) -> HashMap<String, Type> {
+    pins.iter()
+        .filter_map(|(parameter, pin)| match pin {
+            Pin::Concrete(pinned) => Some((parameter.clone(), pinned.clone())),
+            Pin::CallerParameter(_) => None,
+        })
+        .collect()
+}
+
+/// The pinned parameter the operands spell, which the help names as the one the
+/// site chose a type for. Parameters are considered in name order, so a body
+/// written against several is always reported against the same one.
+fn pinned_parameter_spelled_in<'p>(
+    written: &WrittenArithmetic,
+    pins: &'p HashMap<String, Pin>,
+) -> Option<&'p str> {
+    let mut parameters: Vec<&str> = pins.keys().map(String::as_str).collect();
+    parameters.sort_unstable();
+    parameters.into_iter().find(|parameter| {
+        let spelled = |kind: &TypeKind| generic_parameter_name(kind) == Some(*parameter);
+        spells_a_type(&written.left.kind, &spelled) || spells_a_type(&written.right.kind, &spelled)
+    })
+}
+
+/// True when `ty` is a bare parameter the site pins to one of its own.
+fn hands_on_a_parameter(ty: &Type, pins: &HashMap<String, Pin>) -> bool {
+    generic_parameter_name(&ty.kind)
+        .and_then(|name| pins.get(name))
+        .is_some_and(|pin| matches!(pin, Pin::CallerParameter(_)))
+}
+
+/// The operand as the pinning body would write it, or `None` where restating it
+/// would build a type larger than the program writes.
+fn delegated_operand(ty: &Type, pins: &HashMap<String, Pin>) -> Option<Type> {
+    if let Some(pin) = generic_parameter_name(&ty.kind).and_then(|name| pins.get(name)) {
+        return Some(match pin {
+            Pin::CallerParameter(own) => Type::new(
+                TypeKind::Generic(own.clone(), None, TypeDeclarationKind::None),
+                ty.span,
+            ),
+            Pin::Concrete(pinned) => pinned.clone(),
+        });
+    }
+    let pinned_here =
+        |kind: &TypeKind| generic_parameter_name(kind).is_some_and(|name| pins.contains_key(name));
+    (!spells_a_type(&ty.kind, &pinned_here)).then(|| ty.clone())
 }
 
 impl Obligation {
@@ -65,6 +178,9 @@ impl Obligation {
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
+            Obligation::Arithmetic(written) => {
+                written.delegated_through(pins).map(Obligation::Arithmetic)
+            }
         }
     }
 }
@@ -98,15 +214,14 @@ pub(crate) struct PinningSite {
 /// parameter to one of its own parameters carries that obligation too.
 ///
 /// A requirement can only be added, and the obligations that can be added form
-/// a finite set: an [`Obligation::Ordering`] names a generic parameter of the
-/// body it is recorded against, and the program declares finitely many. So the
-/// loop ends, including when bodies delegate to each other in a cycle.
-///
-/// That argument holds only while delegation *renames* what an obligation
-/// carries. An obligation that instead built a larger value on delegation — a
-/// type wrapping the parameter it was delegated through, say — could grow
-/// without bound around a delegation cycle, and would have to bound its own
-/// growth before being added here.
+/// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
+/// body it is recorded against, and the program declares finitely many. An
+/// [`Obligation::Arithmetic`] carries operand types, which could grow around a
+/// delegation cycle; [`WrittenArithmetic::delegated_through`] answers that by
+/// handing on only operands that are a bare parameter name or a type written in
+/// the program, and dropping any that would be built larger. Both sets being
+/// finite, the loop ends, including when bodies delegate to each other in a
+/// cycle.
 fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[PinningSite]) {
     loop {
         let mut inherited: Vec<(GenericBodyId, Obligation)> = Vec::new();
@@ -122,7 +237,7 @@ fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[Pi
         }
         let mut grew = false;
         for (caller, obligation) in inherited {
-            grew |= requirements.entry(caller).or_default().insert(obligation);
+            grew |= state_obligation(requirements.entry(caller).or_default(), obligation);
         }
         if !grew {
             return;
@@ -144,12 +259,77 @@ fn current_body(context: &Context) -> Option<GenericBodyId> {
 /// The generic-parameter name `ty` spells, when that name is in scope as a
 /// parameter rather than as a declared type.
 fn generic_parameter_in_scope<'t>(ty: &'t Type, context: &Context) -> Option<&'t str> {
-    let name = super::generics::generic_parameter_name(&ty.kind)?;
+    parameter_in_scope(&ty.kind, context)
+}
+
+/// [`generic_parameter_in_scope`] against a bare kind, for the walk over a
+/// type's components, which holds kinds rather than types.
+fn parameter_in_scope<'k>(kind: &'k TypeKind, context: &Context) -> Option<&'k str> {
+    let name = generic_parameter_name(kind)?;
     let is_parameter = matches!(
         context.resolve_type_definition(name),
         Some(TypeDefinition::Generic(_))
     );
     is_parameter.then_some(name)
+}
+
+/// The parameter name a bare generic-parameter spelling refers to.
+fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
+    super::generics::generic_parameter_name(kind)
+}
+
+/// True when `kind`, or any type it spells at any depth, satisfies `applies`.
+///
+/// A parameter reaches an operator from below the surface as readily as from
+/// it — `Vec3<T> * f32` states as much about `T` as `a * b` does — so a
+/// requirement is decided over the whole type rather than its head alone.
+fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool) -> bool {
+    if applies(kind) {
+        return true;
+    }
+    let spelled_by = |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells_a_type(&ty.kind, applies));
+    match kind {
+        TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
+            spelled_by(element)
+        }
+        TypeKind::Array(element, size) => spelled_by(element) || spelled_by(size),
+        TypeKind::Map(key, value) | TypeKind::Result(key, value) => {
+            spelled_by(key) || spelled_by(value)
+        }
+        TypeKind::Tuple(elements) => elements.iter().any(spelled_by),
+        TypeKind::Custom(_, Some(arguments)) => arguments.iter().any(spelled_by),
+        TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
+            spells_a_type(&inner.kind, applies)
+        }
+        TypeKind::Generic(_, Some(bound), _) => spells_a_type(&bound.kind, applies),
+        TypeKind::Function(signature) => {
+            signature.params.iter().any(|param| spelled_by(&param.typ))
+                || signature.return_type.as_deref().is_some_and(spelled_by)
+        }
+        TypeKind::Custom(_, None)
+        | TypeKind::Generic(_, None, _)
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error => false,
+    }
 }
 
 impl TypeChecker {
@@ -166,12 +346,48 @@ impl TypeChecker {
         let Some(body) = current_body(context) else {
             return;
         };
-        self.instantiation_requirements
-            .entry(body)
-            .or_default()
-            .insert(Obligation::Ordering {
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::Ordering {
                 parameter: parameter.to_string(),
-            });
+            },
+        );
+    }
+
+    /// Record that the body being checked applies `op` to operands of these
+    /// types, when either of them spells one of that body's own generic
+    /// parameters.
+    ///
+    /// Called for an operation the body's own check admitted, which for a
+    /// parameter it admits on the grounds that the type is decided elsewhere.
+    /// Recording what was admitted is what makes "elsewhere" a place: an
+    /// operation the body already refused is not restated at every site.
+    pub(crate) fn record_arithmetic_requirement(
+        &mut self,
+        left: &Type,
+        op: &BinaryOp,
+        right: &Type,
+        context: &Context,
+    ) {
+        let spells_a_parameter = |ty: &Type| {
+            spells_a_type(&ty.kind, &|kind| {
+                parameter_in_scope(kind, context).is_some()
+            })
+        };
+        if !spells_a_parameter(left) && !spells_a_parameter(right) {
+            return;
+        }
+        let Some(body) = current_body(context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::Arithmetic(WrittenArithmetic {
+                left: left.clone(),
+                op: *op,
+                right: right.clone(),
+            }),
+        );
     }
 
     /// Record that the body being checked hands a container to a call that
@@ -302,24 +518,92 @@ impl TypeChecker {
     /// Runs once the body pass has recorded every requirement and every site,
     /// so a site is answered the same wherever it is written relative to the
     /// body it pins.
-    pub(crate) fn answer_pinning_sites(&mut self) {
+    /// `context` carries the program's global scope. An obligation is answered
+    /// only once every type in it is concrete — a parameter pinned to another
+    /// parameter is handed on instead — so nothing named there is body-local,
+    /// and the global scope is the whole scope the answer needs.
+    pub(crate) fn answer_pinning_sites(&mut self, context: &Context) {
         let sites = std::mem::take(&mut self.pinning_sites);
-        settle_requirements(&mut self.instantiation_requirements, &sites);
+        let mut requirements = std::mem::take(&mut self.instantiation_requirements);
+        settle_requirements(&mut requirements, &sites);
         for site in &sites {
-            self.answer_pinning_site(site);
+            let stated = requirements
+                .get(&site.callee)
+                .map_or(&[][..], Vec::as_slice);
+            self.answer_pinning_site(stated, site, context);
         }
+        self.instantiation_requirements = requirements;
     }
 
     /// Answer every obligation the body `site` pins has stated.
-    fn answer_pinning_site(&mut self, site: &PinningSite) {
-        let Some(obligations) = self.instantiation_requirements.get(&site.callee).cloned() else {
-            return;
-        };
-        for obligation in &obligations {
+    ///
+    /// The obligations are held outside the checker for the length of the
+    /// answering pass, so a site reads what its body stated rather than copying
+    /// it — the operands an arithmetic obligation carries make that copy a
+    /// deep one.
+    fn answer_pinning_site(
+        &mut self,
+        stated: &[Obligation],
+        site: &PinningSite,
+        context: &Context,
+    ) {
+        for obligation in stated {
             match obligation {
                 Obligation::Ordering { parameter } => self.answer_ordering(parameter, site),
+                Obligation::Arithmetic(written) => self.answer_arithmetic(written, site, context),
             }
         }
+    }
+
+    /// Report `site` when the operator the body wrote has no meaning at the
+    /// types the site pins its operands to.
+    ///
+    /// The judgment is the body's own arithmetic check, replayed against the
+    /// pinned operands. Asking the same question a second way would have to
+    /// reproduce every ground on which arithmetic is admitted — a trait the
+    /// operand's class implements, a vector broadcast over a scalar — and
+    /// would refuse working programs on the ones it missed.
+    fn answer_arithmetic(
+        &mut self,
+        written: &WrittenArithmetic,
+        site: &PinningSite,
+        context: &Context,
+    ) {
+        let pinned = concretely_pinned(&site.pins);
+        let left = self.substitute_type(&written.left, &pinned);
+        let right = self.substitute_type(&written.right, &pinned);
+        if self.is_unsettled(&left) || self.is_unsettled(&right) {
+            return;
+        }
+        let Err(message) = self.check_arithmetic_op(&left, &written.op, &right, context) else {
+            return;
+        };
+        let Some(parameter) = pinned_parameter_spelled_in(written, &site.pins) else {
+            return;
+        };
+        let help = format!(
+            "'{}' applies '{}' to its '{}' parameter, so the type it is instantiated with has to \
+             support it",
+            site.callee.1,
+            crate::ast::formatter::helpers::binary_operator(written.op),
+            parameter
+        );
+        self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, site.span, help);
+    }
+
+    /// True when `ty` still spells something this site did not settle: a
+    /// parameter it does not pin, or a type an earlier error stands in for.
+    ///
+    /// Such a type is nobody's answer to give — the sites that pin the pinning
+    /// body answer it, or the error already reported does — so the operator is
+    /// left unjudged rather than refused against a name.
+    fn is_unsettled(&self, ty: &Type) -> bool {
+        let unsettled = |kind: &TypeKind| {
+            matches!(kind, TypeKind::Generic(..) | TypeKind::Error)
+                || matches!(kind, TypeKind::Custom(name, None)
+                    if !self.type_table.global_type_definitions.contains_key(name.as_str()))
+        };
+        spells_a_type(&ty.kind, &unsettled)
     }
 
     /// Report `site` when it pins `parameter` to a type carrying no ordering.
