@@ -181,3 +181,165 @@ fn main()
         "xy zw",
     );
 }
+
+/// A class naming its own type in a signature works for a purely type-generic
+/// class, and a value parameter must not change that.
+///
+/// The sizes on both sides are the same here deliberately: nothing yet
+/// compares the value a size generic carries, so a mismatched pair is accepted
+/// and would make this assert the wrong thing. The parameter stands for
+/// a value, so naming the class at its own parameters puts it in a type
+/// position, and the marker it is carried through substitution as must never
+/// reach the reader.
+#[test]
+fn a_value_generic_class_names_its_own_type_written_out() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Wrap<T, Size>) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    let v = Wrap<int, 3>([5, 6, 7])
+    println(f"{w.first_of(v)}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn a_value_generic_class_names_its_own_type_as_self() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Self) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    let v = Wrap<int, 3>([5, 6, 7])
+    println(f"{w.first_of(v)}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn a_value_generic_class_names_its_own_type_bare() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Wrap) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    let v = Wrap<int, 3>([5, 6, 7])
+    println(f"{w.first_of(v)}")
+"#,
+        "5",
+    );
+}
+
+/// A value-generic class with no self-typed member was never affected, and has
+/// to stay that way.
+#[test]
+fn a_value_generic_class_without_a_self_typed_member_still_reads_its_field() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first() T
+        return self.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    println(f"{w.first()}")
+"#,
+        "1",
+    );
+}
+
+/// The same signature on a class with only type parameters, which is what the
+/// value-generic spelling has to agree with.
+#[test]
+fn a_type_generic_class_names_its_own_type_the_same_way() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Holder<T>
+    data List<T>
+
+    fn init(data List<T>)
+        self.data = data
+
+    public fn first_of(other Holder<T>) T
+        return other.data[0]
+
+fn main()
+    var one = List<int>()
+    one.push(1)
+    var two = List<int>()
+    two.push(5)
+    let w = Holder<int>(one)
+    let v = Holder<int>(two)
+    println(f"{w.first_of(v)}")
+"#,
+        "5",
+    );
+}
+
+/// The marker a value generic travels as inside the substitution map names no
+/// type anyone wrote. A diagnostic about such a type must show the value the
+/// reader wrote, not the compiler's spelling for it.
+#[test]
+fn a_diagnostic_about_a_value_generic_type_shows_the_value_not_the_marker() {
+    assert_compiler_error(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Wrap<T, Size>) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    println(f"{w.first_of(7)}")
+"#,
+        "expected Wrap<int, 3>, got int",
+    );
+}

@@ -2209,6 +2209,14 @@ impl TypeChecker {
             return Self::error_type();
         }
 
+        // A value generic is carried through substitution as a marker wrapping
+        // the expression it stands for, and that marker is already resolved: it
+        // denotes a value, not a type. Looking its name up would fail, and the
+        // failure would put the marker in front of the reader.
+        if name == crate::type_checker::generics::VALUE_GENERIC_MARKER {
+            return make_type(TypeKind::Custom(name.to_string(), args));
+        }
+
         // Handle built-in generic type aliases
         if let Some(resolved) = self.resolve_builtin_type_alias(name, &args, context) {
             return resolved;
