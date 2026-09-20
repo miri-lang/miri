@@ -718,3 +718,93 @@ inspect(data, 0)
         "zero: 2\nstill alive: 2",
     );
 }
+
+#[test]
+fn test_a_trait_dispatched_call_sees_an_implementer_reached_through_its_base_class() {
+    // The join over a trait's implementers decides membership from each class's
+    // own trait list, so a subclass that reaches the trait through its base was
+    // left out. With another implementer found, the join reported no escape at
+    // all and the argument looked untouched — while the implementer actually
+    // dispatched to keeps it.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+trait Sink
+    public fn take(items [int]) [int]
+
+class Keeper implements Sink
+    public fn take(_items [int]) [int]
+        return List([0])
+
+class SubKeeper extends Keeper
+    public fn take(items [int]) [int]
+        return items
+
+fn main()
+    let l = List([1, 2])
+    let k Sink = SubKeeper()
+    let got = k.take(l)
+    println(f"{l.length()} {got.length()}")
+"#,
+        "was consumed by",
+    );
+}
+
+#[test]
+fn test_a_trait_dispatched_call_still_sees_a_direct_implementer() {
+    // The control for the case above: the same program with the consuming class
+    // naming the trait itself was always refused, and must stay refused.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+trait Sink
+    public fn take(items [int]) [int]
+
+class Keeper implements Sink
+    public fn take(_items [int]) [int]
+        return List([0])
+
+class SubKeeper implements Sink
+    public fn take(items [int]) [int]
+        return items
+
+fn main()
+    let l = List([1, 2])
+    let k Sink = SubKeeper()
+    let got = k.take(l)
+    println(f"{l.length()} {got.length()}")
+"#,
+        "was consumed by",
+    );
+}
+
+#[test]
+fn test_a_trait_dispatched_call_whose_implementers_all_keep_nothing_is_not_refused() {
+    // The join must stay precise in the other direction: when no implementer
+    // keeps the argument, passing it on leaves it usable.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+trait Sink
+    public fn take(items [int]) int
+
+class Keeper implements Sink
+    public fn take(items [int]) int
+        return items.length()
+
+class SubKeeper extends Keeper
+    public fn take(items [int]) int
+        return items.length() + 1
+
+fn main()
+    let l = List([1, 2])
+    let k Sink = SubKeeper()
+    let n = k.take(l)
+    println(f"{n} {l.length()}")
+"#,
+        "3 2",
+    );
+}
