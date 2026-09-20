@@ -46,6 +46,13 @@ fn main()
     assert_runs_with_output(source, "1 2 3.5");
 }
 
+/// Narrow integer components stay refused, and this is the decision rather
+/// than a gap waiting to be filled. WGSL has no narrow integer scalar — `i8`
+/// and `i16` both emit `i32` — so a narrow component cannot exist on the device
+/// at the width it was written at. Storing four bytes for it on the host to
+/// make the two agree would leave `Vec2<i16>` a `Vec2<i32>` under another name,
+/// and letting the host keep two bytes is what made a vector in a collection
+/// read back zeros.
 #[test]
 fn a_vector_component_narrower_than_four_bytes_is_refused() {
     for component in ["i8", "i16", "u8", "u16"] {

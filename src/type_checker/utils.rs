@@ -1017,28 +1017,19 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
     match kind {
         // A vector (Vec2/3/4) is a valid storage-buffer element when its
         // component is a WGSL-vector-capable 4-byte scalar (f32 / i32 / u32 and
-        // their narrower aliases / browser-portable `Int`). 64-bit components
-        // have no portable WGSL vector type and are rejected.
+        // the browser-portable `Int`). 64-bit components have no portable WGSL
+        // vector type and are rejected.
         //
-        // TODO: the narrow arms (I8/I16/U8/U16) are unreachable for a vector —
-        // a component without an inline byte width is refused where it is
-        // written, so no buffer can hold one. Reaching them would also need the
-        // upload widened: the host marshals such a component at 1 or 2 bytes
-        // while the shader reads the i32/u32 that `wgsl_scalar_name` emits.
-        // Either widen the upload and admit them, or drop these arms.
+        // A component narrower than four bytes is rejected here as it is
+        // wherever one is written. WGSL has no narrow integer scalar at all —
+        // `wgsl_scalar_name` maps `i8` and `i16` alike to `i32` — so such a
+        // component cannot exist on the device at the width it was written at,
+        // and storing four bytes for it on the host would make `Vec2<i16>` a
+        // `Vec2<i32>` under another name.
         TypeKind::Custom(name, Some(args)) if crate::ast::types::vec_dim(name).is_some() => {
             matches!(
                 vector_component_kind(args),
-                Some(
-                    TypeKind::F32
-                        | TypeKind::I32
-                        | TypeKind::U32
-                        | TypeKind::I8
-                        | TypeKind::I16
-                        | TypeKind::U8
-                        | TypeKind::U16
-                        | TypeKind::Int
-                )
+                Some(TypeKind::F32 | TypeKind::I32 | TypeKind::U32 | TypeKind::Int)
             )
         }
         // An Atomic<T> is a valid storage-buffer element when T is u32 or i32.
