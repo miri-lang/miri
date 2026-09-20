@@ -2334,6 +2334,50 @@ impl TypeChecker {
         self.check_inner_type_compatible(&declared_elem, actual_elem, context)
     }
 
+    /// Whether `arg` is a map literal whose keys and values can be the entries
+    /// of a `Map<k_type, v_type>`.
+    ///
+    /// Mirrors [`Self::sequence_argument_fits_element`] for the two-slot case.
+    /// An empty literal carries no key or value type to disagree with.
+    fn map_argument_fits_entries(
+        &self,
+        k_type: &Type,
+        v_type: &Type,
+        arg_expr: &Expression,
+        arg_type: &Type,
+        context: &Context,
+    ) -> bool {
+        // A prior diagnostic already named the real problem.
+        if matches!(arg_type.kind, TypeKind::Error) {
+            return true;
+        }
+        if !matches!(&arg_expr.node, ExpressionKind::Map(_)) {
+            return false;
+        }
+        let TypeKind::Custom(name, Some(cargs)) = &arg_type.kind else {
+            return false;
+        };
+        if BuiltinCollectionKind::from_name(name.as_str()) != Some(BuiltinCollectionKind::Map)
+            || cargs.len() != 2
+        {
+            return false;
+        }
+        let declared = [k_type, v_type];
+        for (slot, written) in cargs.iter().enumerate() {
+            let Ok(written_type) = self.extract_type_from_expression(written) else {
+                return false;
+            };
+            if matches!(written_type.kind, TypeKind::Void) {
+                continue;
+            }
+            let declared_slot = self.create_type_expression(declared[slot].clone());
+            if !self.check_inner_type_compatible(&declared_slot, written, context) {
+                return false;
+            }
+        }
+        true
+    }
+
     fn try_infer_map_constructor(
         &mut self,
         name: &str,
@@ -2348,13 +2392,25 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
-                // TODO: the positional argument is never checked on this path,
-                // so `Map<int, int>(7)` type-checks and lowering then discards
-                // the argument and allocates an empty map — accepted, dropped,
-                // never mentioned. It must be refused, the way the same call
-                // without type arguments already is.
                 let k_type = self.resolve_type_expression(&args[0], context);
                 let v_type = self.resolve_type_expression(&args[1], context);
+                // As for a set: the type arguments say what the map holds, not
+                // whether the argument is something it can be built from.
+                if let Some((arg_expr, arg_type)) = positional_args.first() {
+                    if !self
+                        .map_argument_fits_entries(&k_type, &v_type, arg_expr, arg_type, context)
+                    {
+                        self.report_error(
+                            DiagnosticCode::TypBuiltinConstructor,
+                            format!(
+                                "Map<{0}, {1}>(...) expects a map literal of '{0}' to '{1}', got '{2}'. Use 'Map<{0}, {1}>()' for an empty map",
+                                k_type, v_type, arg_type
+                            ),
+                            span,
+                        );
+                        return Some(make_type(TypeKind::Error));
+                    }
+                }
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Map.name().to_string(),
                     Some(vec![
@@ -2405,6 +2461,56 @@ impl TypeChecker {
         Some(make_type(TypeKind::Error))
     }
 
+    /// Whether `arg` is a set literal whose elements can be the elements of a
+    /// `Set<elem_type>`.
+    ///
+    /// A set has its own element extraction rather than the sequence one, which
+    /// answers for lists and arrays only — a list constructor refuses a set
+    /// argument, and sharing the extraction would quietly accept it.
+    fn set_argument_fits_element(
+        &self,
+        elem_type: &Type,
+        arg_expr: &Expression,
+        arg_type: &Type,
+        context: &Context,
+    ) -> bool {
+        // A prior diagnostic already named the real problem.
+        if matches!(arg_type.kind, TypeKind::Error) {
+            return true;
+        }
+        // An empty brace literal names no elements, so it reads as an empty map
+        // and is equally the contents of an empty set. `Set<T>({})` is written
+        // that way and has always meant the empty set.
+        if let ExpressionKind::Map(pairs) = &arg_expr.node {
+            return pairs.is_empty();
+        }
+        if !matches!(&arg_expr.node, ExpressionKind::Set(_)) {
+            return false;
+        }
+        let written = match &arg_type.kind {
+            TypeKind::Set(inner) => inner.as_ref(),
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name.as_str())
+                    == Some(BuiltinCollectionKind::Set) =>
+            {
+                match args.first() {
+                    Some(first) => first,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+        let Ok(written_type) = self.extract_type_from_expression(written) else {
+            return false;
+        };
+        // An empty literal carries no element type to disagree with.
+        if matches!(written_type.kind, TypeKind::Void) {
+            return true;
+        }
+        let declared = self.create_type_expression(elem_type.clone());
+        self.check_inner_type_compatible(&declared, written, context)
+    }
+
     fn try_infer_set_constructor(
         &mut self,
         name: &str,
@@ -2419,12 +2525,23 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 1 {
-                // TODO: the positional argument is never checked on this path,
-                // so `Set<int>(5)` type-checks and lowering then discards the
-                // argument and allocates an empty set — accepted, dropped,
-                // never mentioned. It must be refused, the way the same call
-                // without type arguments already is.
                 let elem_type = self.resolve_type_expression(&args[0], context);
+                // Writing the element type does not excuse the argument from
+                // being one the set can be built from: lowering reads it only
+                // when it is a set literal, and drops anything else silently.
+                if let Some((arg_expr, arg_type)) = positional_args.first() {
+                    if !self.set_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
+                        self.report_error(
+                            DiagnosticCode::TypBuiltinConstructor,
+                            format!(
+                                "Set<{0}>(...) expects a set literal of '{0}', got '{1}'. Use 'Set<{0}>()' for an empty set",
+                                elem_type, arg_type
+                            ),
+                            span,
+                        );
+                        return Some(make_type(TypeKind::Error));
+                    }
+                }
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Set.name().to_string(),
                     Some(vec![self.create_type_expression(elem_type)]),
@@ -2872,10 +2989,6 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
-                // TODO: the positional argument is never checked on this path,
-                // so `Array<int, 3>(5)` reaches MIR, which refuses it there.
-                // The rejection belongs here, as a type error with a span on
-                // the argument.
                 let elem_type = self.resolve_type_expression(&args[0], context);
                 let size_expr = args[1].clone();
 
@@ -2898,6 +3011,24 @@ impl TypeChecker {
                 );
 
                 if self.refuse_unusable_array_element(&elem_type, args[0].span) {
+                    return Some(make_type(TypeKind::Error));
+                }
+
+                // The constructor takes either nothing, leaving every element at
+                // its default, or one argument per element. Any other count was
+                // accepted here and refused only once MIR lowering was reached,
+                // which reported it as an internal failure of the compiler
+                // rather than as something the source got wrong.
+                let written = positional_args.len();
+                if written != 0 && written as i128 != size_value {
+                    self.report_error(
+                        DiagnosticCode::TypBuiltinConstructor,
+                        format!(
+                            "Array<{0}, {1}>(...) takes either no argument or exactly {1} of them, got {2}. Use 'Array<{0}, {1}>()' for an array of defaults",
+                            elem_type, size_value, written
+                        ),
+                        span,
+                    );
                     return Some(make_type(TypeKind::Error));
                 }
 
