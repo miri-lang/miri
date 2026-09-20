@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod arithmetic;
+pub mod bare_parameter_elements;
 pub mod basic;
 pub mod classes_inside_generic_functions;
 pub mod declaration_order;

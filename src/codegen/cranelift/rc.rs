@@ -118,6 +118,18 @@ impl<'a> FunctionTranslator<'a> {
         }
         let shape = Self::classify_element_shape(elem_kind);
         if let ElementShape::UserClass(class_name) = shape {
+            // Every caller is expected to have screened the element already. If
+            // one has not, refuse here rather than name a release helper for a
+            // parameter that has no concrete type yet: that symbol is defined
+            // nowhere, so emitting it turns a compile into a link failure
+            // reporting a mangled name instead of the program.
+            if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+                return Err(CodegenError::Internal(format!(
+                    "refusing to register a release helper named for the unresolved generic \
+                     parameter '{class_name}': the registration site must skip an element whose \
+                     type is not yet concrete, as the others do"
+                )));
+            }
             let symbol = Self::generic_drop_thunk_name_part(
                 class_name,
                 Self::custom_type_args(elem_kind),
