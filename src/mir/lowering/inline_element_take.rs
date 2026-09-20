@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Lowering for the two list methods that hand an element back as they remove
-//! it: `pop` and `remove_at`.
+//! Lowering for the list methods that hand an element back: `pop` and
+//! `remove_at`, which remove the element they return, and `first` and `last`,
+//! which leave it where it is.
 //!
 //! Both are written once in the standard library over an opaque element type,
 //! and that body is compiled once for every instantiation. An element the list
@@ -16,6 +17,11 @@
 //! Lowering the call here is what makes the element type concrete: the
 //! components are read at their real offsets and copied into a value of their
 //! own before the list gives up the slot they came from.
+//!
+//! A method that only reads needs the copy just as much. It answers with an
+//! optional, and an optional releases a vector payload, so handing back the
+//! address of the element inside the list would have the optional free a
+//! pointer into a buffer it does not own.
 
 use crate::ast::expression::Expression;
 use crate::ast::{types, Type, TypeKind};
@@ -31,39 +37,50 @@ use super::constructors::int_constant;
 use super::helpers::coerce_rvalue_in;
 use super::{lower_expression, LoweringContext};
 
-/// Which element a call takes out of the list.
-pub(super) enum ListRemoval<'a> {
-    /// `pop()` — the element at the end.
+/// Which element a call reads out of the list, and whether it removes it.
+pub(super) enum InlineElementRead<'a> {
+    /// `pop()` — the element at the end, removed.
+    Pop,
+    /// `remove_at(index)` — the element at `index`, removed, shifting the rest
+    /// down.
+    RemoveAt(&'a Expression),
+    /// `first()` — the element at the front, left in place.
+    First,
+    /// `last()` — the element at the end, left in place.
     Last,
-    /// `remove_at(index)` — the element at `index`, shifting the rest down.
-    At(&'a Expression),
 }
 
-impl<'a> ListRemoval<'a> {
-    /// The removal `method_name` names, or `None` when the method removes
-    /// nothing or does not hand the element back.
+impl<'a> InlineElementRead<'a> {
+    /// The read `method_name` names, or `None` when the method does not hand an
+    /// element back.
     ///
-    /// TODO: `first`, `last`, `contains` and `index_of` reach an element through
-    /// the same generic body and are wrong for an inline element in the same
-    /// way — the first two crash, the other two compare a prefix of the
-    /// components and answer that a present vector is absent. They need the
-    /// element type made concrete here too.
+    /// TODO: `contains` and `index_of` reach an element through the same generic
+    /// body and are wrong for an inline element too — they compare a prefix of
+    /// the components and answer that a present vector is absent. They cannot be
+    /// lowered here the way these are, because they compare with `==`, and
+    /// equality between two vectors is itself unsupported: it reports that
+    /// structural equality is not available for the vector's own component type.
+    /// That has to be answered first.
     pub(super) fn of(method_name: &str, args: &'a [Expression]) -> Option<Self> {
         match (method_name, args) {
-            ("pop", []) => Some(Self::Last),
-            ("remove_at", [index]) => Some(Self::At(index)),
+            ("pop", []) => Some(Self::Pop),
+            ("remove_at", [index]) => Some(Self::RemoveAt(index)),
+            ("first", []) => Some(Self::First),
+            ("last", []) => Some(Self::Last),
             _ => None,
         }
     }
 
     /// The runtime entry that drops the element out of the list, and the
-    /// arguments it takes after the list itself.
+    /// arguments it takes after the list itself; `None` for a read that leaves
+    /// the element where it is.
     ///
     /// Neither entry releases the element: the caller is walking away with it.
-    fn runtime_call(&self, index: Local) -> (&'static str, Vec<Operand>) {
+    fn removal_call(&self, index: Local) -> Option<(&'static str, Vec<Operand>)> {
         match self {
-            Self::Last => (rt::LIST_POP, Vec::new()),
-            Self::At(_) => (rt::LIST_TAKE_AT, vec![Operand::Copy(Place::new(index))]),
+            Self::Pop => Some((rt::LIST_POP, Vec::new())),
+            Self::RemoveAt(_) => Some((rt::LIST_TAKE_AT, vec![Operand::Copy(Place::new(index))])),
+            Self::First | Self::Last => None,
         }
     }
 }
@@ -90,19 +107,20 @@ pub(super) fn inline_element(ctx: &LoweringContext, list_ty: &Type) -> Option<In
     Some(InlineElement { ty, components })
 }
 
-/// Lower `list.pop()` / `list.remove_at(i)` for a list of inline elements.
+/// Lower `list.pop()`, `list.remove_at(i)`, `list.first()` or `list.last()` for
+/// a list of inline elements.
 ///
 /// The shape mirrors the standard library body: an out-of-range index answers
 /// `None`, and any other copies the element out, removes it, and answers
 /// `Some`. The copy is what the body cannot express, and it has to happen
 /// before the removal — after it the slot is either past the end or holding a
 /// later element shifted down over it.
-pub(super) fn lower_inline_element_take(
+pub(super) fn lower_inline_element_read(
     ctx: &mut LoweringContext,
     obj: &Expression,
     list_ty: &Type,
     element: &InlineElement,
-    removal: ListRemoval<'_>,
+    removal: InlineElementRead<'_>,
     span: &Span,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
@@ -139,7 +157,7 @@ pub(super) fn lower_inline_element_take(
 fn lower_length_and_index(
     ctx: &mut LoweringContext,
     list: Local,
-    removal: &ListRemoval<'_>,
+    removal: &InlineElementRead<'_>,
     span: Span,
 ) -> Result<(Local, Local), LoweringError> {
     let len = call_runtime(
@@ -149,8 +167,9 @@ fn lower_length_and_index(
         int(span),
     );
     let index = match removal {
-        ListRemoval::Last => last_index(ctx, len, span),
-        ListRemoval::At(arg) => {
+        InlineElementRead::Pop | InlineElementRead::Last => last_index(ctx, len, span),
+        InlineElementRead::First => store_temp(ctx, int_constant(0, &span), int(span), span),
+        InlineElementRead::RemoveAt(arg) => {
             let op = lower_expression(ctx, arg, None)?;
             store_temp(ctx, super::dispatch::move_to_copy(op), int(span), arg.span)
         }
@@ -174,7 +193,7 @@ fn emit_take_or_absent(
     sites: TakeSites,
     element: &InlineElement,
     option_ty: &Type,
-    removal: &ListRemoval<'_>,
+    removal: &InlineElementRead<'_>,
     span: Span,
 ) {
     let in_range = index_in_range(ctx, sites.index, sites.len, span);
@@ -210,7 +229,8 @@ fn emit_take_or_absent(
     ctx.set_current_block(join_bb);
 }
 
-/// Copy the element out, drop it from the list, and store it as `Some`.
+/// Copy the element out, drop it from the list when the read removes it, and
+/// store it as `Some`.
 ///
 /// The copy comes first: once the element is removed its slot is either past the
 /// end or holding the element that shifted down over it.
@@ -219,14 +239,15 @@ fn emit_take(
     sites: &TakeSites,
     element: &InlineElement,
     option_ty: &Type,
-    removal: &ListRemoval<'_>,
+    removal: &InlineElementRead<'_>,
     span: Span,
 ) {
     let watermark = ctx.body.local_decls.len();
     let copied = copy_inline_element(ctx, sites.list, sites.index, element, span);
-    let (entry, args) = removal.runtime_call(sites.index);
-    let call_args = [vec![Operand::Copy(Place::new(sites.list))], args].concat();
-    call_runtime(ctx, entry, call_args, Type::new(TypeKind::Boolean, span));
+    if let Some((entry, args)) = removal.removal_call(sites.index) {
+        let call_args = [vec![Operand::Copy(Place::new(sites.list))], args].concat();
+        call_runtime(ctx, entry, call_args, Type::new(TypeKind::Boolean, span));
+    }
 
     let wrapped = coerce_rvalue_in(
         ctx,
