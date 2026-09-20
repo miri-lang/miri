@@ -1933,7 +1933,7 @@ impl TypeChecker {
         let substitution: std::collections::HashMap<String, Type> =
             mapping.iter().cloned().collect();
         let body = (
-            crate::type_checker::ordering_requirements::FREE_FUNCTION_OWNER.to_string(),
+            crate::type_checker::instantiation_requirements::FREE_FUNCTION_OWNER.to_string(),
             callee.clone(),
         );
         self.record_pinning_site(body, &substitution, span, context);

@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Which generic parameters a body needs to carry an ordering, and the check
-//! that applies that need where a parameter is pinned to a concrete type.
+//! Which of its own generic parameters a body places requirements on, and the
+//! check that applies those requirements where a parameter is pinned to a
+//! concrete type.
 //!
-//! A generic body is checked once, against its own parameters. An ordering
-//! operator written there has no type to ask yet, so the check is deferred:
-//! the parameter is recorded as needing an ordering, and every site that pins
-//! it — a call to a generic function, a method reached through a generic
-//! receiver — answers for the type it pins it to. Without the deferral the
-//! operator would reach code generation with nothing to compare but the two
-//! operands' addresses.
+//! A generic body is checked once, against its own parameters. An operation
+//! written there on a value of a parameter type has no type to ask yet, so the
+//! check is deferred: the body records what it needs of the parameter, and
+//! every site that pins it — a call to a generic function, a method reached
+//! through a generic receiver — answers for the type it pins it to. Without
+//! the deferral the operation would reach code generation with nothing but the
+//! operands' bytes to work on.
 //!
 //! Bodies are checked in source order, so a site can be checked before the body
 //! it pins has stated anything. Sites are therefore only recorded during the
 //! body pass. After it, requirements are settled — a body that pins another
-//! body's ordering parameter to its own parameter orders that parameter too —
-//! and every site is answered against the settled set.
+//! body's required parameter to one of its own parameters carries that
+//! requirement too — and every site is answered against the settled set.
+//!
+//! Ordering is the first requirement carried here, not the subject: a body that
+//! compares values of a parameter states it, and a site pinning that parameter
+//! to a type without `compare` is refused.
 
 use super::context::{Context, TypeDefinition};
 use super::operators::missing_ordering_at_instantiation_message;
@@ -35,8 +40,34 @@ pub(crate) type GenericBodyId = (String, String);
 pub(crate) const FREE_FUNCTION_OWNER: &str = "";
 
 /// Every requirement recorded across the program, keyed by the body that stated
-/// it and valued by the parameter names that body orders.
-pub(crate) type OrderingRequirements = HashMap<GenericBodyId, BTreeSet<String>>;
+/// it.
+pub(crate) type InstantiationRequirements = HashMap<GenericBodyId, BTreeSet<Obligation>>;
+
+/// What a body needs of its own generic parameters, stated as the operation
+/// the body wrote.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Obligation {
+    /// The body compares values of this parameter.
+    Ordering { parameter: String },
+}
+
+impl Obligation {
+    /// The same obligation restated in the pinning body's own parameter names,
+    /// when every parameter it mentions is pinned to one of those.
+    ///
+    /// A parameter pinned to a concrete type is answered at the site itself
+    /// rather than handed on, so such an obligation delegates nothing.
+    fn delegated_through(&self, pins: &HashMap<String, Pin>) -> Option<Obligation> {
+        match self {
+            Obligation::Ordering { parameter } => match pins.get(parameter) {
+                Some(Pin::CallerParameter(own)) => Some(Obligation::Ordering {
+                    parameter: own.clone(),
+                }),
+                Some(Pin::Concrete(_)) | None => None,
+            },
+        }
+    }
+}
 
 /// What a site pins one generic parameter to.
 #[derive(Debug)]
@@ -63,29 +94,35 @@ pub(crate) struct PinningSite {
     span: Span,
 }
 
-/// Grow `requirements` until every body that pins another body's ordering
-/// parameter to one of its own parameters orders that parameter too.
+/// Grow `requirements` until every body that pins another body's required
+/// parameter to one of its own parameters carries that obligation too.
 ///
-/// A requirement can only be added, and there are finitely many parameters to
-/// add, so the loop ends — including when bodies delegate to each other in a
-/// cycle.
-fn settle_requirements(requirements: &mut OrderingRequirements, sites: &[PinningSite]) {
+/// A requirement can only be added, and the obligations that can be added form
+/// a finite set: an [`Obligation::Ordering`] names a generic parameter of the
+/// body it is recorded against, and the program declares finitely many. So the
+/// loop ends, including when bodies delegate to each other in a cycle.
+///
+/// That argument holds only while delegation *renames* what an obligation
+/// carries. An obligation that instead built a larger value on delegation — a
+/// type wrapping the parameter it was delegated through, say — could grow
+/// without bound around a delegation cycle, and would have to bound its own
+/// growth before being added here.
+fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[PinningSite]) {
     loop {
-        let mut inherited: Vec<(GenericBodyId, String)> = Vec::new();
+        let mut inherited: Vec<(GenericBodyId, Obligation)> = Vec::new();
         for site in sites {
             let (Some(caller), Some(required)) = (&site.caller, requirements.get(&site.callee))
             else {
                 continue;
             };
-            for parameter in required {
-                if let Some(Pin::CallerParameter(own)) = site.pins.get(parameter) {
-                    inherited.push((caller.clone(), own.clone()));
-                }
-            }
+            let delegated = required
+                .iter()
+                .filter_map(|obligation| obligation.delegated_through(&site.pins));
+            inherited.extend(delegated.map(|obligation| (caller.clone(), obligation)));
         }
         let mut grew = false;
-        for (caller, own) in inherited {
-            grew |= requirements.entry(caller).or_default().insert(own);
+        for (caller, obligation) in inherited {
+            grew |= requirements.entry(caller).or_default().insert(obligation);
         }
         if !grew {
             return;
@@ -129,10 +166,12 @@ impl TypeChecker {
         let Some(body) = current_body(context) else {
             return;
         };
-        self.ordering_requirements
+        self.instantiation_requirements
             .entry(body)
             .or_default()
-            .insert(parameter.to_string());
+            .insert(Obligation::Ordering {
+                parameter: parameter.to_string(),
+            });
     }
 
     /// Record that the body being checked hands a container to a call that
@@ -195,7 +234,7 @@ impl TypeChecker {
     /// [`answer_pinning_sites`](Self::answer_pinning_sites).
     ///
     /// Nothing is judged here, because the body being pinned may be declared
-    /// further down the source and not yet have stated what it orders. Whether
+    /// further down the source and not yet have stated what it requires. Whether
     /// each pin names the checking body's own parameter is decided now, while
     /// that body's scope is the one in `context`.
     pub(crate) fn record_pinning_site(
@@ -257,43 +296,50 @@ impl TypeChecker {
         }
     }
 
-    /// Settle every requirement, then report each site that pins an ordering
-    /// parameter to a type carrying no ordering.
+    /// Settle every requirement, then report each site that pins a required
+    /// parameter to a type that cannot meet the requirement.
     ///
     /// Runs once the body pass has recorded every requirement and every site,
     /// so a site is answered the same wherever it is written relative to the
     /// body it pins.
     pub(crate) fn answer_pinning_sites(&mut self) {
         let sites = std::mem::take(&mut self.pinning_sites);
-        settle_requirements(&mut self.ordering_requirements, &sites);
+        settle_requirements(&mut self.instantiation_requirements, &sites);
         for site in &sites {
             self.answer_pinning_site(site);
         }
     }
 
-    /// Report each ordering parameter `site` pins to a type carrying no ordering.
+    /// Answer every obligation the body `site` pins has stated.
     fn answer_pinning_site(&mut self, site: &PinningSite) {
-        let Some(parameters) = self.ordering_requirements.get(&site.callee).cloned() else {
+        let Some(obligations) = self.instantiation_requirements.get(&site.callee).cloned() else {
             return;
         };
-        for parameter in parameters {
-            let Some(Pin::Concrete(pinned)) = site.pins.get(&parameter) else {
-                continue;
-            };
-            if self.orders_its_values(pinned) {
-                continue;
+        for obligation in &obligations {
+            match obligation {
+                Obligation::Ordering { parameter } => self.answer_ordering(parameter, site),
             }
-            self.report_error_with_help(
-                DiagnosticCode::TypOrderingNotSupported,
-                missing_ordering_at_instantiation_message(pinned),
-                site.span,
-                format!(
-                    "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
-                     define 'compare'",
-                    site.callee.1, parameter
-                ),
-            );
         }
+    }
+
+    /// Report `site` when it pins `parameter` to a type carrying no ordering.
+    fn answer_ordering(&mut self, parameter: &str, site: &PinningSite) {
+        let Some(Pin::Concrete(pinned)) = site.pins.get(parameter) else {
+            return;
+        };
+        if self.orders_its_values(pinned) {
+            return;
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TypOrderingNotSupported,
+            missing_ordering_at_instantiation_message(pinned),
+            site.span,
+            format!(
+                "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
+                 define 'compare'",
+                site.callee.1, parameter
+            ),
+        );
     }
 
     /// Re-key a receiver's substitution into `declaring`'s own parameter names.
