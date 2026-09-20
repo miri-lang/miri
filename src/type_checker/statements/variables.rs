@@ -52,6 +52,87 @@ use crate::type_checker::utils::{
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
+    /// Whether a written type's arguments name the same parameters the
+    /// initializer's do.
+    ///
+    /// Inside `fn f<T>`, `Tagged<T>` and `Tagged<int>` are different types: the
+    /// body is compiled for whatever `T` turns out to be, and nothing makes
+    /// that an `int`. The general rule treats an unconstrained parameter as
+    /// matching anything, which is right where the parameter is the whole
+    /// declared type — `var x T = a` takes whatever the body is instantiated
+    /// at — and wrong one level in, where the two spellings have to agree.
+    ///
+    /// Only a parameter **the enclosing body declares** is held to this. A
+    /// parameter name that resolves to nothing in scope is an inference slot
+    /// the declaration is there to fill: `let r Result<int, bool> =
+    /// Result.Ok(42)` infers `Result<int, E>`, because `Ok` pins one side only
+    /// and the annotation is what settles the other.
+    ///
+    /// Only argument positions are compared, and only when both sides spell the
+    /// same type with the same arity; anything else is left to the general
+    /// rule, which already answers it.
+    fn type_arguments_name_the_same_parameters(
+        &self,
+        declared: &Type,
+        inferred: &Type,
+        context: &Context,
+    ) -> bool {
+        let (
+            TypeKind::Custom(declared_name, Some(declared_args)),
+            TypeKind::Custom(inferred_name, Some(inferred_args)),
+        ) = (&declared.kind, &inferred.kind)
+        else {
+            return true;
+        };
+        if declared_name != inferred_name || declared_args.len() != inferred_args.len() {
+            return true;
+        }
+        declared_args
+            .iter()
+            .zip(inferred_args)
+            .all(|(declared_arg, inferred_arg)| {
+                Self::argument_parameters_agree(declared_arg, inferred_arg, context)
+            })
+    }
+
+    /// Whether one written type argument may stand where the other is declared.
+    ///
+    /// A parameter the body declares agrees only with the same parameter by
+    /// name. Anything else is left to the general rule.
+    fn argument_parameters_agree(
+        declared: &Expression,
+        inferred: &Expression,
+        context: &Context,
+    ) -> bool {
+        let Some(declared_param) = Self::declared_parameter_in_scope(declared, context) else {
+            return true;
+        };
+        Self::written_parameter_name(inferred) == Some(declared_param)
+    }
+
+    /// The name of the enclosing body's type parameter a written argument is,
+    /// or `None` when it names anything else.
+    fn declared_parameter_in_scope<'e>(arg: &'e Expression, context: &Context) -> Option<&'e str> {
+        let name = Self::written_parameter_name(arg)?;
+        matches!(
+            context.resolve_type_definition(name),
+            Some(crate::type_checker::context::TypeDefinition::Generic(_))
+        )
+        .then_some(name)
+    }
+
+    /// The name of the type parameter a written type argument is, or `None`
+    /// when it names something else.
+    fn written_parameter_name(arg: &Expression) -> Option<&str> {
+        let ExpressionKind::Type(ty, _) = &arg.node else {
+            return None;
+        };
+        let TypeKind::Generic(name, _, _) = &ty.kind else {
+            return None;
+        };
+        Some(name.as_str())
+    }
+
     pub(crate) fn check_variable_declaration(
         &mut self,
         decls: &[VariableDeclaration],
@@ -455,12 +536,6 @@ impl TypeChecker {
             make_type(TypeKind::Error)
         };
 
-        // TODO: when the annotation names a generic parameter of the enclosing
-        // body (`var x Tagged<T> = Tagged<int>(1)` inside `fn f<T>`), the two
-        // sides compare as compatible and the mismatch goes unreported — the
-        // same spelling written `Tagged<String>` outside a generic body is
-        // correctly refused. `are_compatible` treats the unsubstituted argument
-        // as matching anything.
         // If both type annotation and initializer exist, check compatibility
         if let (Some(type_expr), Some(init)) = (&decl.typ, &decl.initializer) {
             let declared_type = self.resolve_type_expression(type_expr, context);
@@ -473,7 +548,13 @@ impl TypeChecker {
             let inferred_type = self
                 .widen_int_literals(init, &declared_type, &inferred_type)
                 .unwrap_or(inferred_type);
-            if !self.are_compatible(&declared_type, &inferred_type, context) {
+            if !self.are_compatible(&declared_type, &inferred_type, context)
+                || !self.type_arguments_name_the_same_parameters(
+                    &declared_type,
+                    &inferred_type,
+                    context,
+                )
+            {
                 // Check for list literal compatibility (e.g. [1] -> [i16])
                 let mut compatible = false;
                 if let (TypeKind::List(target_inner), ExpressionKind::List(elements)) =
