@@ -41,6 +41,19 @@ pub(crate) struct ElementIdentitySetters {
     pub(crate) set_equals_fn: ContainerSetter,
 }
 
+/// The rule by which a container recognises two of its elements, or a map two
+/// of its keys, as the same one.
+#[derive(Clone, Copy)]
+pub(crate) enum ElementRule {
+    /// The bytes of the value are the value.
+    Bytes,
+    /// The value points at a string, matched by its content.
+    StringContent,
+    /// The value's type answers `equals`, reached through the thunk at this
+    /// address.
+    OwnEquals(Value),
+}
+
 /// The runtime setters through which a list's or array's elements learn how
 /// two of them are ordered. See [`FunctionTranslator::emit_element_order`].
 #[derive(Clone, Copy)]
@@ -341,10 +354,16 @@ impl<'a> FunctionTranslator<'a> {
     /// `elem_kind` as the same one: a string by its content, a class through its
     /// own `equals`, anything else by its bytes (the runtime default).
     ///
-    /// This is the one place both containers take the rule from, and it is the
-    /// rule `==` applies to the element type. It has to run before the first
-    /// element is stored, since the runtime places each element by the hash of
-    /// the rule in force when it arrives.
+    /// An optional element is none of those itself — its bytes are the address
+    /// of its `Some` box — so it registers the rule of the value it wraps,
+    /// together with how many boxes the runtime must open to reach that value
+    /// and how wide the value is. A rule is registered only where it is the one
+    /// `==` applies; an element whose equality is a walk over fields keeps the
+    /// byte rule rather than being matched half-right.
+    ///
+    /// This is the one place both containers take the rule from. It has to run
+    /// before the first element is stored, since the runtime places each element
+    /// by the hash of the rule in force when it arrives.
     pub(crate) fn emit_element_identity(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -356,23 +375,70 @@ impl<'a> FunctionTranslator<'a> {
         if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
             return Ok(());
         }
+        let (depth, value_kind) = Self::peel_optionals(elem_kind);
+        let Some(rule) = Self::value_identity_rule(builder, ctx, value_kind, type_ctx)? else {
+            return Ok(());
+        };
+        if let ElementRule::OwnEquals(addr) = rule {
+            (setters.set_equals_fn)(builder, ctx, container_ptr, addr)?;
+        }
+        let Some(word) = Self::element_identity_kind(rule, depth, value_kind, type_ctx.ptr_type)
+        else {
+            return Ok(());
+        };
+        let kind = builder.ins().iconst(type_ctx.ptr_type, word);
+        (setters.set_kind)(builder, ctx, container_ptr, kind)
+    }
+
+    /// The rule matching two values of `value_kind` the way `==` compares them,
+    /// or `None` when no rule the runtime can apply does.
+    ///
+    /// A type whose equality is a structural walk over its fields — a struct, an
+    /// enum, a collection — has no such rule: the runtime sees only bytes, and
+    /// its bytes are an address.
+    ///
+    /// TODO: so a set of structs holds two values its own `==` calls one, and
+    /// finds neither by an equal value built separately, with nothing reported.
+    /// Reaching the walk needs it to have a linkable symbol, which no
+    /// synthesized equality has today.
+    fn value_identity_rule(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        value_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<ElementRule>, CodegenError> {
+        if let Some(addr) = Self::elem_equals_addr_for_kind(builder, ctx, value_kind, type_ctx)? {
+            return Ok(Some(ElementRule::OwnEquals(addr)));
+        }
         if matches!(
-            Self::classify_element_shape(elem_kind),
+            Self::classify_element_shape(value_kind),
             ElementShape::String
         ) {
-            let kind = builder
-                .ins()
-                .iconst(type_ctx.ptr_type, Self::STRING_CONTENT_ELEMENT_KIND);
-            return (setters.set_kind)(builder, ctx, container_ptr, kind);
+            return Ok(Some(ElementRule::StringContent));
         }
-        // TODO: an optional element or key (`Set<int?>`, `Map<int?, V>`) gets
-        // neither a content kind nor an equals callback, so the runtime matches
-        // it by the address of its `Some` box: two equal optionals are stored
-        // as two entries and a lookup misses what the container holds.
-        match Self::elem_equals_addr_for_kind(builder, ctx, elem_kind, type_ctx)? {
-            Some(addr) => (setters.set_equals_fn)(builder, ctx, container_ptr, addr),
-            None => Ok(()),
+        Ok(Self::is_matched_by_bytes(value_kind).then_some(ElementRule::Bytes))
+    }
+
+    /// The element kind word registering `rule` for a value wrapped in `depth`
+    /// optionals, or `None` when there is nothing to register: an unwrapped
+    /// value matched by its bytes is what every container already starts at,
+    /// and an equality callback settles matching on its own.
+    fn element_identity_kind(
+        rule: ElementRule,
+        depth: usize,
+        value_kind: &TypeKind,
+        ptr_type: cl_types::Type,
+    ) -> Option<i64> {
+        let base = match rule {
+            ElementRule::StringContent => Self::STRING_CONTENT_ELEMENT_KIND,
+            ElementRule::Bytes | ElementRule::OwnEquals(_) => Self::BYTES_ELEMENT_KIND,
+        };
+        if depth == 0 {
+            return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
         }
+        let value_size =
+            crate::codegen::cranelift::types::translate_type_kind(value_kind, ptr_type).bytes();
+        Self::optional_element_kind(base, depth, value_size)
     }
 
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.

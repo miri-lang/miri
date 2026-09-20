@@ -116,11 +116,115 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
+    /// The element kind that makes a set match its elements, or a map its keys,
+    /// by their raw bytes. Mirrors the runtime's `element_identity::BY_BYTES`,
+    /// and is what every container starts at.
+    pub(crate) const BYTES_ELEMENT_KIND: i64 = 0;
+
     /// The element kind that makes a set match its string elements, or a map
     /// its string keys, by content. Mirrors the runtime's
-    /// `element_identity::BY_STRING_CONTENT`; the default `0` compares an
-    /// element's raw bytes.
+    /// `element_identity::BY_STRING_CONTENT`.
     pub(crate) const STRING_CONTENT_ELEMENT_KIND: i64 = 1;
+
+    /// Bits the element kind reserves for the rule that settles a value.
+    /// Mirrors the runtime's `element_identity`, which reads the word back.
+    const ELEMENT_RULE_BITS: u32 = 8;
+
+    /// Bits the element kind reserves for the number of optionals wrapping the
+    /// element, immediately above the rule.
+    const OPTIONAL_DEPTH_BITS: u32 = 8;
+
+    /// How many optionals the element kind can say an element is wrapped in.
+    /// Mirrors the runtime's `element_identity::MAX_OPTIONAL_DEPTH`.
+    const MAX_OPTIONAL_DEPTH: usize = (1 << Self::OPTIONAL_DEPTH_BITS) - 1;
+
+    /// The widest boxed value the element kind can state, which is the widest
+    /// scalar the backend has: the field holding it is the rest of the word,
+    /// but a size beyond this means the caller measured something other than a
+    /// boxed value.
+    const MAX_OPTIONAL_VALUE_SIZE: u32 = 16;
+
+    /// The element kind registering `rule` for the value reached by opening
+    /// `depth` optionals, each box holding `value_size` bytes.
+    ///
+    /// `None` when the word cannot say it: no optional to open, a depth past
+    /// what the field holds, or a value of an unstatable width. Declining
+    /// leaves the container matching such an element by its bytes, which is
+    /// what it did before an optional could be described at all — a truncated
+    /// depth would instead open the wrong number of boxes and read a pointer
+    /// as a value.
+    pub(crate) fn optional_element_kind(rule: i64, depth: usize, value_size: u32) -> Option<i64> {
+        if depth == 0 || depth > Self::MAX_OPTIONAL_DEPTH {
+            return None;
+        }
+        if value_size == 0 || value_size > Self::MAX_OPTIONAL_VALUE_SIZE {
+            return None;
+        }
+        let size = i64::from(value_size) << (Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS);
+        Some(rule | (depth as i64) << Self::ELEMENT_RULE_BITS | size)
+    }
+
+    /// How many optionals wrap `kind`, and the type they wrap.
+    pub(crate) fn peel_optionals(kind: &TypeKind) -> (usize, &TypeKind) {
+        let mut depth = 0;
+        let mut inner = kind;
+        while let TypeKind::Option(payload) = inner {
+            depth += 1;
+            inner = &payload.kind;
+        }
+        (depth, inner)
+    }
+
+    /// True when an element of `kind` is the same element as another exactly
+    /// when their bytes agree: a scalar, whose bytes are its value.
+    ///
+    /// A float is one of them, on the same terms a container of bare floats
+    /// already matches on: its bytes settle it, so a negative zero is not the
+    /// zero `==` says it equals and a NaN is the NaN `==` says it is not. The
+    /// wrapped element answers as the bare one does, which is what makes the
+    /// two containers agree with each other.
+    ///
+    /// TODO: settling those two cases needs a float rule of its own beside the
+    /// byte and content rules, and first a decision on whether membership
+    /// follows `==` or identity of value.
+    pub(crate) fn is_matched_by_bytes(kind: &TypeKind) -> bool {
+        match kind {
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr => true,
+            TypeKind::String
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Map(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Custom(_, _)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => false,
+        }
+    }
 
     /// The order kind that makes a list or array sort its elements as unsigned
     /// integers. Mirrors the runtime's `element_order::BY_UNSIGNED_VALUE`; the

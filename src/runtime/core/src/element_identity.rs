@@ -15,6 +15,13 @@
 //! - an element whose type defines its own equality is compared through a
 //!   callback the compiler generates from that type's `equals`.
 //!
+//! An optional element applies none of these to itself: its bytes are the
+//! address of its `Some` box, and two separately built `Some(2)`s hold that
+//! same 2 at two addresses. So the compiler also says how many optionals wrap
+//! the element and how wide the value inside is, and the rules above apply to
+//! that value once every box has been opened. A `None` is the absence of one,
+//! equal only to a `None` reached after opening as many boxes.
+//!
 //! Hashing follows the same rule, since two elements that compare equal have
 //! to land in the same probe chain.
 
@@ -33,6 +40,34 @@ pub const BY_BYTES: usize = 0;
 /// The element's bytes point at a `MiriString`, matched by its content.
 pub const BY_STRING_CONTENT: usize = 1;
 
+/// Width of the field holding the rule that settles a resolved value.
+const RULE_BITS: u32 = 8;
+
+/// Width of the field holding how many optionals wrap the element.
+const DEPTH_BITS: u32 = 8;
+
+/// How many optionals one element may be wrapped in and still be matched by
+/// content. Nesting deeper than this keeps the byte rule: the compiler declines
+/// to encode a depth that does not fit, rather than truncating one into a rule
+/// that would open the wrong number of boxes.
+pub const MAX_OPTIONAL_DEPTH: usize = (1 << DEPTH_BITS) - 1;
+
+/// The kind word registering `rule` for a value reached by opening `depth`
+/// optionals, each box holding `value_size` bytes. `depth` of zero is the
+/// element itself and leaves `rule` exactly as the two bare constants spell it,
+/// so a container whose elements are not optional encodes as it always did.
+pub const fn through_optionals(rule: usize, depth: usize, value_size: usize) -> usize {
+    rule | (depth << RULE_BITS) | (value_size << (RULE_BITS + DEPTH_BITS))
+}
+
+/// What an element slot holds once every optional wrapping it is opened.
+enum Resolved {
+    /// The address the settling rule reads the value at.
+    Value(*const u8),
+    /// A `None` was reached, after opening this many boxes.
+    Missing(usize),
+}
+
 /// How a container decides that two of its elements are the same element.
 ///
 /// Every container starts [`BY_BYTES`] with no callback. The rule must be
@@ -41,7 +76,8 @@ pub const BY_STRING_CONTENT: usize = 1;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct ElementIdentity {
-    /// [`BY_BYTES`] or [`BY_STRING_CONTENT`]; consulted when `equals_fn` is zero.
+    /// The rule, the optional depth and the wrapped value's size, packed by
+    /// [`through_optionals`]. The rule is consulted when `equals_fn` is zero.
     kind: usize,
     /// Address of an [`ElementEqualsFn`], or zero when the element type defines
     /// no equality of its own.
@@ -55,7 +91,7 @@ impl ElementIdentity {
         equals_fn: 0,
     };
 
-    /// Selects the built-in rule, [`BY_BYTES`] or [`BY_STRING_CONTENT`].
+    /// Selects the rule, as packed by [`through_optionals`].
     pub(crate) fn set_kind(&mut self, kind: usize) {
         self.kind = kind;
     }
@@ -65,7 +101,50 @@ impl ElementIdentity {
         self.equals_fn = equals_fn;
     }
 
-    /// Hashes the element stored at `elem`, which spans `size` bytes.
+    /// The rule settling two resolved values.
+    fn rule(&self) -> usize {
+        self.kind & ((1 << RULE_BITS) - 1)
+    }
+
+    /// How many optionals wrap the element; zero when it is not optional.
+    fn optional_depth(&self) -> usize {
+        (self.kind >> RULE_BITS) & MAX_OPTIONAL_DEPTH
+    }
+
+    /// The number of bytes the settling rule reads, given the element slot's
+    /// own `slot_size`. An optional's boxed value has a width of its own — an
+    /// `int?` box holds eight bytes where an `i32?` box holds four, with the
+    /// rest of the box never written — so only the element itself is read at
+    /// the size of its slot.
+    fn value_size(&self, slot_size: usize) -> usize {
+        if self.optional_depth() == 0 {
+            return slot_size;
+        }
+        self.kind >> (RULE_BITS + DEPTH_BITS)
+    }
+
+    /// Opens every optional wrapping the element stored at `elem`.
+    ///
+    /// Each box holds its value at offset zero, so opening one is reading the
+    /// pointer and continuing at what it points to; a null pointer is a `None`
+    /// and ends the walk at the depth it was found.
+    ///
+    /// # Safety
+    ///
+    /// `elem` must point at an element of this rule, whose optionals are live.
+    unsafe fn resolve(&self, elem: *const u8) -> Resolved {
+        let mut at = elem;
+        for opened in 0..self.optional_depth() {
+            let inner = *(at as *const *const u8);
+            if inner.is_null() {
+                return Resolved::Missing(opened);
+            }
+            at = inner;
+        }
+        Resolved::Value(at)
+    }
+
+    /// Hashes the element stored at `elem`, whose slot spans `slot_size` bytes.
     ///
     /// An element compared through a callback hashes to one constant: the
     /// element type states when two values are equal but not how to hash one,
@@ -77,30 +156,58 @@ impl ElementIdentity {
     ///
     /// # Safety
     ///
-    /// `elem` must point at `size` readable bytes holding an element of this rule.
-    pub(crate) unsafe fn hash(&self, elem: *const u8, size: usize) -> u64 {
+    /// `elem` must point at `slot_size` readable bytes holding an element of
+    /// this rule.
+    pub(crate) unsafe fn hash(&self, elem: *const u8, slot_size: usize) -> u64 {
+        match self.resolve(elem) {
+            Resolved::Value(at) => self.hash_value(at, self.value_size(slot_size)),
+            // A `None` has no bytes to hash, and one found at another depth is
+            // a different value — `Some(None)` is not `None` — so the depth is
+            // what separates them.
+            Resolved::Missing(opened) => {
+                let depth = opened.to_ne_bytes();
+                crate::hash::fnv1a(depth.as_ptr(), depth.len())
+            }
+        }
+    }
+
+    /// Hashes the value at `at`, which the settling rule reads over `size` bytes.
+    unsafe fn hash_value(&self, at: *const u8, size: usize) -> u64 {
         if self.equals_fn != 0 {
             return 0;
         }
-        if self.kind == BY_STRING_CONTENT {
-            let (data, len) = string_content(elem);
+        if self.rule() == BY_STRING_CONTENT {
+            let (data, len) = string_content(at);
             return crate::hash::fnv1a(data, len);
         }
-        crate::hash::fnv1a(elem, size)
+        crate::hash::fnv1a(at, size)
     }
 
-    /// True when the elements stored at `a` and `b`, each `size` bytes, are the
-    /// same element.
+    /// True when the elements stored at `a` and `b`, each occupying a slot of
+    /// `slot_size` bytes, are the same element.
     ///
     /// # Safety
     ///
-    /// `a` and `b` must each point at `size` readable bytes holding an element
-    /// of this rule.
-    pub(crate) unsafe fn same(&self, a: *const u8, b: *const u8, size: usize) -> bool {
+    /// `a` and `b` must each point at `slot_size` readable bytes holding an
+    /// element of this rule.
+    pub(crate) unsafe fn same(&self, a: *const u8, b: *const u8, slot_size: usize) -> bool {
+        match (self.resolve(a), self.resolve(b)) {
+            (Resolved::Value(left), Resolved::Value(right)) => {
+                self.same_value(left, right, self.value_size(slot_size))
+            }
+            (Resolved::Missing(left), Resolved::Missing(right)) => left == right,
+            (Resolved::Value(_), Resolved::Missing(_))
+            | (Resolved::Missing(_), Resolved::Value(_)) => false,
+        }
+    }
+
+    /// True when the values at `a` and `b`, read over `size` bytes, are the
+    /// same value under the settling rule.
+    unsafe fn same_value(&self, a: *const u8, b: *const u8, size: usize) -> bool {
         if self.equals_fn != 0 {
             return self.same_through_callback(a, b);
         }
-        if self.kind == BY_STRING_CONTENT {
+        if self.rule() == BY_STRING_CONTENT {
             let (a_data, a_len) = string_content(a);
             let (b_data, b_len) = string_content(b);
             return a_len == b_len && bytes_equal(a_data, b_data, a_len);
