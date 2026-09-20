@@ -13,3 +13,4 @@ pub mod translate_statement;
 pub mod translator;
 pub mod types;
 pub mod vtable;
+pub mod wide_scalar_abi;
