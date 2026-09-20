@@ -23,7 +23,7 @@ use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::{HashMap, HashSet};
 
-use super::context::TypeDefinition;
+use super::context::{class_implements_trait, TypeDefinition};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::utils::{is_auto_copy, is_resource, runs_drop_hook};
 
@@ -1035,12 +1035,17 @@ impl<'a> UseAfterMoveChecker<'a> {
             if cd.is_abstract {
                 continue;
             }
-            // TODO: this reads the class's own trait list, so an implementer
-            // reaching the trait through a trait that extends it, or through a
-            // base class, is left out of the join while other implementers are
-            // found. `context::class_implements_trait` is the shared answer; the
-            // switch waits on a program showing a missed escape.
-            let implements_trait = cd.traits.iter().any(|t| t == trait_or_abstract);
+            // Membership is the shared answer, which walks the class's whole
+            // ancestry and every trait each step of it extends. Reading only
+            // this class's own trait list would leave out an implementer that
+            // reaches the trait through a base class or through a trait
+            // extending it — and leaving one out while finding another is worse
+            // than finding none, because the join then reports an escape the
+            // class it dispatches to actually has as absent.
+            let implements_trait =
+                class_implements_trait(class_name, trait_or_abstract, self.type_definitions);
+            // An abstract *class* is named the same way a trait is here, and is
+            // reached by inheritance rather than by implementing anything.
             let inherits_abstract =
                 !implements_trait && self.class_extends(class_name, trait_or_abstract);
             if !implements_trait && !inherits_abstract {
