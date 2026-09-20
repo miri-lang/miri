@@ -2004,6 +2004,75 @@ impl<'a> FunctionTranslator<'a> {
         (lhs, rhs, lhs_ty)
     }
 
+    /// An integer constant at `ty`, whatever width that is.
+    ///
+    /// `iconst` exists only up to 64 bits — the verifier rejects any wider
+    /// control type outright — so a 128-bit constant is assembled from its two
+    /// halves. Every constant a 128-bit operand is compared against has to come
+    /// from here; building one directly is what takes the compiler down.
+    fn int_const_at(builder: &mut FunctionBuilder, ty: cl_types::Type, value: i128) -> Value {
+        if ty != cl_types::I128 {
+            return builder.ins().iconst(ty, value as i64);
+        }
+        let lo = builder
+            .ins()
+            .iconst(cl_types::I64, (value as u128 & u64::MAX as u128) as i64);
+        let hi = builder
+            .ins()
+            .iconst(cl_types::I64, ((value as u128) >> 64) as i64);
+        builder.ins().iconcat(lo, hi)
+    }
+
+    /// Emits a 128-bit division or remainder as a call to the runtime.
+    ///
+    /// There is no instruction at this width: the backend lowers the narrower
+    /// widths to a hardware divide and has nothing to lower this to, so asking
+    /// for one fails while the function is still being compiled. The operands go
+    /// over as their two 64-bit halves and the result comes back through a stack
+    /// slot, so neither side has to agree about which register pair a 128-bit
+    /// value would arrive in.
+    ///
+    /// Division by zero is already refused before this is reached, and the
+    /// runtime wraps the one overflowing case the way the narrower widths do, so
+    /// no guard is emitted around the call.
+    fn emit_int128_div_or_rem(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &'static str,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value, CodegenError> {
+        let ptr_type = ctx.module.isa().pointer_type();
+        let (lhs_lo, lhs_hi) = builder.ins().isplit(lhs);
+        let (rhs_lo, rhs_hi) = builder.ins().isplit(rhs);
+
+        let slot =
+            builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 4));
+        let out = builder.ins().stack_addr(ptr_type, slot, 0);
+
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name,
+                param_types: &[
+                    cl_types::I64,
+                    cl_types::I64,
+                    cl_types::I64,
+                    cl_types::I64,
+                    ptr_type,
+                ],
+                return_types: &[],
+                args: &[lhs_lo, lhs_hi, rhs_lo, rhs_hi, out],
+            },
+        )?;
+
+        let lo = builder.ins().stack_load(cl_types::I64, slot, 0);
+        let hi = builder.ins().stack_load(cl_types::I64, slot, 8);
+        Ok(builder.ins().iconcat(lo, hi))
+    }
+
     /// Emits an explicit branch: if `rhs == 0`, call `miri_rt_div_by_zero_panic`
     /// (which prints the runtime error and `_exit(1)`s) then trap as unreachable;
     /// otherwise fall through to the continuation block. Avoids Cranelift `trapz`
@@ -2015,7 +2084,7 @@ impl<'a> FunctionTranslator<'a> {
         rhs: Value,
         ty: cl_types::Type,
     ) -> Result<(), CodegenError> {
-        let zero = builder.ins().iconst(ty, 0);
+        let zero = Self::int_const_at(builder, ty, 0);
         let is_zero = builder.ins().icmp(IntCC::Equal, rhs, zero);
 
         let panic_block = builder.create_block();
@@ -2058,7 +2127,7 @@ impl<'a> FunctionTranslator<'a> {
         rhs: Value,
         ty: cl_types::Type,
     ) -> Result<(), CodegenError> {
-        let zero = builder.ins().iconst(ty, 0);
+        let zero = Self::int_const_at(builder, ty, 0);
         let is_zero = builder.ins().icmp(IntCC::Equal, rhs, zero);
 
         let panic_block = builder.create_block();
@@ -2114,37 +2183,30 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Mul if is_float => builder.ins().fmul(lhs, rhs),
             BinOp::Mul => builder.ins().imul(lhs, rhs),
             BinOp::Div if is_float => builder.ins().fdiv(lhs, rhs),
-            // TODO: dividing two 128-bit integers trips an `unreachable` in the
-            // Cranelift verifier — `/` and `%` both crash the compiler where
-            // `+`, `-` and `*` are fine. Cranelift has no native 128-bit divide,
-            // so this path needs a libcall rather than the instruction below.
             BinOp::Div => {
                 Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
+                if ty == cl_types::I128 {
+                    let name = if is_unsigned {
+                        rt::U128_DIV
+                    } else {
+                        rt::I128_DIV
+                    };
+                    return Self::emit_int128_div_or_rem(builder, ctx, name, lhs, rhs);
+                }
                 if is_unsigned {
                     builder.ins().udiv(lhs, rhs)
                 } else {
-                    let (min_val_val, neg1_val) = if ty == cl_types::I128 {
-                        let min_lo = builder.ins().iconst(cl_types::I64, 0);
-                        let min_hi = builder.ins().iconst(cl_types::I64, i64::MIN);
-                        let min_v = builder.ins().iconcat(min_lo, min_hi);
-
-                        let neg1_lo = builder.ins().iconst(cl_types::I64, -1);
-                        let neg1_hi = builder.ins().iconst(cl_types::I64, -1);
-                        let neg1_v = builder.ins().iconcat(neg1_lo, neg1_hi);
-
-                        (min_v, neg1_v)
-                    } else {
-                        let min_val = match ty {
-                            cl_types::I8 => i8::MIN as i64,
-                            cl_types::I16 => i16::MIN as i64,
-                            cl_types::I32 => i32::MIN as i64,
-                            cl_types::I64 => i64::MIN,
-                            _ => 0,
-                        };
-                        let min_v = builder.ins().iconst(ty, min_val);
-                        let neg1_v = builder.ins().iconst(ty, -1);
-                        (min_v, neg1_v)
+                    // 128 bits never reaches here — it returned above, through
+                    // the runtime, which wraps this same overflow itself.
+                    let min_val = match ty {
+                        cl_types::I8 => i8::MIN as i64,
+                        cl_types::I16 => i16::MIN as i64,
+                        cl_types::I32 => i32::MIN as i64,
+                        cl_types::I64 => i64::MIN,
+                        _ => 0,
                     };
+                    let min_val_val = Self::int_const_at(builder, ty, min_val as i128);
+                    let neg1_val = Self::int_const_at(builder, ty, -1);
 
                     let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
                     let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
@@ -2179,31 +2241,28 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Rem if is_float => return Self::emit_float_rem(builder, ctx, ty, lhs, rhs),
             BinOp::Rem => {
                 Self::emit_rem_by_zero_check(builder, ctx, rhs, ty)?;
+                if ty == cl_types::I128 {
+                    let name = if is_unsigned {
+                        rt::U128_REM
+                    } else {
+                        rt::I128_REM
+                    };
+                    return Self::emit_int128_div_or_rem(builder, ctx, name, lhs, rhs);
+                }
                 if is_unsigned {
                     builder.ins().urem(lhs, rhs)
                 } else {
-                    let (min_val_val, neg1_val) = if ty == cl_types::I128 {
-                        let min_lo = builder.ins().iconst(cl_types::I64, 0);
-                        let min_hi = builder.ins().iconst(cl_types::I64, i64::MIN);
-                        let min_v = builder.ins().iconcat(min_lo, min_hi);
-
-                        let neg1_lo = builder.ins().iconst(cl_types::I64, -1);
-                        let neg1_hi = builder.ins().iconst(cl_types::I64, -1);
-                        let neg1_v = builder.ins().iconcat(neg1_lo, neg1_hi);
-
-                        (min_v, neg1_v)
-                    } else {
-                        let min_val = match ty {
-                            cl_types::I8 => i8::MIN as i64,
-                            cl_types::I16 => i16::MIN as i64,
-                            cl_types::I32 => i32::MIN as i64,
-                            cl_types::I64 => i64::MIN,
-                            _ => 0,
-                        };
-                        let min_v = builder.ins().iconst(ty, min_val);
-                        let neg1_v = builder.ins().iconst(ty, -1);
-                        (min_v, neg1_v)
+                    // 128 bits never reaches here — it returned above, through
+                    // the runtime, which wraps this same overflow itself.
+                    let min_val = match ty {
+                        cl_types::I8 => i8::MIN as i64,
+                        cl_types::I16 => i16::MIN as i64,
+                        cl_types::I32 => i32::MIN as i64,
+                        cl_types::I64 => i64::MIN,
+                        _ => 0,
                     };
+                    let min_val_val = Self::int_const_at(builder, ty, min_val as i128);
+                    let neg1_val = Self::int_const_at(builder, ty, -1);
 
                     let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
                     let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
@@ -2219,13 +2278,7 @@ impl<'a> FunctionTranslator<'a> {
                         .brif(is_overflow, overflow_block, &[], normal_block, &[]);
 
                     builder.switch_to_block(overflow_block);
-                    let zero_val = if ty == cl_types::I128 {
-                        let zero_lo = builder.ins().iconst(cl_types::I64, 0);
-                        let zero_hi = builder.ins().iconst(cl_types::I64, 0);
-                        builder.ins().iconcat(zero_lo, zero_hi)
-                    } else {
-                        builder.ins().iconst(ty, 0)
-                    };
+                    let zero_val = Self::int_const_at(builder, ty, 0);
                     builder.def_var(res_var, zero_val);
                     builder.ins().jump(merge_block, &[]);
                     builder.seal_block(overflow_block);

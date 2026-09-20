@@ -258,6 +258,16 @@ pub mod rt {
     /// [`I128_TO_STRING`].
     pub const U128_TO_STRING: &str = "miri_rt_u128_to_string";
 
+    // ── 128-bit integer arithmetic ───────────────────────────────────────────
+    /// Compiler-internal: 128-bit division and remainder, which the backend has
+    /// no instruction for at that width. Operands travel as their two 64-bit
+    /// halves and the result is written through a pointer, because a 128-bit
+    /// value has no single register to arrive in.
+    pub const I128_DIV: &str = "miri_rt_i128_div";
+    pub const I128_REM: &str = "miri_rt_i128_rem";
+    pub const U128_DIV: &str = "miri_rt_u128_div";
+    pub const U128_REM: &str = "miri_rt_u128_rem";
+
     // ── Filesystem ────────────────────────────────────────────────────────────
     pub const FS_STATUS: &str = "miri_rt_fs_status";
     pub const FS_ERROR_MESSAGE: &str = "miri_rt_fs_error_message";
@@ -471,6 +481,10 @@ pub mod rt {
         INT_TO_STRING,
         UINT_TO_STRING,
         I128_TO_STRING,
+        I128_DIV,
+        I128_REM,
+        U128_DIV,
+        U128_REM,
         U128_TO_STRING,
         // Time
         NANOTIME,

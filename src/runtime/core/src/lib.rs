@@ -8,6 +8,7 @@
 //! - [`array`] — Fixed-size array type ([`MiriArray`]) with FFI interface.
 //! - [`element_identity`] — Deciding whether two container elements are the same.
 //! - [`element_order`] — Ordering the elements of a type-erased container.
+//! - [`int128`] — Division and remainder for the 128-bit integer widths.
 //! - [`io`] — Standard I/O operations (print, println, eprint, eprintln).
 //! - [`list`] — Dynamic list type ([`MiriList`]) with FFI interface.
 //! - [`map`] — Hash map type ([`MiriMap`]) with FFI interface.
@@ -28,6 +29,7 @@ pub mod fs;
 pub mod guard;
 pub mod handler_config;
 pub mod hash;
+pub mod int128;
 pub mod io;
 pub mod list;
 pub mod map;
@@ -59,6 +61,7 @@ pub use string::MiriString;
 pub use alloc::ffi::*;
 pub use array::ffi::*;
 pub use fs::ffi::*;
+pub use int128::ffi::*;
 pub use io::ffi::*;
 pub use list::ffi::*;
 pub use map::ffi::*;
