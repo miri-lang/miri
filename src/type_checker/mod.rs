@@ -44,6 +44,7 @@ mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 pub(crate) mod hygiene;
+pub(crate) mod int_literals;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
@@ -142,6 +143,12 @@ pub struct TypeChecker {
     /// rejects anything larger). Runtime lowering of these wide literals is a
     /// separate, pre-existing limitation, not enforced here.
     pub(crate) wide_typed_int_literals: HashSet<usize>,
+    /// Integer literals past the default `int` range, held until the type they
+    /// were written into is known. At an argument or element position a literal
+    /// is inferred before that type is resolved, so the bound cannot be applied
+    /// where the check runs; these are judged once the bodies are checked.
+    pub(crate) deferred_int_literal_ranges:
+        Vec<crate::type_checker::expressions::literals::DeferredIntLiteralRange>,
     /// Names of top-level (`module scope`) `const`/`let`/`var` bindings already
     /// registered by the declaration-collection pass. Function bodies checked
     /// earlier in source order resolve these through the shared context, so a
@@ -221,6 +228,7 @@ impl TypeChecker {
             generic_class_instantiations: HashMap::new(),
             negated_int_literals: HashSet::new(),
             wide_typed_int_literals: HashSet::new(),
+            deferred_int_literal_ranges: Vec::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
             resolving_declared_signature: false,
@@ -388,6 +396,7 @@ impl TypeChecker {
         self.run_pass_collect_declarations(program, &mut context);
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
+        self.report_deferred_int_literal_ranges();
         self.answer_pinning_sites();
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);

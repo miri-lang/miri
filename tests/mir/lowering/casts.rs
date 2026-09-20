@@ -5,6 +5,8 @@ use crate::mir::utils::mir_snapshot_test;
 
 #[test]
 fn test_numeric_cast() {
+    // The annotation types the literal, so the constant is already at the
+    // declared width and no cast is lowered to reach it.
     mir_snapshot_test(
         r#"
 fn main()
@@ -16,7 +18,7 @@ fn main()
 
             bb0: {
                 StorageLive(_1);
-                _1 = const Integer(I8(10)) as i64;
+                _1 = const Integer(I8(10));
                 StorageDead(_1);
                 return;
             }
@@ -56,7 +58,7 @@ fn main()
 
             bb0: {
                 StorageLive(_1);
-                _1 = const Integer(I8(0)) as i64;
+                _1 = const Integer(I8(0));
                 _1 = const Integer(I8(10)) as i64;
                 _0 = const Integer(I8(10));
                 StorageDead(_1);
@@ -78,17 +80,15 @@ fn main()
 "#,
         r#"
             let _0: void;
-            let _1: i64;
+            let _1: void;
             let _2: void;
-            let _3: void;
 
             bb0: {
-                _1 = const Integer(I8(10)) as i64;
-                _2 = const Identifier("take_i64")(_1) -> bb1;
+                _1 = const Identifier("take_i64")(const Integer(I8(10))) -> bb1;
             }
 
             bb1: {
-                _3 = _2;
+                _2 = _1;
                 return;
             }
         "#,

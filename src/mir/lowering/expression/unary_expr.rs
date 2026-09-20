@@ -40,6 +40,45 @@ fn lower_double_negate(
     Operand::Copy(Place::new(second_neg))
 }
 
+/// The constant a negated signed integer literal denotes, so the sign is
+/// applied here rather than by an instruction at run time.
+///
+/// A literal's sign is known while compiling, and performing it later performs
+/// it at the operand's width: the 128-bit widths have no negation instruction to
+/// perform it with, and a narrower one would have to hold a magnitude one past
+/// its own maximum to negate `MIN`. Folding avoids both.
+///
+/// `None` leaves the general path alone — for an unsigned target, whose wrapping
+/// is the existing behaviour, and for a magnitude with no negation (`i128::MIN`
+/// spelled positive).
+fn fold_negated_int_literal(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    operand: &Expression,
+) -> Option<Operand> {
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::types::TypeKind;
+
+    let ExpressionKind::Literal(Literal::Integer(int_lit)) = &operand.node else {
+        return None;
+    };
+    let ty = resolve_type(ctx.type_checker, expr);
+    if !matches!(
+        ty.kind,
+        TypeKind::Int | TypeKind::I8 | TypeKind::I16 | TypeKind::I32 | TypeKind::I64
+    ) && ty.kind != TypeKind::I128
+    {
+        return None;
+    }
+    let negated = int_lit.to_i128().checked_neg()?;
+    let literal = IntegerLiteral::from_type_kind(&ty.kind, negated)?;
+    Some(Operand::Constant(Box::new(crate::mir::Constant {
+        span: expr.span,
+        ty,
+        literal: Literal::Integer(literal),
+    })))
+}
+
 pub(crate) fn lower_unary_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -48,6 +87,22 @@ pub(crate) fn lower_unary_expr(
     let ExpressionKind::Unary(op, operand) = &expr.node else {
         unreachable!()
     };
+
+    if matches!(op, crate::ast::operator::UnaryOp::Negate) {
+        if let Some(folded) = fold_negated_int_literal(ctx, expr, operand) {
+            return Ok(match dest {
+                Some(d) => {
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(folded)),
+                        span: expr.span,
+                    });
+                    Operand::Copy(d)
+                }
+                None => folded,
+            });
+        }
+    }
+
     let op_val = lower_expression(ctx, operand, None)?;
     let un_op = match op {
         crate::ast::operator::UnaryOp::Negate => UnOp::Neg,

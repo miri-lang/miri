@@ -470,6 +470,9 @@ impl TypeChecker {
             let inferred_type = self
                 .narrow_float_literals(init, &declared_type, &inferred_type, context)
                 .unwrap_or(inferred_type);
+            let inferred_type = self
+                .widen_int_literals(init, &declared_type, &inferred_type)
+                .unwrap_or(inferred_type);
             if !self.are_compatible(&declared_type, &inferred_type, context) {
                 // Check for list literal compatibility (e.g. [1] -> [i16])
                 let mut compatible = false;

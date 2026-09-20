@@ -5,13 +5,16 @@ use crate::mir::utils::mir_snapshot_test;
 
 #[test]
 fn test_neg() {
+    // A sign in front of a literal is applied while compiling, so the constant
+    // carries it and no negation instruction is emitted. `--1` still lowers to
+    // two of them, because only a directly-negated literal folds.
     mir_snapshot_test(
         "fn main(): -1",
         r#"
             let _0: int;
 
             bb0: {
-                _0 = Neg(const Integer(I8(1)));
+                _0 = const Integer(I64(-1));
                 return;
             }
         "#,
