@@ -202,7 +202,8 @@ fn assign_to_var_compound(
     let lhs_op = Operand::Copy(Place::new(local));
     let result_ty = ctx.body.local_decls[local.0].ty.clone();
     let watermark = ctx.body.local_decls.len();
-    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
+    let combined =
+        combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr, watermark)?;
 
     // `x op= y` stores what `x op y` yields, so the store is the plain one and
     // takes its reference counting: the target releases what it held and takes
@@ -525,7 +526,8 @@ fn assign_to_member_compound(
     let lhs_op = Operand::Copy(target_place.clone());
     let result_ty = compound_field_result_type(slot_ty, expr.span);
     let watermark = ctx.body.local_decls.len();
-    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
+    let combined =
+        combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr, watermark)?;
 
     // The store into the field is the plain one, for the reason the variable
     // target gives: a managed field releases what it held and takes the
@@ -696,8 +698,10 @@ fn compound_assign_to_index_map(
         expr,
     );
 
+    let value_watermark = ctx.body.local_decls.len();
     let rhs_op = lower_expression(ctx, rhs, None)?;
-    let combined = combine_compound_operands(ctx, &value_ty, op, old, rhs_op, expr)?;
+    let combined =
+        combine_compound_operands(ctx, &value_ty, op, old, rhs_op, expr, value_watermark)?;
 
     // Combining produces a value of its own, already owning the one reference
     // the map is about to take. Donating hands that one over and releases the
@@ -750,9 +754,11 @@ fn compound_binary_op(
 /// compound targets (a variable, a field, an element, a map value) come
 /// through here rather than building the operation themselves.
 ///
-/// Operand temps are left to whoever created them: the watermark taken here is
-/// the current one, so the call releases none of them, which is what the
-/// machine-instruction path did before and after.
+/// `arg_watermark` is where the caller's own temps begin: a method call
+/// releases the operand temps created at or after it, and leaves the target's
+/// own binding — which is older — alone. A caller that lowered the right-hand
+/// side itself passes the mark it took beforehand, so that temp is released
+/// here rather than outliving the statement.
 fn combine_compound_operands(
     ctx: &mut LoweringContext,
     slot_ty: &Type,
@@ -760,9 +766,9 @@ fn combine_compound_operands(
     lhs_op: Operand,
     rhs_op: Operand,
     expr: &Expression,
+    arg_watermark: usize,
 ) -> Result<Operand, LoweringError> {
     let binary_op = compound_binary_op(op)?;
-    let arg_watermark = ctx.body.local_decls.len();
     let operands = crate::mir::lowering::expression::binary_expr::OperatorOperands {
         lhs_op: lhs_op.clone(),
         rhs_op: rhs_op.clone(),
@@ -930,7 +936,8 @@ fn assign_to_index_compound(
     // the truncated value was what got stored back.
     let result_ty = compound_field_result_type(elem_ty, expr.span);
     let watermark = ctx.body.local_decls.len();
-    let combined = combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr)?;
+    let combined =
+        combine_compound_operands(ctx, &result_ty, op, lhs_op, val.clone(), expr, watermark)?;
 
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(target_place.clone(), Rvalue::Use(combined.clone())),

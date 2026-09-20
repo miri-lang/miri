@@ -256,11 +256,11 @@ fn string_add_assign_on_a_local_concatenates() {
     assert_heap_guard_output(
         r#"
 fn main()
-    var s = "a"
-    s += "bc"
+    var s = "a" + "z"
+    s += "b" + "c"
     println(s)
 "#,
-        "abc",
+        "azbc",
     );
 }
 
@@ -271,15 +271,15 @@ fn string_add_assign_on_a_field_concatenates() {
 class Buf
     s String
     fn init()
-        self.s = "a"
+        self.s = "a" + "z"
 
 fn main()
     var b = Buf()
-    b.s += "bc"
+    b.s += "b" + "c"
     b.s += "!"
     println(b.s)
 "#,
-        "abc!",
+        "azbc!",
     );
 }
 
@@ -316,12 +316,12 @@ fn repeated_string_add_assign_keeps_every_part() {
         r#"
 fn main()
     var s = ""
-    s += "a"
-    s += "b"
-    s += "c"
+    s += "a" + "1"
+    s += "b" + "2"
+    s += "c" + "3"
     println(s)
 "#,
-        "abc",
+        "a1b2c3",
     );
 }
 
@@ -332,11 +332,11 @@ fn string_add_assign_on_a_list_element_concatenates() {
 use system.collections.list
 
 fn main()
-    var xs = List(["a", "b"])
-    xs[0] += "z"
+    var xs = List(["a" + "1", "b" + "2"])
+    xs[0] += "y" + "z"
     println(f"{xs[0]} {xs[1]}")
 "#,
-        "az b",
+        "a1yz b2",
     );
 }
 
@@ -348,11 +348,11 @@ use system.collections.map
 
 fn main()
     var m = Map<int, String>()
-    m.set(1, "a")
-    m[1] += "z"
+    m.set(1, "a" + "1")
+    m[1] += "y" + "z"
     println(m[1])
 "#,
-        "az",
+        "a1yz",
     );
 }
 
@@ -372,12 +372,12 @@ class Word implements Addable
         return Word(self.text + other.text)
 
 fn main()
-    var w = Word("a")
-    w += Word("b")
-    let written = Word("a") + Word("b")
+    var w = Word("a" + "1")
+    w += Word("b" + "2")
+    let written = Word("a" + "1") + Word("b" + "2")
     println(f"{w.text} {written.text}")
 "#,
-        "ab ab",
+        "a1b2 a1b2",
     );
 }
 
@@ -389,7 +389,7 @@ fn string_mul_assign_repeats() {
     assert_heap_guard_output(
         r#"
 fn main()
-    var s = "ab"
+    var s = "a" + "b"
     s *= 2
     println(s)
 "#,
