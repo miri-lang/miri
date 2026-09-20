@@ -53,6 +53,16 @@ use crate::type_checker::statements::{check_returns, ReturnStatus};
 use crate::type_checker::utils::is_gpu_signature_type;
 use crate::type_checker::TypeChecker;
 
+/// A declaration about to be given a symbol.
+struct RegisteredFunction<'a> {
+    name: &'a str,
+    generics: &'a Option<Vec<Expression>>,
+    params: &'a [Parameter],
+    return_type_expr: &'a Option<Box<Expression>>,
+    properties: &'a FunctionProperties,
+    is_member: bool,
+}
+
 pub(crate) struct FunctionDeclarationInfo<'a> {
     pub name: &'a str,
     pub generics: &'a Option<Vec<Expression>>,
@@ -61,6 +71,16 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
     pub body: Option<&'a Statement>, // None for abstract functions
     pub properties: &'a FunctionProperties,
     pub span: Span,
+    /// Whether this declaration is a member of a class, trait or enum rather
+    /// than a statement of some body.
+    ///
+    /// A member is reached through its receiver and is deliberately kept out of
+    /// the surrounding scope, so writing its bare name is an error that names
+    /// the receiver in its help. Being inside a class is not the same question:
+    /// a function declared inside a *method body* is a statement like any
+    /// other, and answering the two alike is what left it undefined at its own
+    /// call site.
+    pub is_member: bool,
 }
 
 /// Everything checking a function body needs beyond the checker's own state.
@@ -95,14 +115,18 @@ impl TypeChecker {
             body,
             properties,
             span,
+            is_member,
         } = info;
 
         self.register_function_symbol(
-            name,
-            generics,
-            params,
-            return_type_expr,
-            properties,
+            RegisteredFunction {
+                name,
+                generics,
+                params,
+                return_type_expr,
+                properties,
+                is_member,
+            },
             context,
         );
         context.enter_scope();
@@ -196,15 +220,15 @@ impl TypeChecker {
         context.inferred_return_types.pop();
     }
 
-    fn register_function_symbol(
-        &mut self,
-        name: &str,
-        generics: &Option<Vec<Expression>>,
-        params: &[Parameter],
-        return_type_expr: &Option<Box<Expression>>,
-        properties: &FunctionProperties,
-        context: &mut Context,
-    ) {
+    fn register_function_symbol(&mut self, declaration: RegisteredFunction, context: &mut Context) {
+        let RegisteredFunction {
+            name,
+            generics,
+            params,
+            return_type_expr,
+            properties,
+            is_member,
+        } = declaration;
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: generics.clone(),
             params: params.to_vec(),
@@ -226,7 +250,10 @@ impl TypeChecker {
                 .insert(name.to_string(), global_info);
         }
 
-        if !context.in_class() {
+        // A member answers only through its receiver, so its bare name stays out
+        // of the surrounding scope. Everything else — including a function
+        // declared inside a method body — is reachable where it is written.
+        if !is_member {
             let mut local_info = SymbolInfo::new(
                 func_type,
                 false,

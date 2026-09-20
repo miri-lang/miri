@@ -514,3 +514,127 @@ fn main()
         "4",
     );
 }
+
+/// A function declared inside a class method is a statement of that method's
+/// body, exactly as one inside a free function is. Only the method itself is a
+/// member of the class, and only a member is kept out of the surrounding scope.
+#[test]
+fn a_nested_function_inside_a_class_method_is_callable() {
+    assert_runs_with_output(
+        r#"
+class Cat
+    fn name(self) String
+        return "cat"
+    fn loud(self) String
+        fn shout(s String) String
+            return s.to_upper()
+        return shout(self.name())
+
+fn main()
+    println(Cat().loud())
+"#,
+        "CAT",
+    );
+}
+
+#[test]
+fn a_nested_function_inside_a_class_method_takes_no_arguments() {
+    assert_runs_with_output(
+        r#"
+class Cat
+    fn loud(self) String
+        fn shout() String
+            return "cat".to_upper()
+        return shout()
+
+fn main()
+    println(Cat().loud())
+"#,
+        "CAT",
+    );
+}
+
+#[test]
+fn a_nested_function_inside_a_class_method_sits_beside_a_sibling_call() {
+    assert_runs_with_output(
+        r#"
+class Cat
+    fn name(self) String
+        return "cat"
+    fn twice(self, s String) String
+        return s + s
+    fn loud(self) String
+        fn shout(s String) String
+            return s.to_upper()
+        return shout(self.twice(self.name()))
+
+fn main()
+    println(Cat().loud())
+"#,
+        "CATCAT",
+    );
+}
+
+/// The criterion a nested function inside a trait's default method left open:
+/// the default body is re-lowered for each implementing class, so the nested
+/// declaration has to resolve in every copy of it.
+#[test]
+fn a_nested_function_inside_a_trait_default_works_for_every_implementer() {
+    assert_runs_with_output(
+        r#"
+trait Speaker
+    fn name(self) String
+    fn loud(self) String
+        fn shout(s String) String
+            return s.to_upper()
+        return shout(self.name())
+
+class Cat implements Speaker
+    fn name(self) String
+        return "cat"
+
+class Dog implements Speaker
+    fn name(self) String
+        return "dog"
+
+fn main()
+    println(Cat().loud())
+    println(Dog().loud())
+"#,
+        "CAT\nDOG",
+    );
+}
+
+#[test]
+fn a_nested_function_inside_a_method_releases_what_it_builds() {
+    assert_heap_guard_output(
+        r#"
+class Cat
+    fn loud(self, tail String) String
+        fn join(a String, b String) String
+            return a + b
+        return join("c" + "at", tail)
+
+fn main()
+    println(Cat().loud("!" + "!"))
+"#,
+        "cat!!",
+    );
+}
+
+#[test]
+fn a_method_is_not_callable_as_a_bare_name_from_inside_the_class() {
+    assert_compiler_error(
+        r#"
+class Cat
+    fn name(self) String
+        return "cat"
+    fn loud(self) String
+        return name()
+
+fn main()
+    println(Cat().loud())
+"#,
+        "Undefined method: name",
+    );
+}
