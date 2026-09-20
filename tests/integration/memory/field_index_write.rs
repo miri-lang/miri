@@ -347,3 +347,104 @@ fn main()
         "1 70000000000 3.25 2.5 true",
     );
 }
+
+/// Writing through two indexes at once (`self.rows[r][c] = x`) reaches the
+/// element through the inner collection, and the receiver of that second index
+/// is a retained copy of it. The copy exists only for the write, so it has to
+/// give its reference back — while a receiver that was already a binding must
+/// not be released, since the program goes on using it.
+#[test]
+fn a_nested_index_write_through_a_field_releases_the_inner_collection() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+class Grid
+    var rows List<List<String>>
+
+    fn put(r int, c int, x String)
+        self.rows[r][c] = x
+
+fn main()
+    var row = List<String>()
+    row.push("a" + "b")
+    var g = Grid(rows: List<List<String>>())
+    g.rows.push(row)
+    g.put(0, 0, "e" + "f")
+    println(g.rows[0][0])
+"#,
+        "ef",
+    );
+}
+
+#[test]
+fn a_nested_index_write_through_a_generic_field_releases_the_inner_collection() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+class Grid<T>
+    var rows List<List<T>>
+
+    fn put(r int, c int, x T)
+        self.rows[r][c] = x
+
+fn main()
+    var row = List<String>()
+    row.push("a" + "b")
+    var g = Grid<String>(rows: List<List<String>>())
+    g.rows.push(row)
+    g.put(0, 0, "e" + "f")
+    println(g.rows[0][0])
+"#,
+        "ef",
+    );
+}
+
+#[test]
+fn a_three_level_index_write_releases_every_collection_it_passes_through() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+class Cube
+    var cells List<List<List<String>>>
+
+    fn put(a int, b int, c int, x String)
+        self.cells[a][b][c] = x
+
+fn main()
+    var inner = List<String>()
+    inner.push("a" + "b")
+    var middle = List<List<String>>()
+    middle.push(inner)
+    var q = Cube(cells: List<List<List<String>>>())
+    q.cells.push(middle)
+    q.put(0, 0, 0, "e" + "f")
+    println(q.cells[0][0][0])
+"#,
+        "ef",
+    );
+}
+
+/// The receiver of a nested write is sometimes a plain binding rather than a
+/// temp made for the write. Releasing that would take a reference the program
+/// still needs, so the binding has to survive the write intact.
+#[test]
+fn a_nested_index_write_over_a_local_leaves_the_binding_usable() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var row = List<String>()
+    row.push("a" + "b")
+    var rows = List<List<String>>()
+    rows.push(row)
+    rows[0][0] = "e" + "f"
+    let again = rows[0][0]
+    println(f"{again} {rows.length()}")
+"#,
+        "ef 1",
+    );
+}
