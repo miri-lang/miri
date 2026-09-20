@@ -464,7 +464,7 @@ fn lower_in_operator(
 }
 
 /// Map AST binary operators to MIR BinOp, or error if unsupported.
-fn op_to_binop(
+pub(crate) fn op_to_binop(
     op: &crate::ast::operator::BinaryOp,
     expr_span: crate::error::syntax::Span,
 ) -> Result<BinOp, LoweringError> {

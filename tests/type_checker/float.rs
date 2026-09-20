@@ -135,14 +135,18 @@ x += 2.0
     );
 }
 
+/// `x += 1` is refused for the reason `x + 1` is refused, and says so in the
+/// same words. The message used to be the assignment's own ("cannot assign int
+/// to float"), which named the operand rather than the operation that has no
+/// meaning; a compound assignment is now checked as the operator it spells.
 #[test]
-fn test_invalid_float_assignment() {
+fn test_float_add_assign_of_an_integer_reports_the_operators_own_mismatch() {
     type_checker_error_test(
         "
 var x = 1.0
 x += 1
 ",
-        "Type mismatch in assignment",
+        "cannot add a float to an integer",
     );
 }
 

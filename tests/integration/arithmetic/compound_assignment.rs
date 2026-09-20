@@ -246,3 +246,209 @@ fn main()
         "15 6",
     );
 }
+
+/// A compound assignment names an operator, and the operator a type defines
+/// for that spelling is the one it must apply. `+` on a `String` is the
+/// `concat` its class declares, not a machine add of two addresses, and the
+/// two spellings of it have to agree.
+#[test]
+fn string_add_assign_on_a_local_concatenates() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    var s = "a"
+    s += "bc"
+    println(s)
+"#,
+        "abc",
+    );
+}
+
+#[test]
+fn string_add_assign_on_a_field_concatenates() {
+    assert_heap_guard_output(
+        r#"
+class Buf
+    s String
+    fn init()
+        self.s = "a"
+
+fn main()
+    var b = Buf()
+    b.s += "bc"
+    b.s += "!"
+    println(b.s)
+"#,
+        "abc!",
+    );
+}
+
+/// The same write from inside one of the class's own methods. It prints the
+/// right answer and passes the MIR verifier, but leaks one allocation — and
+/// the operator spelled out, `self.s = self.s + d`, leaks exactly the same
+/// one. The leak is the in-method field store's, not the compound spelling's,
+/// so this is ignored until that is fixed rather than counted against `+=`.
+#[test]
+#[ignore]
+fn string_add_assign_on_a_field_inside_a_method_concatenates() {
+    assert_heap_guard_output(
+        r#"
+class Buf
+    s String
+    fn init()
+        self.s = "a"
+    fn add(d String) String
+        self.s += d
+        self.s += "!"
+        return self.s
+
+fn main()
+    let b = Buf()
+    println(b.add("bc"))
+"#,
+        "abc!",
+    );
+}
+
+#[test]
+fn repeated_string_add_assign_keeps_every_part() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    var s = ""
+    s += "a"
+    s += "b"
+    s += "c"
+    println(s)
+"#,
+        "abc",
+    );
+}
+
+#[test]
+fn string_add_assign_on_a_list_element_concatenates() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List(["a", "b"])
+    xs[0] += "z"
+    println(f"{xs[0]} {xs[1]}")
+"#,
+        "az b",
+    );
+}
+
+#[test]
+fn string_add_assign_on_a_map_value_concatenates() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<int, String>()
+    m.set(1, "a")
+    m[1] += "z"
+    println(m[1])
+"#,
+        "az",
+    );
+}
+
+/// A class that enables `+` for itself has `+=` call the same method, and the
+/// two spellings produce the same value.
+#[test]
+fn a_user_classs_own_concat_answers_add_assign() {
+    assert_heap_guard_output(
+        r#"
+use system.ops
+
+class Word implements Addable
+    text String
+    fn init(text String)
+        self.text = text
+    public fn concat(other Self) Self
+        return Word(self.text + other.text)
+
+fn main()
+    var w = Word("a")
+    w += Word("b")
+    let written = Word("a") + Word("b")
+    println(f"{w.text} {written.text}")
+"#,
+        "ab ab",
+    );
+}
+
+/// `s * 2` repeats a string, so `s *= 2` must too — the compound form may not
+/// demand that the right side have the left side's type when the operator it
+/// names does not.
+#[test]
+fn string_mul_assign_repeats() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    var s = "ab"
+    s *= 2
+    println(s)
+"#,
+        "abab",
+    );
+}
+
+/// The operator a compound assignment names may simply not exist for the type.
+/// That is a type error carrying the same reason the written-out operator
+/// gives, not a crash at run time.
+#[test]
+fn string_sub_assign_is_refused_the_way_the_written_operator_is() {
+    assert_compiler_error(
+        r#"
+fn main()
+    var s = "a"
+    s -= "b"
+    println(s)
+"#,
+        "Invalid types for arithmetic operation: String and String",
+    );
+}
+
+#[test]
+fn a_class_defining_no_operator_is_refused_by_add_assign() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+fn main()
+    var p = Plain(1)
+    p += Plain(2)
+    println(f"{p.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+/// Inside a generic body the operand's recorded type is still the parameter,
+/// which names no class. The operator has to be resolved through the
+/// instantiation's substitution, or the body compiled for `String` combines
+/// two addresses while the one compiled for `int` adds correctly.
+#[test]
+fn add_assign_in_a_generic_body_follows_the_instantiation() {
+    assert_heap_guard_output(
+        r#"
+fn grow<T>(start T, more T) T
+    var acc = start
+    acc += more
+    return acc
+
+fn main()
+    let text = grow("a", "b")
+    let sum = grow(1, 2)
+    println(f"{text} {sum}")
+"#,
+        "ab 3",
+    );
+}

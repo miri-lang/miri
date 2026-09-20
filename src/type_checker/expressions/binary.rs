@@ -379,12 +379,17 @@ impl TypeChecker {
 
         self.check_division_by_zero_assignment(op, rhs);
 
-        if !self.are_compatible(&lhs_type, &rhs_type, context) {
+        let Some(stored_type) = self.compound_result_type(&lhs_type, op, &rhs_type, span, context)
+        else {
+            return ast_factory::make_type(TypeKind::Error);
+        };
+
+        if !self.are_compatible(&lhs_type, &stored_type, context) {
             self.report_error(
                 DiagnosticCode::TypImmutabilityViolation,
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
-                    rhs_type, lhs_type
+                    stored_type, lhs_type
                 ),
                 span,
             );
@@ -395,6 +400,40 @@ impl TypeChecker {
         }
 
         lhs_type
+    }
+
+    /// What `x op= y` actually stores into `x`: the result of `x op y` for a
+    /// compound assignment, and the right-hand type itself for a plain one.
+    ///
+    /// A compound assignment names an operator, so what has to fit the target
+    /// is what that operator yields — not the right-hand operand. Checking the
+    /// operand instead refuses `s *= 2` on a `String`, which `s * 2` allows,
+    /// and accepts `s -= t`, which `s - t` refuses, letting a program with no
+    /// such operator reach code generation. `None` means the operator was
+    /// reported as inapplicable and the assignment has no type.
+    fn compound_result_type(
+        &mut self,
+        lhs_type: &Type,
+        op: &AssignmentOp,
+        rhs_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        let Some(binary_op) = op.binary_op() else {
+            return Some(rhs_type.clone());
+        };
+        // An operand already reported as wrong says nothing about the operator;
+        // reporting again here would name the error type in a second message.
+        if matches!(lhs_type.kind, TypeKind::Error) || matches!(rhs_type.kind, TypeKind::Error) {
+            return Some(rhs_type.clone());
+        }
+        match self.check_binary_op_types(lhs_type, &binary_op, rhs_type, context) {
+            Ok(result) => Some(result),
+            Err(message) => {
+                self.report_error(DiagnosticCode::TypTypeMismatch, message, span);
+                None
+            }
+        }
     }
 
     fn infer_assignment_target(

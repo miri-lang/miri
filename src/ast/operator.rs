@@ -61,3 +61,24 @@ pub enum AssignmentOp {
     AssignDiv,
     AssignMod,
 }
+
+impl AssignmentOp {
+    /// The binary operator this assignment combines the target with, or `None`
+    /// for a plain assignment, which combines with nothing.
+    ///
+    /// `x op= y` means `x op y` stored back into `x`, so every layer that has
+    /// to decide what the compound form yields — what type it produces, which
+    /// method it calls — asks the operator it names. Reading the two spellings
+    /// differently is what let `s += t` add two addresses while `s + t`
+    /// concatenated.
+    pub fn binary_op(self) -> Option<BinaryOp> {
+        match self {
+            AssignmentOp::AssignAdd => Some(BinaryOp::Add),
+            AssignmentOp::AssignSub => Some(BinaryOp::Sub),
+            AssignmentOp::AssignMul => Some(BinaryOp::Mul),
+            AssignmentOp::AssignDiv => Some(BinaryOp::Div),
+            AssignmentOp::AssignMod => Some(BinaryOp::Mod),
+            AssignmentOp::Assign => None,
+        }
+    }
+}
