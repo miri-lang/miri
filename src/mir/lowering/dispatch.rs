@@ -781,7 +781,11 @@ pub(super) fn lower_stored_value(
 ///
 /// Only a built-in collection answers: a user class's type arguments say
 /// nothing about what its own index operator stores.
-fn collection_slot_type(ctx: &LoweringContext, collection_ty: &Type, slot: usize) -> Option<Type> {
+pub(super) fn collection_slot_type(
+    ctx: &LoweringContext,
+    collection_ty: &Type,
+    slot: usize,
+) -> Option<Type> {
     collection_ty.kind.as_builtin_collection()?;
     let arg = if let TypeKind::Custom(_, args) = &collection_ty.kind {
         args.as_ref()?.get(slot)?

@@ -132,3 +132,133 @@ fn main()
         "ab 1 49",
     );
 }
+
+#[test]
+fn map_index_compound_write_combines_with_the_existing_value() {
+    // A compound write is a read-modify-write: the entry has to be read,
+    // combined, and stored. Dropping the operator stored the right-hand side on
+    // its own, so the old value was silently lost.
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["ab"] = 1
+    m["ab"] += 4
+    let v = m.get("ab") ?? -1
+    println(f"{m.length()} {v}")
+"#,
+        "1 5",
+    );
+}
+
+#[test]
+fn map_index_compound_write_honours_every_operator() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["n"] = 20
+    m["n"] -= 5
+    let a = m.get("n") ?? -1
+    println(f"{a}")
+    m["n"] *= 3
+    let b = m.get("n") ?? -1
+    println(f"{b}")
+    m["n"] /= 2
+    let c = m.get("n") ?? -1
+    println(f"{c}")
+    m["n"] %= 7
+    let d = m.get("n") ?? -1
+    println(f"{d}")
+"#,
+        "15
+45
+22
+1",
+    );
+}
+
+#[test]
+fn map_index_compound_write_of_an_absent_key_reports_it() {
+    // The read half of a compound write answers the way a plain `m[k]` read
+    // does: a key the map does not hold is an error, not an entry to create.
+    assert_runtime_error(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["present"] = 1
+    m["absent"] += 4
+    println(f"{m.length()}")
+"#,
+        "map key not found",
+    );
+}
+
+#[test]
+fn map_index_plain_write_of_an_absent_key_still_inserts() {
+    // Only the compound form reads first. A plain write creates the entry, and
+    // must keep doing so.
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["a"] = 1
+    m["b"] = 2
+    let got = m.get("b") ?? -1
+    println(f"{m.length()} {got}")
+"#,
+        "2 2",
+    );
+}
+
+#[test]
+fn map_index_compound_write_combines_at_the_maps_value_type() {
+    // The combined value is typed by the map's value slot, not by the
+    // right-hand side, so adding to a float entry keeps the fraction. The result
+    // is read back through the index, because reading it through `get` returns a
+    // float value's bit pattern converted rather than reinterpreted.
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var f = Map<String, float>()
+    f["x"] = 1.5
+    f["x"] += 2.25
+    let got = f["x"]
+    println(f"{got}")
+"#,
+        "3.75",
+    );
+}
+
+#[test]
+#[ignore = "compound assignment to a String is broken wherever it is written, not only in a map: `var s = \"a\" + \"b\"` then `s += \"c\" + \"d\"` on a plain local leaks a reference and then crashes with SIGBUS. The map write combines with that same operation, so its managed-value case cannot work until the general one does"]
+fn map_index_compound_write_concatenates_a_managed_value() {
+    // The value read out is a borrow of what the map still holds, and the
+    // combined value is a fresh allocation that replaces it, so the entry the
+    // write overwrites has to be released exactly once.
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, String>()
+    m["k"] = "a" + "b"
+    m["k"] += "c" + "d"
+    let got = m.get("k") ?? "none"
+    println(f"{got}")
+    println(f"{m.length()}")
+"#,
+        "abcd
+1",
+    );
+}
