@@ -116,6 +116,49 @@ pub(crate) fn instantiated_field_types(
         .collect()
 }
 
+/// The type each field of `class_name` is declared at, written in
+/// `class_name`'s **own** type parameters, in the order
+/// [`collect_class_fields_all`] lists them.
+///
+/// An ancestor declares its fields in its own parameters, and the `extends`
+/// clause says what those are bound to. A caller holding no concrete arguments
+/// — the shared body of a generic class, or the table a reference-counting pass
+/// reads a field projection through — still has to follow that binding: in
+/// `class Child<X, Y> extends Base<Y, X>` the inherited `left`, declared `A`,
+/// is a `Y`, and reading it as `A` names a parameter the child does not have.
+///
+/// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
+pub(crate) fn declared_field_types(
+    type_definitions: &HashMap<String, TypeDefinition>,
+    class_name: &str,
+) -> Vec<Type> {
+    let own_args = own_parameters_as_arguments(type_definitions, class_name);
+    instantiated_field_types(type_definitions, class_name, &own_args)
+}
+
+/// `class_name`'s own type parameters, spelled as the type arguments an
+/// instance of it at itself would carry. Empty for a class declaring none.
+fn own_parameters_as_arguments(
+    type_definitions: &HashMap<String, TypeDefinition>,
+    class_name: &str,
+) -> Vec<Type> {
+    let Some(TypeDefinition::Class(class_def)) = type_definitions.get(class_name) else {
+        return Vec::new();
+    };
+    let Some(generics) = class_def.generics.as_ref() else {
+        return Vec::new();
+    };
+    generics
+        .iter()
+        .map(|param| {
+            Type::new(
+                crate::ast::types::TypeKind::Generic(param.name.clone(), None, param.kind),
+                crate::error::syntax::Span::new(0, 0),
+            )
+        })
+        .collect()
+}
+
 /// Whether a body for `method_name` is compiled under `class_def`'s own name.
 ///
 /// That holds for a method the class declares, and equally for one a trait it

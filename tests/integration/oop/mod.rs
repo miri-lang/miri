@@ -13,6 +13,7 @@ pub mod drop;
 pub mod generic_class_monomorphization;
 pub mod inheritance;
 pub mod inherited_arg_count;
+pub mod inherited_field_types;
 pub mod inherited_through_extends_arguments;
 pub mod inherited_traits;
 pub mod invalid_targets;

@@ -1485,15 +1485,7 @@ impl<'a> FunctionTranslator<'a> {
                 )
             }
             Some(TypeDefinition::Class(def)) => {
-                let all_fields = crate::type_checker::context::collect_class_fields_all(
-                    def,
-                    type_ctx.type_definitions,
-                );
-                Self::field_kind_at_instantiation(
-                    all_fields.get(idx).map(|(_, info)| &info.ty),
-                    type_args,
-                    def.generics.as_deref(),
-                )
+                Self::inherited_field_kind(def, name, type_args, idx, type_ctx)
             }
             None
             | Some(TypeDefinition::Enum(_))
@@ -1501,6 +1493,59 @@ impl<'a> FunctionTranslator<'a> {
             | Some(TypeDefinition::Alias(_))
             | Some(TypeDefinition::Trait(_)) => TypeKind::Error,
         }
+    }
+
+    /// The kind of field `idx` of class `name`, with every ancestor's field
+    /// type followed through the `extends` clause that binds it.
+    ///
+    /// A class does not declare the fields it inherits; the ancestor does, in
+    /// the ancestor's own parameters. Matching those against the child's
+    /// parameters finds nothing when the clause renames or reorders them, and
+    /// the field is then read at a name that stands for no type — so a managed
+    /// one is released by the wrong rule, or by none.
+    fn inherited_field_kind(
+        def: &crate::type_checker::context::ClassDefinition,
+        name: &str,
+        type_args: Option<&Vec<Expression>>,
+        idx: usize,
+        type_ctx: &TypeCtx,
+    ) -> TypeKind {
+        let fields = match type_args {
+            Some(args) => match Self::extract_type_args_from_exprs(Some(args.as_slice())) {
+                Some(written) => {
+                    crate::mir::lowering::inherited_instantiation::instantiated_field_types(
+                        type_ctx.type_definitions,
+                        name,
+                        &written,
+                    )
+                }
+                // A value-generic argument is a literal rather than a type, so
+                // the chain cannot be walked in types alone. Such a class binds
+                // its own parameters directly, which the expression-based
+                // substitution resolves.
+                None => {
+                    let all_fields = crate::type_checker::context::collect_class_fields_all(
+                        def,
+                        type_ctx.type_definitions,
+                    );
+                    return Self::field_kind_at_instantiation(
+                        all_fields.get(idx).map(|(_, info)| &info.ty),
+                        type_args,
+                        def.generics.as_deref(),
+                    );
+                }
+            },
+            // Inside the shared body of a generic class the arguments are the
+            // class's own parameters, and the binding still has to be followed.
+            None => crate::mir::lowering::inherited_instantiation::declared_field_types(
+                type_ctx.type_definitions,
+                name,
+            ),
+        };
+        fields
+            .get(idx)
+            .map(|ty| ty.kind.clone())
+            .unwrap_or(TypeKind::Error)
     }
 
     /// The declared field type with the type parameters it is written in

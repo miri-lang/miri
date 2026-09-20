@@ -775,12 +775,17 @@ impl<'a> LoweringContext<'a> {
                         .collect();
                     field_types.insert(name.clone(), types);
                 }
-                crate::type_checker::context::TypeDefinition::Class(class_def) => {
-                    let all_fields = crate::type_checker::context::collect_class_fields_all(
-                        class_def,
+                crate::type_checker::context::TypeDefinition::Class(_) => {
+                    // Each inherited field is written in the parameters of the
+                    // ancestor that declares it, which the `extends` clause
+                    // binds to this class's own. Reading them unbound names a
+                    // parameter this class does not have, so a swapped clause
+                    // decides a managed field is a scalar and releases it by
+                    // the wrong rule, or not at all.
+                    let types = crate::mir::lowering::inherited_instantiation::declared_field_types(
                         type_checker.type_definitions(),
+                        name,
                     );
-                    let types: Vec<_> = all_fields.iter().map(|(_, fi)| fi.ty.clone()).collect();
                     field_types.insert(name.clone(), types);
                 }
                 // Enums, aliases, generics, traits: excluded (see doc comment above).
