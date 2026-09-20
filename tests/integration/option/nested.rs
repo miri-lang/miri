@@ -304,3 +304,139 @@ fn main()
         "some some head\nsome none\nsome some lifted\nsome none",
     );
 }
+
+#[test]
+fn test_a_bare_value_passed_to_a_constructor_is_boxed_for_the_init_parameter() {
+    // A class with a user-defined `init` received its arguments exactly as they
+    // were lowered, without being compared against the parameter declared. A
+    // bare value passed where an optional is written reached the body unboxed,
+    // and the first read took the payload for the address of an optional.
+    assert_runs_with_output(
+        r#"
+class Box
+    var held String?
+    fn init(held String?)
+        self.held = held
+
+fn main()
+    let b = Box("field")
+    match b.held
+        Some(mid): println(f"field {mid}")
+        None: println("field none")
+"#,
+        "field field",
+    );
+}
+
+#[test]
+fn test_a_constructor_argument_two_optional_layers_short_is_boxed_for_every_layer() {
+    assert_runs_with_output(
+        r#"
+class Box
+    var held Option<String?>
+    fn init(held Option<String?>)
+        self.held = held
+
+fn main()
+    let b = Box("field")
+    match b.held
+        Some(inner)
+            match inner
+                Some(mid): println(f"two {mid}")
+                None: println("two inner none")
+        None: println("two none")
+"#,
+        "two field",
+    );
+}
+
+#[test]
+fn test_a_none_literal_constructor_argument_stays_the_outer_none() {
+    // Passes before the coercion existed, because a `None` literal already
+    // lowered as the outer absence. It guards the coercion against lifting it
+    // into `Some(None)`.
+    assert_runs_with_output(
+        r#"
+class Box
+    var held Option<String?>
+    fn init(held Option<String?>)
+        self.held = held
+
+fn main()
+    let b = Box(None)
+    match b.held
+        Some(inner): println("outer some")
+        None: println("outer none")
+"#,
+        "outer none",
+    );
+}
+
+#[test]
+fn test_a_constructor_argument_already_at_the_declared_depth_is_not_reboxed() {
+    // Also passes beforehand — nothing was coerced at all. It is here to catch
+    // the coercion boxing a value that already matched.
+    // An argument that already matches the parameter must pass through
+    // untouched; boxing it again would put the value one layer too deep.
+    assert_runs_with_output(
+        r#"
+class Box
+    var held String?
+    fn init(held String?)
+        self.held = held
+
+fn main()
+    let ready String? = Some("ready")
+    let b = Box(ready)
+    match b.held
+        Some(mid): println(f"depth {mid}")
+        None: println("depth none")
+"#,
+        "depth ready",
+    );
+}
+
+#[test]
+fn test_a_named_constructor_argument_is_boxed_for_its_init_parameter() {
+    // The named form reaches the same loop, and the parameter it names is what
+    // decides the depth its value is boxed to.
+    assert_runs_with_output(
+        r#"
+class Pair
+    var first String?
+    var second int
+    fn init(first String?, second int)
+        self.first = first
+        self.second = second
+
+fn main()
+    let p = Pair(first: "named", second: 7)
+    match p.first
+        Some(mid): println(f"named {mid} {p.second}")
+        None: println("named none")
+"#,
+        "named named 7",
+    );
+}
+
+#[test]
+#[ignore = "a named argument is passed in the position it was written rather than the position it names, so arguments given out of declaration order are silently swapped. Independent of optionals and of the boxing this file otherwise covers: two plain int parameters reproduce it, and a plain function call does too, while a struct literal and a class without an init are both correct because they match arguments to fields by name"]
+fn test_a_named_constructor_argument_out_of_declaration_order_binds_by_name() {
+    assert_runs_with_output(
+        r#"
+class Pair
+    var first String?
+    var second int
+    fn init(first String?, second int)
+        self.first = first
+        self.second = second
+
+fn main()
+    let p = Pair(second: 7, first: "named")
+    match p.first
+        Some(mid): println(f"named {mid} {p.second}")
+        None: println("named none")
+"#,
+        "named named 7",
+    );
+}

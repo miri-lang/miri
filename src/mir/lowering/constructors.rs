@@ -207,13 +207,16 @@ pub fn lower_class_constructor(
         ctx.record_class_instantiations(ty);
     }
     let field_subs = build_class_field_substitution(ctx, def, resolved_ty);
-    let init_class_name: Option<String> = {
-        if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
-            Some(class_name.to_string())
+    // The parameters travel with the class that defines the `init`, because an
+    // argument has to be brought to the type that body declares for it before
+    // the call — the same thing a plain function call does.
+    let init_site: Option<(String, Vec<(String, Type)>)> = {
+        if let Some(m) = def.methods.get("init").filter(|m| !m.is_abstract) {
+            Some((class_name.to_string(), m.params.clone()))
         } else if let Some(base) = &def.base_class {
             resolve_inherited_method(ctx.type_checker.type_definitions(), base, "init")
                 .filter(|(_, m)| !m.is_abstract)
-                .map(|(c, _)| c)
+                .map(|(c, m)| (c, m.params.clone()))
         } else {
             None
         }
@@ -231,9 +234,24 @@ pub fn lower_class_constructor(
     };
 
     let instance_ty = constructed_instance_type(class_name, resolved_ty, span);
-    if let Some(init_class) = init_class_name {
+    if let Some((init_class, init_params)) = init_site {
         let init_symbol = monomorphized_init_symbol(ctx, def, &init_class, class_name, &field_subs);
-        lower_class_with_init(ctx, span, instance_ty, init_symbol, &all_fields, args, dest)
+        // A parameter spelled with one of the class's generic parameters is
+        // declared at the instantiation's argument, not at the bare name.
+        let init_params: Vec<(String, Type)> = init_params
+            .into_iter()
+            .map(|(name, ty)| (name, apply_generic_sub(&ty, &field_subs)))
+            .collect();
+        lower_class_with_init(
+            ctx,
+            span,
+            instance_ty,
+            init_symbol,
+            &all_fields,
+            &init_params,
+            args,
+            dest,
+        )
     } else {
         lower_class_without_init(ctx, span, instance_ty, &all_fields, args, dest)
     }
@@ -329,12 +347,14 @@ fn constructed_instance_place(
     (destination, result_op)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
     instance_ty: Type,
     init_symbol: String,
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
+    init_params: &[(String, Type)],
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
@@ -354,23 +374,26 @@ fn lower_class_with_init(
     });
 
     let mut call_args = vec![Operand::Copy(destination)];
-    // TODO: an argument is handed to `init` exactly as it was lowered, without
-    // being compared against the parameter the constructor declares, so a bare
-    // value passed where an optional is written (`Box("s")` into `fn init(held
-    // String?)`) reaches the body unboxed and the first read takes the payload
-    // for the address of an optional. The call path a plain function takes
-    // coerces here (`lower_and_coerce_args`); this one needs the resolved `init`
-    // signature to do the same.
     let init_arg_watermark = ctx.body.local_decls.len();
-    for arg in args {
-        match &arg.node {
-            ExpressionKind::NamedArgument(_name, value) => {
-                call_args.push(lower_expression(ctx, value, None)?);
+    for (position, arg) in args.iter().enumerate() {
+        let watermark = ctx.body.local_decls.len();
+        // A named argument names its parameter; every other takes the one in its
+        // own position.
+        let (value, declared) = match &arg.node {
+            ExpressionKind::NamedArgument(name, value) => (
+                value.as_ref(),
+                init_params.iter().find(|(p, _)| p == name).map(|(_, t)| t),
+            ),
+            _ => (arg, init_params.get(position).map(|(_, t)| t)),
+        };
+        let op = lower_expression(ctx, value, None)?;
+        let op = match declared {
+            Some(target_ty) => {
+                super::dispatch::coerce_arg_to_declared(ctx, op, value, target_ty, watermark)
             }
-            _ => {
-                call_args.push(lower_expression(ctx, arg, None)?);
-            }
-        }
+            None => op,
+        };
+        call_args.push(op);
     }
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
