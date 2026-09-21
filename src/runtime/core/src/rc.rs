@@ -92,7 +92,11 @@ pub(crate) fn report_leak_check_at_exit() {
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_exit_handler_registered();
 
-    let total_size = RC_HEADER_SIZE + payload_size;
+    // Security Invariant: Use checked_add to prevent integer overflow when computing total layout size
+    let total_size = match RC_HEADER_SIZE.checked_add(payload_size) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
     let layout = match Layout::from_size_align(total_size, 8) {
         Ok(l) => l,
         Err(_) => return std::ptr::null_mut(),
@@ -175,8 +179,15 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     // Guard is disabled, returned DeallocNow, or the block was untracked.
     // Deallocate immediately.
     let base = payload_ptr.sub(RC_HEADER_SIZE);
-    let total_size = RC_HEADER_SIZE + payload_size;
-    let layout = Layout::from_size_align(total_size, 8).unwrap_or_else(|_| std::process::abort());
+    // Security Invariant: Use checked_add to prevent integer overflow when re-constructing total layout size
+    let total_size = match RC_HEADER_SIZE.checked_add(payload_size) {
+        Some(s) => s,
+        None => return,
+    };
+    let layout = match Layout::from_size_align(total_size, 8) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
     dealloc(base, layout);
 }
 
@@ -416,6 +427,26 @@ mod tests {
             assert_eq!(*rc_ptr, (-1isize) as usize, "immortal RC should not change");
 
             free_with_rc(ptr, 64);
+        }
+    }
+
+    #[test]
+    fn test_alloc_and_free_with_rc_overflow_handled_safely() {
+        let _balance = balance_guard();
+        unsafe {
+            let ptr = alloc_with_rc(usize::MAX);
+            assert!(
+                ptr.is_null(),
+                "alloc_with_rc should return null on integer overflow"
+            );
+
+            let ptr_near_overflow = alloc_with_rc(usize::MAX - RC_HEADER_SIZE + 1);
+            assert!(
+                ptr_near_overflow.is_null(),
+                "alloc_with_rc should return null on integer overflow"
+            );
+
+            free_with_rc(std::ptr::null_mut(), usize::MAX);
         }
     }
 
