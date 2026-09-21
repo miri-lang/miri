@@ -123,3 +123,53 @@ pub fn read_or_report(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::Severity;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_missing_returns_expected_diagnostic() {
+        let path = Path::new("non_existent_file.mi");
+        let diagnostic = missing(path);
+
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert_eq!(diagnostic.code, Some("MER_BLD_008"));
+        assert_eq!(
+            diagnostic.message,
+            "could not read non_existent_file.mi: no such file or directory"
+        );
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some("check the path; `miri test` accepts either a .mi file or a directory to walk")
+        );
+    }
+
+    #[test]
+    fn test_missing_sanitizes_control_characters_in_path() {
+        let path = Path::new("bad\npath\tfile.mi");
+        let diagnostic = missing(path);
+
+        assert_eq!(
+            diagnostic.message,
+            "could not read bad\\npath\\tfile.mi: no such file or directory"
+        );
+    }
+
+    #[test]
+    fn test_read_directory_returns_directory_diagnostic() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let result = read(dir.path());
+
+        assert!(result.is_err());
+        let diagnostic = result.unwrap_err();
+        assert_eq!(diagnostic.code, Some("MER_BLD_008"));
+        assert!(diagnostic.message.contains("it is a directory, not a file"));
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some("name a single .mi file; `miri test <dir>` is the command that reads a directory")
+        );
+    }
+}
