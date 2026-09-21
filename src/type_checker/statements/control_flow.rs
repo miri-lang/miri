@@ -1271,6 +1271,19 @@ impl TypeChecker {
         context: &mut Context,
         span: Span,
     ) {
+        if let Some(expr) = expr_opt {
+            if let Some(gpu_param) = self.gpu_resident_identifier(expr, context) {
+                self.report_error(
+                    DiagnosticCode::TarGpuResidencyViolation,
+                    format!(
+                        "cannot return gpu-resident parameter '{}' (buffer-touching operation)",
+                        gpu_param
+                    ),
+                    expr.span,
+                );
+            }
+        }
+
         let (actual_return_type, return_span) = if let Some(expr) = expr_opt {
             (self.infer_expression(expr, context), expr.span)
         } else {
