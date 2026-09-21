@@ -13,6 +13,7 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::dispatch::conform_lookup_operand;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
 use crate::mir::lowering::method_dispatch::{operator_method_callee, resolve_inherited_method};
@@ -430,6 +431,8 @@ fn lower_in_operator(
 ) -> Result<Operand, LoweringError> {
     let lhs_op = lower_expression(ctx, lhs, None)?;
     let rhs_op = lower_expression(ctx, rhs, None)?;
+
+    let lhs_op = conform_lookup_operand(ctx, lhs_op, lhs, rhs);
 
     let result_ty = Type::new(TypeKind::Boolean, expr.span);
     let (destination, ret_op) = if let Some(d) = dest {

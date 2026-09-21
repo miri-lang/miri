@@ -13,6 +13,7 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::dispatch::conform_lookup_operand;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::ensure_place;
 
@@ -150,6 +151,8 @@ fn lower_map_index_read(
 ) -> Result<Operand, LoweringError> {
     let obj_op = lower_expression(ctx, obj, None)?;
     let key_op = lower_expression(ctx, key_expr, None)?;
+
+    let key_op = conform_lookup_operand(ctx, key_op, key_expr, obj);
 
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,

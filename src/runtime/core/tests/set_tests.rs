@@ -1,7 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use by_address::{miri_rt_set_add, miri_rt_set_contains, miri_rt_set_remove};
 use miri_runtime_core::set::ffi::*;
+
+/// The three set entry points that take an element, called the way compiled
+/// code calls them: by the address of the element's bytes.
+///
+/// A test spells an element as a value word, so each wrapper lends out that
+/// word's address. The wrappers shadow the glob-imported entry points of the
+/// same name, which `ffi_abi` exercises directly.
+mod by_address {
+    use miri_runtime_core::set::{ffi, MiriSet};
+
+    /// # Safety
+    /// `set` is a live set or null.
+    pub unsafe fn miri_rt_set_add(set: *mut MiriSet, elem: usize) -> u8 {
+        ffi::miri_rt_set_add(set, &elem as *const usize as *const u8)
+    }
+
+    /// # Safety
+    /// `set` is a live set or null.
+    pub unsafe fn miri_rt_set_contains(set: *const MiriSet, elem: usize) -> u8 {
+        ffi::miri_rt_set_contains(set, &elem as *const usize as *const u8)
+    }
+
+    /// # Safety
+    /// `set` is a live set or null.
+    pub unsafe fn miri_rt_set_remove(set: *mut MiriSet, elem: usize) -> u8 {
+        ffi::miri_rt_set_remove(set, &elem as *const usize as *const u8)
+    }
+}
 
 #[test]
 fn test_set_new_empty() {
@@ -728,5 +757,87 @@ fn test_set_of_optionals_reads_a_narrow_value_at_its_own_width() {
         miri_rt_set_free(set);
         release_box(stored);
         release_box(probe);
+    }
+}
+
+/// The three element entry points called with a sixteen-byte element: twice the
+/// width of a value word, which is the width the by-address ABI exists for.
+mod wide {
+    use miri_runtime_core::set::{ffi, MiriSet};
+
+    /// # Safety
+    /// `set` is a live set whose element size is sixteen bytes.
+    pub unsafe fn add(set: *mut MiriSet, elem: i128) -> u8 {
+        ffi::miri_rt_set_add(set, (&elem as *const i128).cast())
+    }
+
+    /// # Safety
+    /// `set` is a live set whose element size is sixteen bytes.
+    pub unsafe fn contains(set: *const MiriSet, elem: i128) -> u8 {
+        ffi::miri_rt_set_contains(set, (&elem as *const i128).cast())
+    }
+
+    /// # Safety
+    /// `set` is a live set whose element size is sixteen bytes.
+    pub unsafe fn remove(set: *mut MiriSet, elem: i128) -> u8 {
+        ffi::miri_rt_set_remove(set, (&elem as *const i128).cast())
+    }
+}
+
+/// A sixteen-byte element reaches the set whole. `i128::MAX` and `-1` fill their
+/// low eight bytes with the same ones and differ only above bit 63, so a set
+/// handed a value word alone would fold them into one element and answer every
+/// lookup for either with the other.
+#[test]
+fn test_set_distinguishes_sixteen_byte_elements_sharing_a_low_word() {
+    unsafe {
+        let set = miri_rt_set_new(16);
+
+        assert_eq!(wide::add(set, i128::MAX), 1);
+        assert_eq!(wide::add(set, -1), 1);
+        assert_eq!(wide::add(set, i128::MAX), 0, "the same element twice");
+        assert_eq!(miri_rt_set_len(set), 2);
+
+        assert_eq!(wide::contains(set, i128::MAX), 1);
+        assert_eq!(wide::contains(set, -1), 1);
+        assert_eq!(wide::contains(set, i128::MIN), 0);
+
+        assert_eq!(wide::remove(set, i128::MAX), 1);
+        assert_eq!(miri_rt_set_len(set), 1);
+        assert_eq!(wide::contains(set, i128::MAX), 0);
+        assert_eq!(
+            wide::contains(set, -1),
+            1,
+            "removing one element must leave its low-word twin"
+        );
+
+        miri_rt_set_free(set);
+    }
+}
+
+/// A null element address is refused rather than read: the entry points take an
+/// address from compiled code, and reading one that is not there would fault
+/// before anything could report it.
+#[test]
+fn test_set_element_entry_points_refuse_a_null_element_address() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        assert_eq!(miri_rt_set_add(set, 10), 1);
+
+        assert_eq!(
+            miri_runtime_core::set::ffi::miri_rt_set_add(set, std::ptr::null()),
+            0
+        );
+        assert_eq!(
+            miri_runtime_core::set::ffi::miri_rt_set_contains(set, std::ptr::null()),
+            0
+        );
+        assert_eq!(
+            miri_runtime_core::set::ffi::miri_rt_set_remove(set, std::ptr::null()),
+            0
+        );
+        assert_eq!(miri_rt_set_len(set), 1);
+
+        miri_rt_set_free(set);
     }
 }

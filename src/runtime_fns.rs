@@ -540,7 +540,8 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
-/// Argument positions of `name` that carry an element value as opaque bytes.
+/// Argument positions of `name` that carry an element value as opaque bytes in
+/// a value word.
 ///
 /// A collection stores whatever bit pattern it is handed and compares later
 /// lookups against those same bytes, so an element argument is never a number to
@@ -549,15 +550,38 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
 /// float turned into the integer nearest its value can never match the float
 /// that was stored.
 ///
-/// Both the storing entry points and the lookup ones are listed, because a
-/// lookup that reinterprets differently from the store it must match is exactly
-/// the mismatch this prevents. Positions naming an index or a size are not
-/// listed; those really are numbers.
+/// Only the list entry points are listed. A set or a map takes its element by
+/// address at every width — those positions are listed by
+/// [`element_address_positions`] — while the list keeps a value word here and
+/// settles its wide and inline element cases in MIR lowering, where it can hand
+/// over the element's payload and its stride as a pair of operands.
 pub fn element_value_positions(name: &str) -> &'static [usize] {
     match name {
-        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
-        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
+        rt::LIST_PUSH => &[1],
         rt::LIST_SET | rt::LIST_INSERT => &[2],
+        _ => &[],
+    }
+}
+
+/// Argument positions of `name` that carry an element by the address of its
+/// bytes.
+///
+/// The set and map entry points read an element out of the buffer the caller
+/// points them at, copying the container's whole slot from it. An element of any
+/// width therefore arrives intact, where a value word truncates one wider than
+/// itself and leaves two elements agreeing in their low bytes indistinguishable.
+///
+/// Both the storing entry points and the lookup ones are listed, because a
+/// lookup that reads an element differently from the store it must match is
+/// exactly the mismatch this prevents. Positions naming an index or a size are
+/// not listed; those really are numbers.
+///
+/// The caller owes the buffer the container's slot width: it is spilled at the
+/// width the slot was allocated for, which is never narrower than a value word.
+pub fn element_address_positions(name: &str) -> &'static [usize] {
+    match name {
+        rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
+        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
         rt::MAP_SET => &[1, 2],
         _ => &[],
     }
@@ -582,6 +606,16 @@ pub fn orders_its_elements(name: &str) -> bool {
 /// float instead would read the result from the register floats are returned in
 /// while the runtime wrote the one integers use, so the value would arrive as
 /// zero. The word is reinterpreted at the destination instead.
+///
+/// TODO: an element wider than a value word cannot come back through one, so
+/// `miri_rt_map_get`, `miri_rt_map_get_checked`, `miri_rt_map_value_at` and
+/// `miri_rt_set_element_at` still truncate a 128-bit element to its low half on
+/// the way out — iterating a wide set, or reading a wide map value back, reads
+/// half a value even though the store and the lookup now carry all of it. The
+/// way out is the one the `out` parameters already use: the caller boxes a slot
+/// with `box_value_in_stack_slot`, hands its address over, and reads the value
+/// back with `writeback_out_arg_slots`, which changes the return ABI of all four
+/// symbols.
 pub fn returns_element_value(name: &str) -> bool {
     matches!(
         name,
