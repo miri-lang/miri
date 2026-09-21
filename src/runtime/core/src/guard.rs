@@ -191,7 +191,11 @@ impl GuardState {
         let seq = self.seq_counter;
         self.seq_counter += 1;
 
-        let full_size = RC_HEADER_SIZE + size;
+        // Security Invariant: Use checked_add to prevent integer overflow when computing layout size
+        let full_size = match RC_HEADER_SIZE.checked_add(size) {
+            Some(s) => s,
+            None => return,
+        };
         let layout = match Layout::from_size_align(full_size, 8) {
             Ok(l) => l,
             Err(_) => return,
