@@ -1002,7 +1002,12 @@ impl TypeChecker {
                     || arms.iter().any(|arm| {
                         arm.guard.as_ref().is_some_and(|g| {
                             self.expr_touches_param_buffer(g, param_names, params, context)
-                        }) || self.body_contains_param_identifier(&arm.body, param_names, params, context)
+                        }) || self.body_contains_param_identifier(
+                            &arm.body,
+                            param_names,
+                            params,
+                            context,
+                        )
                     })
             }
             ExpressionKind::EnumValue(_name, args) => args
