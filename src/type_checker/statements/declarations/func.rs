@@ -297,17 +297,18 @@ impl TypeChecker {
                 }
             }
 
-            context.define(
-                param.name.clone(),
-                SymbolInfo::new(
-                    param_type.clone(),
-                    param.is_out,
-                    false,
-                    MemberVisibility::Public,
-                    self.modules.current_module.clone(),
-                    None,
-                ),
+            let mut info = SymbolInfo::new(
+                param_type.clone(),
+                param.is_out,
+                false,
+                MemberVisibility::Public,
+                self.modules.current_module.clone(),
+                None,
             );
+            if let Some(r) = param.residency {
+                info.residency = r;
+            }
+            context.define(param.name.clone(), info);
 
             self.check_parameter_guard(param, &param_type, context);
         }
@@ -982,18 +983,38 @@ impl TypeChecker {
                     || self.expr_touches_param_buffer(expr, param_names, params, context)
             }
 
+            // UNSAFE: guard/cast/named argument/conditional/match/enum value can contain param
+            ExpressionKind::Guard(_, expr) | ExpressionKind::Cast(expr, _) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+            ExpressionKind::NamedArgument(_name, expr) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+            }
+            ExpressionKind::Conditional(cond, then_expr, else_expr_opt, _if_type) => {
+                self.expr_touches_param_buffer(cond, param_names, params, context)
+                    || self.expr_touches_param_buffer(then_expr, param_names, params, context)
+                    || else_expr_opt.as_ref().is_some_and(|e| {
+                        self.expr_touches_param_buffer(e, param_names, params, context)
+                    })
+            }
+            ExpressionKind::Match(expr, arms) => {
+                self.expr_touches_param_buffer(expr, param_names, params, context)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(|g| {
+                            self.expr_touches_param_buffer(g, param_names, params, context)
+                        }) || self.body_contains_param_identifier(&arm.body, param_names, params, context)
+                    })
+            }
+            ExpressionKind::EnumValue(_name, args) => args
+                .iter()
+                .any(|arg| self.expr_touches_param_buffer(arg, param_names, params, context)),
+
             // SAFE: literals, type refs, super don't reference params
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)
             | ExpressionKind::TypeDeclaration(_, _, _, _)
-            | ExpressionKind::EnumValue(_, _)
             | ExpressionKind::StructMember(_, _)
-            | ExpressionKind::Guard(_, _)
-            | ExpressionKind::Cast(_, _)
-            | ExpressionKind::NamedArgument(_, _)
-            | ExpressionKind::Match(_, _)
-            | ExpressionKind::Conditional(_, _, _, _)
             | ExpressionKind::Super => false,
         }
     }
@@ -1010,7 +1031,11 @@ impl TypeChecker {
             StatementKind::Expression(expr) => {
                 self.expr_touches_param_buffer(expr, param_names, params, context)
             }
-            StatementKind::Variable(_vars, _visibility) => false,
+            StatementKind::Variable(vars, _visibility) => vars.iter().any(|v| {
+                v.initializer.as_ref().is_some_and(|e| {
+                    self.expr_touches_param_buffer(e, param_names, params, context)
+                })
+            }),
             StatementKind::If(cond, then_stmt, else_stmt, _if_type) => {
                 self.expr_touches_param_buffer(cond, param_names, params, context)
                     || self.body_contains_param_identifier(then_stmt, param_names, params, context)
