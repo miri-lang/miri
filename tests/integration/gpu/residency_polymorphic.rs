@@ -71,6 +71,63 @@ fn main()
 }
 
 #[test]
+fn return_explicit_gpu_param_is_rejected() {
+    // Returning an explicitly marked `gpu` parameter is rejected.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn id(a gpu Array<int,4>) Array<int,4>
+    return a
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    let x = id(g)
+",
+        "buffer-touching",
+    );
+}
+
+#[test]
+fn return_param_cast_is_rejected() {
+    // Returning a param wrapped in a cast expression is buffer-touching.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn id(a Array<int,4>) Array<int,4>
+    return a as Array<int,4>
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    let x = id(g)
+",
+        "buffer-touching",
+    );
+}
+
+#[test]
+fn return_param_conditional_is_rejected() {
+    // Returning a param in a conditional branch is buffer-touching.
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn id(cond bool, a Array<int,4>) Array<int,4>
+    if cond
+        return a
+    else
+        return a
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    let x = id(true, g)
+",
+        "buffer-touching",
+    );
+}
+
+#[test]
 fn explicit_host_annotation_locks() {
     // Criterion 3: Explicit annotations lock
     // An explicit `host` annotation on a parameter locks it to host-only.
