@@ -16,8 +16,8 @@ use crate::runtime_fns::rt;
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{
-    collection_slot_type, donate_operand_to_container, lower_stored_value, ELEMENT_SLOT,
-    MAP_VALUE_SLOT,
+    collection_slot_type, conform_operand_to_collection_slot, donate_operand_to_container,
+    lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
 };
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
@@ -633,6 +633,12 @@ fn assign_to_index_map(
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, idx.span);
+
+    // The value arrives lowered by the assignment that owns it, so it is the one
+    // stored operand that never passed through `lower_stored_value`; it is read
+    // at the map's own value width here instead.
+    let (val, val_ty) =
+        conform_operand_to_collection_slot(ctx, val, val_ty, obj_ty, MAP_VALUE_SLOT, expr.span);
 
     inc_ref_if_managed(ctx, &val, &val_ty, expr);
 

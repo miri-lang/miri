@@ -489,20 +489,19 @@ pub mod ffi {
 
     /// Sets a key-value pair in the map.
     ///
-    /// Both key and value are passed as pointer-sized integers. The runtime copies
-    /// `key_size`/`value_size` bytes from the address of each parameter on the stack.
+    /// Key and value are each passed by the address of their bytes: the runtime
+    /// copies `key_size`/`value_size` bytes from there, so an entry of any width
+    /// arrives whole. A managed key or value is the reference written at that
+    /// address, donated to the map.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: usize, value: usize) {
+    pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: *const u8, value: *const u8) {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || key.is_null() || value.is_null() {
             return;
         }
         let map = &mut *ptr;
-        map.set(
-            &key as *const usize as *const u8,
-            &value as *const usize as *const u8,
-        );
+        map.set(key, value);
     }
 
     /// Gets the value for a key, returning the value as a pointer-sized integer.
@@ -510,13 +509,13 @@ pub mod ffi {
     /// Returns 0 if the key is not found.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: usize) -> usize {
+    pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: *const u8) -> usize {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || key.is_null() {
             return 0;
         }
         let map = &*ptr;
-        let result = map.get(&key as *const usize as *const u8);
+        let result = map.get(key);
         if result.is_null() {
             return 0;
         }
@@ -530,14 +529,18 @@ pub mod ffi {
     /// which returns an Option.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: usize) -> usize {
+    pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: *const u8) -> usize {
         guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             eprintln!("Runtime error: map index on null map");
             std::process::abort();
         }
+        if key.is_null() {
+            eprintln!("Runtime error: map index with no key");
+            std::process::abort();
+        }
         let map = &*ptr;
-        let result = map.get(&key as *const usize as *const u8);
+        let result = map.get(key);
         if result.is_null() {
             eprintln!("Runtime error: map key not found");
             std::process::abort();
@@ -551,13 +554,13 @@ pub mod ffi {
     /// Returns true (1) if the map contains the given key.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: usize) -> u8 {
+    pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: *const u8) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || key.is_null() {
             return 0;
         }
         let map = &*ptr;
-        if map.contains_key(&key as *const usize as *const u8) {
+        if map.contains_key(key) {
             1
         } else {
             0
@@ -569,13 +572,13 @@ pub mod ffi {
     /// Returns true (1) if the key was found and removed, false (0) otherwise.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8 {
+    pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: *const u8) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || key.is_null() {
             return 0;
         }
         let map = &mut *ptr;
-        if map.remove(&key as *const usize as *const u8) {
+        if map.remove(key) {
             1
         } else {
             0

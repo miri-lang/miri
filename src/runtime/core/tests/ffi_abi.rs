@@ -288,18 +288,22 @@ fn test_set_ffi_abi() {
         assert_eq!(miri_rt_set_len(set), 0);
         assert_eq!(miri_rt_set_is_empty(set), 1);
 
-        assert_eq!(miri_rt_set_add(set, 10), 1);
-        assert_eq!(miri_rt_set_add(set, 20), 1);
-        assert_eq!(miri_rt_set_add(set, 10), 0); // duplicate
+        // The element travels by the address of its bytes: the entry points copy
+        // elem_size bytes from there, which is how an element wider than a value
+        // word reaches the set whole.
+        let word = |v: &usize| v as *const usize as *const u8;
+        assert_eq!(miri_rt_set_add(set, word(&10)), 1);
+        assert_eq!(miri_rt_set_add(set, word(&20)), 1);
+        assert_eq!(miri_rt_set_add(set, word(&10)), 0); // duplicate
         assert_eq!(miri_rt_set_len(set), 2);
 
-        assert_eq!(miri_rt_set_contains(set, 10), 1);
-        assert_eq!(miri_rt_set_contains(set, 99), 0);
+        assert_eq!(miri_rt_set_contains(set, word(&10)), 1);
+        assert_eq!(miri_rt_set_contains(set, word(&99)), 0);
 
         let elem = miri_rt_set_element_at(set, 0);
         assert!(elem == 10 || elem == 20);
 
-        assert_eq!(miri_rt_set_remove(set, 10), 1);
+        assert_eq!(miri_rt_set_remove(set, word(&10)), 1);
         assert_eq!(miri_rt_set_len(set), 1);
 
         miri_rt_set_clear(set);
@@ -330,17 +334,20 @@ fn test_map_ffi_abi() {
         assert_eq!(miri_rt_map_len(map), 0);
         assert_eq!(miri_rt_map_is_empty(map), 1);
 
-        miri_rt_map_set(map, 1, 100);
-        miri_rt_map_set(map, 2, 200);
+        // Key and value each travel by the address of their bytes, for the
+        // reason the set test gives.
+        let word = |v: &usize| v as *const usize as *const u8;
+        miri_rt_map_set(map, word(&1), word(&100));
+        miri_rt_map_set(map, word(&2), word(&200));
         assert_eq!(miri_rt_map_len(map), 2);
 
-        assert_eq!(miri_rt_map_get(map, 1), 100);
-        assert_eq!(miri_rt_map_get(map, 99), 0); // not found
+        assert_eq!(miri_rt_map_get(map, word(&1)), 100);
+        assert_eq!(miri_rt_map_get(map, word(&99)), 0); // not found
 
-        assert_eq!(miri_rt_map_get_checked(map, 2), 200);
+        assert_eq!(miri_rt_map_get_checked(map, word(&2)), 200);
 
-        assert_eq!(miri_rt_map_contains_key(map, 1), 1);
-        assert_eq!(miri_rt_map_contains_key(map, 99), 0);
+        assert_eq!(miri_rt_map_contains_key(map, word(&1)), 1);
+        assert_eq!(miri_rt_map_contains_key(map, word(&99)), 0);
 
         let k = miri_rt_map_key_at(map, 0);
         assert!(k == 1 || k == 2);
@@ -350,7 +357,7 @@ fn test_map_ffi_abi() {
         miri_rt_map_set_val_drop_fn(map, 0);
         miri_rt_map_set_key_drop_fn(map, 0);
 
-        assert_eq!(miri_rt_map_remove(map, 1), 1);
+        assert_eq!(miri_rt_map_remove(map, word(&1)), 1);
         assert_eq!(miri_rt_map_len(map), 1);
 
         miri_rt_map_clear(map);

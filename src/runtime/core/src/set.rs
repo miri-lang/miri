@@ -195,13 +195,24 @@ impl MiriSet {
         elem_ptr
     }
 
-    /// Releases one reference to a managed element through `elem_drop_fn`;
-    /// does nothing for an element the set does not manage.
-    unsafe fn release_element(&self, elem_ptr: usize) {
-        if self.elem_drop_fn != 0 && elem_ptr != 0 {
-            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.elem_drop_fn);
-            drop_fn(elem_ptr as *mut u8);
+    /// Releases one reference to a managed element, whose reference is the word
+    /// the element slot at `elem_slot` holds; does nothing for an element the
+    /// set does not manage.
+    ///
+    /// The word is read only once the set is known to manage its elements, so
+    /// an unmanaged element's bytes are never touched, and it is read unaligned:
+    /// `elem_slot` is either a caller-supplied element buffer or a slot inside
+    /// the set's own storage, and neither is promised a pointer's alignment.
+    unsafe fn release_element(&self, elem_slot: *const u8) {
+        if self.elem_drop_fn == 0 || elem_slot.is_null() {
+            return;
         }
+        let elem_ptr = elem_slot.cast::<usize>().read_unaligned();
+        if elem_ptr == 0 {
+            return;
+        }
+        let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.elem_drop_fn);
+        drop_fn(elem_ptr as *mut u8);
     }
 
     fn contains_key(&self, elem: *const u8) -> bool {
@@ -335,23 +346,23 @@ pub mod ffi {
 
     /// Adds an element to the set.
     ///
-    /// The value is passed as a pointer-sized integer. The runtime copies
-    /// `elem_size` bytes from the address of the parameter on the stack.
+    /// The element is passed by the address of its bytes: the runtime copies
+    /// `elem_size` bytes from there, so an element of any width arrives whole.
     /// Returns true (1) if the element was newly inserted, false (0) if duplicate.
     ///
-    /// A managed element arrives with a reference donated to the set. When the
-    /// set already holds the same element it keeps the one it has and releases
-    /// the donated reference, so an add that changes nothing leaves no count
-    /// raised.
+    /// A managed element arrives with a reference donated to the set, the
+    /// reference itself being the value written at that address. When the set
+    /// already holds the same element it keeps the one it has and releases the
+    /// donated reference, so an add that changes nothing leaves no count raised.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: usize) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: *const u8) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || elem.is_null() {
             return 0;
         }
         let set = &mut *ptr;
-        if set.insert(&elem as *const usize as *const u8) {
+        if set.insert(elem) {
             1
         } else {
             set.release_element(elem);
@@ -362,13 +373,13 @@ pub mod ffi {
     /// Returns true (1) if the set contains the given element.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: usize) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: *const u8) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || elem.is_null() {
             return 0;
         }
         let set = &*ptr;
-        if set.contains_key(&elem as *const usize as *const u8) {
+        if set.contains_key(elem) {
             1
         } else {
             0
@@ -379,16 +390,14 @@ pub mod ffi {
     /// Returns true (1) if removed, false (0) if not found.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: usize) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: *const u8) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
+        if ptr.is_null() || elem.is_null() {
             return 0;
         }
         let set = &mut *ptr;
-        if let Some(idx) = set.find_slot(&elem as *const usize as *const u8) {
-            if set.elem_drop_fn != 0 {
-                set.release_element(*(set.data.add(idx * set.elem_size) as *const usize));
-            }
+        if let Some(idx) = set.find_slot(elem) {
+            set.release_element(set.data.add(idx * set.elem_size));
             *set.states.add(idx) = SLOT_TOMBSTONE;
             set.len -= 1;
             1

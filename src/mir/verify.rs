@@ -89,6 +89,7 @@
 
 use crate::ast::literal::Literal;
 use crate::ast::types::BuiltinCollectionKind;
+use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use crate::mir::rvalue::Rvalue;
@@ -218,7 +219,9 @@ fn join_states(into: &mut PathState, from: &PathState) {
     }
 }
 
-/// Verify RC invariants in a MIR body after Perceus insertion and RC elision.
+/// Verify the invariants a MIR body must hold after Perceus insertion and RC
+/// elision: that its reference counts balance, and that every element it hands a
+/// collection fills the slot it goes into.
 ///
 /// Returns a (possibly empty) list of violations. A non-empty list indicates a bug
 /// in lowering or in one of the RC passes, not in the program being compiled.
@@ -241,7 +244,7 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     let managed_params = collect_managed_param_locals(body);
     let reachable = reachable_block_indices(body);
 
-    let mut violations = Vec::new();
+    let mut violations = verify_collection_element_width(body);
     flag_decref_on_params(body, &managed_params, &mut violations);
 
     let entries = run_to_fixpoint(body, &tracked, &reachable);
@@ -1060,6 +1063,149 @@ pub fn verify_collection_element_ownership(
         });
     }
     violations
+}
+
+/// Report every call that hands a set or a map an element whose type is not the
+/// width of the slot it goes into.
+///
+/// These containers copy their whole slot out of the buffer the caller points
+/// them at, and the caller sizes that buffer from the operand's own type. An
+/// operand narrower than the slot therefore leaves the rest of it filled by
+/// whatever lay beside it, and one wider is read back short — either way a
+/// lookup spelled at one width can never match a store spelled at another, and
+/// the container answers wrong with nothing to report it. Lowering converts
+/// every element to the type the container declares for the slot, so a call
+/// arriving here at some other width is a path that missed that conversion.
+///
+/// A slot the enclosing instantiation has not pinned to a concrete type is
+/// skipped rather than reported: a bare type parameter has no width to compare
+/// against, and the instantiation that gives it one is checked in its own body.
+/// So is a projected operand, whose type the local alone does not say.
+pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation> {
+    let mut violations = Vec::new();
+    for block in &body.basic_blocks {
+        let Some(terminator) = &block.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
+            continue;
+        };
+        let Some(symbol) = called_symbol(func) else {
+            continue;
+        };
+        let Some(receiver) = args.first().and_then(bare_local_read) else {
+            continue;
+        };
+        let receiver_ty = &body.local_decls[receiver.0].ty;
+        for position in crate::runtime_fns::element_address_positions(symbol) {
+            let Some(operand) = args.get(*position) else {
+                continue;
+            };
+            violations.extend(element_width_violation(
+                body,
+                ElementArgument {
+                    symbol,
+                    operand,
+                    receiver,
+                    receiver_ty,
+                    position: *position,
+                },
+            ));
+        }
+    }
+    violations
+}
+
+/// One element a call hands a collection, and where it is going.
+///
+/// `position` is the element's own argument position in the call. The receiver
+/// takes the first, so the slot the element fills is the type argument one place
+/// before it: a map's key and its value are told apart by nothing else.
+struct ElementArgument<'a> {
+    symbol: &'a str,
+    operand: &'a Operand,
+    receiver: Local,
+    receiver_ty: &'a crate::ast::types::Type,
+    position: usize,
+}
+
+/// The violation `argument` raises, or `None` when it fills its slot exactly or
+/// when either side has no width this body can read.
+fn element_width_violation(
+    body: &Body,
+    argument: ElementArgument<'_>,
+) -> Option<VerificationViolation> {
+    let slot = argument.position.checked_sub(1)?;
+    let slot_ty = concrete_collection_slot(argument.receiver_ty, slot, body)?;
+    let operand_ty = concrete_operand_type(argument.operand, body)?;
+    let slot_bytes = compute_elem_size_from_type(&slot_ty.kind);
+    let operand_bytes = compute_elem_size_from_type(&operand_ty.kind);
+    if slot_bytes == operand_bytes {
+        return None;
+    }
+    Some(VerificationViolation {
+        local: argument.receiver,
+        local_name: local_display_name(body, argument.receiver),
+        message: format!(
+            "`{}` is handed, in argument {}, a {} of {} bytes where `{}` stores that slot as {} \
+             of {} bytes, so the bytes the two spell do not describe one element",
+            argument.symbol,
+            argument.position,
+            operand_ty.kind,
+            operand_bytes,
+            argument.receiver_ty.kind,
+            slot_ty.kind,
+            slot_bytes
+        ),
+    })
+}
+
+/// The type a collection's `slot`-th type argument names, when this body pins it
+/// to a concrete one.
+fn concrete_collection_slot(
+    collection_ty: &crate::ast::types::Type,
+    slot: usize,
+    body: &Body,
+) -> Option<crate::ast::types::Type> {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::types::TypeKind;
+    let TypeKind::Custom(name, Some(args)) = &collection_ty.kind else {
+        return None;
+    };
+    BuiltinCollectionKind::from_name(name)?;
+    let ExpressionKind::Type(ty, _) = &args.get(slot)?.node else {
+        return None;
+    };
+    pinned_type(ty, body)
+}
+
+/// The type an operand reads, when the operand names a whole local or a
+/// constant and this body pins that type to a concrete one.
+fn concrete_operand_type(operand: &Operand, body: &Body) -> Option<crate::ast::types::Type> {
+    match operand {
+        Operand::Constant(constant) => pinned_type(&constant.ty, body),
+        Operand::Copy(_) | Operand::Move(_) => {
+            let local = bare_local_read(operand)?;
+            pinned_type(&body.local_decls[local.0].ty, body)
+        }
+    }
+}
+
+/// `ty` itself, or `None` when this body gives it no width to read.
+///
+/// One of the body's own type parameters has none until the body is
+/// instantiated. Neither has a canonical collection spelling: those are
+/// normalized to `Custom` before lowering, so one surviving here is a shape the
+/// width table has no entry for, and this pass reports a violation rather than
+/// failing on one.
+fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::types::Type> {
+    use crate::ast::types::TypeKind;
+    match &ty.kind {
+        TypeKind::Custom(name, None) if body.type_params.contains(name.as_str()) => None,
+        TypeKind::Generic(_, _, _) => None,
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => None,
+        _ => Some(ty.clone()),
+    }
 }
 
 /// The separator [`crate::mir::lowering::dispatch::mangle_generic_name`] puts

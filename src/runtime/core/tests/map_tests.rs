@@ -1,7 +1,55 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use by_address::{
+    miri_rt_map_contains_key, miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_remove,
+    miri_rt_map_set,
+};
 use miri_runtime_core::map::ffi::*;
+
+/// The five map entry points that take a key or a value, called the way
+/// compiled code calls them: by the address of the bytes.
+///
+/// A test spells a key or a value as a value word, so each wrapper lends out
+/// that word's address. The wrappers shadow the glob-imported entry points of
+/// the same name, which `ffi_abi` exercises directly.
+mod by_address {
+    use miri_runtime_core::map::{ffi, MiriMap};
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_set(map: *mut MiriMap, key: usize, value: usize) {
+        ffi::miri_rt_map_set(
+            map,
+            &key as *const usize as *const u8,
+            &value as *const usize as *const u8,
+        )
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_get(map: *const MiriMap, key: usize) -> usize {
+        ffi::miri_rt_map_get(map, &key as *const usize as *const u8)
+    }
+
+    /// # Safety
+    /// `map` is a live map or null, and holds `key`.
+    pub unsafe fn miri_rt_map_get_checked(map: *const MiriMap, key: usize) -> usize {
+        ffi::miri_rt_map_get_checked(map, &key as *const usize as *const u8)
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_contains_key(map: *const MiriMap, key: usize) -> u8 {
+        ffi::miri_rt_map_contains_key(map, &key as *const usize as *const u8)
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_remove(map: *mut MiriMap, key: usize) -> u8 {
+        ffi::miri_rt_map_remove(map, &key as *const usize as *const u8)
+    }
+}
 use miri_runtime_core::string::MiriString;
 
 #[test]
@@ -860,5 +908,106 @@ fn test_map_with_a_key_equals_callback_matches_keys_through_it() {
 
         miri_rt_map_free(map);
         miri_rt_map_free(copy);
+    }
+}
+
+/// The key entry points called with a sixteen-byte key: twice the width of a
+/// value word, which is the width the by-address ABI exists for.
+mod wide {
+    use miri_runtime_core::map::{ffi, MiriMap};
+
+    /// # Safety
+    /// `map` is a live map whose key size is sixteen bytes.
+    pub unsafe fn set(map: *mut MiriMap, key: i128, value: usize) {
+        ffi::miri_rt_map_set(
+            map,
+            (&key as *const i128).cast(),
+            (&value as *const usize).cast(),
+        )
+    }
+
+    /// # Safety
+    /// `map` is a live map whose key size is sixteen bytes.
+    pub unsafe fn get(map: *const MiriMap, key: i128) -> usize {
+        ffi::miri_rt_map_get(map, (&key as *const i128).cast())
+    }
+
+    /// # Safety
+    /// `map` is a live map whose key size is sixteen bytes.
+    pub unsafe fn contains_key(map: *const MiriMap, key: i128) -> u8 {
+        ffi::miri_rt_map_contains_key(map, (&key as *const i128).cast())
+    }
+
+    /// # Safety
+    /// `map` is a live map whose key size is sixteen bytes.
+    pub unsafe fn remove(map: *mut MiriMap, key: i128) -> u8 {
+        ffi::miri_rt_map_remove(map, (&key as *const i128).cast())
+    }
+}
+
+/// A sixteen-byte key reaches the map whole. `i128::MAX` and `-1` fill their low
+/// eight bytes with the same ones and differ only above bit 63, so a map handed
+/// a value word alone would fold them into one entry and answer a lookup for
+/// either with the other's value.
+#[test]
+fn test_map_distinguishes_sixteen_byte_keys_sharing_a_low_word() {
+    unsafe {
+        let map = miri_rt_map_new(16, 8, 0);
+
+        wide::set(map, i128::MAX, 7);
+        wide::set(map, -1, 9);
+        assert_eq!(miri_rt_map_len(map), 2);
+
+        assert_eq!(wide::get(map, i128::MAX), 7);
+        assert_eq!(wide::get(map, -1), 9);
+        assert_eq!(wide::contains_key(map, i128::MIN), 0);
+
+        wide::set(map, i128::MAX, 8);
+        assert_eq!(miri_rt_map_len(map), 2, "an overwrite adds no entry");
+        assert_eq!(wide::get(map, i128::MAX), 8);
+        assert_eq!(wide::get(map, -1), 9);
+
+        assert_eq!(wide::remove(map, i128::MAX), 1);
+        assert_eq!(miri_rt_map_len(map), 1);
+        assert_eq!(wide::contains_key(map, i128::MAX), 0);
+        assert_eq!(
+            wide::contains_key(map, -1),
+            1,
+            "removing one key must leave its low-word twin"
+        );
+
+        miri_rt_map_free(map);
+    }
+}
+
+/// A null key or value address is refused rather than read: the entry points
+/// take an address from compiled code, and reading one that is not there would
+/// fault before anything could report it.
+#[test]
+fn test_map_entry_points_refuse_a_null_key_or_value_address() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set(map, 1, 100);
+        let word = |v: &usize| v as *const usize as *const u8;
+
+        miri_runtime_core::map::ffi::miri_rt_map_set(map, std::ptr::null(), word(&5));
+        miri_runtime_core::map::ffi::miri_rt_map_set(map, word(&2), std::ptr::null());
+        assert_eq!(miri_rt_map_len(map), 1);
+
+        assert_eq!(
+            miri_runtime_core::map::ffi::miri_rt_map_get(map, std::ptr::null()),
+            0
+        );
+        assert_eq!(
+            miri_runtime_core::map::ffi::miri_rt_map_contains_key(map, std::ptr::null()),
+            0
+        );
+        assert_eq!(
+            miri_runtime_core::map::ffi::miri_rt_map_remove(map, std::ptr::null()),
+            0
+        );
+        assert_eq!(miri_rt_map_len(map), 1);
+
+        miri_rt_map_free(map);
     }
 }

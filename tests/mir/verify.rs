@@ -1354,3 +1354,184 @@ fn a_runtime_backed_map_method_verifies_clean() {
         messages(&violations)
     );
 }
+
+/// Locals: 0 the return slot, 1 a receiver typed `receiver`, 2 an element typed
+/// `element`, 3 the call's result. The body's one call hands the element to
+/// `symbol`.
+fn element_call_body(receiver: Type, element: Type, symbol: &str) -> Body {
+    body_of(
+        &[void_ty(), receiver, element, void_ty()],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    symbol,
+                    vec![Operand::Copy(place(1)), Operand::Copy(place(2))],
+                    3,
+                    1,
+                ),
+            ),
+            block(Vec::new(), ret()),
+        ],
+    )
+}
+
+/// A set copies its whole slot out of the buffer the caller spills the element
+/// into, and the caller sizes that buffer from the element's own type: eight
+/// bytes handed to a sixteen-byte slot leave half of it filled by whatever lay
+/// beside it, which no lookup can match.
+#[test]
+fn an_element_narrower_than_the_slot_it_is_stored_in_is_reported() {
+    let body = element_call_body(
+        collection_ty("Set", &[TypeKind::I128]),
+        Type::new(TypeKind::Int, span()),
+        "miri_rt_set_add",
+    );
+
+    let violations = verify_body(&body);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert!(
+        violations[0].message.contains("miri_rt_set_add")
+            && violations[0].message.contains("8 bytes")
+            && violations[0].message.contains("16 bytes"),
+        "the finding must name the symbol and both widths, got: {}",
+        messages(&violations)
+    );
+}
+
+#[test]
+fn an_element_spelled_at_the_slot_type_verifies_clean() {
+    let body = element_call_body(
+        collection_ty("Set", &[TypeKind::I128]),
+        Type::new(TypeKind::I128, span()),
+        "miri_rt_set_add",
+    );
+    assert_clean(&body, "an element as wide as the slot it is stored in");
+}
+
+/// A map value goes to the second element position, so a width check reading
+/// only the key would pass a body storing a truncated value.
+#[test]
+fn a_map_value_narrower_than_its_slot_is_reported() {
+    let body = body_of(
+        &[
+            void_ty(),
+            collection_ty("Map", &[TypeKind::Int, TypeKind::I128]),
+            Type::new(TypeKind::Int, span()),
+            Type::new(TypeKind::Int, span()),
+            void_ty(),
+        ],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_rt_map_set",
+                    vec![
+                        Operand::Copy(place(1)),
+                        Operand::Copy(place(2)),
+                        Operand::Copy(place(3)),
+                    ],
+                    4,
+                    1,
+                ),
+            ),
+            block(Vec::new(), ret()),
+        ],
+    );
+
+    let violations = verify_body(&body);
+    assert_eq!(
+        violations.len(),
+        1,
+        "the key fills its slot and only the value does not, got: {}",
+        messages(&violations)
+    );
+    assert!(
+        violations[0].message.contains("argument 2"),
+        "the finding must name the argument that misses its slot, or a check that \
+         read the key against the value's slot would read the same, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A key filling its slot while the value does not is the other way round, and
+/// has to be told apart from it by the finding alone.
+#[test]
+fn a_map_key_narrower_than_its_slot_names_the_key_argument() {
+    let body = body_of(
+        &[
+            void_ty(),
+            collection_ty("Map", &[TypeKind::I128, TypeKind::Int]),
+            Type::new(TypeKind::Int, span()),
+            Type::new(TypeKind::Int, span()),
+            void_ty(),
+        ],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_rt_map_set",
+                    vec![
+                        Operand::Copy(place(1)),
+                        Operand::Copy(place(2)),
+                        Operand::Copy(place(3)),
+                    ],
+                    4,
+                    1,
+                ),
+            ),
+            block(Vec::new(), ret()),
+        ],
+    );
+
+    let violations = verify_body(&body);
+    assert_eq!(
+        violations.len(),
+        1,
+        "the value fills its slot and only the key does not, got: {}",
+        messages(&violations)
+    );
+    assert!(
+        violations[0].message.contains("argument 1"),
+        "the finding must name the key argument, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A canonical collection spelling reaches the width table as a shape it has no
+/// entry for. The pass reports what it can read and stays silent about the rest;
+/// it never fails on a body it was asked to check.
+#[test]
+fn a_slot_spelled_as_a_canonical_collection_verifies_clean() {
+    let inner = TypeKind::Set(Box::new(miri::ast::factory::type_expr_non_null(Type::new(
+        TypeKind::Int,
+        span(),
+    ))));
+    let body = element_call_body(
+        collection_ty("Set", &[inner]),
+        Type::new(TypeKind::Int, span()),
+        "miri_rt_set_add",
+    );
+    assert_clean(&body, "a slot spelled as a canonical collection");
+}
+
+/// A body lowered once for every instantiation spells its element as its own
+/// type parameter, which has no width until the instantiation gives it one.
+#[test]
+fn an_element_typed_by_an_unpinned_type_parameter_verifies_clean() {
+    let mut body = element_call_body(
+        collection_ty("Set", &[TypeKind::I128]),
+        Type::new(TypeKind::Custom("T".to_string(), None), span()),
+        "miri_rt_set_add",
+    );
+    body.type_params.insert("T".to_string());
+    assert_clean(&body, "an element typed by an unpinned type parameter");
+}

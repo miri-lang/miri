@@ -768,14 +768,90 @@ pub(super) fn lower_stored_value(
     let Some(slot_ty) = collection_slot_type(ctx, collection_ty, slot) else {
         return Ok((op, op_ty));
     };
-    Ok(wrap_for_optional_slot(
+    let (op, op_ty) = wrap_for_optional_slot(ctx, op, op_ty, &slot_ty, watermark, value_arg.span);
+    Ok(conform_operand_to_slot(
         ctx,
         op,
         op_ty,
         &slot_ty,
-        watermark,
         value_arg.span,
     ))
+}
+
+/// Convert `op` to the collection's declared slot type when both are numbers of
+/// different types.
+///
+/// A set or a map copies its whole slot out of the buffer the caller points it
+/// at, so an operand narrower than the slot would leave the rest of it filled by
+/// whatever lay beside it, and one wider would be read back short. Both the
+/// store and every lookup that has to match it go through here, so they agree on
+/// the representation whatever the call site wrote.
+///
+/// Only numbers are converted: a managed slot holds a reference, which is one
+/// word wherever it came from, and a slot whose type the enclosing
+/// instantiation has not pinned has no width to convert to.
+pub(super) fn conform_operand_to_slot(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    op_ty: Type,
+    slot_ty: &Type,
+    span: Span,
+) -> (Operand, Type) {
+    if op_ty.kind == slot_ty.kind
+        || !ctx.type_checker.is_numeric_type(&op_ty.kind)
+        || !ctx.type_checker.is_numeric_type(&slot_ty.kind)
+    {
+        return (op, op_ty);
+    }
+    let converted = widen_operand_to_slot(ctx, op, &op_ty, slot_ty, span);
+    (converted, slot_ty.clone())
+}
+
+/// Convert the value a lookup asks `collection` about to the type `collection`
+/// stores its elements as.
+///
+/// A lookup matches the bytes a store wrote, so it has to spell the element the
+/// way the store did. The collection's type is the one the type checker
+/// recorded, read through the active instantiation; a lookup against something
+/// the checker did not type is left as it was lowered.
+pub(super) fn conform_lookup_operand(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    element: &Expression,
+    collection: &Expression,
+) -> Operand {
+    let Some(collection_ty) = ctx.recorded_type(collection.id) else {
+        return op;
+    };
+    let element_ty = resolve_arg_type(ctx, element, &op);
+    conform_operand_to_collection_slot(
+        ctx,
+        op,
+        element_ty,
+        &collection_ty,
+        ELEMENT_SLOT,
+        element.span,
+    )
+    .0
+}
+
+/// Convert an operand a collection is about to store or look up to the type its
+/// `slot`-th type argument declares.
+///
+/// The sites that lower an element without going through [`lower_stored_value`]
+/// reach the same rule through here.
+pub(super) fn conform_operand_to_collection_slot(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    op_ty: Type,
+    collection_ty: &Type,
+    slot: usize,
+    span: Span,
+) -> (Operand, Type) {
+    let Some(slot_ty) = collection_slot_type(ctx, collection_ty, slot) else {
+        return (op, op_ty);
+    };
+    conform_operand_to_slot(ctx, op, op_ty, &slot_ty, span)
 }
 
 /// The type a collection declares for the slot named by its `slot`-th type
@@ -809,12 +885,6 @@ pub(super) fn collection_slot_type(
 /// intrinsic that takes ownership of them, leaving the map holding references it
 /// does not own. Lowering the call here donates both instead, matching
 /// `lower_list_push`.
-///
-/// TODO: both operands are donated as a single value word, so a key or value
-/// wider than that word is silently truncated — two distinct 128-bit keys fold
-/// into one entry. A list hands such an element over by address instead (see
-/// [`list_element_operands`]); the map entry points, and every lookup that has
-/// to match the bytes they stored, need the same treatment.
 fn lower_map_set(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -861,10 +931,6 @@ fn lower_map_set(
 ///
 /// Mirrors [`lower_map_set`]; the intrinsic reports whether the element was
 /// newly inserted, so the call keeps its boolean result.
-///
-/// TODO: the element is donated as a single value word, so one wider than that
-/// word loses its upper half and compares equal to any other element sharing its
-/// low word. The same fix [`lower_map_set`] needs applies here.
 fn lower_set_add(
     ctx: &mut LoweringContext,
     obj: &Expression,
