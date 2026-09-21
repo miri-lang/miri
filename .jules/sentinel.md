@@ -30,3 +30,8 @@
 **Vulnerability:** `Lexer::lex_float_or_range` sliced source strings using fixed 1-byte ranges (`&src[lookahead_cursor..lookahead_cursor + 1]`), panicking if `lookahead_cursor` landed on a multi-byte UTF-8 character boundary (e.g. `1.日本語`).
 **Learning:** Slicing Rust string references (`&str`) by byte offsets without verifying character boundaries panics when encountering non-ASCII UTF-8 sequences. Lookahead logic operating on single-byte characters/tokens must operate on raw byte slices (`src.as_bytes()`) or character iterators.
 **Prevention:** Inspect lookahead tokens using `src.as_bytes()[cursor]` directly or byte slice methods instead of string slice ranges (`&src[x..x+1]`).
+
+## 2026-03-31 - [Integer Overflow in RC Layout Size Calculation]
+**Vulnerability:** `alloc_with_rc` and `free_with_rc` in `src/runtime/core/src/rc.rs` (and `guard.rs`) added `RC_HEADER_SIZE` to `payload_size` without checked arithmetic, causing `usize` integer overflow when allocated huge sizes.
+**Learning:** Raw memory management code in `src/runtime/core` that computes layout sizes from caller parameters must guard all size additions with `checked_add`. Unchecked addition can wrap to 0, producing a zero-sized layout that receives out-of-bounds writes.
+**Prevention:** Always use `RC_HEADER_SIZE.checked_add(payload_size)` and return null / early exit on `None` before passing to `Layout::from_size_align`.
