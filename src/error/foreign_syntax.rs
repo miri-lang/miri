@@ -136,3 +136,122 @@ impl ForeignForm {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_foreign_form_repair_textual_variants() {
+        let colon = ForeignForm::ColonAnnotation {
+            colon_start: 5,
+            colon_end: 6,
+        };
+        assert_eq!(
+            colon.repair(),
+            Some(RepairRequest::ColonAnnotation {
+                colon_start: 5,
+                colon_end: 6,
+            })
+        );
+
+        let arrow = ForeignForm::ArrowReturnType {
+            arrow_start: 10,
+            arrow_end: 12,
+        };
+        assert_eq!(
+            arrow.repair(),
+            Some(RepairRequest::ArrowReturnType {
+                arrow_start: 10,
+                arrow_end: 12,
+            })
+        );
+
+        let macro_bang = ForeignForm::MacroBang { bang_start: 7 };
+        assert_eq!(
+            macro_bang.repair(),
+            Some(RepairRequest::PrintlnBang { bang_start: 7 })
+        );
+
+        let null_lit = ForeignForm::NullLiteral {
+            spelling_start: 15,
+            spelling_end: 19,
+        };
+        assert_eq!(
+            null_lit.repair(),
+            Some(RepairRequest::NullToNone {
+                spelling_start: 15,
+                spelling_end: 19,
+            })
+        );
+
+        let let_mut = ForeignForm::LetMut {
+            keyword_start: 0,
+            mut_end: 7,
+        };
+        assert_eq!(
+            let_mut.repair(),
+            Some(RepairRequest::LetMutToVar {
+                keyword_start: 0,
+                mut_end: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn test_foreign_form_repair_structural_variants_yield_none() {
+        let structural_forms = [
+            ForeignForm::BraceBlock,
+            ForeignForm::Elif,
+            ForeignForm::ImplBlock,
+            ForeignForm::TupleForBinding,
+            ForeignForm::DestructuringLet,
+        ];
+
+        for form in structural_forms {
+            assert_eq!(
+                form.repair(),
+                None,
+                "structural foreign form {:?} should not have a textual repair",
+                form
+            );
+        }
+    }
+
+    #[test]
+    fn test_foreign_form_help_messages() {
+        let all_forms = [
+            ForeignForm::ColonAnnotation {
+                colon_start: 0,
+                colon_end: 1,
+            },
+            ForeignForm::ArrowReturnType {
+                arrow_start: 0,
+                arrow_end: 2,
+            },
+            ForeignForm::BraceBlock,
+            ForeignForm::Elif,
+            ForeignForm::ImplBlock,
+            ForeignForm::MacroBang { bang_start: 0 },
+            ForeignForm::NullLiteral {
+                spelling_start: 0,
+                spelling_end: 4,
+            },
+            ForeignForm::TupleForBinding,
+            ForeignForm::DestructuringLet,
+            ForeignForm::LetMut {
+                keyword_start: 0,
+                mut_end: 7,
+            },
+        ];
+
+        for form in all_forms {
+            let help = form.help();
+            assert!(
+                !help.is_empty(),
+                "help text for {:?} should not be empty",
+                form
+            );
+        }
+    }
+}
