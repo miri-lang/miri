@@ -107,6 +107,69 @@ fn test_const_fold_binary() {
 }
 
 #[test]
+fn test_const_fold_unary_i128_negation() {
+    use miri::mir::UnOp;
+
+    let mut body = create_test_body();
+    // _1 = 170141183460469231731687303715884105727 (i128::MAX)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::I128, Span::default()),
+        Span::default(),
+    ));
+    // _2 = -_1
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::I128, Span::default()),
+        Span::default(),
+    ));
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::I128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::I128(i128::MAX)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(2)),
+            Rvalue::UnaryOp(UnOp::Neg, Box::new(Operand::Copy(Place::new(Local(1))))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+
+    body.basic_blocks.push(bb0);
+
+    let mut pass = ConstantPropagation;
+    let changed = pass.run(&mut body);
+
+    assert!(changed);
+
+    let bb0 = &body.basic_blocks[0];
+    let stmt1 = &bb0.statements[1];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt1.kind {
+        if let Literal::Integer(IntegerLiteral::I128(val)) = c.literal {
+            assert_eq!(val, -i128::MAX);
+        } else {
+            panic!("Expected I128 literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment, got {:?}", stmt1.kind);
+    }
+}
+
+#[test]
 fn test_const_fold_branch() {
     let mut body = create_test_body();
     // _1 = 1

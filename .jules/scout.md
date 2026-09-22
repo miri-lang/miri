@@ -64,3 +64,8 @@
 **Root cause:** AST->MIR lowering (`src/mir/lowering/expression/unary_expr.rs`) mapped `UnaryOp::BitwiseNot` to `UnOp::Not`. In Cranelift codegen (`src/codegen/cranelift/translate_rvalue.rs`), `UnOp::Not` checked `if ty == cl_types::I8` and treated `I8` values as booleans using `bxor_imm(val, 1)`. Because Cranelift represents `bool`, `u8`, and `i8` all as `I8`, 8-bit integers were misclassified as booleans.
 **Fix:** Added `UnOp::BitwiseNot` to MIR `UnOp` enum in `src/mir/rvalue.rs`. Lowered `UnaryOp::BitwiseNot` to `UnOp::BitwiseNot`, translated it to `bnot(val)` in Cranelift, `"~"` in WGSL, and bitwise complement `!val` in constant propagation.
 **Lesson:** Do not collapse distinct operator semantics (logical vs bitwise NOT) into a single MIR variant when backend types (e.g., Cranelift's `I8` for `bool`, `u8`, `i8`) collapse type distinctions. Separate domain semantics in MIR so codegen does not have to rely on ambiguous IR types.
+
+## 2026-07-13 - [Unary negation in constant propagation truncated i128 to i64]
+**Bug:** Negating an `i128` constant value (e.g., `-a` where `a` is `i128::MAX`) during MIR constant propagation produced `1` instead of `-170141183460469231731687303715884105727`.
+**Root cause:** In `fold_unary` (`src/mir/optimization/constant_propagation.rs`), `UnOp::Neg` performed `(-(val as i64)) as i128`, casting the full-width `i128` value down to `i64` before negating and expanding back to `i128`.
+**Lesson:** Optimization passes operating on generic `i128` integer containers must execute operations across the full `i128` width (e.g. `val.wrapping_neg()`) rather than casting through narrower types like `i64`.
