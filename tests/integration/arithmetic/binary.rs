@@ -121,6 +121,18 @@ println(f"{a / z}")
 }
 
 #[test]
+fn test_constant_fold_i128_negation() {
+    assert_runs_with_output(
+        r#"
+let a i128 = 170141183460469231731687303715884105727
+let neg_a i128 = -a
+println(f"{neg_a}")
+"#,
+        "-170141183460469231731687303715884105727",
+    );
+}
+
+#[test]
 fn test_128bit_unsigned_division_and_remainder() {
     // The unsigned path takes the same guard, and its dividend has no sign bit
     // to mistake for one — read as signed, this dividend is -1 and the quotient
