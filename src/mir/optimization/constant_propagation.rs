@@ -235,7 +235,7 @@ fn fold_unary(op: crate::mir::UnOp, operand: &Constant) -> Option<Constant> {
     let val = get_int(operand)?;
 
     let res = match op {
-        UnOp::Neg => (-(val as i64)) as i128,
+        UnOp::Neg => val.wrapping_neg(),
         UnOp::Not => {
             if val == 0 {
                 1
