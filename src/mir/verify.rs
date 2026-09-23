@@ -296,6 +296,10 @@ fn reachable_block_indices(body: &Body) -> Vec<usize> {
 
 /// IncRef on parameters is legal (a callee-side copy needs its own reference);
 /// DecRef on parameters corrupts the caller's reference count and is rejected.
+///
+/// Only the parameter's own value is the caller's. A DecRef through a projection
+/// of it — releasing the value a store into `self.field` replaced — releases
+/// what the object owns, and is legal.
 fn flag_decref_on_params(
     body: &Body,
     managed_params: &HashSet<Local>,
@@ -305,7 +309,10 @@ fn flag_decref_on_params(
     for block in &body.basic_blocks {
         for stmt in &block.statements {
             if let StatementKind::DecRef(place) = &stmt.kind {
-                if managed_params.contains(&place.local) && !seen.contains(&place.local) {
+                if place.projection.is_empty()
+                    && managed_params.contains(&place.local)
+                    && !seen.contains(&place.local)
+                {
                     seen.push(place.local);
                 }
             }

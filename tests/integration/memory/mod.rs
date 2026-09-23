@@ -20,6 +20,7 @@ pub mod heap_guard;
 pub mod loops;
 pub mod match_arms;
 pub mod method_arg_temps;
+pub mod method_field_stores;
 pub mod nested_calls;
 pub mod null_coalesce;
 pub mod option_coercion;
