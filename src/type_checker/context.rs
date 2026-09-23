@@ -57,6 +57,10 @@ pub struct SymbolInfo {
     pub residency: BindingResidency,
     /// True if this symbol represents a `gpu fn` (GPU kernel function).
     pub is_gpu_fn: bool,
+    /// True if this symbol is a parameter of the function being checked. A
+    /// gpu-resident parameter aliases its caller's buffer, which a local
+    /// `gpu var` never does.
+    pub is_parameter: bool,
     /// Byte offset of the `let` keyword that introduced this binding.
     ///
     /// Set only for an immutable local declared alone in its statement, which
@@ -93,6 +97,7 @@ impl SymbolInfo {
             is_intrinsic: false,
             residency: BindingResidency::Host,
             is_gpu_fn: false,
+            is_parameter: false,
             declaration_keyword_start: None,
             module_scope: false,
         }
@@ -111,6 +116,7 @@ impl SymbolInfo {
             is_intrinsic: true,
             residency: BindingResidency::Host,
             is_gpu_fn: false,
+            is_parameter: false,
             declaration_keyword_start: None,
             module_scope: false,
         }

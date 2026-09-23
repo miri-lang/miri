@@ -1272,7 +1272,13 @@ impl TypeChecker {
         span: Span,
     ) {
         if let Some(expr) = expr_opt {
-            if let Some(gpu_param) = self.gpu_resident_identifier(expr, context) {
+            // Only a parameter aliases a caller's buffer; a function's own
+            // `gpu var` is read back to the host on the return edge.
+            if let Some(gpu_param) = self.gpu_resident_identifier(expr, context).filter(|name| {
+                context
+                    .resolve_info(name)
+                    .is_some_and(|info| info.is_parameter)
+            }) {
                 self.report_error(
                     DiagnosticCode::TarGpuResidencyViolation,
                     format!(
