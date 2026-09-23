@@ -6,6 +6,7 @@
 //! `translator.rs`; this module dispatches into them.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::factory::type_expr_non_null;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
@@ -62,6 +63,17 @@ pub(crate) struct ElementOrderSetters {
     pub(crate) set_kind: ContainerSetter,
     /// Routes ordering through a generated `compare` thunk.
     pub(crate) set_compare_fn: ContainerSetter,
+}
+
+/// The enum value one variant's drop guard releases fields out of.
+#[derive(Clone, Copy)]
+struct EnumDropSite {
+    /// The discriminant, read once for every variant's guard.
+    disc: Value,
+    /// Address of the discriminant slot.
+    payload_ptr: Value,
+    /// Width of each slot, from [`layout::enum_payload_slot_size`].
+    slot_size: i32,
 }
 
 /// Mangle a generic class name with a concrete instantiation's type arguments,
@@ -1320,17 +1332,26 @@ impl<'a> FunctionTranslator<'a> {
         let disc = builder
             .ins()
             .load(ptr_type, MemFlags::new(), payload_ptr, 0);
+        // The drop thunk carries the instantiation as types; the layout
+        // authority reads it as the type-argument expressions a construction
+        // site carries, so both sides resolve payloads by the same rule.
+        let type_args: Option<Vec<Expression>> =
+            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
+        let slot_size = layout::enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type);
 
         for (variant_idx, managed_fields) in
-            Self::enum_variants_with_managed_fields(enum_def, inst_args, type_ctx)
+            Self::enum_variants_with_managed_fields(enum_def, type_args.as_deref(), type_ctx)
         {
             Self::emit_enum_variant_drop_guard(
                 builder,
                 ctx,
-                disc,
+                EnumDropSite {
+                    disc,
+                    payload_ptr,
+                    slot_size: slot_size as i32,
+                },
                 variant_idx,
                 &managed_fields,
-                payload_ptr,
                 type_ctx,
             )?;
         }
@@ -1343,11 +1364,13 @@ impl<'a> FunctionTranslator<'a> {
     /// blocks when there is decref work to do.
     ///
     /// For generic enums, resolves generic-parameter fields to their concrete
-    /// kinds using `inst_args` so that a managed type argument (like `String`)
-    /// is correctly identified as managed.
+    /// kinds through [`layout::enum_payload_field_kind`] using `type_args`, so
+    /// that a managed type argument (like `String`) is correctly identified as
+    /// managed. A parameter left unresolved — the shared bare-name thunk has no
+    /// arguments — is skipped.
     pub fn enum_variants_with_managed_fields(
         enum_def: &EnumDefinition,
-        inst_args: Option<&[Type]>,
+        type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> Vec<(usize, Vec<(usize, TypeKind)>)> {
         enum_def
@@ -1359,25 +1382,10 @@ impl<'a> FunctionTranslator<'a> {
                     .iter()
                     .enumerate()
                     .filter_map(|(fi, ty)| {
-                        let kind = &ty.kind;
-                        // Resolve generic-parameter fields to their concrete kind.
-                        if enum_def.generics.is_some()
-                            && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
-                        {
-                            if let Some(concrete) = Self::generic_field_concrete_kind_for_enum(
-                                enum_def, kind, inst_args,
-                            ) {
-                                if is_field_managed(&concrete) {
-                                    return Some((fi, concrete));
-                                }
-                            }
-                            return None;
-                        }
-                        if is_field_managed(kind) {
-                            Some((fi, kind.clone()))
-                        } else {
-                            None
-                        }
+                        let kind = layout::enum_payload_field_kind(enum_def, &ty.kind, type_args);
+                        let unresolved = enum_def.generics.is_some()
+                            && Self::is_unresolved_generic_elem(&kind, type_ctx.type_definitions);
+                        (!unresolved && is_field_managed(&kind)).then_some((fi, kind))
                     })
                     .collect();
                 if managed.is_empty() {
@@ -1389,46 +1397,22 @@ impl<'a> FunctionTranslator<'a> {
             .collect()
     }
 
-    /// Resolve a generic enum's bare-generic field to its concrete kind for one
-    /// instantiation.
-    ///
-    /// Similar to `generic_field_concrete_kind` for classes, but works with
-    /// enum generic parameters. When the field is a bare generic parameter
-    /// (`value T`), it is resolved to the argument at the parameter's declared
-    /// position. Returns `None` when the field is not a bare generic, or when
-    /// no per-instantiation arguments are available (the shared bare-name thunk),
-    /// so the caller skips the field.
-    fn generic_field_concrete_kind_for_enum(
-        enum_def: &EnumDefinition,
-        field_kind: &TypeKind,
-        inst_args: Option<&[Type]>,
-    ) -> Option<TypeKind> {
-        let gen_name = if let TypeKind::Generic(name, _, _) = field_kind {
-            name.as_str()
-        } else if let TypeKind::Custom(name, None) = field_kind {
-            name.as_str()
-        } else {
-            return None;
-        };
-        let generics = enum_def.generics.as_ref()?;
-        let param_idx = generics.iter().position(|g| g.name == gen_name)?;
-        inst_args?.get(param_idx).map(|t| t.kind.clone())
-    }
-
     /// Emit `if disc == variant_idx { decref each managed field }`. Caller
     /// continues in the merge block after this returns.
-    #[allow(clippy::too_many_arguments)]
     fn emit_enum_variant_drop_guard(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        disc: Value,
+        site: EnumDropSite,
         variant_idx: usize,
         managed_fields: &[(usize, TypeKind)],
-        payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
+        let EnumDropSite {
+            disc,
+            payload_ptr,
+            slot_size,
+        } = site;
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
         let variant_val = builder.ins().iconst(ptr_type, variant_idx as i64);
         let is_this_variant = builder.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
@@ -1444,7 +1428,9 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(drop_block);
         for (field_idx, field_kind) in managed_fields {
-            let field_offset = ptr_size + (*field_idx as i32 * ptr_size);
+            // Payload field `k` is enum field `k + 1`: the discriminant
+            // occupies the first slot.
+            let field_offset = (*field_idx as i32 + 1) * slot_size;
             let field_ptr =
                 builder
                     .ins()

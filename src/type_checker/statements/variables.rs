@@ -40,6 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
@@ -210,6 +211,9 @@ impl TypeChecker {
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
+        if let (true, Some(type_expr)) = (context.in_gpu_function, &decl.typ) {
+            self.reject_device_wide_integer(&inferred_type.kind, type_expr.span);
+        }
         self.check_gpu_residency_type(decl, &inferred_type, context, span);
         self.check_host_f16(decl, &inferred_type, context, span);
         let is_mutable = matches!(
@@ -394,8 +398,10 @@ impl TypeChecker {
     }
 
     /// Validates that a literal integer array expression does not contain values
-    /// outside the i32 range. Used by both variable initializers and reassignments.
-    /// Non-integer element types and non-literal arrays pass silently.
+    /// outside the 32-bit device lane a 64-bit element is narrowed into (the
+    /// range the GPU wire format checks at upload). Used by both variable
+    /// initializers and reassignments. Elements that are never narrowed and
+    /// non-literal arrays pass silently.
     /// The elem_expr is a type expression (Expression with ExpressionKind::Type or Identifier).
     pub(crate) fn check_gpu_i32_range_array_expr(
         &mut self,
@@ -407,29 +413,34 @@ impl TypeChecker {
             return;
         };
 
-        let elem_kind = resolve_element_type_kind(elem_expr);
-        let is_int_type = matches!(elem_kind, Some(TypeKind::Int) | Some(TypeKind::I64));
-
-        if !is_int_type {
+        let Some(wire) =
+            resolve_element_type_kind(elem_expr).and_then(|kind| buffer_element_wire(&kind))
+        else {
             return;
-        }
+        };
+        let Some((min, max)) = wire.conversion.checked_range() else {
+            return;
+        };
 
         for (elem_idx, elem) in elements.iter().enumerate() {
-            if let Some(val) = Self::try_eval_const_int_with_context(elem, context) {
-                if val < i32::MIN as i128 || val > i32::MAX as i128 {
-                    self.report_error(
-                        DiagnosticCode::TarGpuValueOutOfRange,
-                        format!(
-                            "Array element {} has value {} which exceeds i32 range [{}, {}]; \
-                            use Array<i32, N> for explicit 32-bit GPU storage",
-                            elem_idx,
-                            val,
-                            i32::MIN,
-                            i32::MAX
-                        ),
-                        elem.span,
-                    );
-                }
+            let Some(val) = Self::try_eval_const_int_with_context(elem, context) else {
+                continue;
+            };
+            if val < min || val > max {
+                self.report_error(
+                    DiagnosticCode::TarGpuValueOutOfRange,
+                    format!(
+                        "Array element {} has value {} which exceeds {} range [{}, {}]; \
+                        use Array<{}, N> for explicit 32-bit GPU storage",
+                        elem_idx,
+                        val,
+                        wire.device.name(),
+                        min,
+                        max,
+                        wire.device.name()
+                    ),
+                    elem.span,
+                );
             }
         }
     }

@@ -457,6 +457,7 @@ impl TypeChecker {
                 continue;
             }
             if is_gpu_signature_type(&param_type.kind) {
+                self.reject_device_wide_integer(&param_type.kind, param.typ.span);
                 continue;
             }
             self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,

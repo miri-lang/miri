@@ -11,19 +11,24 @@
 //! WGSL kernels are embedded in the manifest JSON under `seed[].wgsl` and
 //! `frame.wgsl` (if present), not as separate files.
 
+mod buffers;
 mod manifest;
 
-use crate::ast::types::{FrameFieldKind, TypeKind, FRAME_INPUT_FIELDS};
+use crate::ast::types::{FrameFieldKind, FRAME_INPUT_FIELDS};
+use crate::codegen::wgsl::types::is_atomic_element_buffer;
 use crate::codegen::wgsl::{compile_module, WgslOptions};
 use crate::error::compiler::CompilerError;
+use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
-use crate::mir::{Body, ExecutionModel};
+use crate::mir::body::DeviceHandleId;
+use crate::mir::{Body, ExecutionModel, LocalDecl};
 use crate::type_checker::GpuBufferInit;
+use buffers::{BufferTable, HostProgram};
 use manifest::{
     BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest, SourceMapEntry,
 };
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -39,26 +44,31 @@ const PACKAGE_JSON_FILENAME: &str = "package.json";
 
 /// Per-binding metadata for a kernel's storage buffer.
 #[derive(Debug, Clone)]
-pub(crate) struct BufferBinding {
-    pub name: String,
-    pub element_type: String,
-    pub length: usize,
-    pub read_only: bool,
+struct BufferBinding {
+    /// Manifest name of the device buffer bound here.
+    name: String,
+    element_type: &'static str,
+    read_only: bool,
     /// Whether the kernel writes this buffer. `read_only` is the WGSL storage
     /// qualifier and is forced false for atomic buffers, so it cannot answer
     /// the data-flow question the runtime's state-pair inference asks.
-    pub writes: bool,
-    pub initial_data: Vec<f64>,
-    /// True if this buffer was zero-filled (sized-ctor like Array<T, N>()).
-    /// When true, initialData should be null in the manifest.
-    pub is_zero_filled: bool,
+    writes: bool,
+}
+
+/// A kernel ready to compile: its body, the grid it dispatches, and the
+/// device buffer behind each storage binding, in binding order.
+struct KernelPlan<'a> {
+    name: &'a str,
+    body: &'a Body,
+    grid: [u32; 3],
+    handles: Vec<DeviceHandleId>,
 }
 
 /// One compiled GPU entry point and its metadata.
 #[derive(Debug)]
 struct KernelArtifact {
     entry_point: String,
-    grid_size: Option<[u32; 3]>,
+    grid_size: [u32; 3],
     /// Unrounded logical iteration extent (a 2-D/3-D `forall`'s loop lengths);
     /// lets a paint-writing kernel declare a rectangular canvas.
     logical_extent: Option<[u32; 3]>,
@@ -76,7 +86,7 @@ pub fn emit_bundle(
     mir_bodies: &[(String, Body)],
     out_path: Option<&PathBuf>,
     source: Option<&str>,
-    gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
+    gpu_buffer_inits: Option<&HashMap<Span, GpuBufferInit>>,
 ) -> Result<PathBuf, CompilerError> {
     let kernels = extract_kernels(mir_bodies);
     if kernels.is_empty() {
@@ -86,6 +96,16 @@ pub fn emit_bundle(
                 .to_string(),
         ));
     }
+
+    let host = HostProgram::scan(mir_bodies);
+    let plans = plan_kernels(&kernels, &host)?;
+    let no_inits = HashMap::new();
+    let buffers = BufferTable::build(
+        plans.iter().flat_map(plan_bindings),
+        &host,
+        gpu_buffer_inits.unwrap_or(&no_inits),
+        source,
+    )?;
 
     let bundle_dir = resolve_bundle_dir(out_path)?;
     fs::create_dir_all(&bundle_dir)?;
@@ -100,7 +120,7 @@ pub fn emit_bundle(
         .map(|(name, body)| (name.as_str(), body))
         .collect();
 
-    let artifacts = compile_kernels(&kernels, &helpers, gpu_buffer_inits, source)?;
+    let artifacts = compile_kernels(&plans, &helpers, &buffers, source)?;
 
     // Derive program name from output directory or use default
     let program_name = out_path
@@ -108,13 +128,25 @@ pub fn emit_bundle(
         .and_then(|f| f.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "gpu_program".to_string());
-    let manifest = build_manifest(&program_name, &artifacts, gpu_buffer_inits)?;
+    let manifest = build_manifest(&program_name, &artifacts, &buffers)?;
     let manifest_path = bundle_dir.join(format!("{}.json", program_name));
     let manifest_json = manifest
         .to_json()
         .map_err(|err| CompilerError::Codegen(format!("Failed to serialize manifest: {}", err)))?;
     fs::write(&manifest_path, &manifest_json)?;
+    write_runtime_files(&bundle_dir, &program_name, &manifest_json, &manifest.canvas)?;
 
+    Ok(bundle_dir)
+}
+
+/// Writes the runtime driver, the headless runner and the dev-preview page
+/// beside the manifest.
+fn write_runtime_files(
+    bundle_dir: &std::path::Path,
+    program_name: &str,
+    manifest_json: &str,
+    canvas: &CanvasSpec,
+) -> Result<(), CompilerError> {
     // Copy miri-gpu.js runtime
     fs::write(bundle_dir.join(MIRI_GPU_JS_FILENAME), MIRI_GPU_JS)?;
 
@@ -130,17 +162,15 @@ pub fn emit_bundle(
     // the manifest so it runs from a `file://` double-click (ES-module import +
     // JSON fetch are blocked under file://). The separate `<name>.json` +
     // `miri-gpu.js` files above are the artifacts for website integration.
-    let index_path = bundle_dir.join(INDEX_HTML_FILENAME);
     let html_text = generate_index_html(
-        &program_name,
+        program_name,
         MIRI_GPU_JS,
-        &manifest_json,
-        manifest.canvas.width,
-        manifest.canvas.height,
+        manifest_json,
+        canvas.width,
+        canvas.height,
     );
-    fs::write(&index_path, html_text)?;
-
-    Ok(bundle_dir)
+    fs::write(bundle_dir.join(INDEX_HTML_FILENAME), html_text)?;
+    Ok(())
 }
 
 fn resolve_bundle_dir(out_path: Option<&PathBuf>) -> Result<PathBuf, CompilerError> {
@@ -159,46 +189,90 @@ fn resolve_bundle_dir(out_path: Option<&PathBuf>) -> Result<PathBuf, CompilerErr
     }
 }
 
-fn extract_kernels(mir_bodies: &[(String, Body)]) -> Vec<(String, Body)> {
+fn extract_kernels(mir_bodies: &[(String, Body)]) -> Vec<(&str, &Body)> {
     mir_bodies
         .iter()
         .filter(|(_, body)| matches!(body.execution_model, ExecutionModel::GpuKernel))
-        .map(|(name, body)| (name.clone(), body.clone()))
+        .map(|(name, body)| (name.as_str(), body))
         .collect()
 }
 
+/// Pairs each kernel with its launch: the grid it dispatches and the device
+/// buffer behind each storage binding.
+fn plan_kernels<'a>(
+    kernels: &[(&'a str, &'a Body)],
+    host: &HostProgram,
+) -> Result<Vec<KernelPlan<'a>>, CompilerError> {
+    kernels
+        .iter()
+        .map(|&(name, body)| {
+            let site = host.launch_of(name, body)?;
+            let grid = buffers::fixed_grid(name, body, resolve_grid_size(body), host, &site)?;
+            let handles = site
+                .handles
+                .iter()
+                .map(|handle| {
+                    handle.ok_or_else(|| {
+                        CompilerError::Codegen(format!(
+                            "kernel {name} is launched on a buffer with no device handle"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let binding_count = buffers::storage_params(body).count();
+            if handles.len() != binding_count {
+                return Err(CompilerError::Codegen(format!(
+                    "kernel {name} binds {binding_count} storage buffers but its launch passes {}",
+                    handles.len()
+                )));
+            }
+            Ok(KernelPlan {
+                name,
+                body,
+                grid,
+                handles,
+            })
+        })
+        .collect()
+}
+
+/// Each storage binding of a planned kernel: its device buffer and the kernel
+/// parameter it binds as.
+fn plan_bindings<'p>(
+    plan: &'p KernelPlan<'p>,
+) -> impl Iterator<Item = (DeviceHandleId, &'p LocalDecl)> + 'p {
+    plan.handles
+        .iter()
+        .copied()
+        .zip(buffers::storage_params(plan.body).map(|(_, decl)| decl))
+}
+
 fn compile_kernels(
-    kernels: &[(String, Body)],
+    plans: &[KernelPlan],
     helpers: &[(&str, &Body)],
-    gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
+    buffers: &BufferTable,
     source: Option<&str>,
 ) -> Result<Vec<KernelArtifact>, CompilerError> {
     let options = WgslOptions::default();
-    let mut artifacts = Vec::with_capacity(kernels.len());
+    let mut artifacts = Vec::with_capacity(plans.len());
 
-    for (name, body) in kernels {
+    for plan in plans {
         // Emit every reachable helper alongside the kernel; an unused helper is
         // a harmless dead function in WGSL.
         let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
         module_bodies.extend_from_slice(helpers);
-        module_bodies.push((name.as_str(), body));
+        module_bodies.push((plan.name, plan.body));
         let module = compile_module(&module_bodies, &options)
             .map_err(|err| CompilerError::Codegen(err.to_string()))?;
 
-        let bindings = extract_buffer_bindings(body, gpu_buffer_inits);
-        let is_frame_step = is_frame_step_kernel(body);
-        let grid_size = resolve_grid_size(body);
-        let logical_extent = resolve_logical_extent(body);
-        let source_map = build_source_map(&module.source_map, source);
-
         artifacts.push(KernelArtifact {
-            entry_point: name.clone(),
-            grid_size,
-            logical_extent,
+            entry_point: plan.name.to_string(),
+            grid_size: plan.grid,
+            logical_extent: resolve_logical_extent(plan.body),
             wgsl_source: module.wgsl,
-            bindings,
-            is_frame_step,
-            source_map,
+            bindings: extract_buffer_bindings(plan, buffers)?,
+            is_frame_step: is_frame_step_kernel(plan.body),
+            source_map: build_source_map(&module.source_map, source),
         });
     }
 
@@ -252,265 +326,70 @@ fn is_frame_step_kernel(body: &Body) -> bool {
     }
 }
 
-/// Extract the WGSL element type string from a buffer (Array/List) parameter type.
-///
-/// Returns the WGSL type name ("i32", "f32", etc.) for the buffer's element type.
-/// Falls back to "i32" if the type cannot be resolved.
-fn buffer_element_type_string(param_ty: &TypeKind) -> String {
-    use crate::ast::types::BuiltinCollectionKind;
-
-    fn scalar_name(kind: &TypeKind) -> Option<&'static str> {
-        match kind {
-            TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Some("i32"),
-            TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
-            TypeKind::F16 => Some("f16"),
-            TypeKind::F32 => Some("f32"),
-            TypeKind::Boolean => Some("bool"),
-            TypeKind::Int => Some("i32"),
-            TypeKind::I64 => Some("i64"),
-            TypeKind::U64 => Some("u64"),
-            TypeKind::Float | TypeKind::F64 => Some("f64"),
-            TypeKind::I128
-            | TypeKind::U128
-            | TypeKind::String
-            | TypeKind::Identifier
-            | TypeKind::RawPtr
-            | TypeKind::Void
-            | TypeKind::Error
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Map(_, _)
-            | TypeKind::Tuple(_)
-            | TypeKind::Set(_)
-            | TypeKind::Result(_, _)
-            | TypeKind::Future(_)
-            | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
-            | TypeKind::Custom(_, _)
-            | TypeKind::Meta(_)
-            | TypeKind::Option(_)
-            | TypeKind::Linear(_) => None,
-        }
-    }
-
-    match param_ty {
-        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => {
-            if let crate::ast::expression::ExpressionKind::Type(inner, _) = &elem_expr.node {
-                scalar_name(&inner.kind)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "i32".to_string())
-            } else {
-                "i32".to_string()
-            }
-        }
-        TypeKind::Custom(name, Some(args))
-            if matches!(
-                BuiltinCollectionKind::from_name(name),
-                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
-            ) =>
-        {
-            if let Some(elem_expr) = args.first() {
-                if let crate::ast::expression::ExpressionKind::Type(inner, _) = &elem_expr.node {
-                    scalar_name(&inner.kind)
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "i32".to_string())
-                } else {
-                    "i32".to_string()
-                }
-            } else {
-                "i32".to_string()
-            }
-        }
-        TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::Map(_, _)
-        | TypeKind::Tuple(_)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Custom(_, _)
-        | TypeKind::Meta(_)
-        | TypeKind::Option(_)
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Linear(_) => "i32".to_string(),
-    }
-}
-
-/// Check if a buffer has Atomic element types and therefore needs read-write access.
-fn is_buffer_atomic_element(param_ty: &TypeKind) -> bool {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::types::BuiltinCollectionKind;
-
-    match param_ty {
-        TypeKind::Custom(name, Some(args))
-            if matches!(
-                BuiltinCollectionKind::from_name(name),
-                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
-            ) =>
-        {
-            if let Some(elem_expr) = args.first() {
-                if let ExpressionKind::Type(inner, _) = &elem_expr.node {
-                    if let TypeKind::Custom(elem_name, Some(inner_args)) = &inner.kind {
-                        return elem_name == crate::ast::types::ATOMIC_TYPE_NAME
-                            && !inner_args.is_empty();
-                    }
-                }
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
 fn extract_buffer_bindings(
-    body: &Body,
-    gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
-) -> Vec<BufferBinding> {
-    let mut bindings = Vec::new();
-
-    for param_idx in 1..=body.arg_count {
-        let decl = match body.local_decls.get(param_idx) {
-            Some(d) => d,
-            None => continue,
-        };
-
-        let is_storage_buffer = matches!(
-            decl.storage_class,
-            crate::mir::body::StorageClass::GpuGlobal
-                | crate::mir::body::StorageClass::StorageBuffer
-        );
-
-        if !is_storage_buffer {
-            continue;
-        }
-
-        // Atomic buffers need read-write access; check the element type
-        let is_atomic_buffer = is_buffer_atomic_element(&decl.ty.kind);
-        let read_only =
-            !is_atomic_buffer && !body.out_params.get(param_idx - 1).copied().unwrap_or(false);
-        let writes = body
-            .param_written
-            .get(param_idx - 1)
-            .copied()
-            .unwrap_or_else(|| body.out_params.get(param_idx - 1).copied().unwrap_or(false));
-
-        let name = decl
-            .name
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("_buf{}", param_idx));
-
-        let (element_type, length, initial_data, is_zero_filled) =
-            if let Some(inits) = gpu_buffer_inits {
-                if let Some(init) = inits.get(&name) {
-                    let is_sized = init.length.is_some();
-                    (
-                        init.elem_type.clone(),
-                        init.length.unwrap_or(init.values.len()),
-                        init.values.clone(),
-                        is_sized, // Zero-filled if explicitly sized (Array<T, N>())
-                    )
-                } else {
-                    let elem_type = buffer_element_type_string(&decl.ty.kind);
-                    (elem_type, 0, Vec::new(), false)
-                }
-            } else {
-                let elem_type = buffer_element_type_string(&decl.ty.kind);
-                (elem_type, 0, Vec::new(), false)
-            };
-
-        bindings.push(BufferBinding {
-            name,
-            element_type,
-            length,
-            read_only,
-            writes,
-            initial_data,
-            is_zero_filled,
-        });
-    }
-
-    bindings
+    plan: &KernelPlan,
+    buffers: &BufferTable,
+) -> Result<Vec<BufferBinding>, CompilerError> {
+    let body = plan.body;
+    buffers::storage_params(body)
+        .zip(&plan.handles)
+        .map(|((local_idx, decl), &handle)| {
+            let buffer = buffers.buffer_of(handle).ok_or_else(|| {
+                CompilerError::Codegen(format!("device buffer {handle} has no bundle entry"))
+            })?;
+            // Atomic buffers need read-write access; check the element type
+            let is_atomic_buffer = is_atomic_element_buffer(&decl.ty.kind);
+            let is_out = body.out_params.get(local_idx - 1).copied().unwrap_or(false);
+            let writes = body
+                .param_written
+                .get(local_idx - 1)
+                .copied()
+                .unwrap_or(is_out);
+            Ok(BufferBinding {
+                name: buffer.name.clone(),
+                element_type: buffer.element_type,
+                read_only: !is_atomic_buffer && !is_out,
+                writes,
+            })
+        })
+        .collect()
 }
 
 fn build_manifest(
     program_name: &str,
     artifacts: &[KernelArtifact],
-    _gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
+    buffers: &BufferTable,
 ) -> Result<Manifest, CompilerError> {
-    // Collect all unique buffers with their metadata
-    let all_buffers: BTreeMap<String, (String, usize, Vec<f64>, bool)> = {
-        let mut buffers = BTreeMap::new();
-        for artifact in artifacts {
-            for binding in &artifact.bindings {
-                buffers.insert(
-                    binding.name.clone(),
-                    (
-                        binding.element_type.clone(),
-                        binding.length,
-                        binding.initial_data.clone(),
-                        binding.is_zero_filled,
-                    ),
-                );
-            }
-        }
-        buffers
-    };
-
-    // Convert to BufferSpec list. The `BTreeMap` ensures deterministic iteration
-    // order, producing byte-identical bundles from identical source.
-    let buffers: Vec<BufferSpec> = all_buffers
+    // `BufferTable` iterates by name, producing byte-identical bundles from
+    // identical source.
+    let buffer_specs: Vec<BufferSpec> = buffers
         .iter()
-        .map(
-            |(name, (elem_type, length, initial_data, is_zero_filled))| {
-                // Emit initialData for every buffer:
-                // - If zero-filled (sized-ctor), emit null
-                // - If has literal data, emit the values
-                // - If empty (uninitialized), emit null
-                let initial_data_json = if *is_zero_filled || initial_data.is_empty() {
-                    None
-                } else {
-                    Some(
-                        initial_data
-                            .iter()
-                            .map(|v| {
-                                if v.fract() == 0.0 {
-                                    json!(*v as i64)
-                                } else {
-                                    json!(v)
-                                }
-                            })
-                            .collect(),
-                    )
-                };
-                BufferSpec {
-                    name: name.clone(),
-                    elem_type: elem_type.clone(),
-                    length: *length as u32,
-                    initial_data: initial_data_json,
-                }
-            },
-        )
+        .map(|buffer| {
+            // A sized constructor is zero-filled by the runtime: no initialData.
+            let initial_data_json = if buffer.is_zero_filled || buffer.initial_data.is_empty() {
+                None
+            } else {
+                Some(
+                    buffer
+                        .initial_data
+                        .iter()
+                        .map(|v| {
+                            if v.fract() == 0.0 {
+                                json!(*v as i64)
+                            } else {
+                                json!(v)
+                            }
+                        })
+                        .collect(),
+                )
+            };
+            BufferSpec {
+                name: buffer.name.clone(),
+                elem_type: buffer.element_type.to_string(),
+                length: buffer.length as u32,
+                initial_data: initial_data_json,
+            }
+        })
         .collect();
 
     // Compute canvas dimensions from paint buffer. The display target is a
@@ -533,23 +412,24 @@ fn build_manifest(
         })
         .unwrap_or_else(|| "output".to_string());
 
-    let paint_length = all_buffers
+    let paint_length = buffers
         .get(&paint_buffer)
-        .map(|(_, len, _, _)| *len)
+        .map(|buffer| buffer.length)
         .unwrap_or(4096);
 
     // Infer paint_mode BEFORE computing canvas dimensions.
     // Check if the paint buffer is f32 with length = 4 * pixel_count.
     // If so, it's RGBA; otherwise it's colormap.
-    let (paint_mode, effective_paint_length) = all_buffers
+    let (paint_mode, effective_paint_length) = buffers
         .get(&paint_buffer)
-        .map(|(elem_type, len, _, _)| {
-            if elem_type == "f32" && *len % 4 == 0 {
+        .map(|buffer| {
+            let len = buffer.length;
+            if buffer.element_type == "f32" && len % 4 == 0 {
                 // RGBA mode: length is 4 * pixel_count
-                ("rgba".to_string(), *len / 4)
+                ("rgba".to_string(), len / 4)
             } else {
                 // Colormap mode: length is pixel_count
-                ("colormap".to_string(), *len)
+                ("colormap".to_string(), len)
             }
         })
         .unwrap_or_else(|| ("colormap".to_string(), paint_length));
@@ -587,7 +467,7 @@ fn build_manifest(
             width: canvas_width,
             height: canvas_height,
         },
-        buffers,
+        buffers: buffer_specs,
         seed: seed_kernels,
         frame_passes,
         paint: paint_buffer,
@@ -636,9 +516,8 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
         None
     };
 
-    // Use grid_size (dispatch grid) if available; fallback to a default grid of [1,1,1]
-    // for runtime-bound kernels where grid is computed at runtime.
-    let workgroups = artifact.grid_size.unwrap_or([1, 1, 1]);
+    // Planning refused every kernel whose grid is known only at run time.
+    let workgroups = artifact.grid_size;
 
     Ok(KernelSpec {
         entry_point: artifact.entry_point.clone(),

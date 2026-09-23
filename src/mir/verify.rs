@@ -1268,6 +1268,9 @@ fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
 /// hands back the initial values, exits 0, and reports nothing, which reads as
 /// a result rather than as a transfer that did not happen.
 ///
+/// A closure capturing a gpu binding is the same crossing: the capture copies
+/// the host array into the closure's environment when the closure is created.
+///
 /// This is checked per body rather than per statement so that a spelling the
 /// lowering grows later is covered the day it lands: whichever statement
 /// performs the copy, the handle it copies from has to have been read back
@@ -1285,23 +1288,76 @@ pub fn verify_cross_residency_readback(body: &Body) -> Vec<VerificationViolation
             else {
                 continue;
             };
-            let Some(source) = unfenced_gpu_source(body, dest, rvalue, &fenced) else {
-                continue;
-            };
-            violations.push(VerificationViolation {
-                local: source,
-                local_name: local_display_name(body, source),
-                message: format!(
-                    "`{}` is gpu-resident and is copied into host-resident `{}` with no \
-                     readback fencing its device buffer, so the copy hands back the host \
-                     array's initial values instead of the device's results",
-                    local_display_name(body, source),
-                    local_display_name(body, dest.local),
-                ),
-            });
+            if let Some(source) = unfenced_gpu_source(body, dest, rvalue, &fenced) {
+                violations.push(unfenced_copy_violation(body, source, dest.local));
+            }
+            violations.extend(
+                unfenced_gpu_captures(body, rvalue, &fenced)
+                    .map(|source| unfenced_capture_violation(body, source, dest.local)),
+            );
         }
     }
     violations
+}
+
+fn unfenced_copy_violation(body: &Body, source: Local, dest: Local) -> VerificationViolation {
+    VerificationViolation {
+        local: source,
+        local_name: local_display_name(body, source),
+        message: format!(
+            "`{}` is gpu-resident and is copied into host-resident `{}` with no \
+             readback fencing its device buffer, so the copy hands back the host \
+             array's initial values instead of the device's results",
+            local_display_name(body, source),
+            local_display_name(body, dest),
+        ),
+    }
+}
+
+fn unfenced_capture_violation(body: &Body, source: Local, closure: Local) -> VerificationViolation {
+    VerificationViolation {
+        local: source,
+        local_name: local_display_name(body, source),
+        message: format!(
+            "`{}` is gpu-resident and is captured into closure `{}` with no readback \
+             fencing its device buffer, so the closure holds the host array's initial \
+             values instead of the device's results",
+            local_display_name(body, source),
+            local_display_name(body, closure),
+        ),
+    }
+}
+
+/// The gpu-resident locals a closure aggregate captures whole, when no readback
+/// in this body fenced their device buffers.
+fn unfenced_gpu_captures<'a>(
+    body: &'a Body,
+    rvalue: &'a Rvalue,
+    fenced: &'a HashSet<u64>,
+) -> impl Iterator<Item = Local> + 'a {
+    let captured: &[Operand] =
+        if let Rvalue::Aggregate(crate::mir::AggregateKind::Closure(_, _), operands) = rvalue {
+            operands
+        } else {
+            &[]
+        };
+    captured.iter().filter_map(move |operand| match operand {
+        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            unfenced_gpu_local(body, place.local, fenced)
+        }
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+    })
+}
+
+/// `local`, when it is a gpu-resident binding whose device buffer no readback
+/// in this body fenced.
+fn unfenced_gpu_local(body: &Body, local: Local, fenced: &HashSet<u64>) -> Option<Local> {
+    let decl = &body.local_decls[local.0];
+    let handle = decl.device_handle?;
+    if decl.residency != crate::mir::body::BindingResidency::Gpu || fenced.contains(&handle.0) {
+        return None;
+    }
+    Some(local)
 }
 
 /// The device handles some `miri_gpu_readback` call in this body fences.
@@ -1347,12 +1403,7 @@ fn unfenced_gpu_source(
     if !source.projection.is_empty() {
         return None;
     }
-    let decl = &body.local_decls[source.local.0];
-    let handle = decl.device_handle?;
-    if decl.residency != crate::mir::body::BindingResidency::Gpu || fenced.contains(&handle.0) {
-        return None;
-    }
-    Some(source.local)
+    unfenced_gpu_local(body, source.local, fenced)
 }
 
 /// The value of an integer constant operand, or `None` for anything else.

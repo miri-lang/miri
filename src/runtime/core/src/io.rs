@@ -454,6 +454,21 @@ pub mod ffi {
         trap(code::REMAINDER_BY_ZERO, "remainder by zero");
     }
 
+    /// Reports a refused GPU kernel launch as MER_RT_013 and ends the process.
+    ///
+    /// The GPU runtime has already written the reason to stderr when its
+    /// launch entry returns failure; this is the exit that follows, so the
+    /// program leaves through the one door that reports a code instead of
+    /// aborting on a signal.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_gpu_launch_failed_panic() {
+        trap(
+            code::GPU_LAUNCH_FAILED,
+            "the GPU kernel could not be launched",
+        );
+    }
+
     /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
     ///
     /// The closure layout is `[fn_ptr][dtor_ptr][captures...]`; `closure_ptr`

@@ -448,3 +448,274 @@ fn main()
 ",
     );
 }
+
+/// Returning a gpu binding hands the caller its device results. The return
+/// edge is a host boundary like `let h = g`: the return slot is a host local,
+/// and the binding's device buffer is released on the way out, so a return
+/// that skips the readback hands back the host array's initial values. Every
+/// return spelling is covered — an early return from a branch, one from inside
+/// a loop, a trailing `return`, and an implicit last-expression return.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn returning_a_gpu_binding_reads_back_the_device_results() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+fn pick(k int) Array<int, 4>
+    gpu var b = [0, 0, 0, 0]
+    forall i in 0..4
+        b[i] = 9 + k
+    if k > 1
+        return b
+    var i = 0
+    while i < 3
+        if k == 1
+            return b
+        i = i + 1
+    return b
+
+fn implicit() Array<int, 4>
+    gpu var b = [0, 0, 0, 0]
+    forall i in 0..4
+        b[i] = 7
+    b
+
+fn main()
+    let early = pick(2)
+    let in_loop = pick(1)
+    let trailing = pick(0)
+    let tail = implicit()
+    println(f\"{early[0]} {in_loop[1]} {trailing[2]} {tail[3]}\")
+",
+        "11 10 9 7",
+    );
+}
+
+/// A gpu-resident reduction result returned from a function carries the
+/// device's value, not the output buffer's host-side seed.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn returning_a_gpu_scalar_reads_back_the_device_result() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+fn total() int
+    gpu var data = [1, 2, 3, 4]
+    gpu let sum = data.reduce(0, fn(a int, b int) int: a + b)
+    return sum
+
+fn main()
+    println(f\"{total()}\")
+",
+        "10",
+    );
+}
+
+/// The verifier gate for the return edge: building runs `MIRI_VERIFY_MIR`, which
+/// refuses a copy of a gpu binding into the host return slot that no readback
+/// fences. Covers the class on a machine with no adapter.
+#[test]
+fn returning_a_gpu_binding_passes_the_cross_residency_verifier() {
+    assert_builds(
+        "
+use system.collections.array
+
+fn explicit() Array<int, 4>
+    gpu var b = [0, 0, 0, 0]
+    forall i in 0..4
+        b[i] = 9
+    return b
+
+fn implicit() Array<int, 4>
+    gpu var b = [0, 0, 0, 0]
+    forall i in 0..4
+        b[i] = 9
+    b
+
+fn main()
+    let e = explicit()
+    let i = implicit()
+    println(f\"{e.length()} {i.length()}\")
+",
+    );
+}
+
+/// A closure captures by value at its creation (SPEC: captures are copies taken
+/// when the closure is created). Capturing a gpu binding is therefore a host
+/// boundary: the capture is fenced, so the closure sees the device's results as
+/// of that point rather than the host array's initial values. Both closure
+/// spellings — a lambda and a nested `fn` — capture the same way.
+///
+/// The closures run before the host readback of `a`: that readback writes the
+/// device buffer into the host array the capture shares, which would supply
+/// the value after the fact and hide a missing capture fence.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn closure_capture_of_a_gpu_binding_sees_the_device_results() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..4
+        a[i] = a[i] * 5
+    let g = fn() int
+        let c = a
+        return c[0]
+    fn last() int
+        let c = a
+        return c[3]
+    let r = g()
+    let l = last()
+    let h = a
+    println(f\"{h[0]} {r} {l}\")
+",
+        "5 5 20",
+    );
+}
+
+/// The captured copy is taken when the closure is created: a launch after the
+/// capture changes the device buffer, which a later host readback observes, but
+/// not the closure's copy.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn closure_capture_of_a_gpu_binding_is_a_copy_taken_at_creation() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..4
+        a[i] = a[i] * 5
+    let g = fn() int
+        let c = a
+        return c[0]
+    forall i in 0..4
+        a[i] = a[i] * 2
+    let r = g()
+    let h = a
+    println(f\"{h[0]} {r}\")
+",
+        "10 5",
+    );
+}
+
+/// A gpu scalar no launch has touched has no device buffer, so its readback has
+/// nothing to copy: the host value it was declared with is the answer.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_scalar_with_no_device_buffer_reads_back_its_declared_value() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+fn main()
+    gpu let s = 7
+    let h = s
+    gpu var f = 2.5
+    let hf = f
+    println(f\"{h} {hf}\")
+",
+        "7 2.5",
+    );
+}
+
+/// A reduction assigned into an existing gpu scalar reads back as the device's
+/// result.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reduction_assigned_into_a_gpu_scalar_reads_back() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+fn main()
+    gpu var xs = [1, 2, 3, 4]
+    gpu var s = 7
+    s = xs.reduce(0, fn(a int, b int) int: a + b)
+    let h = s
+    println(f\"{h}\")
+",
+        "10",
+    );
+}
+
+/// The return and capture fences each cost exactly one readback, and every
+/// buffer they read is still released exactly once when its binding's function
+/// returns: one upload, one readback and one release per binding.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn return_and_capture_fences_keep_device_telemetry_balanced() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.collections.array
+
+fn make() Array<int, 4>
+    gpu var b = [0, 0, 0, 0]
+    forall i in 0..4
+        b[i] = 9
+    return b
+
+fn capture() int
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..4
+        a[i] = a[i] * 5
+    let g = fn() int
+        let c = a
+        return c[0]
+    return g()
+
+fn main()
+    gpu_reset_telemetry()
+    let h = make()
+    let r = capture()
+    println(f\"{h[0]} {r} uploads {gpu_uploads()} readbacks {gpu_readbacks()} releases {gpu_releases()}\")
+",
+        "9 5 uploads 2 readbacks 2 releases 2",
+    );
+}
+
+/// The verifier gate for captures: building runs `MIRI_VERIFY_MIR`, which
+/// refuses a closure that captures a gpu binding no readback fences. Covers
+/// both closure spellings on a machine with no adapter.
+#[test]
+fn capturing_a_gpu_binding_passes_the_cross_residency_verifier() {
+    assert_builds(
+        "
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..4
+        a[i] = a[i] * 5
+    let g = fn() int
+        let c = a
+        return c[0]
+    fn last() int
+        let c = a
+        return c[3]
+    println(f\"{g()} {last()}\")
+",
+    );
+}

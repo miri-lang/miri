@@ -1024,6 +1024,10 @@ fn emit_gpu_upload(
 /// A gpu-resident target is left alone: `gpu_b = gpu_a` stays on the device,
 /// and a host array assigned into a gpu binding is an upload, which
 /// `handle_managed_place_assign` emits instead.
+// TODO: a host value assigned into a gpu *scalar* is not uploaded. Once the
+// scalar has a device buffer (it holds a reduction's result), `s = 3` writes
+// only the host copy, and the next readback of `s` overwrites it with the
+// stale device value.
 fn emit_assigned_source_readback(
     ctx: &mut LoweringContext,
     lhs: &crate::ast::expression::LeftHandSideExpression,

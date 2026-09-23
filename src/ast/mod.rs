@@ -10,6 +10,7 @@ pub mod expression;
 pub mod extent;
 pub mod factory;
 pub mod formatter;
+pub mod gpu_wire;
 pub mod literal;
 pub mod math_intrinsic;
 pub mod node;

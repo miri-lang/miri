@@ -193,7 +193,7 @@ fn custom_field_layout(
         TypeDefinition::Struct(struct_def) => {
             struct_field_layout(name, struct_def, field_idx, ptr_ty)
         }
-        TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, field_idx, ptr_ty),
+        TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, type_args, field_idx, ptr_ty),
         TypeDefinition::Alias(alias_def) => field_layout(
             &alias_def.template.kind,
             field_idx,
@@ -241,20 +241,67 @@ fn struct_field_layout(
     (offset, ptr_ty)
 }
 
+/// Where field `field_idx` of an enum value sits: the discriminant is field 0,
+/// and payload field `k` of whichever variant the value holds is field `k + 1`.
+///
+/// A read of a payload field does not know which variant it reads — the match
+/// arm that reached it does, but the projection only carries the index — so
+/// the offset must not depend on the variant. Every field therefore occupies
+/// one slot of [`enum_payload_slot_size`], the same for all variants of the
+/// enum at this instantiation. The type returned is a pointer-sized word; a
+/// reader loads at the width of the binding it fills.
 fn enum_field_layout(
-    _enum_def: &EnumDefinition,
+    enum_def: &EnumDefinition,
+    type_args: Option<&[Expression]>,
     field_idx: usize,
     ptr_ty: CraneliftType,
 ) -> (i32, CraneliftType) {
-    let ptr_size = ptr_ty.bytes() as i32;
-    // Discriminant is pointer-sized at offset 0; payload starts at offset ptr_size.
-    // Enums currently use pointer-sized slots for all fields to simplify layout.
-    if field_idx == 0 {
-        (0, ptr_ty)
-    } else {
-        let payload_offset = ptr_size + ((field_idx - 1) as i32 * ptr_size);
-        (payload_offset, ptr_ty)
-    }
+    let slot = enum_payload_slot_size(enum_def, type_args, ptr_ty) as i32;
+    ((field_idx as i32) * slot, ptr_ty)
+}
+
+/// The width of every slot in an enum value: the discriminant's and each
+/// payload field's.
+///
+/// It is the widest payload any variant carries at this instantiation, and
+/// never narrower than a pointer, so a 128-bit payload gets a slot it fits in
+/// and every other enum keeps pointer-sized slots. A payload spelled as a type
+/// parameter takes the width of the argument bound to it; one with no bound
+/// argument is pointer-sized.
+///
+/// This is the one authority for enum payload offsets: construction, the
+/// field reads and writes of a match, and the drop path all lay a value out
+/// by it, so none of them can disagree about where a field lives.
+pub fn enum_payload_slot_size(
+    enum_def: &EnumDefinition,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> u32 {
+    enum_def
+        .variants
+        .values()
+        .flatten()
+        .map(|field_ty| {
+            let stored = enum_payload_field_kind(enum_def, &field_ty.kind, type_args);
+            translate_type_kind(&stored, ptr_ty).bytes()
+        })
+        .fold(ptr_ty.bytes(), u32::max)
+}
+
+/// The kind an enum payload field declared as `declared` stores at the
+/// instantiation `type_args`: a payload spelled as a type parameter takes the
+/// argument bound to it, and any other payload is stored as declared. A
+/// parameter with no bound argument is returned unresolved.
+///
+/// The slot width above, and the drop path's choice of which fields to
+/// release, both resolve payloads through this, so the offsets a value is
+/// written at and the offsets it is released from cannot disagree.
+pub fn enum_payload_field_kind(
+    enum_def: &EnumDefinition,
+    declared: &TypeKind,
+    type_args: Option<&[Expression]>,
+) -> TypeKind {
+    substitute_generic_field_kind(declared, type_args, enum_def.generics.as_ref())
 }
 
 /// Where each field of a class instance sits, and how much memory the fields
@@ -347,7 +394,9 @@ pub fn aggregate_size(
     let ptr_size = ptr_ty.bytes();
     match local_type {
         TypeKind::Tuple(element_exprs) => tuple_aggregate_size(element_exprs, ptr_ty),
-        TypeKind::Custom(name, _) => custom_aggregate_size(name, type_definitions, ptr_ty),
+        TypeKind::Custom(name, type_args) => {
+            custom_aggregate_size(name, type_args.as_deref(), type_definitions, ptr_ty)
+        }
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -407,13 +456,14 @@ fn tuple_aggregate_size(
 /// payload (classes, traits, generics) fall back to a pointer slot.
 fn custom_aggregate_size(
     name: &str,
+    type_args: Option<&[Expression]>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> u32 {
     let ptr_size = ptr_ty.bytes();
     match type_definitions.get(name) {
         Some(TypeDefinition::Struct(struct_def)) => struct_aggregate_size(struct_def, ptr_ty),
-        Some(TypeDefinition::Enum(enum_def)) => enum_aggregate_size(enum_def, ptr_size),
+        Some(TypeDefinition::Enum(enum_def)) => enum_aggregate_size(enum_def, type_args, ptr_ty),
         Some(TypeDefinition::Alias(alias_def)) => {
             aggregate_size(&alias_def.template.kind, type_definitions, ptr_ty)
         }
@@ -440,30 +490,14 @@ fn struct_aggregate_size(struct_def: &StructDefinition, ptr_ty: CraneliftType) -
     align_to(total, max_align) as u32
 }
 
-/// Size of an enum aggregate: a ptr-sized discriminant followed by the
-/// largest variant payload. Each payload field uses a pointer-sized slot to
-/// match the convention in [`field_layout`].
-///
-/// TODO: Payload slots are ptr-sized, so payloads wider than a pointer (e.g. I128)
-/// overflow their slot on the STORE side. A wider load cannot fix a store overflow.
-/// If I128 payloads are ever needed, increase slot width for fields > ptr_size.
-/// Note: coerce_value_to_declared_type in translate_rvalue.rs deliberately skips
-/// coercion for declared types wider than ptr_type, preserving the pre-diff behavior
-/// for those cases until the slot width is widened.
-fn enum_aggregate_size(enum_def: &EnumDefinition, ptr_size: u32) -> u32 {
-    let max_payload = enum_def
-        .variants
-        .values()
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|ty| match &ty.kind {
-                    TypeKind::I128 | TypeKind::U128 => 16u32,
-                    _ => ptr_size,
-                })
-                .sum::<u32>()
-        })
-        .max()
-        .unwrap_or(0);
-    ptr_size + max_payload
+/// Size of an enum aggregate: the discriminant slot followed by as many
+/// payload slots as the variant with the most fields carries, each slot as wide
+/// as [`enum_payload_slot_size`] says.
+fn enum_aggregate_size(
+    enum_def: &EnumDefinition,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> u32 {
+    let max_fields = enum_def.variants.values().map(Vec::len).max().unwrap_or(0);
+    enum_payload_slot_size(enum_def, type_args, ptr_ty) * (1 + max_fields as u32)
 }

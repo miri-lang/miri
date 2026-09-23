@@ -64,11 +64,15 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Frees the persistent device buffer of a `gpu`-resident local at its
-    /// `StorageDead` (scope exit). The handle id is a compile-time constant on
-    /// the local's decl; a non-`gpu` local carries no handle and this is a
-    /// no-op. `miri_gpu_release` is idempotent, so a `gpu`-to-`gpu` move whose
-    /// handle is shared by two locals releases it once and the second call is a
-    /// harmless no-op.
+    /// `StorageDead` (scope exit) and closes the activation its declaration
+    /// opened. The handle id is a compile-time constant on the local's decl; the
+    /// runtime resolves it to the innermost live activation. A non-`gpu` local
+    /// carries no handle and this is a no-op.
+    ///
+    /// Each release closes one activation, so a handle shared by several locals
+    /// (a `gpu`-to-`gpu` move, a `gpu let` bound to a reduction's output) is
+    /// released only by its first-declared owner — see
+    /// [`Self::is_device_handle_owner`].
     fn translate_gpu_buffer_release(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -91,7 +95,7 @@ impl<'a> FunctionTranslator<'a> {
         // releasing a caller-owned buffer (a double-free); it is set only by
         // `stamp_residency_param_handles`, which every residency specialization
         // routes through.
-        if decl.device_handle_borrowed {
+        if decl.device_handle_borrowed || !Self::is_device_handle_owner(body, place.local) {
             return Ok(());
         }
         let handle_val = builder
@@ -109,6 +113,17 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
         Ok(())
+    }
+
+    /// True when `local` is the first-declared non-borrowed local carrying its
+    /// device handle. Later sharers are declared inside the owner's scope, so
+    /// the owner's `StorageDead` runs on every path theirs does and closes the
+    /// activation exactly once.
+    fn is_device_handle_owner(body: &Body, local: Local) -> bool {
+        let handle = body.local_decls[local.0].device_handle;
+        !body.local_decls[..local.0]
+            .iter()
+            .any(|decl| !decl.device_handle_borrowed && decl.device_handle == handle)
     }
 
     /// `StatementKind::IncRef`: bump the RC slot at `payload - ptr_size`,

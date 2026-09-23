@@ -27,6 +27,8 @@ pub(crate) mod code {
     pub(crate) const INDEX_OUT_OF_BOUNDS: &str = "MER_RT_011";
     /// A `panic` the program asked for.
     pub(crate) const EXPLICIT_PANIC: &str = "MER_RT_012";
+    /// A GPU kernel launch the runtime or the device refused.
+    pub(crate) const GPU_LAUNCH_FAILED: &str = "MER_RT_013";
 }
 
 /// Report a runtime fault under `code` and end the process.

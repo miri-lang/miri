@@ -15,6 +15,7 @@
 
 use crate::compute::{get_kernel_by_name, CompiledKernel};
 use crate::context::{init_gpu_context, with_validation_scope, GpuContext, GpuError};
+use crate::wire::WireConversion;
 use crate::{device_table, telemetry};
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
@@ -39,6 +40,21 @@ pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
                 value,
                 i32::MIN,
                 i32::MAX
+            )
+        }
+        GpuError::ValueOutOfU32Range {
+            buffer_index,
+            element_index,
+            value,
+        } => {
+            format!(
+                "Runtime error: GPU upload failed: buffer {} element {}: value {} \
+                exceeds u32 range [{}, {}]; use Array<u32, N> for explicit 32-bit GPU storage",
+                buffer_index,
+                element_index,
+                value,
+                u32::MIN,
+                u32::MAX
             )
         }
         GpuError::GridTooLarge(reason) => {
@@ -79,6 +95,9 @@ pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
                 "Runtime error: GPU launch failed: unsupported scalar type: {}",
                 reason
             )
+        }
+        GpuError::InactiveHandle(reason) => {
+            format!("Runtime error: GPU launch failed: {}", reason)
         }
     }
 }
@@ -131,10 +150,11 @@ pub struct GpuLaunchDesc {
     /// buffer binding is read-only, 0 if read-write. Array length is `num_bufs`.
     /// When null, all buffers are assumed read-write (legacy behavior).
     pub buf_read_only: *const u8,
-    /// Which buffers need i64→i32 narrowing on upload and i32→i64 widening on readback.
-    /// `buf_int_narrow[i]` is 1 if the i-th buffer is an `Array<int, N>`, 0 otherwise.
-    /// Array length is `num_bufs`. When null, no buffers need narrowing (legacy behavior).
-    pub buf_int_narrow: *const u8,
+    /// Per-buffer element conversion code (see [`crate::wire::WireConversion`]):
+    /// how each buffer's elements are converted between their host width and
+    /// their device lane on upload and readback. Array length is `num_bufs`.
+    /// When null, every buffer's bytes are copied unchanged.
+    pub buf_wire_conversion: *const u8,
     /// Bitmask indicating which uniform bounds and runtime range starts are present.
     /// Bit 0/1/2 = x/y/z loop-bound present; bit 3/4/5 = x/y/z range-start present.
     pub uniform_bound_present: u64,
@@ -144,8 +164,9 @@ pub struct GpuLaunchDesc {
     pub uniform_bound_y_value: i64,
     /// Bound value for z axis (3D loops only).
     pub uniform_bound_z_value: i64,
-    /// Packed scalar capture values (int→i32, bool→u32, f32→f32).
-    /// Each scalar occupies 4 bytes. When null, no scalar captures are present.
+    /// Packed scalar capture values, each already converted by the compiler
+    /// to its 32-bit device lane (4 bytes per scalar). When null, no scalar
+    /// captures are present.
     pub scalar_inputs_ptr: *const u8,
     /// Byte length of `scalar_inputs_ptr` buffer.
     pub scalar_inputs_len: usize,
@@ -181,26 +202,49 @@ pub unsafe extern "C" fn miri_gpu_launch_inline(desc: *const GpuLaunchDesc) -> u
     let desc_ref = &*desc;
     match launch_impl(desc_ref) {
         Ok(()) => 1,
+        // Every failure is reported and returned: the compiled caller ends the
+        // program through the core runtime's trap, which reports a diagnostic
+        // code and exits cleanly instead of dying on SIGABRT.
         Err(err) => {
             let msg = gpu_launch_error_message(&err);
             let _ = writeln!(std::io::stderr(), "{}", msg);
-
-            // Three variants abort unconditionally because silent data corruption
-            // is worse than early termination. Once generated code traps all
-            // non-success return codes, these will be caught by the trap.
-            match &err {
-                GpuError::ValueOutOfI32Range { .. }
-                | GpuError::GridTooLarge(_)
-                | GpuError::ShaderCompilationFailed(_) => {
-                    std::process::abort();
-                }
-                _ => 0,
-            }
+            0
         }
     }
 }
 
+/// Refuses a 1-D `forall` launch (a loop bound on x alone) that dispatches
+/// more than 2³¹ threads. The kernel numbers its threads with the device's
+/// 32-bit `int`, so a thread past `i32::MAX` would wrap negative and pass the
+/// loop's bounds guard. A multi-axis loop indexes each axis separately and is
+/// not limited this way, nor is a `gpu fn` launch, which carries no bound.
+fn refuse_unindexable_loop(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
+    const BOUND_AXES: u64 = 0b111;
+    const MAX_INDEXED_THREADS: u64 = 1 << 31;
+    if desc.uniform_bound_present & BOUND_AXES != 1 {
+        return Ok(());
+    }
+    let threads: u64 = [
+        desc.grid_x,
+        desc.grid_y,
+        desc.grid_z,
+        desc.block_x,
+        desc.block_y,
+        desc.block_z,
+    ]
+    .iter()
+    .map(|&n| u64::from(n))
+    .product();
+    if threads > MAX_INDEXED_THREADS {
+        return Err(GpuError::GridTooLarge(
+            "this loop dispatches more threads than a 32-bit device index can number".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
+    device_table::check_activation_balance()?;
     let wgsl = decode_utf8(desc.wgsl_ptr, desc.wgsl_len)?;
     let entry_point = decode_utf8(desc.entry_ptr, desc.entry_len)?;
 
@@ -284,15 +328,16 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
             let _ = narrow_uniform_bound(value)?;
         }
     }
+    refuse_unindexable_loop(desc)?;
 
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
     let buf_byte_lens = std::slice::from_raw_parts(desc.buf_byte_lens, desc.num_bufs);
     let buf_handle_ids = std::slice::from_raw_parts(desc.buf_handle_ids, desc.num_bufs);
-    let buf_int_narrow = if desc.buf_int_narrow.is_null() {
+    let buf_wire_conversion = if desc.buf_wire_conversion.is_null() {
         None
     } else {
         Some(std::slice::from_raw_parts(
-            desc.buf_int_narrow,
+            desc.buf_wire_conversion,
             desc.num_bufs,
         ))
     };
@@ -303,7 +348,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         buf_handle_ids,
         buf_data_ptrs,
         buf_byte_lens,
-        buf_int_narrow,
+        buf_wire_conversion,
     )?;
 
     // Create one 4-byte `u32` uniform buffer per present bound/start, in the
@@ -394,14 +439,13 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         telemetry::record_fence();
         for i in transient_captures {
-            let needs_narrow = buf_int_narrow.as_ref().is_some_and(|arr| arr[i] != 0);
             readback_device_buffer(
                 device,
                 queue,
                 &storage_buffers[i],
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
-                needs_narrow,
+                WireConversion::for_buffer(buf_wire_conversion, i)?,
             )?;
         }
     }
@@ -413,159 +457,101 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 /// allocates its persistent buffer; a transient one allocates fresh and is
 /// scheduled for post-dispatch readback.
 ///
-/// When `buf_int_narrow[i]` is 1, the host buffer (i64 elements) is narrowed
-/// to i32 on upload and widened back on readback.
+/// `buf_wire_conversion[i]` names how buffer `i`'s elements are converted to
+/// their device lane on upload (and back on readback).
 ///
 /// # Safety
 /// The three slices must be `num_bufs` long and their host pointers valid for
 /// the matching byte lengths.
 ///
 /// # Errors
-/// Returns `Err` if any buffer value falls outside i32 range during narrowing.
+/// Returns `Err` if any element does not fit its device lane, or a conversion
+/// code is unknown.
 unsafe fn prepare_capture_buffers(
     device: &Device,
     queue: &Queue,
     buf_handle_ids: &[u64],
     buf_data_ptrs: &[*mut u8],
     buf_byte_lens: &[usize],
-    buf_int_narrow: Option<&[u8]>,
+    buf_wire_conversion: Option<&[u8]>,
 ) -> Result<(Vec<wgpu::Buffer>, Vec<usize>), GpuError> {
     let mut storage_buffers = Vec::with_capacity(buf_handle_ids.len());
     let mut transient_captures = Vec::new();
-    for i in 0..buf_handle_ids.len() {
-        let needs_narrow = buf_int_narrow.is_some_and(|arr| arr[i] != 0);
-        let buffer = if buf_handle_ids[i] != device_table::HOST_HANDLE {
-            persistent_capture_buffer(
-                device,
-                queue,
-                buf_handle_ids[i],
-                buf_data_ptrs[i],
-                buf_byte_lens[i],
-                needs_narrow,
-                i,
-            )?
+    for (i, &handle) in buf_handle_ids.iter().enumerate() {
+        let upload = HostUpload {
+            host_ptr: buf_data_ptrs[i],
+            byte_len: buf_byte_lens[i],
+            conversion: WireConversion::for_buffer(buf_wire_conversion, i)?,
+            buffer_index: i,
+        };
+        let buffer = if handle != device_table::HOST_HANDLE {
+            persistent_capture_buffer(device, queue, handle, upload)?
         } else {
             transient_captures.push(i);
-            new_storage_buffer_with_upload(
-                device,
-                queue,
-                buf_data_ptrs[i],
-                buf_byte_lens[i],
-                needs_narrow,
-                i,
-            )?
+            new_storage_buffer_with_upload(device, queue, upload)?
         };
         storage_buffers.push(buffer);
     }
     Ok((storage_buffers, transient_captures))
 }
 
+/// A host buffer about to be uploaded to the device: where its bytes are, how
+/// many there are, how its elements convert to their device lane, and which
+/// launch buffer it is (for error reports).
+#[derive(Clone, Copy)]
+struct HostUpload {
+    host_ptr: *mut u8,
+    byte_len: usize,
+    conversion: WireConversion,
+    buffer_index: usize,
+}
+
 /// Returns the resident device buffer for `handle`, allocating and uploading
 /// it on first capture and reusing it (no upload) on every later launch.
 ///
-/// When the buffer is first uploaded, range validation occurs. Later captures
-/// reuse the persistent buffer without re-validation.
+/// Elements are converted and range-checked when the buffer is first
+/// uploaded; later captures reuse the persistent buffer without re-checking.
 ///
 /// # Errors
-/// Returns `Err` if the buffer value falls outside i32 range during first upload.
+/// Returns `Err` if an element does not fit its device lane on first upload.
 unsafe fn persistent_capture_buffer(
     device: &Device,
     queue: &Queue,
     handle: u64,
-    host_ptr: *mut u8,
-    byte_len: usize,
-    needs_narrow: bool,
-    buffer_index: usize,
+    upload: HostUpload,
 ) -> Result<wgpu::Buffer, GpuError> {
     if let Some((existing, _, _)) = device_table::resident_buffer(handle) {
         return Ok(existing);
     }
-    let buffer = new_storage_buffer_with_upload(
-        device,
-        queue,
-        host_ptr,
-        byte_len,
-        needs_narrow,
-        buffer_index,
-    )?;
-    let device_byte_len = if needs_narrow {
-        let elem_count = byte_len / 8;
-        elem_count.checked_mul(4).ok_or_else(|| {
-            GpuError::GridTooLarge(
-                "persistent capture buffer overflow: element count * 4".to_string(),
-            )
-        })?
-    } else {
-        byte_len
-    };
-    device_table::insert_resident(handle, buffer.clone(), device_byte_len, needs_narrow);
+    let buffer = new_storage_buffer_with_upload(device, queue, upload)?;
+    let device_byte_len = upload.conversion.device_len(upload.byte_len)?;
+    device_table::insert_resident(handle, buffer.clone(), device_byte_len, upload.conversion)?;
     Ok(buffer)
 }
 
-/// Allocates a storage buffer sized for `byte_len` (or narrowed size if needs_narrow).
-/// When there are host bytes to copy, uploads them and records one upload in the telemetry counters;
-/// an empty or null capture allocates the buffer without an upload.
-///
-/// When `needs_narrow` is true, the host buffer contains i64 elements
-/// (8 bytes each) that are narrowed to i32 (4 bytes each) on upload.
-///
-/// # Panics
-/// Panics if `byte_len` is not a multiple of 8 when `needs_narrow` is true (host buffer
-/// must contain complete i64 elements).
+/// Allocates a storage buffer sized for the device form of `upload` and, when
+/// there are host bytes to copy, converts and uploads them, recording one
+/// upload in the telemetry counters; an empty or null capture allocates the
+/// buffer without an upload.
 ///
 /// # Errors
-/// Returns `Err` if any element value falls outside i32 range during narrowing.
+/// Returns `Err` if an element does not fit its device lane.
 unsafe fn new_storage_buffer_with_upload(
     device: &Device,
     queue: &Queue,
-    host_ptr: *mut u8,
-    byte_len: usize,
-    needs_narrow: bool,
-    buffer_index: usize,
+    upload: HostUpload,
 ) -> Result<wgpu::Buffer, GpuError> {
-    let (device_byte_len, upload_bytes) = if needs_narrow {
-        // Host buffer is i64 elements (byte_len = 8*N); device buffer is i32 elements (4*N).
-        // Guard: byte_len must be a multiple of 8.
-        assert!(
-            byte_len.is_multiple_of(8),
-            "host buffer byte_len {} is not a multiple of 8 for i64 narrowing",
-            byte_len
-        );
-        let elem_count = byte_len / 8;
-        // Defend against integer overflow: check that elem_count * 4 doesn't overflow.
-        let device_len = elem_count.checked_mul(4).ok_or_else(|| {
-            GpuError::GridTooLarge("storage buffer overflow: element count * 4".to_string())
-        })?;
-        let padded = align_to_4(device_len.max(4));
-        let mut upload_bytes = Vec::with_capacity(device_len);
-        if byte_len > 0 && !host_ptr.is_null() {
-            let host_i64s = std::slice::from_raw_parts(host_ptr as *const i64, elem_count);
-            for (elem_idx, &val) in host_i64s.iter().enumerate() {
-                if val < i32::MIN as i64 || val > i32::MAX as i64 {
-                    return Err(GpuError::ValueOutOfI32Range {
-                        buffer_index,
-                        element_index: elem_idx,
-                        value: val,
-                    });
-                }
-                upload_bytes.extend_from_slice(&(val as i32).to_le_bytes());
-            }
-        }
-        (padded as u64, upload_bytes)
+    let device_len = upload.conversion.device_len(upload.byte_len)?;
+    let upload_bytes = if upload.byte_len > 0 && !upload.host_ptr.is_null() {
+        let host = std::slice::from_raw_parts(upload.host_ptr as *const u8, upload.byte_len);
+        upload.conversion.encode(host, upload.buffer_index)?
     } else {
-        // Defend against integer overflow in align_to_4.
-        let padded = align_to_4(byte_len.max(4));
-        let bytes = if byte_len > 0 && !host_ptr.is_null() {
-            std::slice::from_raw_parts(host_ptr as *const u8, byte_len).to_vec()
-        } else {
-            Vec::new()
-        };
-        (padded as u64, bytes)
+        Vec::new()
     };
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("miri_gpu_launch_inline storage"),
-        size: device_byte_len,
+        size: align_to_4(device_len.max(4)) as u64,
         usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -838,25 +824,12 @@ unsafe fn readback_device_buffer(
     src: &wgpu::Buffer,
     host_ptr: *mut u8,
     byte_len: usize,
-    needs_narrow: bool,
+    conversion: WireConversion,
 ) -> Result<(), GpuError> {
-    let (device_byte_len, host_byte_len) = if needs_narrow {
-        // Device buffer is i32 elements (4 bytes each); host buffer is i64 elements (8 bytes each).
-        // Guard: byte_len (host length) must be a multiple of 8.
-        assert!(
-            byte_len.is_multiple_of(8),
-            "host buffer byte_len {} is not a multiple of 8 for i64 widening",
-            byte_len
-        );
-        let elem_count = byte_len / 8;
-        let device_len = elem_count.checked_mul(4).ok_or_else(|| {
-            GpuError::GridTooLarge("readback buffer overflow: element count * 4".to_string())
-        })?;
-        (device_len, byte_len)
-    } else {
-        (byte_len, byte_len)
-    };
-
+    if byte_len == 0 || host_ptr.is_null() {
+        return Ok(());
+    }
+    let device_byte_len = conversion.device_len(byte_len)?;
     let padded = align_to_4(device_byte_len.max(4)) as u64;
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("miri_gpu_launch_inline readback"),
@@ -881,22 +854,11 @@ unsafe fn readback_device_buffer(
         .map_err(|_| GpuError::BufferCreationFailed)?;
 
     let mapped = slice.get_mapped_range();
-    if needs_narrow {
-        // Widen i32 elements back to i64.
-        // Host array is 8-aligned by alloc_zeroed, so the i64 slice read is aligned.
-        let elem_count = host_byte_len / 8;
-        let device_i32s = std::slice::from_raw_parts(mapped.as_ptr() as *const i32, elem_count);
-        let host_i64s = std::slice::from_raw_parts_mut(host_ptr as *mut i64, elem_count);
-        device_i32s
-            .iter()
-            .zip(host_i64s.iter_mut())
-            .for_each(|(&v, d)| *d = v as i64);
-    } else {
-        std::ptr::copy_nonoverlapping(mapped.as_ptr(), host_ptr, host_byte_len);
-    }
+    let host = std::slice::from_raw_parts_mut(host_ptr, byte_len);
+    let decoded = conversion.decode(&mapped[..device_byte_len], host);
     drop(mapped);
     staging.unmap();
-    Ok(())
+    decoded
 }
 
 fn align_to_4(value: usize) -> usize {
@@ -987,7 +949,7 @@ mod desc_layout_tests {
         assert_eq!(offset_of!(GpuLaunchDesc, buf_byte_lens), 72);
         assert_eq!(offset_of!(GpuLaunchDesc, buf_handle_ids), 80);
         assert_eq!(offset_of!(GpuLaunchDesc, buf_read_only), 88);
-        assert_eq!(offset_of!(GpuLaunchDesc, buf_int_narrow), 96);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_wire_conversion), 96);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 104);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_x_value), 112);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_y_value), 120);
@@ -1021,19 +983,15 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
     if host_byte_len == 0 || header.data.is_null() {
         return 1;
     }
-    let Some((buffer, resident_byte_len, needs_widen)) = device_table::resident_buffer(handle)
+    let Some((buffer, resident_byte_len, conversion)) = device_table::resident_buffer(handle)
     else {
         return 1;
     };
-    // `readback_device_buffer` takes the HOST byte length and derives the device
-    // length itself (host/8*4 for widened i64 buffers). For a widened buffer the
-    // resident (device) length is half the host length, so clamping to it here
-    // would re-narrow and drop the upper half — pass the host length directly.
-    let byte_len = if needs_widen {
-        host_byte_len
-    } else {
-        host_byte_len.min(resident_byte_len)
-    };
+    // `readback_device_buffer` takes the HOST byte length and derives the
+    // device length from the conversion, so the host length is clamped, in
+    // whole elements, to what the resident buffer holds: a host array that
+    // grew since the upload can never issue a copy past the device buffer.
+    let byte_len = conversion.host_len_within(host_byte_len, resident_byte_len);
     let Ok(ctx) = init_gpu_context() else {
         return 0;
     };
@@ -1043,7 +1001,7 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
         &buffer,
         header.data,
         byte_len,
-        needs_widen,
+        conversion,
     ) {
         Ok(()) => {
             telemetry::record_fence();
@@ -1058,8 +1016,14 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
 }
 
 /// Cross-residency upload: copies host array bytes to the persistent device
-/// buffer owned by `handle`. If the buffer does not yet exist, allocates and
-/// uploads it (as if this binding were first captured in a launch).
+/// buffer owned by `handle`, converting each element to its device lane the
+/// way the buffer's first upload did.
+///
+/// A `handle` with no resident buffer yet uploads nothing: the host array is
+/// the authoritative copy, and the first launch that captures the binding
+/// allocates the device buffer from it with the element conversion the launch
+/// descriptor names. This call carries no element type, so it cannot choose a
+/// conversion itself.
 ///
 /// When `handle` is 0 (HOST_HANDLE sentinel), returns 0 immediately—
 /// host-resident captures manage their own device buffers in the launch path.
@@ -1077,85 +1041,27 @@ pub unsafe extern "C" fn miri_gpu_upload(handle: u64, arr: *const MiriArrayHeade
     if host_byte_len == 0 || header.data.is_null() {
         return 1;
     }
-
+    let Some((existing_buffer, existing_byte_len, conversion)) =
+        device_table::resident_buffer(handle)
+    else {
+        return 1;
+    };
     let Ok(ctx) = init_gpu_context() else {
         return 0;
     };
-
-    // Check if buffer already exists; if so, reuse it with a write.
-    if let Some((existing_buffer, existing_byte_len, needs_widen)) =
-        device_table::resident_buffer(handle)
-    {
-        if host_byte_len == 0 || header.data.is_null() {
-            return 1;
-        }
-        if needs_widen {
-            // Host buffer is i64 elements that were narrowed to i32 on first upload.
-            // Narrow again for this explicit upload.
-            let elem_count = host_byte_len / 8;
-            let device_len = match elem_count.checked_mul(4) {
-                Some(len) => len,
-                None => {
-                    log::error!("miri_gpu_upload: buffer size overflow: element count * 4");
-                    return 0;
-                }
-            };
-            if device_len > existing_byte_len {
-                log::error!("miri_gpu_upload: narrowed device buffer too small");
-                return 0;
-            }
-            let mut upload_bytes = Vec::with_capacity(device_len);
-            let host_i64s = std::slice::from_raw_parts(header.data as *const i64, elem_count);
-            for (elem_idx, &val) in host_i64s.iter().enumerate() {
-                if val < i32::MIN as i64 || val > i32::MAX as i64 {
-                    log::error!(
-                        "miri_gpu_upload narrowing failed: buffer {} element {}: value {} \
-                        exceeds i32 range [{}, {}]",
-                        handle,
-                        elem_idx,
-                        val,
-                        i32::MIN,
-                        i32::MAX
-                    );
-                    return 0;
-                }
-                upload_bytes.extend_from_slice(&(val as i32).to_le_bytes());
-            }
-            ctx.queue.write_buffer(&existing_buffer, 0, &upload_bytes);
-        } else {
-            // No narrowing needed; write raw bytes.
-            let upload_len = host_byte_len.min(existing_byte_len);
-            ctx.queue.write_buffer(
-                &existing_buffer,
-                0,
-                std::slice::from_raw_parts(header.data, upload_len),
-            );
-        }
-        telemetry::record_upload();
-        return 1;
-    }
-
-    // Buffer does not exist yet; allocate and upload it fresh (same as first-launch path).
-    // For simplicity, assume no narrowing (the assignment path does not narrow; narrowing
-    // is only applied when a host array with i64 elements is first uploaded in a launch).
-    // If narrowing is needed in the future, the calling code must pass an i32-narrowed array.
-    match new_storage_buffer_with_upload(
-        &ctx.device,
-        &ctx.queue,
-        header.data,
-        host_byte_len,
-        false, // no narrowing for explicit upload assignment
-        0,     // buffer_index is not meaningful for standalone upload
-    ) {
-        Ok(buffer) => {
-            device_table::insert_resident(handle, buffer, host_byte_len, false);
-            1
-        }
+    let host = std::slice::from_raw_parts(header.data as *const u8, host_byte_len);
+    let upload_bytes = match conversion.encode(host, 0) {
+        Ok(bytes) => bytes,
         Err(err) => {
-            log::error!("miri_gpu_upload failed: {:?}", err);
-            0
+            let _ = writeln!(std::io::stderr(), "{}", gpu_launch_error_message(&err));
+            return 0;
         }
-    }
+    };
+    let upload_len = upload_bytes.len().min(existing_byte_len);
+    ctx.queue
+        .write_buffer(&existing_buffer, 0, &upload_bytes[..upload_len]);
+    telemetry::record_upload();
+    1
 }
 
 #[cfg(test)]
@@ -1353,6 +1259,16 @@ mod gpu_launch_error_message_tests {
         assert!(msg.starts_with("Runtime error: GPU"));
         assert!(msg.contains("grid dimensions exceed device limits"));
         assert!(msg.contains("reduce the loop range"));
+    }
+
+    #[test]
+    fn inactive_handle_error() {
+        let err = GpuError::InactiveHandle(
+            "gpu binding 7 was released with no live activation".to_string(),
+        );
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU launch failed"));
+        assert!(msg.contains("gpu binding 7 was released with no live activation"));
     }
 
     #[test]

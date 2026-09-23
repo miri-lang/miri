@@ -21,3 +21,4 @@ pub mod skill;
 pub mod test_cmd;
 pub mod version;
 pub mod view;
+pub mod web_gpu_buffers;

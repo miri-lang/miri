@@ -23,17 +23,16 @@ use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::gpu_wire::{buffer_conversion, scalar_capture_wire};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::node::IdNode;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
-use crate::ast::types::{
-    resolve_element_type_kind, BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME,
-};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME};
 use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::{BackendConfig, BackendMetadata, GpuBodyMetadata};
-use crate::mir::body::{BindingResidency, DeviceHandleId};
+use crate::mir::body::{BindingResidency, DeviceHandleId, LaunchUniform};
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
@@ -119,6 +118,37 @@ impl AxisSpec {
     fn is_runtime(&self) -> bool {
         matches!(self.start, AxisStart::Runtime(_)) || matches!(self.bound, AxisBound::Runtime(..))
     }
+}
+
+/// The most workgroups every device dispatches along one grid axis: WebGPU's
+/// guaranteed `maxComputeWorkgroupsPerDimension`.
+const MAX_WORKGROUPS_PER_AXIS: u32 = 65_535;
+
+/// The most threads a 1-D loop may dispatch: a kernel numbers them with the
+/// device's 32-bit `int`, and a thread past `i32::MAX` would wrap negative and
+/// slip under the loop's bounds guard.
+const MAX_INDEXED_THREADS: u64 = 1 << 31;
+
+/// Why a 1-D loop longer than [`MAX_INDEXED_THREADS`] is refused. The runtime
+/// refuses a runtime-bound loop with the same words.
+const DEVICE_INDEX_OVERFLOW: &str = "more threads than a 32-bit device index can number";
+
+/// How a `forall` kernel maps its dispatch grid onto the loop's x index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GridLayout {
+    /// Each loop axis owns its grid axis: `workgroup_id * block + local_id`.
+    PerAxis,
+    /// A 1-D loop whose workgroups may exceed one grid axis and spill into the
+    /// y axis: the x index flattens the (x, y) workgroup id first.
+    SpilledX,
+}
+
+/// How a kernel turns its thread coordinates into loop variables: the grid
+/// layout it was dispatched with, and each axis's runtime start uniform
+/// (`None` for a literal start).
+struct LoopIndexing<'a> {
+    layout: GridLayout,
+    start_uniforms: &'a [Option<Local>],
 }
 
 /// Lowers a `forall` loop targeting GPU into a synthesized kernel + `GpuLaunch`.
@@ -282,7 +312,40 @@ fn compute_kernel_grid_size(
             unreachable!("literal mode checked above");
         }
     }
+    let grid = spill_literal_grid(axes.len(), grid);
+    if axes.len() == 1 && dispatched_threads(grid, block) > MAX_INDEXED_THREADS {
+        return Err(LoweringError::unsupported_expression(
+            format!("forall: this loop dispatches {DEVICE_INDEX_OVERFLOW}"),
+            span,
+        ));
+    }
     Ok(Some(grid))
+}
+
+/// Every thread a grid of `block`-sized workgroups dispatches.
+fn dispatched_threads(grid: [u32; 3], block: [u32; 3]) -> u64 {
+    grid.iter().chain(&block).map(|&n| u64::from(n)).product()
+}
+
+/// A 1-D literal grid with its x workgroups spread over the x and y axes so
+/// neither exceeds [`MAX_WORKGROUPS_PER_AXIS`]. A grid that fits one axis, and
+/// every 2-D or 3-D grid, is returned unchanged.
+fn spill_literal_grid(rank: usize, grid: [u32; 3]) -> [u32; 3] {
+    if rank != 1 {
+        return grid;
+    }
+    let rows = grid[0].saturating_sub(1) / MAX_WORKGROUPS_PER_AXIS + 1;
+    [grid[0].div_ceil(rows), rows, grid[2]]
+}
+
+/// The kernel grid layout: a 1-D loop spills when its grid is computed at run
+/// time or its literal grid exceeds one axis.
+fn grid_layout(kernel_grid: Option<[u32; 3]>, rank: usize) -> GridLayout {
+    match kernel_grid {
+        _ if rank != 1 => GridLayout::PerAxis,
+        Some([_, 1, _]) => GridLayout::PerAxis,
+        Some(_) | None => GridLayout::SpilledX,
+    }
 }
 
 /// The unrounded logical per-axis iteration extent for a literal-bound `forall`
@@ -339,21 +402,22 @@ fn axis_start_operand(
 }
 
 /// Builds loop local variables from thread indices and axis starts.
-/// `start_uniforms[i]` carries the runtime start uniform for axis `i`, or `None`
-/// when the axis start is a compile-time literal.
 fn build_loop_locals(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
-    start_uniforms: &[Option<Local>],
+    indexing: LoopIndexing,
     span: Span,
 ) -> Vec<Local> {
     let i64_ty = Type::new(TypeKind::Int, span);
     let mut loop_locals = Vec::new();
 
     for (i, axis) in axes.iter().enumerate() {
-        let thread_int = compute_thread_index(ctx, axis.dimension, span);
-        let start_op =
-            axis_start_operand(ctx, axis, start_uniforms.get(i).copied().flatten(), span);
+        let thread_int = match indexing.layout {
+            GridLayout::PerAxis => compute_thread_index(ctx, axis.dimension, span),
+            GridLayout::SpilledX => compute_spilled_thread_index(ctx, span),
+        };
+        let start_uniform = indexing.start_uniforms.get(i).copied().flatten();
+        let start_op = axis_start_operand(ctx, axis, start_uniform, span);
         let loop_local = ctx.push_local(axis.name.clone(), i64_ty.clone(), span);
         push_assign(
             ctx,
@@ -414,10 +478,12 @@ fn push_kernel_params(
                 Dimension::Y => "_bound_y",
                 Dimension::Z => "_bound_z",
             };
-            let local =
-                ctx.push_param(bound_name.to_string(), Type::new(TypeKind::Int, span), span);
-            ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
-            bounds.push(local);
+            bounds.push(push_launch_uniform(
+                ctx,
+                bound_name,
+                LaunchUniform::LoopBound,
+                span,
+            ));
         }
         for (i, axis) in axes.iter().enumerate() {
             if !matches!(axis.start, AxisStart::Runtime(_)) {
@@ -428,10 +494,12 @@ fn push_kernel_params(
                 Dimension::Y => "_start_y",
                 Dimension::Z => "_start_z",
             };
-            let local =
-                ctx.push_param(start_name.to_string(), Type::new(TypeKind::Int, span), span);
-            ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
-            starts[i] = Some(local);
+            starts[i] = Some(push_launch_uniform(
+                ctx,
+                start_name,
+                LaunchUniform::RangeStart,
+                span,
+            ));
         }
     }
 
@@ -442,6 +510,22 @@ fn push_kernel_params(
     }
 
     UniformParams { bounds, starts }
+}
+
+/// Pushes an `Int` kernel parameter the launch fills in, marked with its
+/// `role` so backends bind it as its own uniform. The name is only a debugging
+/// aid: nothing downstream reads it to decide what the parameter is.
+pub(crate) fn push_launch_uniform(
+    ctx: &mut LoweringContext,
+    name: &str,
+    role: LaunchUniform,
+    span: Span,
+) -> Local {
+    let local = ctx.push_param(name.to_string(), Type::new(TypeKind::Int, span), span);
+    let decl = &mut ctx.body.local_decls[local.0];
+    decl.storage_class = StorageClass::UniformBuffer;
+    decl.launch_uniform = Some(role);
+    local
 }
 
 /// Maps an [`AcceleratorBindingKind`] to the MIR storage class a kernel
@@ -516,16 +600,11 @@ fn build_kernel_body_nd(
         is_frame_step: false,
     }));
 
-    // Mirrors the param push order in `push_kernel_params`: buffers, then the
-    // bound/start uniforms, then the scalar captures. Only buffers can be
-    // written; every uniform is read-only.
-    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
-    out_params.extend(std::iter::repeat_n(false, bound_count + start_count));
-    out_params.extend(scalar_captures.iter().map(|_| false));
-    kernel.out_params = out_params;
-    let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.out_params.len(), false);
-    kernel.param_written = param_written;
+    mark_written_params(
+        &mut kernel,
+        &buffer_captures,
+        bound_count + start_count + scalar_captures.len(),
+    );
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
@@ -538,7 +617,11 @@ fn build_kernel_body_nd(
         span,
     );
 
-    let loop_locals = build_loop_locals(&mut ctx, axes, &uniforms.starts, span);
+    let indexing = LoopIndexing {
+        layout: grid_layout(grid_size, rank),
+        start_uniforms: &uniforms.starts,
+    };
+    let loop_locals = build_loop_locals(&mut ctx, axes, indexing, span);
 
     emit_bounds_check_nd(
         &mut ctx,
@@ -551,6 +634,23 @@ fn build_kernel_body_nd(
     )?;
 
     Ok(ctx.body)
+}
+
+/// Records which kernel params the kernel writes. Mirrors the param push order
+/// in `push_kernel_params`: buffers first, then the bound/start uniforms and
+/// the scalar captures (`read_only_count` of them). Only buffers can be
+/// written; every uniform and scalar is read-only.
+fn mark_written_params(
+    kernel: &mut Body,
+    buffer_captures: &[&CaptureInfo],
+    read_only_count: usize,
+) {
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(std::iter::repeat_n(false, read_only_count));
+    kernel.out_params = out_params;
+    let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
+    param_written.resize(kernel.out_params.len(), false);
+    kernel.param_written = param_written;
 }
 
 /// Builds a per-axis bounds check condition: `loop_var_i < limit_i`.
@@ -786,6 +886,12 @@ fn compute_runtime_grid_and_bounds(
             starts[i] = Some(Box::new(start_op));
         }
     }
+    if let [_] = axes {
+        let workgroups = operand_to_local(ctx, &grid_values[0], span);
+        let (columns, rows) = spill_runtime_grid(ctx, workgroups, span);
+        grid_values[0] = Operand::Copy(Place::new(columns));
+        grid_values[1] = Operand::Copy(Place::new(rows));
+    }
 
     let grid_x = operand_to_local(ctx, &grid_values[0], span);
     let grid_y = operand_to_local(ctx, &grid_values[1], span);
@@ -826,6 +932,7 @@ fn build_literal_grid_dim3(
             grid[i] = literal_grid_dim(length, block_size[i]);
         }
     }
+    let grid = spill_literal_grid(axes.len(), grid);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
     push_assign(
@@ -896,7 +1003,7 @@ fn assemble_gpu_launch_terminator(
     let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
-        .map(|c| needs_int_narrowing(&c.ty))
+        .map(|c| needs_wire_conversion(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
         .map_err(|e| {
@@ -1112,25 +1219,10 @@ fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
     }
 }
 
+/// A host scalar a kernel may capture: exactly the kinds the GPU wire format
+/// gives a capture lane ([`scalar_capture_wire`]).
 fn is_gpu_scalar_capture(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U64
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Boolean
-    )
+    scalar_capture_wire(kind).is_some()
 }
 
 pub fn int_literal_to_i64(lit: &IntegerLiteral) -> i64 {
@@ -1613,6 +1705,90 @@ pub fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Spa
     global_idx
 }
 
+/// The x index of a thread in a 1-D loop whose workgroups spill into the y
+/// grid axis: `(workgroup_id.y * num_workgroups.x + workgroup_id.x) * block +
+/// local_id.x`. The flattened workgroup id stays below `65535²`, inside `u32`;
+/// the multiply by the block size is done in `int` so the index does not wrap.
+fn compute_spilled_thread_index(ctx: &mut LoweringContext, span: Span) -> Local {
+    let local_id = push_u32_intrinsic(ctx, GpuIntrinsic::ThreadIdx(Dimension::X), span);
+    let column = push_u32_intrinsic(ctx, GpuIntrinsic::BlockIdx(Dimension::X), span);
+    let row = push_u32_intrinsic(ctx, GpuIntrinsic::BlockIdx(Dimension::Y), span);
+    let columns = push_u32_intrinsic(ctx, GpuIntrinsic::GridDim(Dimension::X), span);
+    let block_dim = push_u32_intrinsic(ctx, GpuIntrinsic::BlockDim(Dimension::X), span);
+
+    // Each result takes its left operand's type.
+    let binary = |ctx: &mut LoweringContext, op: BinOp, lhs: Local, rhs: Local| {
+        let local = ctx.push_temp(ctx.body.local_decls[lhs.0].ty.clone(), span);
+        let copy = |operand: Local| Box::new(Operand::Copy(Place::new(operand)));
+        push_assign(ctx, local, Rvalue::BinaryOp(op, copy(lhs), copy(rhs)), span);
+        local
+    };
+    let row_start = binary(ctx, BinOp::Mul, row, columns);
+    let workgroup = binary(ctx, BinOp::Add, row_start, column);
+
+    let workgroup_int = push_int_cast(ctx, workgroup, span);
+    let block_dim_int = push_int_cast(ctx, block_dim, span);
+    let local_id_int = push_int_cast(ctx, local_id, span);
+    let first_thread = binary(ctx, BinOp::Mul, workgroup_int, block_dim_int);
+    binary(ctx, BinOp::Add, local_id_int, first_thread)
+}
+
+/// Spreads a runtime count of 1-D workgroups over the x and y grid axes so
+/// neither exceeds [`MAX_WORKGROUPS_PER_AXIS`]: `rows = (count - 1) / max + 1`
+/// and `columns = ceil(count / rows)`. A count that fits one axis keeps one
+/// row, and a count of zero yields zero columns.
+fn spill_runtime_grid(ctx: &mut LoweringContext, workgroups: Local, span: Span) -> (Local, Local) {
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let int = |value: i64| int_constant(value, span);
+    let binary = |ctx: &mut LoweringContext, op: BinOp, lhs: Operand, rhs: Operand| {
+        let local = ctx.push_temp(i64_ty.clone(), span);
+        push_assign(
+            ctx,
+            local,
+            Rvalue::BinaryOp(op, Box::new(lhs), Box::new(rhs)),
+            span,
+        );
+        Operand::Copy(Place::new(local))
+    };
+    let copy = |local: Local| Operand::Copy(Place::new(local));
+
+    let last = binary(ctx, BinOp::Sub, copy(workgroups), int(1));
+    let full_rows = binary(
+        ctx,
+        BinOp::Div,
+        last,
+        int(i64::from(MAX_WORKGROUPS_PER_AXIS)),
+    );
+    let rows = binary(ctx, BinOp::Add, full_rows, int(1));
+    let row_slack = binary(ctx, BinOp::Sub, rows.clone(), int(1));
+    let padded = binary(ctx, BinOp::Add, copy(workgroups), row_slack);
+    let columns = binary(ctx, BinOp::Div, padded, rows.clone());
+    (
+        operand_to_local(ctx, &columns, span),
+        operand_to_local(ctx, &rows, span),
+    )
+}
+
+/// A fresh `u32` local holding `intrinsic`.
+fn push_u32_intrinsic(ctx: &mut LoweringContext, intrinsic: GpuIntrinsic, span: Span) -> Local {
+    let local = ctx.push_temp(Type::new(TypeKind::U32, span), span);
+    push_assign(ctx, local, Rvalue::GpuIntrinsic(intrinsic), span);
+    local
+}
+
+/// A fresh `int` local holding `value` widened from `u32`.
+fn push_int_cast(ctx: &mut LoweringContext, value: Local, span: Span) -> Local {
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        local,
+        Rvalue::Cast(Box::new(Operand::Copy(Place::new(value))), i64_ty),
+        span,
+    );
+    local
+}
+
 pub fn materialize_operand_to_local(ctx: &mut LoweringContext, op: Operand, span: Span) -> Operand {
     match &op {
         Operand::Copy(Place { local, projection }) | Operand::Move(Place { local, projection })
@@ -1654,26 +1830,11 @@ pub fn int_constant(value: i64, span: Span) -> Operand {
     }))
 }
 
-pub fn needs_int_narrowing(ty: &Type) -> bool {
-    let elem_expr = match &ty.kind {
-        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => Some(elem_expr.as_ref()),
-        TypeKind::Custom(name, Some(args))
-            if matches!(
-                BuiltinCollectionKind::from_name(name),
-                Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
-            ) && !args.is_empty() =>
-        {
-            Some(&args[0])
-        }
-        _ => None,
-    };
-
-    elem_expr.is_some_and(|expr| {
-        matches!(
-            resolve_element_type_kind(expr),
-            Some(TypeKind::Int | TypeKind::I64)
-        )
-    })
+/// Whether the host must convert each element of the buffer `ty` between its
+/// host width and its device width on upload and readback, as the GPU wire
+/// format ([`buffer_conversion`]) decides.
+pub fn needs_wire_conversion(ty: &Type) -> bool {
+    !buffer_conversion(&ty.kind).is_identity()
 }
 
 pub fn compute_grid_size(

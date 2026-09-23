@@ -1218,7 +1218,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (12 codes: 001-012)
+    // RT — Runtime traps and assertion failures (13 codes: 001-013)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1303,7 +1303,14 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // TAR — Target capabilities (9 codes: 001-009)
+    "RT",
+    "013",
+    RtGpuLaunchFailed,
+    "GPU Launch Failed",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    // TAR — Target capabilities (10 codes: 001-010)
     "TAR",
     "001",
     TarShuffleOffsetTooLarge,
@@ -1364,6 +1371,13 @@ diagnostics!(
     "009",
     TarGpuValueOutOfRange,
     "Value Out of Range for GPU Storage",
+    Severity::Error,
+    false,
+    FixSafety::TargetChanging,
+    "TAR",
+    "010",
+    TarWebGpuUnsupported,
+    "Not Expressible in a Web GPU Bundle",
     Severity::Error,
     false,
     FixSafety::TargetChanging,

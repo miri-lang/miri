@@ -53,11 +53,22 @@ pub enum GpuError {
         element_index: usize,
         value: i64,
     },
+    /// A `u64` buffer element value exceeds the u32 lane it is narrowed into
+    /// on upload; refused for the same reason as [`GpuError::ValueOutOfI32Range`].
+    ValueOutOfU32Range {
+        buffer_index: usize,
+        element_index: usize,
+        value: u64,
+    },
     /// Grid dimensions exceed device limits or loop bound exceeds u32::MAX.
     /// The reason string clarifies which: "grid dimensions" or "loop bound".
     /// This is rejected before dispatch to avoid wgpu validation failures or
     /// silent truncation of the bounds-check uniform.
     GridTooLarge(String),
+    /// A gpu binding's handle was used or released with no live activation —
+    /// the compiled acquire/release pairing went wrong, so the device table is
+    /// not trusted to resolve it to the right buffer.
+    InactiveHandle(String),
 }
 
 #[repr(C)]

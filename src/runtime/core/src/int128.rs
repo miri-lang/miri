@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Division and remainder for the 128-bit integer widths.
+//! Division, remainder and float conversion for the 128-bit integer widths.
 //!
 //! The code generator has no instruction for these: its backend lowers the
-//! narrower widths to a hardware divide, and at 128 bits there is nothing to
-//! lower to — the operation is a library routine on every target this compiles
-//! for. Rust reaches that same routine for a `i128 / i128`, so the whole job
-//! here is to be callable from compiled code.
+//! narrower widths to a hardware divide or conversion, and at 128 bits there is
+//! nothing to lower to — the operation is a library routine on every target
+//! this compiles for. Rust reaches that same routine for a `i128 / i128` or an
+//! `f64 as i128`, so the whole job here is to be callable from compiled code.
 //!
 //! Operands travel as their two 64-bit halves and the result is written through
 //! a pointer, because a 128-bit value has no single register to arrive in and
@@ -29,7 +29,7 @@ unsafe fn write_halves(out: *mut u64, value: u128) {
     out.add(1).write_unaligned((value >> 64) as u64);
 }
 
-/// FFI surface for 128-bit division and remainder.
+/// FFI surface for 128-bit division, remainder and float conversion.
 pub mod ffi {
     use super::{from_halves, write_halves};
 
@@ -135,5 +135,66 @@ pub mod ffi {
             return;
         }
         write_halves(out, from_halves(lhs_lo, lhs_hi) % rhs);
+    }
+
+    /// Converts a float to a 128-bit signed integer, truncating toward zero.
+    ///
+    /// A value past either bound saturates to that bound and NaN converts to
+    /// zero, which is how every narrower width converts. A 32-bit float is
+    /// widened to this width first; the widening is exact, so it converts to
+    /// the same integer.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point to sixteen writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn miri_rt_f64_to_i128(value: f64, out: *mut u64) {
+        if out.is_null() {
+            return;
+        }
+        write_halves(out, value as i128 as u128);
+    }
+
+    /// Converts a float to a 128-bit unsigned integer, truncating toward zero.
+    /// Saturates as [`miri_rt_f64_to_i128`] does, so a negative value converts
+    /// to zero.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point to sixteen writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn miri_rt_f64_to_u128(value: f64, out: *mut u64) {
+        if out.is_null() {
+            return;
+        }
+        write_halves(out, value as u128);
+    }
+
+    /// Converts a 128-bit signed integer to the nearest 64-bit float.
+    #[no_mangle]
+    pub extern "C" fn miri_rt_i128_to_f64(lo: u64, hi: u64) -> f64 {
+        from_halves(lo, hi) as i128 as f64
+    }
+
+    /// Converts a 128-bit unsigned integer to the nearest 64-bit float.
+    #[no_mangle]
+    pub extern "C" fn miri_rt_u128_to_f64(lo: u64, hi: u64) -> f64 {
+        from_halves(lo, hi) as f64
+    }
+
+    /// Converts a 128-bit signed integer to the nearest 32-bit float.
+    ///
+    /// Rounded once, from the integer: going through a 64-bit float first
+    /// would round twice and can land one step away from the nearest value.
+    #[no_mangle]
+    pub extern "C" fn miri_rt_i128_to_f32(lo: u64, hi: u64) -> f32 {
+        from_halves(lo, hi) as i128 as f32
+    }
+
+    /// Converts a 128-bit unsigned integer to the nearest 32-bit float,
+    /// rounded once as [`miri_rt_i128_to_f32`] is.
+    #[no_mangle]
+    pub extern "C" fn miri_rt_u128_to_f32(lo: u64, hi: u64) -> f32 {
+        from_halves(lo, hi) as f32
     }
 }

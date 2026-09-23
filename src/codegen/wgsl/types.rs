@@ -4,16 +4,17 @@
 //! WGSL type-name resolution from MIR/AST type kinds.
 
 use crate::ast::expression::ExpressionKind;
+use crate::ast::gpu_wire::{device_scalar, DeviceScalar};
 use crate::ast::types::{vec_dim, TypeKind};
 use crate::error::CodegenError;
 
 /// WGSL scalar types representable in a compute shader.
 ///
-/// `I64`/`U64`/`F64` require host wgpu features (`SHADER_INT64`/`SHADER_F64`)
-/// and naga validator capabilities (`SHADER_INT64`/`FLOAT64`) at the launch
-/// site. The emitter and the GPU runtime cooperate so an adapter that lacks
-/// the matching feature fails the dispatch with `UnsupportedScalar` instead
-/// of silently truncating element widths.
+/// `F16`/`F64` require the host wgpu features `SHADER_F16`/`SHADER_F64` at the
+/// launch site; an adapter that lacks one fails the dispatch with
+/// `UnsupportedScalar` rather than running the kernel at the wrong width.
+/// There are no 64-bit integer scalars: every integer width travels in a
+/// 32-bit lane under the GPU wire format ([`crate::ast::gpu_wire`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WgslScalar {
     I32,
@@ -21,8 +22,6 @@ pub enum WgslScalar {
     F16,
     F32,
     Bool,
-    I64,
-    U64,
     F64,
 }
 
@@ -35,49 +34,53 @@ impl WgslScalar {
             WgslScalar::F16 => "f16",
             WgslScalar::F32 => "f32",
             WgslScalar::Bool => "bool",
-            WgslScalar::I64 => "i64",
-            WgslScalar::U64 => "u64",
             WgslScalar::F64 => "f64",
+        }
+    }
+}
+
+impl From<DeviceScalar> for WgslScalar {
+    fn from(device: DeviceScalar) -> Self {
+        match device {
+            DeviceScalar::I32 => WgslScalar::I32,
+            DeviceScalar::U32 => WgslScalar::U32,
+            DeviceScalar::F16 => WgslScalar::F16,
+            DeviceScalar::F32 => WgslScalar::F32,
+            DeviceScalar::F64 => WgslScalar::F64,
         }
     }
 }
 
 /// Map a scalar MIR/AST type kind to its WGSL scalar representation.
 ///
-/// For browser portability (WebGPU/Tint has 64-bit support for neither ints
-/// nor floats), Miri's defaults map to the widths the device has: `Int` to
-/// WGSL `i32` and `Float` to `f32`. The runtime marshals host i64/f64 values ↔
-/// device i32/f32 at launch/readback boundaries. A width the source named
-/// explicitly keeps it (`I32` → `i32`, `I64` → `i64`, `F64` → `f64` for
-/// CPU-only code) and is rejected at the launch site rather than silently
-/// narrowed.
+/// A numeric kind takes the device scalar the GPU wire format assigns it
+/// ([`device_scalar`]), so a kernel local, a buffer element and a captured
+/// scalar of the same type always share one WGSL type. `bool` is WGSL `bool`
+/// (valid for locals only), and `Atomic<T>` unwraps to its inner scalar.
 ///
 /// Returns `Err(CodegenError::Internal)` for non-scalar inputs; callers wrap
 /// pointer/buffer types in `array<T>` themselves.
 pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
     match kind {
-        TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Ok(WgslScalar::I32),
-        TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Ok(WgslScalar::U32),
-        TypeKind::F16 => Ok(WgslScalar::F16),
-        TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Boolean => Ok(WgslScalar::Bool),
-        TypeKind::Int => Ok(WgslScalar::I32), // Browser-portable: no i64
-        TypeKind::Float => Ok(WgslScalar::F32), // Browser-portable: no f64
-        TypeKind::I64 => Ok(WgslScalar::I64), // Explicit i64 still uses i64
-        TypeKind::U64 => Ok(WgslScalar::U64),
-        TypeKind::F64 => Ok(WgslScalar::F64), // Explicit f64 still uses f64
-        // Atomic<u32> and Atomic<i32> unwrap to their inner scalar types
         TypeKind::Custom(name, Some(args)) if name == crate::ast::types::ATOMIC_TYPE_NAME => {
-            if args.len() == 1 {
-                if let ExpressionKind::Type(inner_ty, _) = &args[0].node {
-                    return scalar(&inner_ty.kind);
-                }
-            }
-            Err(CodegenError::Internal(format!(
-                "WGSL backend cannot represent type {:?} as a scalar",
-                kind
-            )))
+            atomic_scalar(kind, args)
         }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64 => device_scalar(kind)
+            .map(WgslScalar::from)
+            .ok_or_else(|| unrepresentable_scalar(kind)),
         TypeKind::I128
         | TypeKind::U128
         | TypeKind::String
@@ -97,11 +100,28 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
-        | TypeKind::Linear(_) => Err(CodegenError::Internal(format!(
-            "WGSL backend cannot represent type {:?} as a scalar",
-            kind
-        ))),
+        | TypeKind::Linear(_) => Err(unrepresentable_scalar(kind)),
     }
+}
+
+/// The inner scalar of an `Atomic<T>` with exactly one resolved type argument.
+fn atomic_scalar(
+    kind: &TypeKind,
+    args: &[crate::ast::expression::Expression],
+) -> Result<WgslScalar, CodegenError> {
+    if let [only] = args {
+        if let ExpressionKind::Type(inner_ty, _) = &only.node {
+            return scalar(&inner_ty.kind);
+        }
+    }
+    Err(unrepresentable_scalar(kind))
+}
+
+fn unrepresentable_scalar(kind: &TypeKind) -> CodegenError {
+    CodegenError::Internal(format!(
+        "WGSL backend cannot represent type {:?} as a scalar",
+        kind
+    ))
 }
 
 /// Map a vector type kind (Vec2, Vec3, Vec4) to its WGSL vector type spelling.
@@ -174,6 +194,19 @@ pub fn buffer_element_typename(kind: &TypeKind) -> Result<String, CodegenError> 
         Some(vec_spelling) => Ok(vec_spelling),
         None => Ok(component_scalar(inner)?.name().to_string()),
     }
+}
+
+/// Whether `kind` is a buffer-like collection of `Atomic<T>` elements.
+///
+/// An atomic buffer is bound `read_write` even where a kernel only reads it,
+/// and its elements are read and written through the `atomic*` builtins rather
+/// than plain loads and stores.
+pub fn is_atomic_element_buffer(kind: &TypeKind) -> bool {
+    matches!(
+        buffer_element_inner_kind(kind),
+        Ok(TypeKind::Custom(name, Some(args)))
+            if name == crate::ast::types::ATOMIC_TYPE_NAME && args.len() == 1
+    )
 }
 
 /// Resolve the component scalar of an element kind: the vector component for a
@@ -360,12 +393,13 @@ mod tests {
     }
 
     #[test]
-    fn test_default_int_maps_to_i32_for_browser_portability() {
-        // WebGPU/Tint has no 64-bit ints, so the default `int` must not reach
-        // WGSL as i64 — the runtime marshals host i64 buffers to device i32.
+    fn test_64_bit_ints_map_to_32_bit_lanes_for_browser_portability() {
+        // WebGPU/Tint has no 64-bit ints, so neither the default `int` nor a
+        // named 64-bit width reaches WGSL as one — the runtime marshals host
+        // 64-bit elements to the device's 32-bit lane.
         assert_eq!(wgsl_scalar(&TypeKind::Int), WgslScalar::I32);
-        assert_eq!(wgsl_scalar(&TypeKind::I64), WgslScalar::I64);
-        assert_eq!(wgsl_scalar(&TypeKind::U64), WgslScalar::U64);
+        assert_eq!(wgsl_scalar(&TypeKind::I64), WgslScalar::I32);
+        assert_eq!(wgsl_scalar(&TypeKind::U64), WgslScalar::U32);
     }
 
     /// A width named in the source is emitted as itself; `float` is the host
@@ -439,8 +473,6 @@ mod tests {
         assert_eq!(WgslScalar::F16.name(), "f16");
         assert_eq!(WgslScalar::F32.name(), "f32");
         assert_eq!(WgslScalar::Bool.name(), "bool");
-        assert_eq!(WgslScalar::I64.name(), "i64");
-        assert_eq!(WgslScalar::U64.name(), "u64");
         assert_eq!(WgslScalar::F64.name(), "f64");
     }
 

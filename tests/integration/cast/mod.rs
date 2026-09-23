@@ -3,6 +3,8 @@
 
 use super::utils::*;
 
+mod int128_float;
+
 #[test]
 fn test_cast_int_to_float() {
     assert_runs_with_output(

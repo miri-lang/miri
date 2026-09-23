@@ -574,8 +574,9 @@ impl<'a> FunctionTranslator<'a> {
     /// True when a field of `owner_kind` must be loaded at the destination's
     /// width instead of the one `field_layout` reports.
     ///
-    /// An enum or Option payload lays out as a pointer-sized slot whatever it
-    /// holds, and a generic parameter carries no width of its own, so loading
+    /// An enum or Option payload slot is at least pointer-sized whatever it
+    /// holds, and `field_layout` reports the slot's word rather than the
+    /// field's type; a generic parameter carries no width of its own. Loading
     /// at the reported width erases the field's real type. A generic enum such
     /// as `Result<T, E>` is the case that makes this load-bearing: the binding
     /// is resolved where the aggregate definition is still generic.
@@ -634,6 +635,15 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         if from_ty == to_ty {
             return Ok(value);
+        }
+        if Self::is_int128_float_pair(from_ty, to_ty) {
+            // The backend has no instruction for this conversion; only an
+            // explicit cast, which can reach the runtime, lowers it.
+            return Err(CodegenError::Internal(format!(
+                "Unsupported implicit cast from {} to {}: a 128-bit integer converts \
+                 to or from a float only through an explicit cast",
+                from_ty, to_ty
+            )));
         }
 
         if from_ty.is_float() && to_ty.is_float() {
