@@ -308,6 +308,7 @@ impl TypeChecker {
             if let Some(r) = param.residency {
                 info.residency = r;
             }
+            info.is_parameter = true;
             context.define(param.name.clone(), info);
 
             self.check_parameter_guard(param, &param_type, context);
