@@ -382,6 +382,22 @@ fn decref_on_a_parameter_is_flagged() {
     );
 }
 
+/// Releasing what a store through a parameter replaced — `self.value = x` in a
+/// method — releases a value the object owns, not the caller's own reference.
+#[test]
+fn decref_through_a_parameter_projection_is_not_flagged() {
+    let field = Place {
+        local: Local(1),
+        projection: vec![miri::mir::PlaceElem::Field(0)],
+    };
+    let body = body_of(
+        &[void_ty(), collection_ty("Tagged", &[])],
+        1,
+        vec![block(vec![stmt(StatementKind::DecRef(field))], ret())],
+    );
+    assert_clean(&body, "a DecRef of a field reached through a parameter");
+}
+
 /// A back edge must reach a fixpoint rather than looping forever, whether or not
 /// the body inside it balances.
 #[test]

@@ -200,6 +200,10 @@ fn lower_closure_body(
     closure: &ClosureSource,
 ) -> Result<(Body, Vec<CapturedVar>), LoweringError> {
     let span = closure.span;
+    // TODO: an unannotated lambda is lowered as `void` here, but the type
+    // checker infers its return type from the body's last expression, so a
+    // body ending in `x + 1` is called as returning `int` and codegen refuses
+    // the two signatures. Read the checker's recorded type for the lambda.
     let ret_ty = match closure.return_type {
         Some(ret_expr) => ctx.declared_type(ret_expr),
         None => Type::new(TypeKind::Void, span),
@@ -210,12 +214,15 @@ fn lower_closure_body(
 
     lower_as_return(&mut lambda_ctx, closure.body, &ret_ty)?;
 
-    // Ensure the last block has a terminator.
+    // Falling off the end must end the root scope's storage exactly as an
+    // explicit `return` does: a capture the body assigns owns the value it last
+    // stored, and only its `StorageDead` releases it.
     let last_block_idx = lambda_ctx.current_block.0;
     if lambda_ctx.body.basic_blocks[last_block_idx]
         .terminator
         .is_none()
     {
+        lambda_ctx.pop_scope(span);
         lambda_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
     }
 

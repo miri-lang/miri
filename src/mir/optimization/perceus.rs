@@ -423,17 +423,16 @@ impl Perceus {
     }
 
     /// Determines if a reassignment destination needs a DecRef.
-    // TODO: the borrowed test ignores the projection, so `self.field = x` inside
-    // a method is rejected — `self` is a parameter — and the value the field held
-    // is never released, leaking one allocation per store. What a field holds is
-    // owned by the object, not by the caller, so the guard belongs only on an
-    // unprojected destination. Widening it reaches every method that overwrites a
-    // field and every write through a captured value, so it needs the whole suite
-    // under the heap guard, not the leak check alone.
+    ///
+    /// A borrowed local's own value belongs to the caller or the closure
+    /// environment, so overwriting the local must not release it. What is
+    /// reached *through* a projection of it — `self.value` inside a method — is
+    /// owned by the object the local points at, and overwriting it releases the
+    /// value it replaces like any other store.
     fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
-        // A borrowed local's value belongs to the caller or the closure
-        // environment; overwriting it must not release that value.
-        lhs.local.0 != 0 && !ctx.borrowed.contains(lhs.local) && is_place_managed(lhs, ctx)
+        let overwrites_borrowed_value =
+            lhs.projection.is_empty() && ctx.borrowed.contains(lhs.local);
+        lhs.local.0 != 0 && !overwrites_borrowed_value && is_place_managed(lhs, ctx)
     }
 }
 
