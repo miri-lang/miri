@@ -4,29 +4,36 @@
 //! `forall` capture validation.
 //!
 //! Walks the body of a `forall` looking for free identifiers (references to
-//! outer-scope variables) that lower to WGSL storage buffers, and rejects two
-//! classes of invalid capture:
+//! outer-scope variables) that lower to WGSL storage buffers or uniform
+//! scalars, and rejects every capture the device cannot receive intact:
 //!
 //!   * **Host-resident captures**. A buffer may only be captured into a
 //!     kernel when its binding residency is `Gpu`. Capturing a host-resident
 //!     binding is a type error with two machine-applicable fix-its (annotate
 //!     with `gpu let`, or copy explicitly above the loop). There is no
 //!     implicit upload — residency is source-visible.
+//!   * **Dynamically sized collections**. Only a fixed-size `Array<T, N>` has
+//!     a device layout a kernel can bind as a storage buffer.
 //!   * **Non-buffer-eligible element types**. Even a gpu-resident buffer must
 //!     hold a WGSL storage-buffer-eligible scalar. Bool is the motivating
 //!     rejection: WGSL allows `bool` as a local but forbids it inside
 //!     `var<storage>` bindings, so an `Array<Boolean, N>` capture would
 //!     round-trip as invalid shader source.
+//!   * **Scalars without a capture lane**. A captured scalar travels in a
+//!     32-bit uniform lane under the GPU wire format; a type with no such lane
+//!     is refused, and a constant too large for its lane is refused here
+//!     rather than truncated (a run-time value is range-checked at launch).
 
 use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::LeftHandSideExpression;
+use crate::ast::gpu_wire::{scalar_capture_wire, DeviceScalar};
 use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, FRAME_INPUT_TYPE_NAME};
 use crate::ast::{Expression, ExpressionKind, Statement, StatementKind, VariableDeclaration};
 use crate::error::syntax::Span;
-use crate::type_checker::context::Context;
+use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::utils::{
     captured_buffer_element, is_gpu_buffer_element, is_residency_gated_buffer,
 };
@@ -44,9 +51,21 @@ enum CaptureViolation {
         elem_ty: Type,
         span: Span,
     },
+    DynamicCollection {
+        name: String,
+        ty: Type,
+        span: Span,
+    },
     UnsupportedScalarCapture {
         name: String,
         ty: Type,
+        span: Span,
+    },
+    CapturedConstantOutOfRange {
+        name: String,
+        value: i128,
+        lane: DeviceScalar,
+        range: (i128, i128),
         span: Span,
     },
 }
@@ -98,16 +117,45 @@ impl TypeChecker {
                 ),
                 span,
             ),
+            CaptureViolation::DynamicCollection { name, ty, span } => self.report_error_with_help(
+                DiagnosticCode::TarGpuParallelConstruct,
+                format!(
+                    "'gpu forall' capture '{}' has type '{}', a dynamically sized collection with no fixed device layout, so a kernel cannot bind it as a storage buffer.",
+                    name, ty
+                ),
+                span,
+                "Copy the elements into a fixed-size 'Array<T, N>' bound with 'gpu var', and capture that.".to_string(),
+            ),
             CaptureViolation::UnsupportedScalarCapture { name, ty, span } => {
                 self.report_error(DiagnosticCode::TarGpuParallelConstruct,
                     format!(
                         "'gpu forall' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
-                         Supported types are: int/i32, i16, i8, bool, float, and f32. Unsupported: i64, f64, String.",
+                         A captured scalar travels in a 32-bit lane: the integers i8 through i64 and u8 through u64, \
+                         int, float, f32, and bool are supported; f16, f64, i128, u128, and non-scalar types are not.",
                         name, ty
                     ),
                     span,
                 );
             }
+            CaptureViolation::CapturedConstantOutOfRange {
+                name,
+                value,
+                lane,
+                range: (min, max),
+                span,
+            } => self.report_error(
+                DiagnosticCode::TarGpuValueOutOfRange,
+                format!(
+                    "'gpu forall' capture '{}' has value {} which exceeds {} range [{}, {}], \
+                     the 32-bit lane it travels in on the device",
+                    name,
+                    value,
+                    lane.name(),
+                    min,
+                    max
+                ),
+                span,
+            ),
         }
     }
 }
@@ -409,57 +457,73 @@ fn check_captured_identifier(
         return;
     }
 
-    if let Some(elem_ty) = captured_buffer_element(&info.ty.kind) {
-        if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {
-            reported.insert(name.to_string());
-            violations.push(CaptureViolation::HostResident {
-                name: name.to_string(),
-                span,
-            });
-            return;
-        }
-        if is_gpu_buffer_element(&elem_ty.kind) {
-            return;
-        }
+    let violation = match captured_buffer_element(&info.ty.kind) {
+        Some(elem_ty) => buffer_capture_violation(name, span, info, elem_ty),
+        // Function values (math intrinsics, user fns) are called, not captured.
+        None if matches!(info.ty.kind, crate::ast::types::TypeKind::Function(_)) => None,
+        None => scalar_capture_violation(name, span, &info.ty, context),
+    };
+    if let Some(violation) = violation {
         reported.insert(name.to_string());
-        violations.push(CaptureViolation::NonBufferElement {
+        violations.push(violation);
+    }
+}
+
+/// Why a captured buffer cannot be bound: it is host-resident, it is a
+/// dynamically sized collection (only a fixed-size `Array<T, N>` has a device
+/// layout), or its element has no storage-buffer wire format.
+fn buffer_capture_violation(
+    name: &str,
+    span: Span,
+    info: &SymbolInfo,
+    elem_ty: Type,
+) -> Option<CaptureViolation> {
+    if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {
+        return Some(CaptureViolation::HostResident {
             name: name.to_string(),
-            elem_ty,
             span,
         });
-        return;
     }
-
-    // Skip function types (math intrinsics, user fns, etc.).
-    // Only validate actual capturable variables.
-    if matches!(info.ty.kind, crate::ast::types::TypeKind::Function(_)) {
-        return;
-    }
-
-    if !is_supported_scalar_capture(&info.ty.kind) {
-        reported.insert(name.to_string());
-        violations.push(CaptureViolation::UnsupportedScalarCapture {
+    if !is_residency_gated_buffer(&info.ty.kind) {
+        return Some(CaptureViolation::DynamicCollection {
             name: name.to_string(),
             ty: info.ty.clone(),
             span,
         });
     }
+    if is_gpu_buffer_element(&elem_ty.kind) {
+        return None;
+    }
+    Some(CaptureViolation::NonBufferElement {
+        name: name.to_string(),
+        elem_ty,
+        span,
+    })
 }
 
-/// Miri's defaults `int` and `float` are capturable because they marshal to
-/// the device's widths on upload — the same narrowing `wgsl_scalar_name`
-/// applies. A width the source named explicitly is not narrowed behind the
-/// programmer's back, so `i64`/`f64` stay unsupported here.
-fn is_supported_scalar_capture(kind: &crate::ast::types::TypeKind) -> bool {
-    use crate::ast::types::TypeKind;
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I32
-            | TypeKind::I16
-            | TypeKind::I8
-            | TypeKind::Boolean
-            | TypeKind::Float
-            | TypeKind::F32
-    )
+/// Why a captured scalar cannot be passed to the kernel: its type has no
+/// capture lane in the GPU wire format, or it is a constant the lane cannot
+/// hold. A value only known at run time is range-checked at the launch.
+fn scalar_capture_violation(
+    name: &str,
+    span: Span,
+    ty: &Type,
+    context: &Context,
+) -> Option<CaptureViolation> {
+    let Some(wire) = scalar_capture_wire(&ty.kind) else {
+        return Some(CaptureViolation::UnsupportedScalarCapture {
+            name: name.to_string(),
+            ty: ty.clone(),
+            span,
+        });
+    };
+    let range @ (min, max) = wire.conversion.checked_range()?;
+    let value = TypeChecker::resolve_const_int(name, Some(context))?;
+    (value < min || value > max).then(|| CaptureViolation::CapturedConstantOutOfRange {
+        name: name.to_string(),
+        value,
+        lane: wire.device,
+        range,
+        span,
+    })
 }

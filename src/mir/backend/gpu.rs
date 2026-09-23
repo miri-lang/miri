@@ -191,6 +191,8 @@ const WGSL_RESERVED_WORDS: &[&str] = &[
     "nil",
     "noexcept",
     "noinline",
+    "non_coherent",
+    "noncoherent",
     "nointerpolation",
     "noperspective",
     "null",

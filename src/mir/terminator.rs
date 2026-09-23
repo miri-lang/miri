@@ -292,8 +292,9 @@ impl fmt::Display for GpuLaunchArgsError {
 ///
 /// A GPU launch marshals N host captures into N storage buffers. Each capture
 /// carries three pieces of parallel metadata that must stay 1:1 with the
-/// capture operands: its persistent device handle, its read-only flag, and its
-/// int-narrowing flag. This struct owns all four vectors and guarantees
+/// capture operands: its persistent device handle, its read-only flag, and
+/// whether its elements need a host/device width conversion under the GPU wire
+/// format. This struct owns all four vectors and guarantees
 ///
 /// ```text
 /// args.len() == arg_handles.len() == arg_read_only.len() == arg_int_narrow.len()
@@ -368,7 +369,8 @@ impl GpuLaunchArgs {
         &self.arg_read_only
     }
 
-    /// i64→i32 narrowing flag for each capture, in `args` order.
+    /// Whether each capture's elements need a host/device width conversion
+    /// (see `ast::gpu_wire::buffer_conversion`), in `args` order.
     pub fn arg_int_narrow(&self) -> &[bool] {
         &self.arg_int_narrow
     }

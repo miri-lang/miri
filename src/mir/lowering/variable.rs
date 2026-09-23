@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::statement::{BindingResidency as AstResidency, VariableDeclaration};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
@@ -31,7 +31,13 @@ use crate::error::lowering::LoweringError;
 /// anything.
 pub(crate) const READBACK_FN: &str = "miri_gpu_readback";
 
-/// Runtime entry that drops the persistent device buffer owned by a handle.
+/// Runtime entry that opens a fresh activation of a `gpu`-resident binding's
+/// handle, so each execution of its declaration owns a device buffer of its
+/// own. Codegen closes the activation with `miri_gpu_release` at scope exit.
+const ACQUIRE_FN: &str = "miri_gpu_acquire";
+
+/// Runtime entry that frees the device buffer of a handle's innermost
+/// activation and closes that activation.
 const RELEASE_FN: &str = "miri_gpu_release";
 
 /// When a host binding is initialized directly from a `gpu`-resident
@@ -44,10 +50,8 @@ const RELEASE_FN: &str = "miri_gpu_release";
 /// and remains available for a second readback.
 ///
 /// Shared with `g.slice(range)` lowering, which fences the same way before
-/// copying a sub-range of the device buffer back to host.
-///
-/// For gpu-resident scalars (e.g., a reduce result), creates a temporary
-/// 1-element array wrapper, reads into it, then copies the scalar back.
+/// copying a sub-range of the device buffer back to host, and with `return g`,
+/// whose return slot is a host local.
 pub(crate) fn emit_cross_residency_readback(
     ctx: &mut LoweringContext,
     initializer: Option<&Expression>,
@@ -63,6 +67,26 @@ pub(crate) fn emit_cross_residency_readback(
     let Some(&src_local) = ctx.variable_map.get(name.as_str()) else {
         return;
     };
+    emit_local_readback(ctx, src_local, span);
+}
+
+/// Fence outstanding device writes and copy `src_local`'s device buffer back
+/// to its host value, when `src_local` carries a device handle; a host local
+/// needs nothing and emits nothing.
+///
+/// The spelling-independent core of [`emit_cross_residency_readback`], for a
+/// boundary that already knows the local it copies, such as a closure capturing
+/// an enclosing binding.
+///
+/// For gpu-resident scalars (e.g., a reduce result), creates a temporary
+/// 1-element array wrapper, reads into it, then copies the scalar back.
+// TODO: the readback writes the device buffer into the binding's host array in
+// place, and every earlier host copy of the binding (`let h = g`, a closure's
+// capture) shares that array by reference count. A later readback therefore
+// rewrites those copies too: `let h = g`, a launch, then `let h2 = g` leaves
+// `h` holding the second results. The readback has to land in storage no
+// earlier copy shares.
+pub(crate) fn emit_local_readback(ctx: &mut LoweringContext, src_local: Local, span: Span) {
     let Some(handle) = ctx.body.local_decls[src_local.0].device_handle else {
         return;
     };
@@ -93,6 +117,11 @@ pub(crate) fn emit_cross_residency_readback(
 /// lone scalar has no destination. Wrap it in a temporary 1-element
 /// `Array<T, 1>`, read the device buffer into that array, then copy element 0
 /// into the scalar local. The wrapper is dropped immediately afterwards.
+///
+/// The wrapper is seeded with the scalar's own host value. A scalar no launch
+/// has touched has no device buffer, and the runtime then leaves the wrapper
+/// as it found it; the unconditional copy back must hand the scalar its own
+/// value, not a placeholder the readback never overwrote.
 fn emit_scalar_readback(
     ctx: &mut LoweringContext,
     handle: DeviceHandleId,
@@ -122,7 +151,10 @@ fn emit_scalar_readback(
     ctx.push_statement(Statement {
         kind: MirStatementKind::Assign(
             Place::new(temp_array),
-            Rvalue::Aggregate(AggregateKind::Array, vec![zero_operand(src_ty, span)]),
+            Rvalue::Aggregate(
+                AggregateKind::Array,
+                vec![Operand::Copy(Place::new(src_local))],
+            ),
         ),
         span,
     });
@@ -158,23 +190,6 @@ fn emit_scalar_readback(
     });
 }
 
-/// A width-matched zero constant of `ty`. Only the type/width matters — the
-/// readback overwrites the value — but a narrower/wider zero would lay the
-/// temporary array element out differently from the device buffer and corrupt
-/// the copy, so the float widths are matched exactly.
-fn zero_operand(ty: &Type, span: Span) -> Operand {
-    let literal = match ty.kind {
-        TypeKind::F32 => Literal::Float(FloatLiteral::F32(0u32)),
-        TypeKind::F64 | TypeKind::Float => Literal::Float(FloatLiteral::F64(0u64)),
-        _ => Literal::Integer(IntegerLiteral::I64(0)),
-    };
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: ty.clone(),
-        literal,
-    }))
-}
-
 /// An `int`-typed integer constant operand.
 fn int_constant(value: i64, span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
@@ -184,11 +199,17 @@ fn int_constant(value: i64, span: Span) -> Operand {
     }))
 }
 
-/// Releases any device buffer left over from a prior runtime lifetime of this
-/// handle so a re-declared `gpu` binding (e.g. a binding in a function called
-/// more than once) starts fresh: its first launch re-uploads rather than
-/// reusing stale device bytes. A noop the first time a handle is declared.
-fn emit_gpu_buffer_reset(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
+/// Opens a fresh activation of `handle`, so this execution of a `gpu`
+/// binding's declaration starts with no device buffer — its first launch
+/// uploads the host value — while an enclosing activation of the same binding
+/// (a recursive caller) keeps its own buffer.
+pub(crate) fn emit_gpu_activation(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
+    emit_void_runtime_call(ctx, ACQUIRE_FN, vec![handle_operand(handle, span)], span);
+}
+
+/// Frees the device buffer of `handle`'s innermost activation and closes it,
+/// for a binding that stops referring to that handle before its scope ends.
+pub(crate) fn emit_gpu_release(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
     emit_void_runtime_call(ctx, RELEASE_FN, vec![handle_operand(handle, span)], span);
 }
 
@@ -375,6 +396,7 @@ fn lower_single_variable(
     // are declaring. The name becomes resolvable only after the initializer is
     // lowered.
     let local = ctx.alloc_local(decl.name.clone(), var_ty, *span);
+    ctx.body.local_decls[local.0].name_span = decl.name_span;
 
     apply_variable_residency(ctx, local, decl, span);
 
@@ -386,7 +408,7 @@ fn lower_single_variable(
 }
 
 /// Apply shared-storage and host/gpu residency metadata to a freshly-declared
-/// local, allocating a device handle (and emitting a buffer reset) for gpu vars.
+/// local, allocating a device handle (and opening its activation) for gpu vars.
 fn apply_variable_residency(
     ctx: &mut LoweringContext,
     local: crate::mir::Local,
@@ -401,29 +423,32 @@ fn apply_variable_residency(
         AstResidency::Gpu => MirResidency::Gpu,
     };
     if ctx.body.local_decls[local.0].residency == MirResidency::Gpu {
-        if let Some(handle) = gpu_move_source_handle(ctx, decl) {
+        if let Some((handle, borrowed)) = gpu_move_source_handle(ctx, decl) {
             // `gpu let/var b = a` where `a` is a gpu-resident binding is a move:
             // `b` takes over `a`'s persistent device buffer (the type checker
             // has consumed `a`). Transfer the handle so `b`'s first launch
-            // reuses the already-uploaded buffer, and skip the reset — releasing
-            // here would drop the very buffer being transferred.
+            // reuses the already-uploaded buffer, and open no activation — a
+            // fresh one would hide the very buffer being transferred. A move out
+            // of a borrowed parameter stays borrowed: the caller still owns it.
             ctx.body.local_decls[local.0].device_handle = Some(handle);
+            ctx.body.local_decls[local.0].device_handle_borrowed = borrowed;
         } else {
             let handle = ctx.fresh_device_handle();
             ctx.body.local_decls[local.0].device_handle = Some(handle);
-            emit_gpu_buffer_reset(ctx, handle, *span);
+            emit_gpu_activation(ctx, handle, *span);
         }
     }
 }
 
-/// Device handle of a gpu-to-gpu move source: a bare identifier initializer
-/// bound to a gpu-resident local with a live device handle. When target is
-/// gpu-resident and source is a gpu binding, the moved binding inherits the
-/// source buffer instead of allocating a fresh one.
+/// Device handle of a gpu-to-gpu move source — a bare identifier initializer
+/// bound to a gpu-resident local with a live device handle — and whether the
+/// source only borrows it. When target is gpu-resident and source is a gpu
+/// binding, the moved binding inherits the source buffer instead of allocating
+/// a fresh one.
 fn gpu_move_source_handle(
     ctx: &LoweringContext,
     decl: &VariableDeclaration,
-) -> Option<DeviceHandleId> {
+) -> Option<(DeviceHandleId, bool)> {
     let Expression {
         node: ExpressionKind::Identifier(name, _),
         ..
@@ -436,7 +461,9 @@ fn gpu_move_source_handle(
     if src_decl.residency != MirResidency::Gpu {
         return None;
     }
-    src_decl.device_handle
+    src_decl
+        .device_handle
+        .map(|handle| (handle, src_decl.device_handle_borrowed))
 }
 
 /// Lower a variable's initializer into `local`: assign a pre-lowered operand,

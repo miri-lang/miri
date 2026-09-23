@@ -16,6 +16,7 @@ pub mod context;
 pub mod device_table;
 pub mod launch;
 pub mod telemetry;
+pub mod wire;
 
 pub use buffer::*;
 pub use compute::*;
@@ -23,3 +24,4 @@ pub use context::*;
 pub use device_table::*;
 pub use launch::*;
 pub use telemetry::*;
+pub use wire::*;

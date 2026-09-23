@@ -6,7 +6,7 @@
 
 use super::device::{assert_gpu_runs_with_output, require_gpu_int64};
 use super::helpers::assert_gpu_wgsl_valid;
-use super::utils::{assert_runs_with_output, assert_runtime_crash};
+use super::utils::{assert_runs_with_output, assert_runtime_error};
 
 /// AC3: WGSL emission produces valid WGSL with uniform binding.
 #[test]
@@ -197,7 +197,8 @@ fn main()
     );
 }
 
-/// Bound value exceeding u32::MAX triggers GridTooLarge error and aborts.
+/// Bound value exceeding u32::MAX is refused: the launch reports why and the
+/// program exits cleanly.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -215,7 +216,7 @@ fn main()
     gpu forall i in 0..n
         data[i] = i
 ";
-    assert_runtime_crash(source);
+    assert_runtime_error(source, "loop bound exceeds u32::MAX");
 }
 
 /// Negative bound should write 0 and result in empty dispatch (no error).
@@ -241,15 +242,15 @@ fn main()
     assert_gpu_runs_with_output(source, "999 999 999 999");
 }
 
-/// Bound value of 2³¹ (2147483648) exceeds device max_compute_workgroups_per_dimension
-/// (~8M on most devices) and must trigger GridTooLarge error. This bound fits in u32, but the
-/// resulting grid (~8.4M) exceeds the device limit, not the u32 range.
+/// A bound of 2³¹ (2147483648) spills its ~8.4M workgroups past one grid axis,
+/// but numbers more threads than the device's 32-bit `int` index can reach: the
+/// launch is refused with its reason rather than wrapping indices negative.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn bound_2_to_31_exceeds_device_grid_limit_errors() {
+fn bound_2_to_31_exceeds_the_device_index_range_errors() {
     require_gpu_int64();
     let source = "
 use system.gpu
@@ -259,9 +260,10 @@ fn main()
     gpu var data = [0, 0, 0, 0]
     let n = 2147483648
     gpu forall i in 0..n
-        data[i] = i
+        if i < 4
+            data[i] = i + 1
 ";
-    assert_runtime_crash(source);
+    assert_runtime_error(source, "more threads than a 32-bit device index can number");
 }
 
 /// When the runtime end is far below the literal start, the range is empty and

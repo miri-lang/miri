@@ -22,6 +22,7 @@ use crate::ast::types::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::body::LaunchUniform;
 use crate::mir::{
     BackendMetadata, BinOp, Body, Dimension, Discriminant, ExecutionModel, GpuBodyMetadata,
     GpuLaunchArgs, LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
@@ -463,7 +464,7 @@ fn emit_gpu_frame_launch_literal(
     let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
-        .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
+        .map(|c| forall_gpu::needs_wire_conversion(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
         .map_err(|e| {
@@ -553,7 +554,7 @@ fn emit_gpu_frame_launch_runtime(
     let arg_read_only: Vec<bool> = buffer_captures.iter().map(|c| !c.is_written).collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
-        .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
+        .map(|c| forall_gpu::needs_wire_conversion(&c.ty))
         .collect();
     let launch_args = GpuLaunchArgs::new(buffer_ops, arg_handles, arg_read_only, arg_int_narrow)
         .map_err(|e| {
@@ -864,9 +865,8 @@ fn register_frame_runtime_params(
         }
     }
 
-    let i64_ty = Type::new(TypeKind::Int, span);
-    let uniform_param = ctx.push_param("_uniform_bound".to_string(), i64_ty, span);
-    ctx.body.local_decls[uniform_param.0].storage_class = StorageClass::UniformBuffer;
+    let uniform_param =
+        forall_gpu::push_launch_uniform(ctx, "_uniform_bound", LaunchUniform::LoopBound, span);
 
     for cap in scalar_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);

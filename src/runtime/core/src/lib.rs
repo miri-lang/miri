@@ -8,7 +8,7 @@
 //! - [`array`] — Fixed-size array type ([`MiriArray`]) with FFI interface.
 //! - [`element_identity`] — Deciding whether two container elements are the same.
 //! - [`element_order`] — Ordering the elements of a type-erased container.
-//! - [`int128`] — Division and remainder for the 128-bit integer widths.
+//! - [`int128`] — Division, remainder and float conversion for the 128-bit integer widths.
 //! - [`io`] — Standard I/O operations (print, println, eprint, eprintln).
 //! - [`list`] — Dynamic list type ([`MiriList`]) with FFI interface.
 //! - [`map`] — Hash map type ([`MiriMap`]) with FFI interface.

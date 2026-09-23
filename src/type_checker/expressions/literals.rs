@@ -145,31 +145,16 @@ impl TypeChecker {
         let Literal::Integer(int_lit) = lit else {
             return;
         };
+        let value = int_lit.to_i128();
+        // Kernel code is bounded by the device's 32-bit lanes, whatever width
+        // the source wrote, so this runs before the wide-type exemption below.
+        if context.in_gpu_function {
+            self.hold_gpu_int_literal_range(expr_id, value, span);
+            return;
+        }
         // A literal explicitly declared with a wider integer type keeps its full
         // i128-representable range (the parser already rejects anything larger).
         if self.wide_typed_int_literals.contains(&expr_id) {
-            return;
-        }
-        let value = int_lit.to_i128();
-
-        if context.in_gpu_function {
-            let max = if self.negated_int_literals.contains(&expr_id) {
-                i32::MAX as i128 + 1
-            } else {
-                i32::MAX as i128
-            };
-            if value > max {
-                self.report_error(
-                    DiagnosticCode::TarGpuValueOutOfRange,
-                    format!(
-                        "Integer literal '{}' is out of range for GPU 32-bit signed integer (i32 range is {} to {})",
-                        value,
-                        i32::MIN,
-                        i32::MAX
-                    ),
-                    span,
-                );
-            }
             return;
         }
 

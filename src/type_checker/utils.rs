@@ -15,6 +15,7 @@ use super::context::{
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
+use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::types::{
     inline_element_layout, is_vector_component, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
     TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
@@ -393,8 +394,22 @@ pub enum GpuScalarClass {
 /// types are `Forbidden` here: each predicate decides those for itself and only
 /// consults this classifier for the scalar leaves, keeping the scalar verdict in
 /// exactly one place.
+///
+/// A scalar is `Storage` exactly when the GPU wire format gives it a buffer
+/// element layout ([`buffer_element_wire`]), so admissibility cannot drift from
+/// the marshalling the launch performs.
 pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
+    if buffer_element_wire(kind).is_some() {
+        return GpuScalarClass::Storage;
+    }
     match kind {
+        TypeKind::Boolean | TypeKind::Void | TypeKind::Error | TypeKind::I128 | TypeKind::U128 => {
+            GpuScalarClass::KernelOnly
+        }
+
+        // The numeric kinds all have a buffer wire format and are classified
+        // `Storage` above; they are listed so a new `TypeKind` variant must be
+        // classified here.
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -407,13 +422,8 @@ pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::Float
         | TypeKind::F16
         | TypeKind::F32
-        | TypeKind::F64 => GpuScalarClass::Storage,
-
-        TypeKind::Boolean | TypeKind::Void | TypeKind::Error | TypeKind::I128 | TypeKind::U128 => {
-            GpuScalarClass::KernelOnly
-        }
-
-        TypeKind::String
+        | TypeKind::F64
+        | TypeKind::String
         | TypeKind::List(_)
         | TypeKind::Array(_, _)
         | TypeKind::Map(_, _)
@@ -809,23 +819,10 @@ pub fn accelerable_byte_size(
 }
 
 /// Host byte width of a device-storable scalar, or `None` for a non-accelerable
-/// scalar (`bool`, `void`, `error`, the 128-bit integers) or any non-scalar.
-///
-/// Gated on [`gpu_scalar_class`] so the width table can never disagree with the
-/// accelerable-scalar set: a scalar has a marshalled width exactly when it is a
-/// `Storage`-class scalar.
+/// scalar (`bool`, `void`, `error`, the 128-bit integers) or any non-scalar —
+/// the host width the GPU wire format marshals the scalar at.
 fn scalar_host_byte_size(kind: &TypeKind) -> Option<usize> {
-    if gpu_scalar_class(kind) != GpuScalarClass::Storage {
-        return None;
-    }
-    match kind {
-        TypeKind::I8 | TypeKind::U8 => Some(1),
-        TypeKind::I16 | TypeKind::U16 | TypeKind::F16 => Some(2),
-        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => Some(4),
-        // `int`/`float` are 64-bit on the host; the wide fixed scalars keep 8.
-        TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => Some(8),
-        _ => None,
-    }
+    buffer_element_wire(kind).map(|format| usize::from(format.host_bytes))
 }
 
 /// Follows a bare, non-generic type alias (`type Byte is u8`) to its underlying
@@ -1131,11 +1128,9 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
 /// `var<storage>` binding from a host `MiriArray`-shaped buffer: fixed-size
 /// `Array<T, N>` / `[T; N]`.
 ///
-/// Kept in lock-step with `forall_gpu::is_gpu_buffer_capture` (the MIR predicate
-/// that decides what actually becomes a storage binding). `List<T>` is dynamic
-/// and has no fixed device storage layout — it can never be a `gpu forall`
-/// capture, so annotating it with `gpu let` would not help; it is rejected as
-/// a non-buffer capture at MIR lowering instead.
+/// `List<T>` is dynamic and has no fixed device storage layout — it can never
+/// be a `gpu forall` capture, so annotating it with `gpu let` would not help;
+/// the capture check rejects it as a dynamically sized collection instead.
 ///
 /// The residency capture rule therefore governs only the plain `Array`
 /// captures a `gpu let` can produce.
@@ -2781,7 +2776,7 @@ impl TypeChecker {
     /// lifetime of the binding, so either folds. A `var` can be assigned after
     /// its declaration, so the recorded initializer says nothing about the
     /// value at a later use site and never folds.
-    fn resolve_const_int(name: &str, context: Option<&Context>) -> Option<i128> {
+    pub(crate) fn resolve_const_int(name: &str, context: Option<&Context>) -> Option<i128> {
         let info = context?.resolve_info(name)?;
         if !info.is_constant && info.mutable {
             return None;

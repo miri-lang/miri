@@ -4,10 +4,15 @@
 //! MIR → WGSL text emitter.
 
 use crate::ast::expression::ExpressionKind;
+use crate::ast::gpu_wire::{
+    collection_element_kind, device_scalar, scalar_capture_wire, sub_lane_bits, DeviceScalar,
+};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
+use crate::codegen::wgsl::identifiers::{source_identifier, SUBGROUP_INVOCATION_ID, SUBGROUP_SIZE};
 use crate::codegen::wgsl::types::{
-    buffer_element, buffer_element_typename, scalar, vector_swizzle, vector_type, WgslScalar,
+    buffer_element, buffer_element_typename, is_atomic_element_buffer, scalar, vector_swizzle,
+    vector_type, WgslScalar,
 };
 use crate::codegen::wgsl::WgslSourceSpan;
 use crate::error::syntax::Span;
@@ -15,8 +20,8 @@ use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
     BasicBlock, BinOp, Body, Constant, Dimension, GpuIndexNarrowing, GpuIntrinsic, Local,
-    MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass, TerminatorKind,
-    UnOp, I32_INDEX_MAX,
+    LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass,
+    TerminatorKind, UnOp, I32_INDEX_MAX,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write;
@@ -40,10 +45,13 @@ impl Emitter {
     }
 
     /// WGSL requires `enable f16;` before any other global declaration when the
-    /// module names the `f16` type. The substring is unambiguous: no other WGSL
-    /// scalar spelling (`i32`/`u32`/`f32`/`f64`) contains it.
+    /// module names the `f16` type. Only a whole `f16` token counts, so a name
+    /// that merely contains it (`coef16`) does not; a source name spelled
+    /// exactly `f16` is escaped on emission, so the token is always the type.
     fn needs_f16_preamble(&self) -> bool {
-        self.output.contains("f16")
+        self.output
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|token| token == "f16")
     }
 
     pub(super) fn finish(self) -> String {
@@ -231,10 +239,15 @@ impl Emitter {
         );
 
         if uses_warp_size {
-            entry_sig.push_str(", @builtin(subgroup_size) SUBGROUP_SIZE: u32");
+            write!(entry_sig, ", @builtin(subgroup_size) {SUBGROUP_SIZE}: u32")
+                .map_err(emit_err)?;
         }
         if uses_lane_id {
-            entry_sig.push_str(", @builtin(subgroup_invocation_id) SUBGROUP_INVOCATION_ID: u32");
+            write!(
+                entry_sig,
+                ", @builtin(subgroup_invocation_id) {SUBGROUP_INVOCATION_ID}: u32"
+            )
+            .map_err(emit_err)?;
         }
 
         entry_sig.push_str(") {");
@@ -344,75 +357,73 @@ struct BufferBinding {
     scalar_field: Option<String>,
 }
 
-/// Converts a scalar type kind to WGSL wire format: int→i32, bool→u32, f32→f32, float→f64.
+/// The `_Inputs` field type of a captured scalar: the device lane the GPU wire
+/// format assigns the capture ([`scalar_capture_wire`]). The type checker
+/// refuses every capture without one, so reaching the error means an earlier
+/// stage let an unsupported capture through.
 fn scalar_type_to_wgsl(ty: &TypeKind) -> Result<WgslScalar, CodegenError> {
-    match ty {
-        TypeKind::Int => Ok(WgslScalar::I32),
-        TypeKind::Boolean => Ok(WgslScalar::U32),
-        TypeKind::F32 => Ok(WgslScalar::F32),
-        // Miri's defaults marshal to the device's widths on upload, the same
-        // way `int` does above; an explicitly named `f64` keeps its width and
-        // is gated host-side.
-        TypeKind::Float => Ok(WgslScalar::F32),
-        TypeKind::F64 => Ok(WgslScalar::F64),
-        // Unsupported scalar types
-        TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::F16
-        | TypeKind::String
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Tuple(_)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Custom(_, _)
-        | TypeKind::Meta(_)
-        | TypeKind::Option(_)
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Linear(_) => Err(CodegenError::Internal(format!(
-            "unsupported scalar capture type in WGSL backend: {:?}",
-            ty
-        ))),
-    }
+    scalar_capture_wire(ty)
+        .map(|format| WgslScalar::from(format.device))
+        .ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "unsupported scalar capture type in WGSL backend: {:?}",
+                ty
+            ))
+        })
 }
 
 fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenError> {
+    let params = kernel_params(body)?;
     let mut bindings = Vec::new();
-    let mut binding_index = 0u32;
+    let mut next_index = 0u32;
+    collect_storage_bindings(body, &params, &mut bindings, &mut next_index)?;
+    collect_uniform_bindings(&params, &mut bindings, &mut next_index)?;
+    Ok(bindings)
+}
 
-    // First pass: collect storage buffers.
-    for param_idx in 1..=body.arg_count {
-        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "WGSL backend: local_decls length {} <= param_idx {}",
-                body.local_decls.len(),
-                param_idx
-            ))
-        })?;
+/// The kernel's parameter locals `1..=arg_count` with their declarations,
+/// rejecting any whose storage class a WGSL kernel cannot bind.
+fn kernel_params(body: &Body) -> Result<Vec<(usize, &LocalDecl)>, CodegenError> {
+    (1..=body.arg_count)
+        .map(|param_idx| {
+            let decl = body.local_decls.get(param_idx).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: local_decls length {} <= param_idx {}",
+                    body.local_decls.len(),
+                    param_idx
+                ))
+            })?;
+            match decl.storage_class {
+                StorageClass::GpuGlobal
+                | StorageClass::StorageBuffer
+                | StorageClass::UniformBuffer => Ok((param_idx, decl)),
+                StorageClass::Stack
+                | StorageClass::GpuShared
+                | StorageClass::GpuConstant
+                | StorageClass::GpuPrivate => Err(CodegenError::Internal(format!(
+                    "WGSL backend: kernel parameter _{} has unsupported storage class {:?}; \
+                     expected GpuGlobal/StorageBuffer/UniformBuffer",
+                    param_idx, decl.storage_class
+                ))),
+            }
+        })
+        .collect()
+}
 
-        // Only storage buffers in the first pass.
-        if !matches!(
+/// Binds every storage-buffer parameter, in parameter order, from `next_index`.
+fn collect_storage_bindings(
+    body: &Body,
+    params: &[(usize, &LocalDecl)],
+    bindings: &mut Vec<BufferBinding>,
+    next_index: &mut u32,
+) -> Result<(), CodegenError> {
+    let storage = params.iter().filter(|(_, decl)| {
+        matches!(
             decl.storage_class,
             StorageClass::GpuGlobal | StorageClass::StorageBuffer
-        ) {
-            continue;
-        }
-
+        )
+    });
+    for &(param_idx, decl) in storage {
         let read_write = body.out_params.get(param_idx - 1).copied().ok_or_else(|| {
             CodegenError::Internal(format!(
                 "WGSL backend: out_params length {} < arg_count {}",
@@ -420,172 +431,106 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
                 body.arg_count
             ))
         })?;
-        let element_type = buffer_element(&decl.ty.kind)?;
-        let element_typename = buffer_element_typename(&decl.ty.kind)?;
         let var_name = decl
             .name
             .as_deref()
-            .map(sanitize_identifier)
-            .unwrap_or_else(|| format!("_buf{}", param_idx));
+            .map_or_else(|| format!("_buf{}", param_idx), source_identifier);
         bindings.push(BufferBinding {
             param_local: Local(param_idx),
             group: 0,
-            index: binding_index,
+            index: *next_index,
             var_name,
-            element_type,
-            element_typename: Some(element_typename),
+            element_type: buffer_element(&decl.ty.kind)?,
+            element_typename: Some(buffer_element_typename(&decl.ty.kind)?),
             read_write,
             is_uniform: false,
             scalar_field: None,
         });
-        binding_index += 1;
+        *next_index += 1;
     }
+    Ok(())
+}
 
-    // Second pass: collect uniform buffers (loop bounds and scalar captures).
-    // Reserve one binding index for all pooled scalar fields (_Inputs struct).
+/// Binds the uniform parameters after the storage buffers. A launch uniform
+/// (loop bound, runtime range start), recognised by the marker lowering sets,
+/// binds as its own `u32` uniform; every other uniform parameter is a captured
+/// scalar, pooled as a field of the one `_Inputs` uniform, whose binding index
+/// is reserved when the first such field is seen.
+fn collect_uniform_bindings(
+    params: &[(usize, &LocalDecl)],
+    bindings: &mut Vec<BufferBinding>,
+    next_index: &mut u32,
+) -> Result<(), CodegenError> {
     let mut inputs_binding: Option<u32> = None;
     let mut scalar_field_index = 0u32;
-    for param_idx in 1..=body.arg_count {
-        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "WGSL backend: local_decls length {} <= param_idx {}",
-                body.local_decls.len(),
-                param_idx
-            ))
-        })?;
-        if decl.storage_class != StorageClass::UniformBuffer {
+    let uniforms = params
+        .iter()
+        .filter(|(_, decl)| decl.storage_class == StorageClass::UniformBuffer);
+    for &(param_idx, decl) in uniforms {
+        if decl.launch_uniform.is_some() {
+            bindings.push(launch_uniform_binding(param_idx, decl, *next_index));
+            *next_index += 1;
             continue;
         }
+        let index = *inputs_binding.get_or_insert_with(|| {
+            let idx = *next_index;
+            *next_index += 1;
+            idx
+        });
+        let field = format!("f{}", scalar_field_index);
+        scalar_field_index += 1;
+        bindings.push(scalar_capture_binding(param_idx, decl, index, field)?);
+    }
+    Ok(())
+}
 
-        let var_name = decl
+/// A launch uniform bound on its own at `index`. Its name is compiler-authored
+/// and already a synthesized (`_`-prefixed) WGSL identifier, so it is kept.
+fn launch_uniform_binding(param_idx: usize, decl: &LocalDecl, index: u32) -> BufferBinding {
+    BufferBinding {
+        param_local: Local(param_idx),
+        group: 0,
+        index,
+        var_name: decl
             .name
             .as_deref()
-            .map(sanitize_identifier)
-            .unwrap_or_else(|| format!("_uniform{}", param_idx));
-
-        // Loop-bound (`_bound_*`) and runtime range-start (`_start_*`) uniforms
-        // are compiler-injected control scalars, each bound as its own `u32`
-        // uniform rather than pooled into the `_Inputs` scalar-capture struct.
-        let is_loop_bound = var_name.starts_with("_bound")
-            || var_name.starts_with("_uniform_bound")
-            || var_name.starts_with("_start");
-
-        if is_loop_bound {
-            bindings.push(BufferBinding {
-                param_local: Local(param_idx),
-                group: 0,
-                index: binding_index,
-                var_name,
-                element_type: WgslScalar::U32,
-                element_typename: None,
-                read_write: false,
-                is_uniform: true,
-                scalar_field: None,
-            });
-            binding_index += 1;
-        } else {
-            // First scalar field: reserve the binding index for the _Inputs struct
-            let inputs_binding_idx = *inputs_binding.get_or_insert_with(|| {
-                let idx = binding_index;
-                binding_index += 1;
-                idx
-            });
-            let scalar_field = format!("f{}", scalar_field_index);
-            let element_type = scalar_type_to_wgsl(&decl.ty.kind)?;
-            bindings.push(BufferBinding {
-                param_local: Local(param_idx),
-                group: 0,
-                index: inputs_binding_idx,
-                var_name,
-                element_type,
-                element_typename: None,
-                read_write: false,
-                is_uniform: true,
-                scalar_field: Some(scalar_field),
-            });
-            scalar_field_index += 1;
-        }
+            .map_or_else(|| format!("_uniform{}", param_idx), str::to_owned),
+        element_type: WgslScalar::U32,
+        element_typename: None,
+        read_write: false,
+        is_uniform: true,
+        scalar_field: None,
     }
+}
 
-    // Validate all parameters.
-    for param_idx in 1..=body.arg_count {
-        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "WGSL backend: local_decls length {} <= param_idx {}",
-                body.local_decls.len(),
-                param_idx
-            ))
-        })?;
-        match decl.storage_class {
-            StorageClass::GpuGlobal | StorageClass::StorageBuffer | StorageClass::UniformBuffer => {
-            }
-            StorageClass::Stack
-            | StorageClass::GpuShared
-            | StorageClass::GpuConstant
-            | StorageClass::GpuPrivate => {
-                return Err(CodegenError::Internal(format!(
-                    "WGSL backend: kernel parameter _{} has unsupported storage class {:?}; \
-                     expected GpuGlobal/StorageBuffer/UniformBuffer",
-                    param_idx, decl.storage_class
-                )));
-            }
-        }
-    }
-
-    Ok(bindings)
+/// A captured scalar, read as `field` of the `_Inputs` uniform bound at `index`.
+fn scalar_capture_binding(
+    param_idx: usize,
+    decl: &LocalDecl,
+    index: u32,
+    field: String,
+) -> Result<BufferBinding, CodegenError> {
+    Ok(BufferBinding {
+        param_local: Local(param_idx),
+        group: 0,
+        index,
+        var_name: decl
+            .name
+            .as_deref()
+            .map_or_else(|| format!("_uniform{}", param_idx), source_identifier),
+        element_type: scalar_type_to_wgsl(&decl.ty.kind)?,
+        element_typename: None,
+        read_write: false,
+        is_uniform: true,
+        scalar_field: Some(field),
+    })
 }
 
 /// Check if a kernel parameter is an Array of Atomic elements.
 fn is_atomic_buffer_element(body: &Body, param_local: crate::mir::Local) -> bool {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::types::BuiltinCollectionKind;
-
-    let decl = match body.local_decls.get(param_local.0) {
-        Some(d) => d,
-        None => return false,
-    };
-
-    let elem_kind = match &decl.ty.kind {
-        TypeKind::Custom(name, Some(args))
-            if matches!(
-                BuiltinCollectionKind::from_name(name),
-                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
-            ) =>
-        {
-            match args.first() {
-                Some(expr) => match &expr.node {
-                    ExpressionKind::Type(ty, _) => &ty.kind,
-                    _ => return false,
-                },
-                None => return false,
-            }
-        }
-        _ => return false,
-    };
-
-    match elem_kind {
-        TypeKind::Custom(name, Some(inner_args)) => {
-            name == crate::ast::types::ATOMIC_TYPE_NAME && inner_args.len() == 1
-        }
-        _ => false,
-    }
-}
-
-fn sanitize_identifier(name: &str) -> String {
-    let mut s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        s.insert(0, '_');
-    }
-    s
+    body.local_decls
+        .get(param_local.0)
+        .is_some_and(|decl| is_atomic_element_buffer(&decl.ty.kind))
 }
 
 /// Info about a loop header: exit block, body entry, and continue target.
@@ -1550,6 +1495,7 @@ impl<'a> BodyEmitter<'a> {
                 self.write_indent()?;
                 let rhs = self.render_rvalue(rvalue)?;
                 let rhs = self.coerce_intrinsic_to_dest(place, rvalue, rhs);
+                let rhs = self.wrap_to_stored_width(place, rvalue, rhs);
                 if self.is_atomic_buffer_element_write(place) {
                     // Wrap bare writes to atomic buffer elements with atomicStore
                     let rendered = self.render_place(place)?;
@@ -1599,6 +1545,36 @@ impl<'a> BodyEmitter<'a> {
         } else {
             rhs
         }
+    }
+
+    /// Brings a freshly computed 8- or 16-bit integer back to its own width.
+    ///
+    /// The device computes it in a full 32-bit lane, so an overflow the host
+    /// wraps would otherwise survive into a later division or comparison.
+    /// `extractBits` keeps the low bits and sign-extends them for a signed
+    /// lane (zero-extends for an unsigned one), and — unlike a shift pair —
+    /// cannot overflow when naga folds it over a constant.
+    fn wrap_to_stored_width(&self, place: &Place, rvalue: &Rvalue, rhs: String) -> String {
+        if !computes_new_value(rvalue) {
+            return rhs;
+        }
+        match self.stored_sub_lane_bits(place) {
+            Some(bits) => format!("extractBits({rhs}, 0u, {bits}u)"),
+            None => rhs,
+        }
+    }
+
+    /// The sub-lane width of the integer stored at `place` — a scalar local or
+    /// a buffer element — or `None` when it fills its lane.
+    fn stored_sub_lane_bits(&self, place: &Place) -> Option<u32> {
+        let declared = &self.body.local_decls.get(place.local.0)?.ty.kind;
+        if place.projection.is_empty() {
+            return sub_lane_bits(declared);
+        }
+        if let [PlaceElem::Index(_)] = place.projection.as_slice() {
+            return sub_lane_bits(&collection_element_kind(declared)?);
+        }
+        None
     }
 
     fn render_place(&self, place: &Place) -> Result<String, CodegenError> {
@@ -1701,32 +1677,7 @@ impl<'a> BodyEmitter<'a> {
             return false;
         }
 
-        let decl = match self.body.local_decls.get(place.local.0) {
-            Some(d) => d,
-            None => return false,
-        };
-
-        // Check if the buffer element type is Atomic
-        match &decl.ty.kind {
-            TypeKind::Custom(name, Some(args))
-                if matches!(
-                    crate::ast::BuiltinCollectionKind::from_name(name),
-                    Some(crate::ast::BuiltinCollectionKind::Array)
-                        | Some(crate::ast::BuiltinCollectionKind::List)
-                ) =>
-            {
-                if let Some(elem_expr) = args.first() {
-                    if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
-                        if let TypeKind::Custom(elem_name, Some(inner_args)) = &elem_ty.kind {
-                            return elem_name == crate::ast::types::ATOMIC_TYPE_NAME
-                                && !inner_args.is_empty();
-                        }
-                    }
-                }
-                false
-            }
-            _ => false,
-        }
+        is_atomic_buffer_element(self.body, place.local)
     }
 
     fn is_atomic_buffer_element_read(&self, place: &Place) -> bool {
@@ -1901,10 +1852,8 @@ impl<'a> BodyEmitter<'a> {
 
             let elem_scalar = scalar(&elem_ty.kind)?;
             let zero_literal = match elem_scalar {
-                crate::codegen::wgsl::types::WgslScalar::I32
-                | crate::codegen::wgsl::types::WgslScalar::I64 => "0",
-                crate::codegen::wgsl::types::WgslScalar::U32
-                | crate::codegen::wgsl::types::WgslScalar::U64 => "0u",
+                crate::codegen::wgsl::types::WgslScalar::I32 => "0",
+                crate::codegen::wgsl::types::WgslScalar::U32 => "0u",
                 crate::codegen::wgsl::types::WgslScalar::F16
                 | crate::codegen::wgsl::types::WgslScalar::F32
                 | crate::codegen::wgsl::types::WgslScalar::F64 => "0.0",
@@ -1916,10 +1865,8 @@ impl<'a> BodyEmitter<'a> {
         } else {
             let wgsl_scalar = scalar(kind)?;
             match wgsl_scalar {
-                crate::codegen::wgsl::types::WgslScalar::I32
-                | crate::codegen::wgsl::types::WgslScalar::I64 => Ok("0".to_string()),
-                crate::codegen::wgsl::types::WgslScalar::U32
-                | crate::codegen::wgsl::types::WgslScalar::U64 => Ok("0u".to_string()),
+                crate::codegen::wgsl::types::WgslScalar::I32 => Ok("0".to_string()),
+                crate::codegen::wgsl::types::WgslScalar::U32 => Ok("0u".to_string()),
                 crate::codegen::wgsl::types::WgslScalar::F16
                 | crate::codegen::wgsl::types::WgslScalar::F32
                 | crate::codegen::wgsl::types::WgslScalar::F64 => Ok("0.0".to_string()),
@@ -1929,18 +1876,36 @@ impl<'a> BodyEmitter<'a> {
     }
 }
 
+/// Whether `rvalue` computes a value rather than moving an existing one, so
+/// an integer result may exceed the width of the type it is stored at.
+fn computes_new_value(rvalue: &Rvalue) -> bool {
+    match rvalue {
+        Rvalue::BinaryOp(..)
+        | Rvalue::UnaryOp(..)
+        | Rvalue::Cast(..)
+        | Rvalue::MathIntrinsic(..) => true,
+        Rvalue::Use(_)
+        | Rvalue::Ref(_)
+        | Rvalue::Len(_)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Aggregate(..)
+        | Rvalue::Phi(_) => false,
+    }
+}
+
 fn local_name(local: Local) -> String {
     format!("_{}", local.0)
 }
 
-/// WGSL identifier for a `shared` (workgroup) array local: its sanitized source
-/// name, falling back to a synthetic `_shared{n}` when the declaration is
+/// WGSL identifier for a `shared` (workgroup) array local: its source name as
+/// spelled by [`source_identifier`], falling back to a synthetic `_shared{n}` when the declaration is
 /// anonymous. The same name is used at the module-scope declaration and at every
 /// reference inside the kernel body.
-fn shared_local_name(decl: &crate::mir::LocalDecl, local: Local) -> String {
+fn shared_local_name(decl: &LocalDecl, local: Local) -> String {
     decl.name
         .as_deref()
-        .map(sanitize_identifier)
+        .map(source_identifier)
         .unwrap_or_else(|| format!("_shared{}", local.0))
 }
 
@@ -2089,8 +2054,8 @@ impl BodyEmitter<'_> {
             }
             GpuIntrinsic::GlobalIdx(dim) => Ok(format!("{}.{}", GLOBAL_ID, dimension_field(dim))),
             GpuIntrinsic::SyncThreads => Ok("workgroupBarrier()".into()),
-            GpuIntrinsic::WarpSize => Ok("SUBGROUP_SIZE".into()),
-            GpuIntrinsic::LaneId => Ok("SUBGROUP_INVOCATION_ID".into()),
+            GpuIntrinsic::WarpSize => Ok(SUBGROUP_SIZE.into()),
+            GpuIntrinsic::LaneId => Ok(SUBGROUP_INVOCATION_ID.into()),
             GpuIntrinsic::ShuffleDown(value_op, offset) => {
                 let value_str = self.render_operand(value_op.as_ref())?;
                 Ok(format!("subgroupShuffleDown({}, {}u)", value_str, offset))
@@ -2121,47 +2086,16 @@ fn render_constant(c: &Constant) -> Result<String, CodegenError> {
     }
 }
 
-/// WGSL integer-literal suffixes encode width and signedness — `u` for u32,
-/// `li` for i64, `lu` for u64, bare for i32 — so the parser cannot widen
-/// an `i32` literal into a storage element by mistake.
-///
-/// Browser-portability: `Int` (default int type) maps to i32 in WGSL,
-/// so renders as bare (e.g., `123` not `123li`). Explicit `I64` still
-/// uses `li` suffix (for CPU-only code). Fixed-width `I32` is bare.
+/// WGSL integer-literal suffixes encode signedness — `u` for u32, bare for
+/// i32 — so the parser cannot mistype a literal feeding a storage element. The
+/// lane comes from the GPU wire format, so an `i64` or `u64` literal renders
+/// at the 32-bit width its binding holds on the device.
 fn render_integer(i: &IntegerLiteral, ty: &TypeKind) -> String {
     let value = i.to_i128();
-    match ty {
-        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U128 => format!("{}u", value),
-        TypeKind::U64 => format!("{}lu", value),
-        TypeKind::Int => value.to_string(), // Browser-portable: bare i32 literal
-        TypeKind::I64 => format!("{}li", value), // Explicit i64 uses li suffix
-        TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::Boolean
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Tuple(_)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Custom(_, _)
-        | TypeKind::Meta(_)
-        | TypeKind::Option(_)
-        | TypeKind::Linear(_) => value.to_string(),
+    match device_scalar(ty) {
+        Some(DeviceScalar::U32) => format!("{}u", value),
+        Some(DeviceScalar::I32 | DeviceScalar::F16 | DeviceScalar::F32 | DeviceScalar::F64)
+        | None => value.to_string(),
     }
 }
 

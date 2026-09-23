@@ -371,6 +371,18 @@ fn remove_storage_markers(body: &mut Body, locals: &HashSet<Local>) {
     }
 }
 
+/// Read back every captured `gpu` binding before the closure copies it.
+///
+/// A capture is a copy taken when the closure is created, and a gpu binding's
+/// host value holds its initial contents until a readback writes the device's
+/// results over it. The closure therefore sees the device's results as of its
+/// creation; a launch after that point does not reach the closure's copy.
+fn fence_device_resident_captures(ctx: &mut LoweringContext, captures: &[CapturedVar], span: Span) {
+    for cap in captures {
+        crate::mir::lowering::variable::emit_local_readback(ctx, cap.outer_local, span);
+    }
+}
+
 /// Allocate the closure struct over `captures` at the creation site and store
 /// it in `dest` (a fresh temporary when `None`).
 fn emit_closure_aggregate(
@@ -379,6 +391,8 @@ fn emit_closure_aggregate(
     captures: &[CapturedVar],
     dest: Option<Place>,
 ) -> Operand {
+    fence_device_resident_captures(ctx, captures, closure.span);
+
     // Build capture operands from the outer scope's locals. A self-reference
     // becomes a counted closure value first, released once the aggregate has
     // taken its own reference.

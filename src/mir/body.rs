@@ -99,6 +99,11 @@ pub struct Body {
     /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
     /// during the post-lowering pipeline pass `stamp_kernel_workgroups`.
     pub kernel_workgroups: Vec<(String, [u32; 3])>,
+    /// Launch grids written as a literal `Dim3` at a `kernel(args).launch(grid,
+    /// block)` in this body, keyed by kernel name, as [grid_x, grid_y, grid_z]
+    /// workgroup counts. A web bundle dispatches the grid it records, so it
+    /// reads this; a grid computed at run time has no entry.
+    pub kernel_grids: Vec<(String, [u32; 3])>,
     /// Every generic function instantiation this body calls, in call order.
     /// Recorded when the call is lowered, with the body's own instantiation
     /// substitution already applied, so the pipeline can lower each callee
@@ -159,6 +164,7 @@ impl Body {
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
+            kernel_grids: Vec::new(),
             generic_function_calls: Vec::new(),
             generic_class_instantiations: Vec::new(),
         }
@@ -377,12 +383,33 @@ impl fmt::Display for DeviceHandleId {
     }
 }
 
+/// A value the host supplies to a GPU kernel from the launch itself rather
+/// than from a captured program value.
+///
+/// Lowering stamps this on the kernel parameters it injects for a `forall`
+/// (the per-axis loop bound and runtime range start) and for a `gpu frame`
+/// (the element-count bound). Each binds as its own `u32` uniform, filled by
+/// the launch; every other uniform parameter is a captured scalar, pooled into
+/// the kernel's scalar-capture uniform. Backends classify a parameter by this
+/// marker, never by its name, so a capture may be called anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LaunchUniform {
+    /// The exclusive end of an iteration axis.
+    LoopBound,
+    /// The runtime start of an iteration axis.
+    RangeStart,
+}
+
 /// Declaration of a local variable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalDecl {
     pub ty: Type,
     pub span: Span,
     pub name: Option<Rc<str>>,
+    /// Where a declared binding's name is written in the source. Unlike
+    /// `name`, it survives a release build, so it is what ties a local back to
+    /// its declaration. Empty for temporaries and parameters.
+    pub name_span: Span,
     pub is_user_variable: bool,
     pub storage_class: StorageClass,
     /// Where the binding's value lives (host / device). Orthogonal to
@@ -398,6 +425,9 @@ pub struct LocalDecl {
     /// A borrowed handle is used to launch on the buffer but must never release
     /// it at scope exit; the owning binding in the caller frees it.
     pub device_handle_borrowed: bool,
+    /// Set on a GPU kernel parameter the launch fills in; `None` for every
+    /// other local, including captured scalars. See [`LaunchUniform`].
+    pub launch_uniform: Option<LaunchUniform>,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -415,11 +445,13 @@ impl LocalDecl {
             ty,
             span,
             name: None,
+            name_span: Span::default(),
             is_user_variable: false,
             storage_class: StorageClass::Stack,
             residency: BindingResidency::Host,
             device_handle: None,
             device_handle_borrowed: false,
+            launch_uniform: None,
             mir_ty,
         }
     }

@@ -22,8 +22,8 @@ use miri::mir::verify::{
     VerificationViolation,
 };
 use miri::mir::{
-    Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
-    Statement, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand, Place,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use std::collections::HashSet;
 
@@ -1244,6 +1244,65 @@ fn a_gpu_to_gpu_copy_needs_no_readback() {
     assert!(
         violations.is_empty(),
         "a gpu-to-gpu copy must verify clean, got: {}",
+        messages(&violations)
+    );
+}
+
+/// Capturing a gpu binding into a closure copies its host array into the
+/// closure's environment, a host boundary the same as `let h = g`: without a
+/// readback the closure holds the host array's initial values.
+fn closure_capture(dest: usize, captured: usize) -> Statement {
+    let closure_ty = Type::new(TypeKind::RawPtr, span());
+    stmt(StatementKind::Assign(
+        place(dest),
+        Rvalue::Aggregate(
+            AggregateKind::Closure("main_lambda_0".into(), closure_ty),
+            vec![Operand::Copy(place(captured))],
+        ),
+    ))
+}
+
+#[test]
+fn capturing_a_gpu_binding_without_a_readback_is_reported() {
+    let unfenced = cross_residency_body(7, vec![block(vec![closure_capture(2, 1)], ret())]);
+
+    let violations = verify_cross_residency_readback(&unfenced);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert_eq!(violations[0].local, Local(1));
+    assert!(
+        violations[0].message.contains("captured"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn a_readback_before_the_capture_verifies_clean() {
+    let fenced = cross_residency_body(
+        7,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_readback",
+                    vec![handle_argument(7), Operand::Copy(place(1))],
+                    3,
+                    1,
+                ),
+            ),
+            block(vec![closure_capture(2, 1)], ret()),
+        ],
+    );
+
+    let violations = verify_cross_residency_readback(&fenced);
+    assert!(
+        violations.is_empty(),
+        "a fenced capture must verify clean, got: {}",
         messages(&violations)
     );
 }

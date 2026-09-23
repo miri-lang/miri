@@ -10,6 +10,7 @@ fn test_while_loop() {
     // bb1: loop header (condition check)
     // bb2: loop body
     // bb3: exit block
+    // bb4: latch (the loop's one back-edge)
     mir_snapshot_test(
         r#"
 fn main()
@@ -41,7 +42,7 @@ fn main()
                 _3 = Add(_1, const Integer(I8(1)));
                 _1 = _3;
                 _4 = _3;
-                goto bb1;
+                goto bb4;
             }
 
             bb3: {
@@ -50,6 +51,10 @@ fn main()
                 StorageDead(_5);
                 StorageDead(_1);
                 return;
+            }
+
+            bb4: {
+                goto bb1;
             }
         "#,
     );

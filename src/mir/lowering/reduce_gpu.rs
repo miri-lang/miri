@@ -26,7 +26,7 @@ use crate::mir::{
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
-use super::forall_gpu::{compute_thread_index, int_constant, needs_int_narrowing, push_assign};
+use super::forall_gpu::{compute_thread_index, int_constant, needs_wire_conversion, push_assign};
 use super::variable::READBACK_FN;
 
 /// Block size for GPU reduction kernels (1D workgroups, 256 threads).
@@ -125,11 +125,19 @@ pub(crate) fn try_lower_gpu_reduce(
     // for reduce results, we want it to reference the 1-element output buffer
     // instead. This ensures cross-residency assignment (`let h = gpu_sum`) uses
     // the correct device buffer for readback.
-    // `_reduce_out` is a local of the enclosing scope, which releases it on every
-    // exit path; releasing it here as well would free the buffer twice.
+    // The output buffer is a temp owned by the enclosing scope, which releases
+    // it on every exit path; releasing it here as well would free it twice.
+    // The destination's own handle is abandoned, so its activation — opened at
+    // the declaration and never launched on — is closed here; otherwise every
+    // execution of the declaration would leave one open.
     if dest_is_gpu_resident {
         if let Some(dest_local) = dest_local_opt {
-            ctx.body.local_decls[dest_local.0].device_handle = Some(handle_id);
+            let abandoned = ctx.body.local_decls[dest_local.0]
+                .device_handle
+                .replace(handle_id);
+            if let Some(abandoned) = abandoned.filter(|&h| h != handle_id) {
+                super::variable::emit_gpu_release(ctx, abandoned, *span);
+            }
         }
     }
 
@@ -1001,10 +1009,20 @@ fn setup_reduce_output_buffer(
         span,
     );
 
-    let output_local = ctx.push_local("_reduce_out".to_string(), output_array_ty, span);
+    // A scope-owned temp, not a named local: each reduction needs its own
+    // release on every exit path, and a name shared by two reductions in one
+    // scope would resolve both scope-exit releases to the later buffer — one
+    // freed twice, the other never.
+    let output_local = ctx.push_temp(output_array_ty, span);
+    ctx.push_statement(MirStatement {
+        kind: MirStatementKind::StorageLive(Place::new(output_local)),
+        span,
+    });
+    ctx.register_scope_temp(output_local);
     ctx.body.local_decls[output_local.0].residency = BindingResidency::Gpu;
     let handle_id = ctx.fresh_device_handle();
     ctx.body.local_decls[output_local.0].device_handle = Some(handle_id);
+    super::variable::emit_gpu_activation(ctx, handle_id, span);
 
     let zero_elem = identity_for_op(BinOp::Add, elem_ty);
     push_assign(
@@ -1044,8 +1062,8 @@ fn assemble_reduce_launch_args(
     ];
     let output_ty = ctx.body.local_decls[output_local.0].ty.clone();
     let arg_int_narrow = vec![
-        needs_int_narrowing(receiver_ty),
-        needs_int_narrowing(&output_ty),
+        needs_wire_conversion(receiver_ty),
+        needs_wire_conversion(&output_ty),
     ];
 
     let arg_read_only = vec![true, false];

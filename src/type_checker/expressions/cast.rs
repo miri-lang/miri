@@ -50,6 +50,9 @@ impl TypeChecker {
             return Self::error_type();
         }
 
+        if context.in_gpu_function {
+            self.reject_device_wide_integer(&target_ty.kind, target_type_expr.span);
+        }
         self.record_cast_requirement(&source_ty, &target_ty, context);
         target_ty
     }

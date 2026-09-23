@@ -8,6 +8,7 @@ use miri::codegen::backend::Backend;
 use miri::codegen::wgsl::{WgslBackend, WgslOptions};
 use miri::error::syntax::Span;
 use miri::mir::backend::{BackendMetadata, GpuBodyMetadata};
+use miri::mir::body::LaunchUniform;
 use miri::mir::{
     AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, Dimension, ExecutionModel,
     GpuIntrinsic, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
@@ -843,6 +844,8 @@ fn gpu_device_function_emits_module_helper() {
     );
 }
 
+/// A parameter lowering marks as a launch uniform binds as its own
+/// `var<uniform>`, keeping its compiler-authored name.
 #[test]
 fn uniform_buffer_storage_class_emits_uniform_binding() {
     let span = dummy_span();
@@ -854,6 +857,7 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     let mut uniform_param = LocalDecl::new(i64_ty, span);
     uniform_param.storage_class = StorageClass::UniformBuffer;
     uniform_param.name = Some("_bound_x".into());
+    uniform_param.launch_uniform = Some(LaunchUniform::LoopBound);
     uniform_param.is_user_variable = true;
     body.local_decls.push(uniform_param);
 

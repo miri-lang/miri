@@ -108,6 +108,25 @@ fn lower_branch_into_join(
     Ok(())
 }
 
+/// A block that only jumps back to `header`: the one back-edge of a loop.
+///
+/// Every `continue` and the fall-through end of the body branch here rather
+/// than to the header directly, so the header has a single latch — the shape
+/// a structured target (WGSL's `loop { ... continuing { ... } }`) requires.
+/// A `for` loop's increment block plays the same role.
+fn new_latch_block(
+    ctx: &mut LoweringContext,
+    header: crate::mir::BasicBlock,
+    span: Span,
+) -> crate::mir::BasicBlock {
+    let latch_bb = ctx.new_basic_block();
+    ctx.body.basic_blocks[latch_bb.0].terminator = Some(Terminator::new(
+        TerminatorKind::Goto { target: header },
+        span,
+    ));
+    latch_bb
+}
+
 pub fn lower_while(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -147,7 +166,8 @@ pub fn lower_while(
                 *span,
             ));
 
-            ctx.enter_loop(exit_bb, header_bb);
+            let latch_bb = new_latch_block(ctx, header_bb, *span);
+            ctx.enter_loop(exit_bb, latch_bb);
             ctx.set_current_block(body_bb);
             lower_statement(ctx, body)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
@@ -155,7 +175,7 @@ pub fn lower_while(
                 .is_none()
             {
                 ctx.set_terminator(Terminator::new(
-                    TerminatorKind::Goto { target: header_bb },
+                    TerminatorKind::Goto { target: latch_bb },
                     *span,
                 ));
             }
@@ -215,7 +235,8 @@ pub fn lower_while(
                 *span,
             ));
 
-            ctx.enter_loop(exit_bb, body_bb);
+            let latch_bb = new_latch_block(ctx, body_bb, *span);
+            ctx.enter_loop(exit_bb, latch_bb);
             ctx.set_current_block(body_bb);
             lower_statement(ctx, body)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
@@ -223,7 +244,7 @@ pub fn lower_while(
                 .is_none()
             {
                 ctx.set_terminator(Terminator::new(
-                    TerminatorKind::Goto { target: body_bb },
+                    TerminatorKind::Goto { target: latch_bb },
                     *span,
                 ));
             }

@@ -11,6 +11,7 @@
 //! invokes the single runtime entry that handles init / compile / cache /
 //! dispatch / sync / readback.
 
+use crate::ast::gpu_wire::{buffer_conversion, scalar_capture_wire, WireConversion};
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind, DIM3_TYPE_NAME};
 use crate::codegen::cranelift::layout::field_layout;
@@ -20,6 +21,7 @@ use crate::codegen::Backend;
 use crate::error::CodegenError;
 use crate::mir::body::DeviceHandleId;
 use crate::mir::{Body, ExecutionModel, GpuLaunchArgs, Local, Operand, Place};
+use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
     condcodes::IntCC, types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData,
     StackSlotKind, TrapCode, Value,
@@ -116,7 +118,7 @@ fn define_bytes(
 /// All 8-byte fields are naturally aligned; the six packed u32 dims
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
-/// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_int_narrow,
+/// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_wire_conversion,
 /// scalar inputs, and the runtime range-start uniforms).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
@@ -134,7 +136,7 @@ mod desc_layout {
     pub(super) const BUF_BYTE_LENS: i32 = 72;
     pub(super) const BUF_HANDLE_IDS: i32 = 80;
     pub(super) const BUF_READ_ONLY: i32 = 88;
-    pub(super) const BUF_INT_NARROW: i32 = 96;
+    pub(super) const BUF_WIRE_CONVERSION: i32 = 96;
     pub(super) const UNIFORM_BOUND_PRESENT: i32 = 104;
     pub(super) const UNIFORM_BOUND_X_VALUE: i32 = 112;
     pub(super) const UNIFORM_BOUND_Y_VALUE: i32 = 120;
@@ -178,14 +180,14 @@ pub(crate) fn translate(
     let args = launch_args.args();
     let arg_handles = launch_args.arg_handles();
     let _arg_read_only = launch_args.arg_read_only();
-    let arg_int_narrow = launch_args.arg_int_narrow();
+    let arg_needs_conversion = launch_args.arg_int_narrow();
     // The parallel per-capture vectors are written to the `#[repr(C)]`
     // `GpuLaunchDesc` by index below; `GpuLaunchArgs` guarantees they are
     // equal-length at construction, but assert the contract here so a future
     // change that bypasses the builder fails at codegen, not at the GPU driver.
     debug_assert_eq!(args.len(), arg_handles.len());
     debug_assert_eq!(args.len(), _arg_read_only.len());
-    debug_assert_eq!(args.len(), arg_int_narrow.len());
+    debug_assert_eq!(args.len(), arg_needs_conversion.len());
 
     let kernel_name = extract_kernel_name(kernel_op)?;
     let kernel = module_ctx
@@ -214,53 +216,19 @@ pub(crate) fn translate(
     )?;
     populate_handle_ids(builder, arg_handles, num_bufs, slots.handle_ids_addr);
 
-    // Allocate and populate buf_read_only if non-empty.
-    let read_only_addr = if _arg_read_only.is_empty() {
-        builder.ins().iconst(ptr_ty, 0)
-    } else {
-        let read_only_slot = builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            _arg_read_only.len() as u32,
-            1,
-        ));
-        let read_only_addr = builder.ins().stack_addr(ptr_ty, read_only_slot, 0);
-        for (i, &is_ro) in _arg_read_only.iter().enumerate() {
-            let byte_val = builder
-                .ins()
-                .iconst(cl_types::I8, if is_ro { 1 } else { 0 });
-            builder
-                .ins()
-                .store(MemFlags::new(), byte_val, read_only_addr, i as i32);
-        }
-        read_only_addr
-    };
-
-    // Allocate and populate buf_int_narrow if non-empty.
-    let int_narrow_addr = if arg_int_narrow.is_empty() {
-        builder.ins().iconst(ptr_ty, 0)
-    } else {
-        let int_narrow_slot = builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            arg_int_narrow.len() as u32,
-            1,
-        ));
-        let int_narrow_addr = builder.ins().stack_addr(ptr_ty, int_narrow_slot, 0);
-        for (i, &needs_narrow) in arg_int_narrow.iter().enumerate() {
-            let byte_val = builder
-                .ins()
-                .iconst(cl_types::I8, if needs_narrow { 1 } else { 0 });
-            builder
-                .ins()
-                .store(MemFlags::new(), byte_val, int_narrow_addr, i as i32);
-        }
-        int_narrow_addr
-    };
+    let read_only_bytes: Vec<u8> = _arg_read_only
+        .iter()
+        .map(|&is_ro| u8::from(is_ro))
+        .collect();
+    let read_only_addr = store_byte_array(builder, ptr_ty, &read_only_bytes);
+    let conversion_codes = buffer_conversion_codes(args, arg_needs_conversion, type_ctx)?;
+    let wire_conversion_addr = store_byte_array(builder, ptr_ty, &conversion_codes);
 
     let (grid_x, grid_y, grid_z) = load_dim3_components(builder, grid_op, locals, type_ctx)?;
     let (block_x, block_y, block_z) = load_dim3_components(builder, block_op, locals, type_ctx)?;
 
     let (scalar_inputs_addr, scalar_inputs_len) =
-        populate_scalar_inputs(builder, ptr_ty, _scalar_args, locals, type_ctx)?;
+        populate_scalar_inputs(builder, module_ctx.module, _scalar_args, locals, type_ctx)?;
 
     populate_descriptor(
         builder,
@@ -271,7 +239,7 @@ pub(crate) fn translate(
             byte_lens_addr: slots.byte_lens_addr,
             handle_ids_addr: slots.handle_ids_addr,
             read_only_addr,
-            int_narrow_addr,
+            wire_conversion_addr,
             scalar_inputs_addr,
             scalar_inputs_len,
         },
@@ -321,22 +289,24 @@ pub(crate) fn translate(
         .declare_func_in_func(func_id, builder.func);
     let call = builder.ins().call(local_func, &[slots.desc_addr]);
 
-    trap_on_launch_failure(builder, call)?;
+    exit_on_launch_failure(builder, module_ctx.module, call)?;
 
     Ok(())
 }
 
-/// Converts a GPU launch failure (return code 0) into a trap.
+/// Ends the program cleanly when the launch entry returns failure (`0`).
 ///
-/// The runtime prints a descriptive error message to stderr before returning 0.
-/// This helper reads the return code, compares it to 0, and emits a trap on
-/// failure. The process terminates cleanly with the error message visible
-/// to the user on stderr.
+/// The GPU runtime writes the reason to stderr before returning `0`; the
+/// failure branch then calls the core runtime's noreturn launch-failure
+/// helper, which reports MER_RT_013 and exits with status 1, so a refused
+/// launch never dies on a signal. The trap after the call only terminates the
+/// block for the verifier; it is never reached.
 ///
 /// After this call, the builder is positioned on the continuation block
 /// (success path) so the parent `translate` function can proceed normally.
-fn trap_on_launch_failure(
+fn exit_on_launch_failure(
     builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
     call: cranelift_codegen::ir::Inst,
 ) -> Result<(), CodegenError> {
     let call_result = builder.inst_results(call)[0];
@@ -348,6 +318,9 @@ fn trap_on_launch_failure(
     builder.ins().brif(failed, fail_block, &[], cont_block, &[]);
 
     builder.switch_to_block(fail_block);
+    let report = declare_launch_failure_fn(module)?;
+    let report_ref = module.declare_func_in_func(report, builder.func);
+    builder.ins().call(report_ref, &[]);
     builder.ins().trap(TrapCode::unwrap_user(1));
     builder.seal_block(fail_block);
 
@@ -355,6 +328,75 @@ fn trap_on_launch_failure(
     builder.seal_block(cont_block);
 
     Ok(())
+}
+
+fn declare_launch_failure_fn(module: &mut ObjectModule) -> Result<FuncId, CodegenError> {
+    let sig = module.make_signature();
+    module
+        .declare_function(rt::GPU_LAUNCH_FAILED_PANIC, Linkage::Import, &sig)
+        .map_err(|err| {
+            CodegenError::declare_function(rt::GPU_LAUNCH_FAILED_PANIC.to_string(), err.to_string())
+        })
+}
+
+/// Writes `bytes` to a fresh stack array and returns its address, or a null
+/// pointer when there are none (the runtime reads null as "all zero").
+fn store_byte_array(builder: &mut FunctionBuilder, ptr_ty: cl_types::Type, bytes: &[u8]) -> Value {
+    if bytes.is_empty() {
+        return builder.ins().iconst(ptr_ty, 0);
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        bytes.len() as u32,
+        1,
+    ));
+    let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
+    for (offset, &byte) in bytes.iter().enumerate() {
+        let value = builder.ins().iconst(cl_types::I8, i64::from(byte));
+        builder
+            .ins()
+            .store(MemFlags::new(), value, addr, offset as i32);
+    }
+    addr
+}
+
+/// The runtime conversion code of every captured buffer, from the GPU wire
+/// format of its element type. Lowering records whether each buffer needs a
+/// conversion from the same rule; a buffer on which the two disagree was
+/// typed differently at the two stages, and is refused rather than marshalled
+/// at a width the kernel does not declare.
+fn buffer_conversion_codes(
+    args: &[Operand],
+    needs_conversion: &[bool],
+    type_ctx: &TypeCtx,
+) -> Result<Vec<u8>, CodegenError> {
+    args.iter()
+        .zip(needs_conversion)
+        .map(|(arg, &needs_conversion)| {
+            let conversion = buffer_conversion(&operand_type(arg, type_ctx)?.kind);
+            if conversion.is_identity() == needs_conversion {
+                return Err(CodegenError::Internal(format!(
+                    "GpuLaunch buffer {:?}: lowering and codegen disagree on its element conversion ({:?})",
+                    arg, conversion
+                )));
+            }
+            Ok(conversion.code())
+        })
+        .collect()
+}
+
+/// The declared type of a projection-free launch operand's local.
+fn operand_type<'a>(op: &Operand, type_ctx: &'a TypeCtx) -> Result<&'a Type, CodegenError> {
+    let (Operand::Copy(place) | Operand::Move(place)) = op else {
+        return Err(CodegenError::Internal(
+            "GpuLaunch operand must be a Copy/Move of a local".to_string(),
+        ));
+    };
+    type_ctx
+        .local_types
+        .get(place.local.0)
+        .copied()
+        .ok_or_else(|| CodegenError::Internal(format!("unknown GpuLaunch local {:?}", place.local)))
 }
 
 fn extract_kernel_name(kernel_op: &Operand) -> Result<String, CodegenError> {
@@ -490,20 +532,22 @@ struct DescriptorSlots {
     byte_lens_addr: Value,
     handle_ids_addr: Value,
     read_only_addr: Value,
-    int_narrow_addr: Value,
+    wire_conversion_addr: Value,
     scalar_inputs_addr: Value,
     scalar_inputs_len: Value,
 }
 
-/// Packs scalar captures into a binary blob on the stack.
-/// Each scalar is stored at a 4-byte offset in order: int→i32, bool→u32, f32→f32.
+/// Packs scalar captures into a binary blob on the stack, one 32-bit lane per
+/// capture in capture order, each converted to its lane by the GPU wire
+/// format ([`scalar_capture_wire`]).
 fn populate_scalar_inputs(
     builder: &mut FunctionBuilder,
-    ptr_ty: cl_types::Type,
+    module: &mut ObjectModule,
     scalar_args: &[Operand],
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(Value, Value), CodegenError> {
+    let ptr_ty = type_ctx.ptr_type;
     if scalar_args.is_empty() {
         return Ok((
             builder.ins().iconst(ptr_ty, 0),
@@ -511,7 +555,7 @@ fn populate_scalar_inputs(
         ));
     }
 
-    let byte_size = (scalar_args.len() as u32) * 4;
+    let byte_size = (scalar_args.len() as u32) * SCALAR_LANE_BYTES;
     let slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         byte_size,
@@ -519,100 +563,160 @@ fn populate_scalar_inputs(
     ));
     let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
 
-    for (i, op) in scalar_args.iter().enumerate() {
-        let value = read_operand_value(builder, op, locals, type_ctx)?;
-        let place = match op {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            Operand::Constant(_) => {
-                return Err(CodegenError::Internal(
-                    "scalar_args operand must be a Copy/Move".to_string(),
-                ));
-            }
-        };
-        let local_ty = type_ctx.local_types.get(place.local.0).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "unknown local in scalar capture: {:?}",
-                place.local
-            ))
-        })?;
-        let converted = convert_scalar_for_uniform(builder, value, local_ty)?;
-        builder
-            .ins()
-            .store(MemFlags::new(), converted, addr, (i as i32) * 4);
+    for (index, op) in scalar_args.iter().enumerate() {
+        let capture = read_scalar_capture(builder, op, index, locals, type_ctx)?;
+        let lane = convert_scalar_to_lane(builder, module, capture)?;
+        let offset = (index as u32 * SCALAR_LANE_BYTES) as i32;
+        builder.ins().store(MemFlags::new(), lane, addr, offset);
     }
 
     Ok((addr, builder.ins().iconst(cl_types::I64, byte_size as i64)))
 }
 
-/// Converts a scalar operand to the wire format: int→i32, bool→u32, f32→f32.
-fn convert_scalar_for_uniform(
+/// Reads the captured scalar `op` (the `index`-th capture) and pairs its value
+/// with the conversion the GPU wire format assigns its type.
+fn read_scalar_capture(
     builder: &mut FunctionBuilder,
-    value: Value,
-    local_ty: &&Type,
-) -> Result<Value, CodegenError> {
-    match &local_ty.kind {
-        TypeKind::Int => {
-            let val_ty = builder.func.dfg.value_type(value);
-            if val_ty == cl_types::I64 {
-                Ok(builder.ins().ireduce(cl_types::I32, value))
-            } else {
-                Ok(value)
-            }
-        }
-        TypeKind::Boolean => {
-            let val_ty = builder.func.dfg.value_type(value);
-            if val_ty == cl_types::I8 {
-                Ok(builder.ins().uextend(cl_types::I32, value))
-            } else {
-                Ok(value)
-            }
-        }
-        // `float` is the host default (f64); the device has no f64, so the
-        // value narrows on upload the same way `int` reduces to i32 above.
-        TypeKind::Float => {
-            let val_ty = builder.func.dfg.value_type(value);
-            if val_ty == cl_types::F64 {
-                Ok(builder.ins().fdemote(cl_types::F32, value))
-            } else {
-                Ok(value)
-            }
-        }
-        TypeKind::F32 => Ok(value),
-        // Unsupported scalar types
-        TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::F16
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Tuple(_)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Custom(_, _)
-        | TypeKind::Meta(_)
-        | TypeKind::Option(_)
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Linear(_) => Err(CodegenError::Internal(format!(
+    op: &Operand,
+    index: usize,
+    locals: &HashMap<Local, cranelift_frontend::Variable>,
+    type_ctx: &TypeCtx,
+) -> Result<ScalarCapture, CodegenError> {
+    let value = read_operand_value(builder, op, locals, type_ctx)?;
+    let local_ty = operand_type(op, type_ctx)?;
+    let wire = scalar_capture_wire(&local_ty.kind).ok_or_else(|| {
+        CodegenError::Internal(format!(
             "unsupported scalar capture type in codegen: {:?}",
             local_ty.kind
-        ))),
+        ))
+    })?;
+    Ok(ScalarCapture {
+        value,
+        conversion: wire.conversion,
+        index,
+    })
+}
+
+/// Bytes each captured scalar occupies in the `_Inputs` uniform block.
+const SCALAR_LANE_BYTES: u32 = 4;
+
+/// One captured scalar on its way into the uniform block: its host value, the
+/// conversion to its lane, and its position (named in a range error).
+#[derive(Clone, Copy)]
+struct ScalarCapture {
+    value: Value,
+    conversion: WireConversion,
+    index: usize,
+}
+
+/// Converts a captured scalar's host value to its 32-bit device lane. A 64-bit
+/// integer is range-checked first: a value the lane cannot hold stops the
+/// program with a runtime error instead of reaching the kernel truncated.
+fn convert_scalar_to_lane(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    capture: ScalarCapture,
+) -> Result<Value, CodegenError> {
+    let value = capture.value;
+    let lane = match capture.conversion {
+        WireConversion::Identity => value,
+        WireConversion::NarrowI64 | WireConversion::NarrowU64 => {
+            guard_capture_range(builder, module, capture)?;
+            resize_int_to_i32(builder, value, IntExtension::Signed)
+        }
+        WireConversion::WidenI8 | WireConversion::WidenI16 => {
+            resize_int_to_i32(builder, value, IntExtension::Signed)
+        }
+        WireConversion::WidenU8 | WireConversion::WidenU16 => {
+            resize_int_to_i32(builder, value, IntExtension::Unsigned)
+        }
+        WireConversion::DemoteF64 if builder.func.dfg.value_type(value) == cl_types::F64 => {
+            builder.ins().fdemote(cl_types::F32, value)
+        }
+        WireConversion::DemoteF64 => value,
+    };
+    Ok(lane)
+}
+
+/// How a narrower integer fills the upper bits of a wider lane.
+#[derive(Clone, Copy)]
+enum IntExtension {
+    Signed,
+    Unsigned,
+}
+
+/// Resizes an integer value to `i32`: reduces a wider one, extends a narrower
+/// one with `extension`, and leaves an `i32` unchanged.
+fn resize_int_to_i32(
+    builder: &mut FunctionBuilder,
+    value: Value,
+    extension: IntExtension,
+) -> Value {
+    let width = builder.func.dfg.value_type(value).bits();
+    match (width.cmp(&32), extension) {
+        (std::cmp::Ordering::Greater, _) => builder.ins().ireduce(cl_types::I32, value),
+        (std::cmp::Ordering::Less, IntExtension::Signed) => {
+            builder.ins().sextend(cl_types::I32, value)
+        }
+        (std::cmp::Ordering::Less, IntExtension::Unsigned) => {
+            builder.ins().uextend(cl_types::I32, value)
+        }
+        (std::cmp::Ordering::Equal, _) => value,
     }
+}
+
+/// Emits the range check for a 64-bit capture narrowed into a 32-bit lane: the
+/// value survives exactly when truncating it to the lane and extending it back
+/// (signed for `i32`, unsigned for `u32`) reproduces it. On failure the GPU
+/// runtime reports the value and the program leaves through the same
+/// noreturn launch-failure exit a refused launch takes.
+fn guard_capture_range(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    capture: ScalarCapture,
+) -> Result<(), CodegenError> {
+    let value = capture.value;
+    let value_ty = builder.func.dfg.value_type(value);
+    let lane = builder.ins().ireduce(cl_types::I32, value);
+    let round_trip = if capture.conversion == WireConversion::NarrowU64 {
+        builder.ins().uextend(value_ty, lane)
+    } else {
+        builder.ins().sextend(value_ty, lane)
+    };
+    let fits = builder.ins().icmp(IntCC::Equal, round_trip, value);
+
+    let fail_block = builder.create_block();
+    let cont_block = builder.create_block();
+    builder.ins().brif(fits, cont_block, &[], fail_block, &[]);
+
+    builder.switch_to_block(fail_block);
+    builder.seal_block(fail_block);
+    let report = declare_capture_range_report_fn(module)?;
+    let report_ref = module.declare_func_in_func(report, builder.func);
+    let index = builder.ins().iconst(cl_types::I64, capture.index as i64);
+    let code = builder
+        .ins()
+        .iconst(cl_types::I8, i64::from(capture.conversion.code()));
+    builder.ins().call(report_ref, &[index, value, code]);
+    let exit = declare_launch_failure_fn(module)?;
+    let exit_ref = module.declare_func_in_func(exit, builder.func);
+    builder.ins().call(exit_ref, &[]);
+    builder.ins().trap(TrapCode::unwrap_user(1));
+
+    builder.switch_to_block(cont_block);
+    builder.seal_block(cont_block);
+    Ok(())
+}
+
+fn declare_capture_range_report_fn(module: &mut ObjectModule) -> Result<FuncId, CodegenError> {
+    const NAME: &str = "miri_gpu_capture_out_of_range";
+    let mut sig = module.make_signature();
+    sig.params.push(AbiParam::new(cl_types::I64));
+    sig.params.push(AbiParam::new(cl_types::I64));
+    sig.params.push(AbiParam::new(cl_types::I8));
+    module
+        .declare_function(NAME, Linkage::Import, &sig)
+        .map_err(|err| CodegenError::declare_function(NAME.to_string(), err.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -632,7 +736,7 @@ fn populate_descriptor(
         byte_lens_addr,
         handle_ids_addr,
         read_only_addr,
-        int_narrow_addr,
+        wire_conversion_addr,
         scalar_inputs_addr,
         scalar_inputs_len,
     } = slots;
@@ -662,7 +766,7 @@ fn populate_descriptor(
     store(byte_lens_addr, desc_layout::BUF_BYTE_LENS);
     store(handle_ids_addr, desc_layout::BUF_HANDLE_IDS);
     store(read_only_addr, desc_layout::BUF_READ_ONLY);
-    store(int_narrow_addr, desc_layout::BUF_INT_NARROW);
+    store(wire_conversion_addr, desc_layout::BUF_WIRE_CONVERSION);
     store(scalar_inputs_addr, desc_layout::SCALAR_INPUTS_PTR);
     store(scalar_inputs_len, desc_layout::SCALAR_INPUTS_LEN);
 }
@@ -776,18 +880,24 @@ fn load_dim3_components(
     let y = builder.ins().load(ty_y, MemFlags::new(), base_addr, off_y);
     let z = builder.ins().load(ty_z, MemFlags::new(), base_addr, off_z);
     Ok((
-        narrow_to_i32(builder, x, ty_x),
-        narrow_to_i32(builder, y, ty_y),
-        narrow_to_i32(builder, z, ty_z),
+        saturate_to_u32(builder, x, ty_x),
+        saturate_to_u32(builder, y, ty_y),
+        saturate_to_u32(builder, z, ty_z),
     ))
 }
 
-fn narrow_to_i32(builder: &mut FunctionBuilder, value: Value, from: cl_types::Type) -> Value {
+/// Narrows a `Dim3` component to the descriptor's 32-bit field, saturating
+/// anything outside `0..=u32::MAX` to `u32::MAX`. Truncating instead would wrap
+/// an oversized or negative dimension to an unrelated grid that may launch; a
+/// saturated one is always refused by the runtime's device-limit check.
+fn saturate_to_u32(builder: &mut FunctionBuilder, value: Value, from: cl_types::Type) -> Value {
     if from == cl_types::I32 {
-        value
-    } else {
-        builder.ins().ireduce(cl_types::I32, value)
+        return value;
     }
+    // Compared unsigned, a negative component is larger than `u32::MAX`.
+    let ceiling = builder.ins().iconst(from, i64::from(u32::MAX));
+    let clamped = builder.ins().umin(value, ceiling);
+    builder.ins().ireduce(cl_types::I32, clamped)
 }
 
 #[cfg(test)]
@@ -818,7 +928,7 @@ mod tests {
         assert_eq!(desc_layout::BUF_BYTE_LENS, 72);
         assert_eq!(desc_layout::BUF_HANDLE_IDS, 80);
         assert_eq!(desc_layout::BUF_READ_ONLY, 88);
-        assert_eq!(desc_layout::BUF_INT_NARROW, 96);
+        assert_eq!(desc_layout::BUF_WIRE_CONVERSION, 96);
         assert_eq!(desc_layout::UNIFORM_BOUND_PRESENT, 104);
         assert_eq!(desc_layout::UNIFORM_BOUND_X_VALUE, 112);
         assert_eq!(desc_layout::UNIFORM_BOUND_Y_VALUE, 120);

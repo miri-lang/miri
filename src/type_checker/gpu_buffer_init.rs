@@ -8,23 +8,29 @@
 //! data. The type checker records that metadata as it finishes checking a
 //! program so the web-gpu bundle emitter consumes a resolved table instead of
 //! re-walking the AST in the pipeline orchestrator.
+//!
+//! The table is keyed by where the declaration's name is written, not by the
+//! name: two functions may each declare a `gpu var buf`, and they are two
+//! buffers. A declaration whose initializer is not a build-time constant has
+//! no entry, which is how the web target knows it cannot bundle it.
 
 use std::collections::HashMap;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
-use crate::ast::operator::BinaryOp;
+use crate::ast::operator::{BinaryOp, UnaryOp};
 use crate::ast::statement::{BindingResidency, Statement, StatementKind, VariableDeclarationType};
-use crate::ast::types::{primitive_type_kind, wgsl_scalar_name, BuiltinCollectionKind, TypeKind};
+use crate::ast::types::BuiltinCollectionKind;
 use crate::ast::Program;
+use crate::error::syntax::Span;
 
 use super::TypeChecker;
 
 /// Initial data for a GPU buffer from a compile-time constant initializer.
 #[derive(Debug, Clone)]
 pub struct GpuBufferInit {
-    /// WGSL scalar element name (e.g. `i32`, `f32`).
-    pub elem_type: String,
+    /// The declared binding's source name.
+    pub name: String,
     /// Constant element values; empty for sized zero-initialized buffers.
     pub values: Vec<f64>,
     /// Explicit length for sized allocations; `None` infers from `values.len()`.
@@ -82,7 +88,7 @@ fn collect_const_values(program: &Program) -> HashMap<String, usize> {
 
 fn collect_from_statement(
     stmt: &Statement,
-    inits: &mut HashMap<String, GpuBufferInit>,
+    inits: &mut HashMap<Span, GpuBufferInit>,
     consts: &HashMap<String, usize>,
 ) {
     match &stmt.node {
@@ -94,15 +100,8 @@ fn collect_from_statement(
                 let Some(init) = &decl.initializer else {
                     continue;
                 };
-                if let Some(values) = extract_const_array_values(init) {
-                    inits.insert(
-                        decl.name.clone(),
-                        GpuBufferInit {
-                            elem_type: infer_elem_type(init),
-                            values,
-                            length: extract_array_size(init, consts),
-                        },
-                    );
+                if let Some(buffer) = constant_buffer_init(&decl.name, init, consts) {
+                    inits.insert(decl.name_span, buffer);
                 }
             }
         }
@@ -130,6 +129,30 @@ fn collect_from_statement(
         }
         _ => {}
     }
+}
+
+/// The initial contents of a buffer declared `name = init`, when `init` is a
+/// build-time constant: a literal of numeric literals, or a sized constructor
+/// whose size resolves. `None` for anything that needs host code to run.
+fn constant_buffer_init(
+    name: &str,
+    init: &Expression,
+    consts: &HashMap<String, usize>,
+) -> Option<GpuBufferInit> {
+    let values = extract_const_array_values(init)?;
+    let length = extract_array_size(init, consts);
+    if is_sized_constructor(init) && length.is_none() {
+        return None;
+    }
+    Some(GpuBufferInit {
+        name: name.to_string(),
+        values,
+        length,
+    })
+}
+
+fn is_sized_constructor(expr: &Expression) -> bool {
+    matches!(&expr.node, ExpressionKind::Call(func_expr, _) if is_array_constructor(func_expr))
 }
 
 fn extract_const_array_values(expr: &Expression) -> Option<Vec<f64>> {
@@ -166,6 +189,9 @@ fn extract_numeric_literal(expr: &Expression) -> Option<f64> {
             FloatLiteral::F32(v) => f32::from_bits(*v) as f64,
             FloatLiteral::F64(v) => f64::from_bits(*v),
         }),
+        ExpressionKind::Unary(UnaryOp::Negate, operand) => {
+            extract_numeric_literal(operand).map(|value| -value)
+        }
         _ => None,
     }
 }
@@ -182,63 +208,6 @@ fn integer_literal_as_f64(int_lit: &IntegerLiteral) -> f64 {
         IntegerLiteral::U32(v) => *v as f64,
         IntegerLiteral::U64(v) => *v as f64,
         IntegerLiteral::U128(v) => *v as f64,
-    }
-}
-
-fn infer_elem_type(expr: &Expression) -> String {
-    match &expr.node {
-        ExpressionKind::Array(elements, _) | ExpressionKind::List(elements) => elements
-            .first()
-            .map(infer_elem_type_from_literal)
-            .unwrap_or_else(|| "i32".to_string()),
-        ExpressionKind::Call(func_expr, _) if is_array_constructor(func_expr) => {
-            infer_sized_array_elem_type(func_expr)
-        }
-        _ => "i32".to_string(),
-    }
-}
-
-/// Extracts the WGSL element type from the first generic of a sized
-/// `Array<T, N>()` constructor's type declaration.
-fn infer_sized_array_elem_type(func_expr: &Expression) -> String {
-    let ExpressionKind::TypeDeclaration(_base, Some(generics), _, _) = &func_expr.node else {
-        return "i32".to_string();
-    };
-    let Some(elem_type_expr) = generics.first() else {
-        return "i32".to_string();
-    };
-    match &elem_type_expr.node {
-        ExpressionKind::Identifier(type_name, _) => scalar_name_from_identifier(type_name),
-        // The type checker rewrites a resolved generic into a `Type` node.
-        ExpressionKind::Type(inner_ty, _) => infer_elem_type_from_type(&inner_ty.kind),
-        _ => "i32".to_string(),
-    }
-}
-
-fn scalar_name_from_identifier(type_name: &str) -> String {
-    primitive_type_kind(type_name)
-        .and_then(|k| wgsl_scalar_name(&k))
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "i32".to_string())
-}
-
-fn infer_elem_type_from_type(kind: &TypeKind) -> String {
-    wgsl_scalar_name(kind).unwrap_or("i32").to_string()
-}
-
-fn infer_elem_type_from_literal(elem: &Expression) -> String {
-    match &elem.node {
-        // A buffer element is read by a kernel, so a float literal takes the
-        // device's float width rather than the host's — the shader has no f64
-        // to widen it into.
-        ExpressionKind::Literal(Literal::Float(_)) => {
-            infer_elem_type_from_type(&crate::type_checker::float_literals::gpu_float_width())
-        }
-        // Integer literals are `int` (Miri default), which maps to i32 for
-        // browser portability. The host keeps i64; marshalling narrows to i32
-        // for the device and widens on readback.
-        ExpressionKind::Literal(Literal::Integer(_)) => "i32".to_string(),
-        _ => "i32".to_string(),
     }
 }
 

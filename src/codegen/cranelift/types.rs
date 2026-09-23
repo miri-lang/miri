@@ -16,6 +16,13 @@ pub fn translate_type(ty: &Type, ptr_ty: CraneliftType) -> CraneliftType {
 }
 
 /// Translate a Miri TypeKind to a Cranelift type.
+///
+/// Two unresolved kinds legitimately reach this function and travel as one
+/// word. A type parameter (`Generic`) does, because the shared body of a
+/// generic class or function is compiled and called when a value's
+/// instantiation was never recorded. `Error` does, because codegen's own
+/// place-type resolver (`resolve_projected_type_kind`) answers `Error` for a
+/// projection it cannot follow.
 pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftType {
     match kind {
         TypeKind::Linear(_) => ptr_ty,
@@ -79,6 +86,8 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
 
         // User-defined types are pointers
         TypeKind::Custom(_, _) => ptr_ty,
+        // TODO: a `T` bound to `i128`/`u128` is truncated in the shared generic
+        // body; only a monomorphized body should see a width-dependent `T`.
         TypeKind::Generic(_, _, _) => ptr_ty,
 
         // Meta types should be resolved before codegen; treat as pointer-sized
@@ -88,8 +97,8 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // Option types are pointers
         TypeKind::Option(_) => ptr_ty,
 
-        // Error types indicate a prior compiler error; treat as pointer-sized
-        // to allow graceful continuation rather than a panic.
+        // TODO: give `resolve_projected_type_kind` an `Option` result so an
+        // unresolved projection is decided at the call site, not a silent word.
         TypeKind::Error => ptr_ty,
     }
 }

@@ -8,7 +8,8 @@
 //! Intended to be consumed by a host runtime (Wasm/JS or native `wgpu`).
 
 mod emitter;
-mod types;
+pub mod identifiers;
+pub(crate) mod types;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::error::CodegenError;

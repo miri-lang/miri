@@ -4,7 +4,9 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use crate::codegen::cranelift::layout::{class_payload_layout, field_layout, ClassPayloadLayout};
+use crate::codegen::cranelift::layout::{
+    class_payload_layout, enum_payload_slot_size, field_layout, ClassPayloadLayout,
+};
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -147,7 +149,11 @@ impl<'a> FunctionTranslator<'a> {
                     Self::is_unsigned_type_kind(&ty.kind)
                 };
 
-                Self::cast_value_with_sign(builder, value, src_ty, dest_ty, is_unsigned)
+                if Self::is_int128_float_pair(src_ty, dest_ty) {
+                    Self::emit_int128_float_cast(builder, ctx, value, dest_ty, is_unsigned)
+                } else {
+                    Self::cast_value_with_sign(builder, value, src_ty, dest_ty, is_unsigned)
+                }
             }
 
             Rvalue::Len(place) => Self::translate_len(builder, ctx, place, locals, type_ctx),
@@ -933,12 +939,15 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
+        let translated =
+            Self::coerce_payload_values(builder, kind, translated, type_ctx, expected_ty)?;
 
         let (field_offsets, total_size) = Self::payload_layout(
             builder,
             kind,
             &translated,
             type_ctx,
+            expected_ty,
             needs_vtable_alloc,
             is_tuple,
         )?;
@@ -953,15 +962,12 @@ impl<'a> FunctionTranslator<'a> {
             Self::store_vtable_pointer(builder, ctx, &class_name, payload_ptr, ptr_type)?;
         }
 
-        Self::store_payload_values(
-            builder,
-            kind,
-            translated,
-            &field_offsets,
-            payload_ptr,
-            type_ctx,
-            expected_ty,
-        )?;
+        for (val, offset) in translated.into_iter().zip(&field_offsets) {
+            let store_offset = Self::store_offset_i32(*offset as i64)?;
+            builder
+                .ins()
+                .store(MemFlags::new(), val, payload_ptr, store_offset);
+        }
         Ok(payload_ptr)
     }
 
@@ -980,11 +986,15 @@ impl<'a> FunctionTranslator<'a> {
         kind: &AggregateKind,
         translated: &[Value],
         type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
         needs_vtable_alloc: bool,
         is_tuple: bool,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         if let Some(layout) = Self::declared_class_layout(kind, type_ctx) {
             return Self::class_field_offsets(layout, translated.len());
+        }
+        if let AggregateKind::Enum(enum_name, _) = kind {
+            return Self::enum_value_layout(builder, enum_name, translated, type_ctx, expected_ty);
         }
         let ptr_size = type_ctx.ptr_type.bytes();
         let tuple_header = if is_tuple { ptr_size } else { 0 };
@@ -994,49 +1004,95 @@ impl<'a> FunctionTranslator<'a> {
             translated,
             tuple_header + vtable_header_size,
             is_tuple,
-            matches!(kind, AggregateKind::Enum(_, _) | AggregateKind::Option),
+            matches!(kind, AggregateKind::Option),
             ptr_size,
         )
     }
 
-    /// Write each translated value into its payload slot, brought to the type
-    /// the slot is declared at where the aggregate knows one.
-    fn store_payload_values(
+    /// Where each field of an enum value is stored, and how many bytes the
+    /// fields need.
+    ///
+    /// Every field sits in a slot of the width
+    /// [`enum_payload_slot_size`] gives this instantiation, because
+    /// that is where a match reads it back from. A value wider than that slot
+    /// can only be a payload whose type parameter this site does not see bound;
+    /// the slot grows to hold it rather than let the store run past the
+    /// allocation.
+    fn enum_value_layout(
+        builder: &FunctionBuilder,
+        enum_name: &str,
+        translated: &[Value],
+        type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let declared_slot = match type_ctx.type_definitions.get(enum_name) {
+            Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) => {
+                let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
+                enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type)
+            }
+            // Not a known enum definition: keep the pointer-sized slot every
+            // payload used before slots were sized from the variants.
+            Some(
+                crate::type_checker::context::TypeDefinition::Struct(_)
+                | crate::type_checker::context::TypeDefinition::Generic(_)
+                | crate::type_checker::context::TypeDefinition::Alias(_)
+                | crate::type_checker::context::TypeDefinition::Class(_)
+                | crate::type_checker::context::TypeDefinition::Trait(_),
+            )
+            | None => ptr_type.bytes(),
+        };
+        let slot = translated
+            .iter()
+            .map(|val| builder.func.dfg.value_type(*val).bytes())
+            .fold(declared_slot, u32::max);
+        let field_count = u32::try_from(translated.len()).map_err(|_| {
+            CodegenError::Internal("enum value carries too many fields".to_string())
+        })?;
+        let total_size = slot.checked_mul(field_count).ok_or_else(|| {
+            CodegenError::Internal("aggregate layout exceeds 4 GiB addressable space".to_string())
+        })?;
+        let offsets = (0..field_count).map(|i| i * slot).collect();
+        Ok((offsets, total_size))
+    }
+
+    /// Bring each payload value to the type its slot is declared at, where the
+    /// aggregate knows one, so the layout is computed from — and the store
+    /// writes — the width a later read expects.
+    fn coerce_payload_values(
         builder: &mut FunctionBuilder,
         kind: &AggregateKind,
         translated: Vec<Value>,
-        field_offsets: &[u32],
-        payload_ptr: Value,
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-    ) -> Result<(), CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let declared_field_types =
-            Self::resolve_declared_field_types_for_aggregate(kind, type_ctx, expected_ty);
-
-        for (i, mut val) in translated.into_iter().enumerate() {
-            if let Some(ref decl_types) = declared_field_types {
-                let payload_field_idx = if matches!(kind, AggregateKind::Option) {
-                    i
-                } else if i > 0 {
-                    i - 1
-                } else {
-                    i
-                };
-                if (i > 0 || matches!(kind, AggregateKind::Option))
-                    && payload_field_idx < decl_types.len()
-                {
-                    if let Some(Some(decl_ty)) = decl_types.get(payload_field_idx) {
-                        val = Self::coerce_value_to_declared_type(builder, val, decl_ty, ptr_type)?;
-                    }
+    ) -> Result<Vec<Value>, CodegenError> {
+        let Some(decl_types) =
+            Self::resolve_declared_field_types_for_aggregate(kind, type_ctx, expected_ty)
+        else {
+            return Ok(translated);
+        };
+        // An enum's field 0 is its discriminant; an Option carries no
+        // discriminant field, so its payload starts at field 0.
+        let first_payload = usize::from(!matches!(kind, AggregateKind::Option));
+        translated
+            .into_iter()
+            .enumerate()
+            .map(|(i, val)| {
+                let declared = i
+                    .checked_sub(first_payload)
+                    .and_then(|payload_idx| decl_types.get(payload_idx))
+                    .and_then(Option::as_ref);
+                match declared {
+                    Some(decl_ty) => Self::coerce_value_to_declared_type(
+                        builder,
+                        val,
+                        decl_ty,
+                        type_ctx.ptr_type,
+                    ),
+                    None => Ok(val),
                 }
-            }
-            let store_offset = Self::store_offset_i32(field_offsets[i] as i64)?;
-            builder
-                .ins()
-                .store(MemFlags::new(), val, payload_ptr, store_offset);
-        }
-        Ok(())
+            })
+            .collect()
     }
 
     /// The declared payload layout of the class `kind` constructs, or `None`
@@ -1114,9 +1170,8 @@ impl<'a> FunctionTranslator<'a> {
     /// An entry is `None` when the payload has no statically known width — a
     /// generic enum constructed inside a generic function body, where the type
     /// parameter is not bound at this site. Those fields keep the value's own
-    /// width, matching the pointer-sized slot the match arm will read them back
-    /// at. Returns `None` for aggregate kinds that carry no declared payload
-    /// types at all.
+    /// width, which is the width the match arm reads them back at. Returns
+    /// `None` for aggregate kinds that carry no declared payload types at all.
     fn resolve_declared_field_types_for_aggregate(
         kind: &AggregateKind,
         type_ctx: &TypeCtx,
@@ -1195,8 +1250,6 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Coerce a value to its declared type, handling width mismatches for floats and ints.
-    /// If the declared type is wider than ptr_type, skip coercion to prevent store overflow:
-    /// enum payload slots are ptr-sized, so widening would write past the slot boundary.
     fn coerce_value_to_declared_type(
         builder: &mut FunctionBuilder,
         value: Value,
@@ -1206,8 +1259,7 @@ impl<'a> FunctionTranslator<'a> {
         let decl_cl_ty =
             crate::codegen::cranelift::types::translate_type_kind(&declared_ty.kind, ptr_type);
         let val_cl_ty = builder.func.dfg.value_type(value);
-        let ptr_bytes = ptr_type.bytes();
-        if decl_cl_ty != val_cl_ty && decl_cl_ty.bytes() <= ptr_bytes {
+        if decl_cl_ty != val_cl_ty {
             let is_unsigned = Self::is_unsigned_type_kind(&declared_ty.kind);
             Self::cast_value_with_sign(builder, value, val_cl_ty, decl_cl_ty, is_unsigned)
         } else {
@@ -1216,13 +1268,14 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Compute per-field offsets and total payload size for a struct-like aggregate.
+    /// An Option's payload takes a slot at least pointer-sized.
     /// Uses u64 internally to prevent silent wraparound, then checks final size fits in u32.
     fn compute_aggregate_layout(
         builder: &FunctionBuilder,
         translated: &[Value],
         header_size: u32,
         is_tuple: bool,
-        is_enum: bool,
+        is_option: bool,
         ptr_size: u32,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         let mut current_offset: u64 = header_size as u64;
@@ -1231,7 +1284,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for &val in translated {
             let ty = builder.func.dfg.value_type(val);
-            let align = if is_enum {
+            let align = if is_option {
                 ptr_size.max(ty.bytes())
             } else {
                 ty.bytes()
@@ -1246,7 +1299,7 @@ impl<'a> FunctionTranslator<'a> {
                 )
             })?;
             field_offsets.push(offset_u32);
-            current_offset += if is_enum {
+            current_offset += if is_option {
                 (ptr_size as u64).max(ty.bytes() as u64)
             } else {
                 ty.bytes() as u64
@@ -2333,6 +2386,87 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
 
+        let lo = builder.ins().stack_load(cl_types::I64, slot, 0);
+        let hi = builder.ins().stack_load(cl_types::I64, slot, 8);
+        Ok(builder.ins().iconcat(lo, hi))
+    }
+
+    /// True when a cast converts between a 128-bit integer and a float, which
+    /// the backend has no instruction for.
+    pub(crate) fn is_int128_float_pair(from_ty: cl_types::Type, to_ty: cl_types::Type) -> bool {
+        (from_ty == cl_types::I128 && to_ty.is_float())
+            || (from_ty.is_float() && to_ty == cl_types::I128)
+    }
+
+    /// Convert between a 128-bit integer and a float through the runtime.
+    ///
+    /// A float converts by truncating toward zero and saturating at the
+    /// integer's bounds, NaN to zero, as the narrower widths do; a 32-bit float
+    /// is widened first, which is exact. `is_unsigned` names the integer side.
+    fn emit_int128_float_cast(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        value: Value,
+        to_ty: cl_types::Type,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
+        if to_ty == cl_types::I128 {
+            return Self::emit_float_to_int128(builder, ctx, value, is_unsigned);
+        }
+        let name = match (is_unsigned, to_ty == cl_types::F32) {
+            (false, false) => rt::I128_TO_F64,
+            (true, false) => rt::U128_TO_F64,
+            (false, true) => rt::I128_TO_F32,
+            (true, true) => rt::U128_TO_F32,
+        };
+        let (lo, hi) = builder.ins().isplit(value);
+        let call = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name,
+                param_types: &[cl_types::I64, cl_types::I64],
+                return_types: &[to_ty],
+                args: &[lo, hi],
+            },
+        )?;
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Convert a float to a 128-bit integer through the runtime, which writes
+    /// the result's two halves to a stack slot.
+    fn emit_float_to_int128(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        value: Value,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
+        let ptr_type = ctx.module.isa().pointer_type();
+        let value = if builder.func.dfg.value_type(value) == cl_types::F32 {
+            builder.ins().fpromote(cl_types::F64, value)
+        } else {
+            value
+        };
+        let name = if is_unsigned {
+            rt::F64_TO_U128
+        } else {
+            rt::F64_TO_I128
+        };
+        let slot =
+            builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 4));
+        let out = builder.ins().stack_addr(ptr_type, slot, 0);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name,
+                param_types: &[cl_types::F64, ptr_type],
+                return_types: &[],
+                args: &[value, out],
+            },
+        )?;
         let lo = builder.ins().stack_load(cl_types::I64, slot, 0);
         let hi = builder.ins().stack_load(cl_types::I64, slot, 8);
         Ok(builder.ins().iconcat(lo, hi))

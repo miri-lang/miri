@@ -474,6 +474,30 @@ fn test_enum_max_payload_wins() {
     assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 4 * ptr.bytes());
 }
 
+/// A 128-bit payload widens every slot of its enum, in every variant, so a
+/// field's offset depends only on its index and a read that does not know the
+/// variant still finds it.
+#[test]
+fn test_enum_wide_payload_widens_every_slot() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![
+        ("Big", vec![TypeKind::I128, TypeKind::Int]),
+        ("Small", vec![TypeKind::Int, TypeKind::Int, TypeKind::Int]),
+    ]);
+    type_defs.insert("Wide".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("Wide".to_string(), None);
+
+    assert_eq!(field_layout(&enum_kind, 0, &type_defs, ptr).0, 0);
+    assert_eq!(field_layout(&enum_kind, 1, &type_defs, ptr).0, 16);
+    assert_eq!(field_layout(&enum_kind, 2, &type_defs, ptr).0, 32);
+    assert_eq!(field_layout(&enum_kind, 3, &type_defs, ptr).0, 48);
+    // Discriminant slot + the three fields of the widest variant, 16 bytes each.
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 64);
+}
+
 #[test]
 fn test_enum_discriminant_is_pointer_type() {
     let mut type_defs = HashMap::new();

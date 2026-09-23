@@ -691,6 +691,55 @@ pub fn lower_to_local(
     Ok(())
 }
 
+/// Lower `expr`, a body's implicitly returned value, into the return place `_0`.
+fn lower_return_expression(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    ret_ty: &Type,
+) -> Result<(), LoweringError> {
+    // An implicitly returned gpu binding crosses to the host return
+    // slot exactly as an explicit `return g` does, and is fenced the
+    // same way.
+    super::variable::emit_cross_residency_readback(ctx, Some(expr), expr.span);
+    // Read through the instantiation substitution: a body lowered for
+    // `Container<String>` returns `String` where the type checker
+    // recorded `T`. Read raw, the two spellings never match, so the
+    // value takes a detour through a temp that is retained for the read
+    // and released after it, leaving the returned value with no holder.
+    let expr_ty = ctx.recorded_type(expr.id);
+    let types_match = expr_ty
+        .as_ref()
+        .map(|t| {
+            let em = MirType::from_type_kind(&t.kind);
+            let rm = MirType::from_type_kind(&ret_ty.kind);
+            // Exact match OR structurally-equivalent outer type.  The latter
+            // handles generic collection returns where element types differ
+            // (e.g. MirType::List(Generic) vs MirType::List(Custom("T"))):
+            // both sides are compatible pointer-sized values, so DPS is safe.
+            em == rm || mir_types_structurally_match(&em, &rm)
+        })
+        .unwrap_or(false);
+
+    if types_match {
+        // DPS: write directly to _0 to avoid a temp that would leak.
+        lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
+    } else {
+        let watermark = ctx.body.local_decls.len();
+        let operand = lower_expression(ctx, expr, None)?;
+        let op_ty = operand.ty(&ctx.body).clone();
+        let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, ret_ty, expr.span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
+            span: expr.span,
+        });
+        // Drop any managed temp created during the expression.
+        if let Operand::Copy(place) | Operand::Move(place) = &operand {
+            ctx.emit_temp_drop(place.local, watermark, expr.span);
+        }
+    }
+    Ok(())
+}
+
 /// Recursively lowers statements to assign the final expression to `_0` (return place).
 pub fn lower_as_return(
     ctx: &mut LoweringContext,
@@ -703,44 +752,7 @@ pub fn lower_as_return(
     }
 
     match &stmt.node {
-        StatementKind::Expression(expr) => {
-            // Read through the instantiation substitution: a body lowered for
-            // `Container<String>` returns `String` where the type checker
-            // recorded `T`. Read raw, the two spellings never match, so the
-            // value takes a detour through a temp that is retained for the read
-            // and released after it, leaving the returned value with no holder.
-            let expr_ty = ctx.recorded_type(expr.id);
-            let types_match = expr_ty
-                .as_ref()
-                .map(|t| {
-                    let em = MirType::from_type_kind(&t.kind);
-                    let rm = MirType::from_type_kind(&ret_ty.kind);
-                    // Exact match OR structurally-equivalent outer type.  The latter
-                    // handles generic collection returns where element types differ
-                    // (e.g. MirType::List(Generic) vs MirType::List(Custom("T"))):
-                    // both sides are compatible pointer-sized values, so DPS is safe.
-                    em == rm || mir_types_structurally_match(&em, &rm)
-                })
-                .unwrap_or(false);
-
-            if types_match {
-                // DPS: write directly to _0 to avoid a temp that would leak.
-                lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
-            } else {
-                let watermark = ctx.body.local_decls.len();
-                let operand = lower_expression(ctx, expr, None)?;
-                let op_ty = operand.ty(&ctx.body).clone();
-                let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, ret_ty, expr.span);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
-                    span: expr.span,
-                });
-                // Drop any managed temp created during the expression.
-                if let Operand::Copy(place) | Operand::Move(place) = &operand {
-                    ctx.emit_temp_drop(place.local, watermark, expr.span);
-                }
-            }
-        }
+        StatementKind::Expression(expr) => lower_return_expression(ctx, expr, ret_ty)?,
         StatementKind::Block(stmts) => {
             ctx.push_scope();
 

@@ -10,6 +10,7 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{GpuLaunchArgs, Operand, TerminatorKind};
 
+use super::forall_gpu::needs_wire_conversion;
 use super::{lower_expression, LoweringContext};
 
 /// Aggregated result of analyzing GPU function arguments for a kernel launch.
@@ -83,7 +84,7 @@ pub(super) fn process_gpu_buffer_args(
                 buffer_args.push(arg_op.clone());
 
                 arg_read_only.push(!out_params.get(arg_idx).copied().unwrap_or(false));
-                arg_int_narrow.push(needs_int_narrowing(&arg_ty));
+                arg_int_narrow.push(needs_wire_conversion(&arg_ty));
             } else {
                 return Err(LoweringError::unsupported_expression(
                     "gpu fn buffer args must be places".to_string(),
@@ -132,11 +133,6 @@ fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
         TypeKind::Custom(n, _) => super::dispatch::is_collection_type(n),
         _ => false,
     }
-}
-
-fn needs_int_narrowing(ty: &Type) -> bool {
-    use super::forall_gpu::needs_int_narrowing as check_narrowing;
-    check_narrowing(ty)
 }
 
 /// Try to extract Dim3(x, y, z) as [x, y, z] from a compile-time literal.
@@ -275,6 +271,9 @@ pub(crate) fn try_lower_kernel_launch(
         ctx.body
             .kernel_workgroups
             .push((kernel_name.clone(), workgroup_size));
+        if let Some(grid) = try_extract_dim3_literal(&args[0]) {
+            ctx.body.kernel_grids.push((kernel_name.clone(), grid));
+        }
     }
 
     let launch_args = GpuLaunchArgs::new(call_args, arg_handles, arg_read_only, arg_int_narrow)

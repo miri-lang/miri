@@ -43,6 +43,7 @@ pub(crate) mod float_literals;
 mod function_analysis;
 pub(crate) mod generics;
 mod gpu_buffer_init;
+mod gpu_integer_width;
 pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
@@ -123,9 +124,10 @@ pub struct TypeChecker {
     /// Source path of the entry-point file. See [`entry_source`].
     pub entry_source_path: Option<std::rc::Rc<str>>,
     /// Initial host data for `gpu` buffers bound to compile-time constant
-    /// literals, keyed by binding name. Populated at the end of [`check`] and
-    /// consumed by the web-gpu bundle emitter.
-    pub gpu_buffer_inits: HashMap<String, GpuBufferInit>,
+    /// literals, keyed by where the binding's name is written (two functions
+    /// may each declare a buffer of the same name). Populated at the end of
+    /// [`check`] and consumed by the web-gpu bundle emitter.
+    pub gpu_buffer_inits: HashMap<Span, GpuBufferInit>,
     /// Distinct resolved type-argument tuples each generic class is instantiated
     /// with, keyed by class name (e.g. `"Box"` → `[[int], [float]]`). Populated
     /// at constructor inference so a later monomorphization pass can emit one
@@ -148,6 +150,10 @@ pub struct TypeChecker {
     /// is inferred before that type is resolved, so the bound cannot be applied
     /// where the check runs; these are judged once the bodies are checked.
     pub(crate) deferred_int_literal_ranges:
+        Vec<crate::type_checker::expressions::literals::DeferredIntLiteralRange>,
+    /// Kernel-code integer literals past `i32::MAX`, held until their recorded
+    /// type decides which 32-bit device lane (signed or unsigned) bounds them.
+    pub(crate) deferred_gpu_int_literal_ranges:
         Vec<crate::type_checker::expressions::literals::DeferredIntLiteralRange>,
     /// Names of top-level (`module scope`) `const`/`let`/`var` bindings already
     /// registered by the declaration-collection pass. Function bodies checked
@@ -229,6 +235,7 @@ impl TypeChecker {
             negated_int_literals: HashSet::new(),
             wide_typed_int_literals: HashSet::new(),
             deferred_int_literal_ranges: Vec::new(),
+            deferred_gpu_int_literal_ranges: Vec::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
             resolving_declared_signature: false,
@@ -397,6 +404,7 @@ impl TypeChecker {
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
         self.report_deferred_int_literal_ranges();
+        self.report_deferred_gpu_int_literal_ranges();
         self.answer_pinning_sites(&context);
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
