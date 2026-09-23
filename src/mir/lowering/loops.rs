@@ -489,7 +489,10 @@ fn emit_loop_length(
         return;
     };
     let owner = iterable_method_owner(ctx, class_name, "length");
-    let length_symbol = format!("{owner}_length");
+    // Optimization: pre-allocate exact capacity to avoid format! macro parsing overhead and reallocations on loop length symbol mangling hot path.
+    let mut length_symbol = String::with_capacity(owner.len() + 7);
+    length_symbol.push_str(&owner);
+    length_symbol.push_str("_length");
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
