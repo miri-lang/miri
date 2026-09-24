@@ -173,7 +173,8 @@ fn lower_map_index_read(
     // result therefore always lands in a borrowed temp; a destination that owns
     // what it holds, such as a `let` binding, takes a copy of it, which raises
     // the count for the binding to release.
-    let borrows = ctx.is_perceus_managed(&result_ty.kind);
+    let borrows = ctx.is_perceus_managed(&result_ty.kind)
+        && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED, &result_ty.kind);
     let destination = match &dest {
         Some(d) if !borrows => d.clone(),
         Some(_) | None => {

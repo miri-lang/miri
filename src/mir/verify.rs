@@ -885,9 +885,10 @@ fn apply_terminator(
 
     release_taken_args(body, func, args, tracked, state, violations);
 
+    let result = &body.local_decls[destination.local.0].ty.kind;
     let borrows = func
         .and_then(direct_call_name)
-        .is_some_and(hands_back_a_borrow);
+        .is_some_and(|name| hands_back_a_borrow(name, result));
     if destination.projection.is_empty() && !borrows {
         adjust(state, tracked, destination.local, 1);
     }

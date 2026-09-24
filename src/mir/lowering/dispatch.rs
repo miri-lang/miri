@@ -230,9 +230,7 @@ fn lower_static_method_impl(
     push_allocator_arg(ctx, &mut arg_ops);
 
     let return_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
+        .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
 
@@ -316,9 +314,7 @@ fn lower_aliased_function_call(
     push_allocator_arg(ctx, &mut arg_ops);
 
     let return_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
+        .recorded_type(call_expr_id)
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest, *span);
 
@@ -1334,19 +1330,14 @@ fn lower_direct_call(
     // device handle so that body's kernel launches on the same persistent buffer.
     let arg_handles = residency_specialize_call(ctx, func, args, &mut func_op, &arg_ops);
 
-    // TODO: read through `ctx.generic_subs`, as `binary_result_type` and the
-    // unary lowering do. Read raw, a call inside an instantiated generic body
-    // types its destination at the bare parameter, and where the same callee is
-    // also reached with its substituted type the two declarations of one
-    // monomorphized symbol disagree on their return type and the backend
-    // refuses the module — reproduced by `inner(x) + inner(z)` inside a generic
-    // body. `lower_aliased_function_call` and the static method call above read
-    // it raw too; all three want the substitution together, because fixing one
-    // alone leaves the disagreement in place.
+    // Read through the active instantiation substitution: a call inside an
+    // instantiated generic body is recorded once against that body's own
+    // parameters, and a destination typed at the bare parameter would be sized
+    // and reference counted as no instantiation's value is. The static method
+    // and aliased calls read it the same way, so every declaration of one
+    // monomorphized symbol agrees on its return type.
     let return_ty = ctx
-        .type_checker
-        .get_type(call_expr_id)
-        .cloned()
+        .recorded_type(call_expr_id)
         .unwrap_or(Type::new(TypeKind::Void, *span));
     let (destination, op) = call_destination(ctx, return_ty, dest, *span);
 

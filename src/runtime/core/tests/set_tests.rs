@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use by_address::{miri_rt_set_add, miri_rt_set_contains, miri_rt_set_remove};
+use by_address::{
+    miri_rt_set_add, miri_rt_set_contains, miri_rt_set_element_at, miri_rt_set_remove,
+};
 use miri_runtime_core::set::ffi::*;
 
-/// The three set entry points that take an element, called the way compiled
-/// code calls them: by the address of the element's bytes.
+/// The set entry points that take or hand back an element, called the way
+/// compiled code calls them: by the address of the element's bytes.
 ///
 /// A test spells an element as a value word, so each wrapper lends out that
-/// word's address. The wrappers shadow the glob-imported entry points of the
+/// word's address, or reads the word back from the storage it lent. The wrappers shadow the glob-imported entry points of the
 /// same name, which `ffi_abi` exercises directly.
 mod by_address {
     use miri_runtime_core::set::{ffi, MiriSet};
@@ -41,6 +43,19 @@ mod by_address {
             &elem as *const usize as *const u8,
             std::mem::size_of::<usize>(),
         )
+    }
+
+    /// # Safety
+    /// `set` is a live set or null.
+    pub unsafe fn miri_rt_set_element_at(set: *const MiriSet, index: usize) -> usize {
+        let mut elem = 0usize;
+        ffi::miri_rt_set_element_at(
+            set,
+            index,
+            &mut elem as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        elem
     }
 }
 

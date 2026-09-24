@@ -310,7 +310,8 @@ fn collect_runtime_info(
 /// parameters and return type its Miri declaration spells.
 ///
 /// An element parameter is declared as the address and byte count it is
-/// passed as; see [`crate::runtime_fns::element_abi_params`].
+/// passed as, and an element result as the storage it is written into; see
+/// [`crate::runtime_fns::element_abi_params`].
 #[cfg(feature = "cranelift")]
 fn runtime_import(
     name: &str,
@@ -329,6 +330,7 @@ fn runtime_import(
         name: name.to_string(),
         param_types: crate::runtime_fns::element_abi_params(name, &declared, ptr_ty),
         return_type: return_type
+            .filter(|_| !crate::runtime_fns::returns_element_value(name))
             .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))),
     }
 }

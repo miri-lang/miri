@@ -591,10 +591,13 @@ pub fn element_positions(name: &str) -> &'static [usize] {
 /// one its Miri declaration spells.
 ///
 /// Each element position (see [`element_positions`]) becomes an address and a
-/// byte count, both pointer-sized. Every other parameter is kept as declared.
+/// byte count, both pointer-sized, and an entry point that hands an element
+/// back (see [`returns_element_value`]) takes the same pair for the storage it
+/// writes, after every other parameter. Every other parameter is kept as
+/// declared.
 pub fn element_abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
     let positions = element_positions(name);
-    let mut params = Vec::with_capacity(declared.len() + positions.len());
+    let mut params = Vec::with_capacity(declared.len() + positions.len() + 2);
     for (index, param) in declared.iter().enumerate() {
         if positions.contains(&index) {
             params.push(pointer.clone());
@@ -602,6 +605,10 @@ pub fn element_abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> V
         } else {
             params.push(param.clone());
         }
+    }
+    if returns_element_value(name) {
+        params.push(pointer.clone());
+        params.push(pointer);
     }
     params
 }
@@ -618,23 +625,13 @@ pub fn orders_its_elements(name: &str) -> bool {
     matches!(name, rt::LIST_SORT | rt::ARRAY_SORT)
 }
 
-/// Whether `name` hands its caller an element value as opaque bytes.
+/// Whether `name` hands its caller an element.
 ///
-/// A container stores element bytes in a value word and returns that same word,
-/// whatever the element's declared type is. Declaring the call as returning a
-/// float instead would read the result from the register floats are returned in
-/// while the runtime wrote the one integers use, so the value would arrive as
-/// zero. The word is reinterpreted at the destination instead.
-///
-/// TODO: an element wider than a value word cannot come back through one, so
-/// `miri_rt_map_get`, `miri_rt_map_get_checked`, `miri_rt_map_value_at` and
-/// `miri_rt_set_element_at` still truncate a 128-bit element to its low half on
-/// the way out — iterating a wide set, or reading a wide map value back, reads
-/// half a value even though the store and the lookup now carry all of it. The
-/// way out is the one the `out` parameters already use: the caller boxes a slot
-/// with `box_value_in_stack_slot`, hands its address over, and reads the value
-/// back with `writeback_out_arg_slots`, which changes the return ABI of all four
-/// symbols.
+/// These entry points return nothing: the element is written into storage the
+/// caller names, passed as two trailing arguments — its address and the number
+/// of bytes the element occupies there — the way an element argument travels
+/// in. A value word could carry neither an element wider than itself nor a
+/// float, whose register differs from the one integers come back in.
 pub fn returns_element_value(name: &str) -> bool {
     matches!(
         name,
@@ -649,9 +646,12 @@ pub fn returns_element_value(name: &str) -> bool {
 /// read. Treating that as a fresh reference would report it as one nobody released.
 ///
 /// Every other call hands back something its caller owns: a reader that raises the
-/// count before returning, or a value built on the spot.
-pub fn hands_back_a_borrow(name: &str) -> bool {
-    name == rt::MAP_GET_CHECKED
+/// count before returning, or a value built on the spot. So does indexing a map
+/// whose values it lays out inline (`result`, the type the call hands back, is an
+/// inline vector): the components are copied out into a value of the caller's
+/// own, and the map keeps no reference to it.
+pub fn hands_back_a_borrow(name: &str, result: &crate::ast::types::TypeKind) -> bool {
+    name == rt::MAP_GET_CHECKED && !crate::ast::types::element_layout(result).is_address
 }
 
 /// Whether `name` never returns to its caller.

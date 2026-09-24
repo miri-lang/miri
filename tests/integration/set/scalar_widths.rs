@@ -236,10 +236,6 @@ fn test_set_of_inline_vectors_agrees_between_the_literal_and_the_method() {
     // one of them would store the address instead of the components, and two
     // vectors with the same components would then count as two elements at one
     // seam and one at the other.
-    //
-    // Only widths that fill one slot exactly are covered: a `Vec3` payload is
-    // twelve bytes against a sixteen-byte stride, which needs the payload and
-    // stride operands a list already carries and a set does not.
     let source = "
 use system.gpu.vector
 use system.collections.set
@@ -253,9 +249,9 @@ fn main()
     built.add(same)
     built.add(b)
     let literal = Set<Vec2<f32>>({a, same, b})
-    println(f'{built.length()} {literal.length()}')
+    println(f'{built.length()} {literal.length()} {built.contains(same)} {literal.contains(b)}')
 ";
-    assert_runs_with_output(source, "2 2");
+    assert_runs_with_output(source, "2 2 true true");
 }
 
 #[test]

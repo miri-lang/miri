@@ -304,7 +304,8 @@ fn test_set_ffi_abi() {
         assert_eq!(miri_rt_set_contains(set, word(&10), W), 1);
         assert_eq!(miri_rt_set_contains(set, word(&99), W), 0);
 
-        let elem = miri_rt_set_element_at(set, 0);
+        let mut elem = 0usize;
+        miri_rt_set_element_at(set, 0, &mut elem as *mut usize as *mut u8, W);
         assert!(elem == 10 || elem == 20);
 
         assert_eq!(miri_rt_set_remove(set, word(&10), W), 1);
@@ -345,17 +346,26 @@ fn test_map_ffi_abi() {
         miri_rt_map_set(map, word(&2), W, word(&200), W);
         assert_eq!(miri_rt_map_len(map), 2);
 
-        assert_eq!(miri_rt_map_get(map, word(&1), W), 100);
-        assert_eq!(miri_rt_map_get(map, word(&99), W), 0); // not found
+        // Every lookup hands its result to storage the caller names.
+        let read = |f: &dyn Fn(*mut u8)| {
+            let mut out = usize::MAX;
+            f(&mut out as *mut usize as *mut u8);
+            out
+        };
+        assert_eq!(read(&|out| miri_rt_map_get(map, word(&1), W, out, W)), 100);
+        assert_eq!(read(&|out| miri_rt_map_get(map, word(&99), W, out, W)), 0); // not found
 
-        assert_eq!(miri_rt_map_get_checked(map, word(&2), W), 200);
+        assert_eq!(
+            read(&|out| miri_rt_map_get_checked(map, word(&2), W, out, W)),
+            200
+        );
 
         assert_eq!(miri_rt_map_contains_key(map, word(&1), W), 1);
         assert_eq!(miri_rt_map_contains_key(map, word(&99), W), 0);
 
-        let k = miri_rt_map_key_at(map, 0);
+        let k = read(&|out| miri_rt_map_key_at(map, 0, out, W));
         assert!(k == 1 || k == 2);
-        let v = miri_rt_map_value_at(map, 0);
+        let v = read(&|out| miri_rt_map_value_at(map, 0, out, W));
         assert!(v == 100 || v == 200);
 
         miri_rt_map_set_val_drop_fn(map, 0);

@@ -188,11 +188,33 @@ impl MiriSet {
     /// releases it when its binding goes out of scope, the same as any other
     /// value a function returns. Handing out the set's own reference instead
     /// would let one pass of a loop free an element the set still holds.
-    unsafe fn hand_out_element(&self, elem_ptr: usize) -> usize {
-        if self.elem_drop_fn != 0 && elem_ptr != 0 {
+    ///
+    /// `elem_slot` is the slot holding the element; a managed element's slot
+    /// holds its reference, read unaligned for the reason
+    /// [`MiriSet::release_element`] gives.
+    unsafe fn hand_out_element(&self, elem_slot: *const u8) {
+        if self.elem_drop_fn == 0 {
+            return;
+        }
+        let elem_ptr = elem_slot.cast::<usize>().read_unaligned();
+        if elem_ptr != 0 {
             crate::rc::incref(elem_ptr as *mut u8);
         }
-        elem_ptr
+    }
+
+    /// The slot of the element at sequential `index`, counting occupied slots
+    /// only, or null past the last element.
+    unsafe fn nth_element(&self, index: usize) -> *const u8 {
+        let mut count: usize = 0;
+        for i in 0..self.capacity {
+            if *self.states.add(i) == SLOT_OCCUPIED {
+                if count == index {
+                    return self.data.add(i * self.elem_size);
+                }
+                count += 1;
+            }
+        }
+        std::ptr::null()
     }
 
     /// Releases one reference to a managed element, whose reference is the word
@@ -235,7 +257,7 @@ impl MiriSet {
 /// Stable FFI interface for set operations.
 pub mod ffi {
     use super::*;
-    use crate::element_bytes::{require_fits_slot, with_slot_bytes};
+    use crate::element_bytes::{read_slot, require_fits_slot, with_slot_bytes};
     use crate::guard;
     use std::ptr;
 
@@ -463,33 +485,34 @@ pub mod ffi {
         set.len = 0;
     }
 
-    /// Returns the element at the given sequential index (skipping empty/tombstone slots).
+    /// Hands the element at the given sequential index (skipping empty and
+    /// tombstone slots) to the caller's `payload`-byte storage at `out`.
     ///
-    /// This enables iteration via `element_at` in for-loops.
-    /// Returns the element value as a usize, or 0 if the index is out of bounds.
+    /// This enables iteration via `element_at` in for-loops. An index past the
+    /// last element writes a zero element.
     ///
     /// A managed element is handed out with its count already raised: the
     /// caller owns what it receives and releases it when the binding goes out of
     /// scope.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_element_at(ptr: *const MiriSet, index: usize) -> usize {
+    pub unsafe extern "C" fn miri_rt_set_element_at(
+        ptr: *const MiriSet,
+        index: usize,
+        out: *mut u8,
+        payload: usize,
+    ) {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() {
-            return 0;
+        let (slot, elem_size) = if ptr.is_null() {
+            (ptr::null(), 0)
+        } else {
+            let set = &*ptr;
+            (set.nth_element(index), set.elem_size)
+        };
+        if !slot.is_null() {
+            (*ptr).hand_out_element(slot);
         }
-        let set = &*ptr;
-        let mut count: usize = 0;
-        for i in 0..set.capacity {
-            if *set.states.add(i) == SLOT_OCCUPIED {
-                if count == index {
-                    let elem_ptr = set.data.add(i * set.elem_size);
-                    return set.hand_out_element(*(elem_ptr as *const usize));
-                }
-                count += 1;
-            }
-        }
-        0
+        read_slot(out, slot, payload, elem_size);
     }
 
     /// Frees a set and all its backing storage.
