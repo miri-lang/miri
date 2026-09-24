@@ -592,6 +592,7 @@ impl TypeChecker {
         for (i, stmt) in stmts.iter().enumerate() {
             if i == last_idx && is_non_void_return {
                 self.check_statement_with_tail_exemptions(stmt, context);
+                self.width_tail_literals(return_type, return_type, stmt, context);
             } else {
                 self.check_statement(stmt, context);
             }
@@ -619,6 +620,15 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         let expr_type = self.infer_expression(expr, context);
+        // The body's value is written into the declared return type's slot, so
+        // a literal there takes that width, as it does after `return`.
+        let expr_type = if infer_main_return || matches!(return_type.kind, TypeKind::Void) {
+            expr_type
+        } else {
+            self.narrow_float_literals(expr, return_type, &expr_type, context)
+                .or_else(|| self.widen_int_literals(expr, return_type, &expr_type))
+                .unwrap_or(expr_type)
+        };
 
         if !infer_main_return
             && !matches!(return_type.kind, TypeKind::Void)

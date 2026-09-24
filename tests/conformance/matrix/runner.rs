@@ -11,7 +11,7 @@
 //!   function a cell declares carries the cell's number;
 //! - a crash names the first cell that printed nothing, because the heap
 //!   guard stops at the violation and every value a driver makes is released
-//!   before the driver returns.
+//!   when the driver returns its line, before `main` prints it.
 //!
 //! Only a failure with no such evidence — a leak reported at exit, a compiler
 //! panic — splits the batch in two. The charged cells are removed and the

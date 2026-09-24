@@ -260,3 +260,56 @@ let x = 170141183460469231731687303715884105727
         "out of range for the default int type (i64, max 9223372036854775807)",
     );
 }
+
+#[test]
+fn test_wide_literal_in_an_index_assignment_reaches_the_slot_whole() {
+    // `i128::MAX` and `-1` share their low word, so only a whole write tells
+    // them apart.
+    assert_runs_with_output(
+        "
+use system.collections.list
+use system.collections.array
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    var l = List<i128>()
+    l.push(-1)
+    l[0] = 170141183460469231731687303715884105727
+    var a = Array<i128, 1>()
+    a[0] = 170141183460469231731687303715884105727
+    println(f'{l[0] == big} {a[0] == big}')
+",
+        "true true",
+    );
+}
+
+#[test]
+fn test_wide_literal_in_a_return_takes_the_declared_width() {
+    assert_runs_with_output(
+        "
+fn widest() i128
+    return 170141183460469231731687303715884105727
+
+fn above_i64() u128: 18446744073709551621
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    let top u128 = 18446744073709551621
+    println(f'{widest() == big} {above_i64() == top}')
+",
+        "true true",
+    );
+}
+
+#[test]
+fn test_literal_too_wide_for_an_assigned_slot_names_the_slot() {
+    assert_compiler_error(
+        "
+fn main()
+    var x i64 = 0
+    x = 9223372036854775808
+    println(f'{x}')
+",
+        "out of range for i64",
+    );
+}

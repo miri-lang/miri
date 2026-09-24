@@ -1308,6 +1308,22 @@ impl TypeChecker {
             .last()
             .unwrap_or(&make_type(TypeKind::Void))
             .clone();
+        // The returned value is written into a slot of the declared return
+        // type, so a literal there takes that width.
+        let actual_return_type = expr_opt
+            .as_deref()
+            .and_then(|expr| {
+                self.narrow_float_literals(
+                    expr,
+                    &expected_return_type,
+                    &actual_return_type,
+                    context,
+                )
+                .or_else(|| {
+                    self.widen_int_literals(expr, &expected_return_type, &actual_return_type)
+                })
+            })
+            .unwrap_or(actual_return_type);
 
         if !self.are_compatible(&expected_return_type, &actual_return_type, context) {
             self.report_error(
