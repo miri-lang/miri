@@ -592,9 +592,24 @@ fn lower_list_push(
     item_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let item_watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
+    emit_list_push(ctx, obj_op, obj_ty, item_arg, span).map(Some)
+}
+
+/// Append `item_arg` to the list `obj_op` of type `obj_ty` through
+/// `miri_rt_list_push`, donating it to the list.
+///
+/// Shared by `list.push(e)` and a list literal, for the reason
+/// [`emit_set_add`] gives.
+pub(crate) fn emit_list_push(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    item_arg: &Expression,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
+    let item_watermark = ctx.body.local_decls.len();
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
@@ -616,7 +631,7 @@ fn lower_list_push(
     if let Some(src) = item_op_src {
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
-    Ok(Some(Operand::Copy(Place::new(dummy_dest))))
+    Ok(Operand::Copy(Place::new(dummy_dest)))
 }
 
 /// Convert `op` to the slot's type when it arrived as something narrower.
@@ -841,10 +856,25 @@ fn lower_map_set(
     value_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::MAP_COW, *span);
+    emit_map_set(ctx, obj_op, obj_ty, key_arg, value_arg, span).map(Some)
+}
 
+/// Store `key_arg` → `value_arg` into the map `obj_op` of type `obj_ty` through
+/// `miri_rt_map_set`, donating both to the map.
+///
+/// Shared by `map.set(k, v)` and a map literal, which fills the map it has
+/// just built one entry at a time, so both seams store an entry the same way.
+pub(crate) fn emit_map_set(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    key_arg: &Expression,
+    value_arg: &Expression,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
     let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, key_arg.span);
     let (value_op, value_ty) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
@@ -872,7 +902,7 @@ fn lower_map_set(
     if let Some(src) = value_src {
         ctx.emit_temp_drop(src, watermark, value_arg.span);
     }
-    Ok(Some(Operand::Copy(Place::new(dummy_dest))))
+    Ok(Operand::Copy(Place::new(dummy_dest)))
 }
 
 /// Lower set.add(element) to miri_rt_set_add, donating the stored element.
@@ -887,10 +917,26 @@ fn lower_set_add(
     dest: Option<Place>,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::SET_COW, *span);
+    emit_set_add(ctx, obj_op, obj_ty, elem_arg, dest, span).map(Some)
+}
 
+/// Add `elem_arg` to the set `obj_op` of type `obj_ty` through
+/// `miri_rt_set_add`, donating it to the set, and answer whether it was newly
+/// inserted.
+///
+/// Shared by `set.add(e)` and a set literal, which fills the set it has just
+/// built one element at a time, so both seams store an element the same way.
+pub(crate) fn emit_set_add(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    elem_arg: &Expression,
+    dest: Option<Place>,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
     let (elem_op, elem_ty) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
     let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_ty, elem_arg.span);
 
@@ -915,7 +961,7 @@ fn lower_set_add(
     if let Some(src) = elem_src {
         ctx.emit_temp_drop(src, watermark, elem_arg.span);
     }
-    Ok(Some(Operand::Copy(destination)))
+    Ok(Operand::Copy(destination))
 }
 
 /// Lower list.insert(index, item) to miri_rt_list_insert.

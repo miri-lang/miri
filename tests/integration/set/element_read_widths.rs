@@ -185,3 +185,40 @@ fn main()
         "1 1 true",
     );
 }
+
+#[test]
+fn test_set_literal_of_vectors_releases_every_operand() {
+    // The literal copies each vector's components into its slots and keeps no
+    // reference to the vector, so every vector is released where its binding
+    // ends — a duplicate operand included.
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+use system.gpu.vector
+
+fn main()
+    let a = Vec2<f32>(1.0, 2.0)
+    let b = Vec4<f32>(1.0, 2.0, 3.0, 4.0)
+    let twos = Set<Vec2<f32>>({a, Vec2<f32>(1.0, 2.0), Vec2<f32>(3.0, 4.0)})
+    let fours = Set<Vec4<f32>>({b, b})
+    println(f"{twos.length()} {fours.length()} {twos.contains(a)} {fours.contains(b)}")
+"#,
+        "2 1 true true",
+    );
+}
+
+#[test]
+fn test_set_literal_of_strings_keeps_one_reference_per_element() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+
+fn main()
+    let s1 = "x" + "y"
+    let s2 = "z" + "w"
+    let s = Set<String>({s1, s2, s1})
+    println(f"{s.length()} {s.contains(s1)} {s1} {s2}")
+"#,
+        "2 true xy zw",
+    );
+}

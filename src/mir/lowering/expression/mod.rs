@@ -20,6 +20,7 @@ pub mod assignment_expr;
 pub mod binary_expr;
 pub mod call_expr;
 pub mod cast_expr;
+pub mod collection_literal;
 pub mod conditional_expr;
 pub mod enumvalue_expr;
 pub mod formattedstring_expr;

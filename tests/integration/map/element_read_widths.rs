@@ -214,3 +214,38 @@ fn main()
         "true 5 true 0",
     );
 }
+
+#[test]
+fn test_map_literals_with_vector_keys_and_values_release_every_operand() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+use system.gpu.vector
+
+fn main()
+    let a = Vec3<f32>(1.0, 2.0, 3.0)
+    let b = Vec3<f32>(4.0, 5.0, 6.0)
+    let by_key = Map<Vec3<f32>, int>({a: 1, b: 2})
+    let by_value = Map<int, Vec3<f32>>({1: a, 2: b})
+    let hit = by_value[2]
+    println(f"{by_key[a]} {by_key.length()} {hit.z}")
+"#,
+        "1 2 6.0",
+    );
+}
+
+#[test]
+fn test_map_literal_with_a_repeated_key_keeps_the_last_value() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    let k = "a" + "b"
+    let m = Map<String, String>({k: "first", k: "second"})
+    let v = m[k]
+    println(f"{m.length()} {v}")
+"#,
+        "1 second",
+    );
+}

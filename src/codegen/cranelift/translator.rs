@@ -966,49 +966,6 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    pub(crate) fn call_rt_list_new(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        elem_size: Value,
-    ) -> Result<Value, CodegenError> {
-        let pt = builder.func.dfg.value_type(elem_size);
-        let inst = Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::LIST_NEW,
-                param_types: &[pt],
-                return_types: &[pt],
-                args: &[elem_size],
-            },
-        )?;
-        Ok(builder.inst_results(inst)[0])
-    }
-
-    /// Appends the element whose `payload` bytes are at `elem`.
-    pub(crate) fn call_rt_list_push(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        list_ptr: Value,
-        elem: Value,
-        payload: Value,
-    ) -> Result<(), CodegenError> {
-        let pt = builder.func.dfg.value_type(list_ptr);
-        Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::LIST_PUSH,
-                param_types: &[pt, pt, pt],
-                return_types: &[],
-                args: &[list_ptr, elem, payload],
-            },
-        )?;
-        Ok(())
-    }
-
     pub(crate) fn call_rt_list_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1049,30 +1006,6 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
         Ok(builder.inst_results(inst)[0])
-    }
-
-    /// Stores an entry; `key` and `value` are each an element's address and
-    /// the count of its bytes.
-    pub(crate) fn call_rt_map_set(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        map_ptr: Value,
-        key: (Value, Value),
-        value: (Value, Value),
-    ) -> Result<(), CodegenError> {
-        let pt = builder.func.dfg.value_type(map_ptr);
-        Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::MAP_SET,
-                param_types: &[pt, pt, pt, pt, pt],
-                return_types: &[],
-                args: &[map_ptr, key.0, key.1, value.0, value.1],
-            },
-        )?;
-        Ok(())
     }
 
     pub(crate) fn call_rt_map_free(
@@ -1590,29 +1523,6 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
         Ok(builder.inst_results(inst)[0])
-    }
-
-    /// Adds the element whose `payload` bytes are at `elem`.
-    pub(crate) fn call_rt_set_add(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        set_ptr: Value,
-        elem: Value,
-        payload: Value,
-    ) -> Result<(), CodegenError> {
-        let pt = builder.func.dfg.value_type(set_ptr);
-        Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::SET_ADD,
-                param_types: &[pt, pt, pt],
-                return_types: &[cl_types::I8],
-                args: &[set_ptr, elem, payload],
-            },
-        )?;
-        Ok(())
     }
 
     pub(crate) fn call_rt_set_free(
