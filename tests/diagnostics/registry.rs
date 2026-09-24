@@ -232,17 +232,19 @@ fn test_copy_clone_debug_eq_hash() {
     let code = DiagnosticCode::LexInvalidToken;
 
     // Copy
-    let _copied = code;
-    let _copied2 = code;
+    let copied = code;
+    let copied2 = code;
+    assert_eq!(copied, DiagnosticCode::LexInvalidToken);
+    assert_eq!(copied2, DiagnosticCode::LexInvalidToken);
 
     // Clone
-    let _cloned = code.clone();
+    let cloned = code.clone();
+    assert_eq!(cloned, DiagnosticCode::LexInvalidToken);
 
     // Debug
-    let _ = format!("{:?}", code);
+    assert_eq!(format!("{:?}", code), "LexInvalidToken");
 
     // Eq/PartialEq
-    assert_eq!(code, code);
     assert_eq!(code, DiagnosticCode::LexInvalidToken);
 
     // Hash
