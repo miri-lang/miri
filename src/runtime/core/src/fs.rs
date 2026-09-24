@@ -394,7 +394,7 @@ pub mod ffi {
                         // handed to the list, so that count *is* the
                         // list's ownership. Adding one here would
                         // outlive the matching DecRef in elem_drop_fn.
-                        crate::miri_rt_list_push(list, name_str as usize);
+                        crate::list::push_word(list, name_str as usize);
                     }
                 }
                 // Set elem_drop_fn so removed elements are DecRef'd

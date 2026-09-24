@@ -16,19 +16,31 @@ mod by_address {
     /// # Safety
     /// `set` is a live set or null.
     pub unsafe fn miri_rt_set_add(set: *mut MiriSet, elem: usize) -> u8 {
-        ffi::miri_rt_set_add(set, &elem as *const usize as *const u8)
+        ffi::miri_rt_set_add(
+            set,
+            &elem as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 
     /// # Safety
     /// `set` is a live set or null.
     pub unsafe fn miri_rt_set_contains(set: *const MiriSet, elem: usize) -> u8 {
-        ffi::miri_rt_set_contains(set, &elem as *const usize as *const u8)
+        ffi::miri_rt_set_contains(
+            set,
+            &elem as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 
     /// # Safety
     /// `set` is a live set or null.
     pub unsafe fn miri_rt_set_remove(set: *mut MiriSet, elem: usize) -> u8 {
-        ffi::miri_rt_set_remove(set, &elem as *const usize as *const u8)
+        ffi::miri_rt_set_remove(
+            set,
+            &elem as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 }
 
@@ -768,19 +780,19 @@ mod wide {
     /// # Safety
     /// `set` is a live set whose element size is sixteen bytes.
     pub unsafe fn add(set: *mut MiriSet, elem: i128) -> u8 {
-        ffi::miri_rt_set_add(set, (&elem as *const i128).cast())
+        ffi::miri_rt_set_add(set, (&elem as *const i128).cast(), 16)
     }
 
     /// # Safety
     /// `set` is a live set whose element size is sixteen bytes.
     pub unsafe fn contains(set: *const MiriSet, elem: i128) -> u8 {
-        ffi::miri_rt_set_contains(set, (&elem as *const i128).cast())
+        ffi::miri_rt_set_contains(set, (&elem as *const i128).cast(), 16)
     }
 
     /// # Safety
     /// `set` is a live set whose element size is sixteen bytes.
     pub unsafe fn remove(set: *mut MiriSet, elem: i128) -> u8 {
-        ffi::miri_rt_set_remove(set, (&elem as *const i128).cast())
+        ffi::miri_rt_set_remove(set, (&elem as *const i128).cast(), 16)
     }
 }
 
@@ -825,15 +837,15 @@ fn test_set_element_entry_points_refuse_a_null_element_address() {
         assert_eq!(miri_rt_set_add(set, 10), 1);
 
         assert_eq!(
-            miri_runtime_core::set::ffi::miri_rt_set_add(set, std::ptr::null()),
+            miri_runtime_core::set::ffi::miri_rt_set_add(set, std::ptr::null(), 8),
             0
         );
         assert_eq!(
-            miri_runtime_core::set::ffi::miri_rt_set_contains(set, std::ptr::null()),
+            miri_runtime_core::set::ffi::miri_rt_set_contains(set, std::ptr::null(), 8),
             0
         );
         assert_eq!(
-            miri_runtime_core::set::ffi::miri_rt_set_remove(set, std::ptr::null()),
+            miri_runtime_core::set::ffi::miri_rt_set_remove(set, std::ptr::null(), 8),
             0
         );
         assert_eq!(miri_rt_set_len(set), 1);

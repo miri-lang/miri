@@ -947,16 +947,76 @@ pub fn inline_element_layout(kind: &TypeKind) -> Option<InlineElementLayout> {
 /// Byte width of a 128-bit scalar, the one scalar too wide for a value word.
 pub const WIDE_SCALAR_BYTES: i64 = 16;
 
-/// The byte width of a scalar element no value word can carry, or `None` for a
-/// scalar that fits in one.
+/// Byte width of a value word: a pointer, a reference, or an element whose
+/// type is still a type parameter.
+pub const VALUE_WORD_BYTES: i64 = 8;
+
+/// How a collection holds an element of one type and how that element travels
+/// to the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ElementLayout {
+    /// Bytes that are the element — what a runtime entry point is told to copy
+    /// out of the address it is handed.
+    pub payload: i64,
+    /// Spacing between consecutive elements of a list or an array, which is
+    /// what an index read strides by. Never less than `payload`.
+    pub stride: i64,
+    /// Whether the operand carrying the element is already the address of its
+    /// bytes. An inline vector is; every other element is a value, whose
+    /// address is taken to hand it over.
+    pub is_address: bool,
+}
+
+/// The layout of a collection element of type `kind`.
 ///
-/// The word-passing collection entry points copy an element out of a single
-/// pointer-sized parameter, so a 128-bit element read from there would take its
-/// upper half from past that word. An element this answers for is handed over by
-/// address instead, the way an inline vector is, and occupies its full width in
-/// the collection's slot.
-pub fn wide_scalar_element_bytes(kind: &TypeKind) -> Option<i64> {
-    matches!(kind, TypeKind::I128 | TypeKind::U128).then_some(WIDE_SCALAR_BYTES)
+/// This is the one place an element's width is decided. The stride a list is
+/// allocated with, the payload each call hands the runtime, and whether that
+/// call must take the element's address all come from here, so a store and the
+/// read or lookup that must match it cannot disagree.
+pub fn element_layout(kind: &TypeKind) -> ElementLayout {
+    if let Some(inline) = inline_element_layout(kind) {
+        return ElementLayout {
+            payload: inline.payload,
+            stride: inline.stride,
+            is_address: true,
+        };
+    }
+    if let Some(inner) = atomic_inner_kind(kind) {
+        return element_layout(inner);
+    }
+    let width = scalar_element_bytes(kind);
+    ElementLayout {
+        payload: width,
+        stride: width,
+        is_address: false,
+    }
+}
+
+/// The type an `Atomic<T>` wraps, which is what it occupies in a collection.
+fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return None;
+    };
+    if name != ATOMIC_TYPE_NAME || args.len() != 1 {
+        return None;
+    }
+    match &args[0].node {
+        ExpressionKind::Type(inner, _) => Some(&inner.kind),
+        _ => None,
+    }
+}
+
+/// Byte width of an element that is not laid out inline: a scalar's own width,
+/// or a value word for anything the element holds by reference or has not
+/// resolved yet.
+fn scalar_element_bytes(kind: &TypeKind) -> i64 {
+    match kind {
+        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
+        TypeKind::I16 | TypeKind::U16 => 2,
+        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
+        TypeKind::I128 | TypeKind::U128 => WIDE_SCALAR_BYTES,
+        _ => VALUE_WORD_BYTES,
+    }
 }
 
 /// std430 inline byte stride between consecutive vector elements stored inline

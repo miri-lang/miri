@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 use super::{into_raw_ptr, MiriString};
 use crate::guard;
-use crate::list::MiriList;
+use crate::list::{push_word, MiriList};
 
 thread_local! {
     /// Thread-local status code for parsing operations.
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn miri_rt_string_split(
             let char_str = ch.encode_utf8(&mut buf);
             let char_string = into_raw_ptr(MiriString::from_str(char_str));
             if !char_string.is_null() {
-                crate::miri_rt_list_push(list, char_string as usize);
+                push_word(list, char_string as usize);
             }
         }
     } else {
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn miri_rt_string_split(
         for part in s_str.split(sep_str) {
             let part_string = into_raw_ptr(MiriString::from_str(part));
             if !part_string.is_null() {
-                crate::miri_rt_list_push(list, part_string as usize);
+                push_word(list, part_string as usize);
             }
         }
     }

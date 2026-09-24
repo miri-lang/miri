@@ -257,3 +257,22 @@ fn main()
 ";
     assert_runs_with_output(source, "2 2");
 }
+
+#[test]
+fn test_set_f32_finds_the_element_it_stored() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn main()
+    var s = Set<f32>()
+    s.add(1.5)
+    s.add(2.5)
+    s.add(1.5)
+    println(f"{s.length()} {s.contains(2.5)} {s.contains(3.5)}")
+    println(f"{s.remove(1.5)} {s.length()}")
+"#,
+        "2 true false
+true 1",
+    );
+}

@@ -915,6 +915,11 @@ fn release_taken_args(
         let Some(local) = args.get(*position).and_then(bare_local_read) else {
             continue;
         };
+        // An element the container lays out inline is copied as bytes; the
+        // caller keeps the reference it passed.
+        if crate::ast::types::element_layout(&body.local_decls[local.0].ty.kind).is_address {
+            continue;
+        }
         release(body, &Place::new(local), tracked, state, violations);
     }
 }
@@ -1126,15 +1131,15 @@ pub fn verify_collection_element_ownership(
     violations
 }
 
-/// Report every call that hands a set or a map an element whose type is not the
+/// Report every call that hands a collection an element whose type is not the
 /// width of the slot it goes into.
 ///
-/// These containers copy their whole slot out of the buffer the caller points
-/// them at, and the caller sizes that buffer from the operand's own type. An
-/// operand narrower than the slot therefore leaves the rest of it filled by
-/// whatever lay beside it, and one wider is read back short — either way a
-/// lookup spelled at one width can never match a store spelled at another, and
-/// the container answers wrong with nothing to report it. Lowering converts
+/// The element travels as its own bytes and their count, and the container
+/// lays those bytes out at its slot's width. An operand of another numeric type
+/// therefore arrives as a different bit pattern — a narrower integer is not
+/// sign-extended, a float is not converted — so a lookup spelled at one width
+/// can never match a store spelled at another, and the container answers wrong
+/// with nothing to report it. Lowering converts
 /// every element to the type the container declares for the slot, so a call
 /// arriving here at some other width is a path that missed that conversion.
 ///
@@ -1158,7 +1163,7 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
             continue;
         };
         let receiver_ty = &body.local_decls[receiver.0].ty;
-        for position in crate::runtime_fns::element_address_positions(symbol) {
+        for position in crate::runtime_fns::element_positions(symbol) {
             let Some(operand) = args.get(*position) else {
                 continue;
             };

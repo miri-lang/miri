@@ -18,9 +18,6 @@ println(f'{a[0]}')
 }
 
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride \
-            for floats narrower than a word is unresolved, so a stored value \
-            would read back as zero. float (f64) round-trips correctly."]
 fn test_list_f32_push() {
     assert_runs_with_output(
         r#"
@@ -108,9 +105,6 @@ println(f'{b[0]}')
 }
 
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride \
-            for floats narrower than a word is unresolved, so a stored value \
-            would read back as zero. float (f64) round-trips correctly."]
 fn test_list_f32_set_method() {
     assert_runs_with_output(
         r#"

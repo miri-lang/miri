@@ -16,8 +16,7 @@ use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{
-    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
-    TrapCode, Value,
+    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, TrapCode, Value,
 };
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -987,11 +986,13 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.inst_results(inst)[0])
     }
 
+    /// Appends the element whose `payload` bytes are at `elem`.
     pub(crate) fn call_rt_list_push(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         list_ptr: Value,
-        val: Value,
+        elem: Value,
+        payload: Value,
     ) -> Result<(), CodegenError> {
         let pt = builder.func.dfg.value_type(list_ptr);
         Self::call_cached_func(
@@ -1000,9 +1001,9 @@ impl<'a> FunctionTranslator<'a> {
             &mut ctx.cached_funcs,
             CallSite {
                 name: rt::LIST_PUSH,
-                param_types: &[pt, pt],
+                param_types: &[pt, pt, pt],
                 return_types: &[],
-                args: &[list_ptr, val],
+                args: &[list_ptr, elem, payload],
             },
         )?;
         Ok(())
@@ -1050,12 +1051,14 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.inst_results(inst)[0])
     }
 
+    /// Stores an entry; `key` and `value` are each an element's address and
+    /// the count of its bytes.
     pub(crate) fn call_rt_map_set(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         map_ptr: Value,
-        key: Value,
-        value: Value,
+        key: (Value, Value),
+        value: (Value, Value),
     ) -> Result<(), CodegenError> {
         let pt = builder.func.dfg.value_type(map_ptr);
         Self::call_cached_func(
@@ -1064,9 +1067,9 @@ impl<'a> FunctionTranslator<'a> {
             &mut ctx.cached_funcs,
             CallSite {
                 name: rt::MAP_SET,
-                param_types: &[pt, pt, pt],
+                param_types: &[pt, pt, pt, pt, pt],
                 return_types: &[],
-                args: &[map_ptr, key, value],
+                args: &[map_ptr, key.0, key.1, value.0, value.1],
             },
         )?;
         Ok(())
@@ -1589,11 +1592,13 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.inst_results(inst)[0])
     }
 
+    /// Adds the element whose `payload` bytes are at `elem`.
     pub(crate) fn call_rt_set_add(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         set_ptr: Value,
         elem: Value,
+        payload: Value,
     ) -> Result<(), CodegenError> {
         let pt = builder.func.dfg.value_type(set_ptr);
         Self::call_cached_func(
@@ -1602,9 +1607,9 @@ impl<'a> FunctionTranslator<'a> {
             &mut ctx.cached_funcs,
             CallSite {
                 name: rt::SET_ADD,
-                param_types: &[pt, pt],
+                param_types: &[pt, pt, pt],
                 return_types: &[cl_types::I8],
-                args: &[set_ptr, elem],
+                args: &[set_ptr, elem, payload],
             },
         )?;
         Ok(())
@@ -1716,73 +1721,6 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
         Ok(())
-    }
-
-    /// Spill `val` into a stack slot at least `slot_bytes` wide and hand back
-    /// the slot's address.
-    ///
-    /// A set or a map reads an element out of the buffer it is pointed at and
-    /// copies its whole slot from there, so the buffer is sized by the slot
-    /// rather than by the value. A value narrower than the slot is written at
-    /// offset zero of a slot cleared first: that is where a read at the slot's
-    /// width finds it on a little-endian target, and it leaves the same bytes
-    /// beside it at the store and at every lookup that must match it.
-    ///
-    /// A list spells the same thing in MIR rather than here, through
-    /// `spill_operand_to_address`, because it carries the element's payload and
-    /// its stride as a separate pair of operands.
-    pub(crate) fn spill_element_to_address(
-        builder: &mut FunctionBuilder,
-        val: Value,
-        slot_bytes: u32,
-        ptr_type: cranelift_codegen::ir::Type,
-    ) -> Value {
-        let value_bytes = builder.func.dfg.value_type(val).bytes();
-        let addr = Self::allocate_element_slot(builder, value_bytes, slot_bytes, ptr_type);
-        builder.ins().store(MemFlags::new(), val, addr, 0);
-        addr
-    }
-
-    /// Allocate a stack slot at least `slot_bytes` wide, zero every byte past
-    /// the first `value_bytes`, and hand back the slot's address.
-    ///
-    /// Elements written into the slot are homogeneous, so a caller storing a
-    /// run of them reuses one slot: the bytes no element covers are cleared
-    /// once here and no store afterwards touches them.
-    pub(crate) fn allocate_element_slot(
-        builder: &mut FunctionBuilder,
-        value_bytes: u32,
-        slot_bytes: u32,
-        ptr_type: cranelift_codegen::ir::Type,
-    ) -> Value {
-        let bytes = slot_bytes.max(value_bytes);
-        let slot = builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            bytes,
-            bytes.trailing_zeros().min(4) as u8,
-        ));
-        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
-        Self::clear_spill_tail(builder, addr, value_bytes, bytes);
-        addr
-    }
-
-    /// Write zeros over the bytes of a spill slot that the value itself does not
-    /// cover, in the widest stores the remaining space admits.
-    fn clear_spill_tail(builder: &mut FunctionBuilder, addr: Value, from: u32, to: u32) {
-        let mut offset = from;
-        while offset < to {
-            let (ty, width) = match to - offset {
-                remaining if remaining >= 8 => (cl_types::I64, 8),
-                remaining if remaining >= 4 => (cl_types::I32, 4),
-                remaining if remaining >= 2 => (cl_types::I16, 2),
-                _ => (cl_types::I8, 1),
-            };
-            let zero = builder.ins().iconst(ty, 0);
-            builder
-                .ins()
-                .store(MemFlags::new(), zero, addr, offset as i32);
-            offset += width;
-        }
     }
 
     pub(crate) fn call_rt_array_panic_oob(
@@ -2264,16 +2202,11 @@ impl<'a> FunctionTranslator<'a> {
 /// The width in bytes a set or map slot holding an element of type `kind` must
 /// have.
 ///
-/// The container is allocated once, from the type its declaration names, and
-/// every element it is later handed is spilled at that same width — so a value
-/// narrower than a machine word still occupies one, and a wider one occupies all
-/// of itself. A slot below a word would make the buffer a caller spills into too
-/// small for the word it writes there.
-///
-/// MIR computes an element's width too, in `compute_elem_size_from_type`, and
-/// the two answers differ on purpose: that one is the element's exact size,
-/// which is what an index read strides by, while this one is the size of the
-/// buffer an element is handed over in and so never falls below a value word.
+/// The container is allocated once, from the type its declaration names: the
+/// element's stride, never less than a value word. The floor is what lets a
+/// method compiled once for every element type hand the container its element
+/// in a value word; the runtime lays each element it is handed out at this
+/// width (see `crate::ast::types::element_layout` for the element's own width).
 pub(crate) fn declared_element_bytes(kind: &TypeKind, ptr_type: cl_types::Type) -> u32 {
     let declared = inline_vec_element_layout(kind, ptr_type)
         .and_then(|(stride, _, _)| u32::try_from(stride).ok())

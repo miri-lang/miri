@@ -32,11 +32,10 @@ use miri_runtime_core::{
 use miri_runtime_core::{
     miri_rt_list_capacity, miri_rt_list_clear, miri_rt_list_clone, miri_rt_list_decref_element,
     miri_rt_list_first, miri_rt_list_free, miri_rt_list_get, miri_rt_list_get_mut,
-    miri_rt_list_insert, miri_rt_list_insert_inline, miri_rt_list_is_empty, miri_rt_list_last,
-    miri_rt_list_len, miri_rt_list_new, miri_rt_list_new_from_managed_array,
-    miri_rt_list_new_from_raw, miri_rt_list_pop, miri_rt_list_push, miri_rt_list_push_inline,
-    miri_rt_list_remove, miri_rt_list_reverse, miri_rt_list_set, miri_rt_list_set_elem_drop_fn,
-    miri_rt_list_sort, miri_rt_list_with_capacity,
+    miri_rt_list_insert, miri_rt_list_is_empty, miri_rt_list_last, miri_rt_list_len,
+    miri_rt_list_new, miri_rt_list_new_from_managed_array, miri_rt_list_new_from_raw,
+    miri_rt_list_pop, miri_rt_list_push, miri_rt_list_remove, miri_rt_list_reverse,
+    miri_rt_list_set, miri_rt_list_set_elem_drop_fn, miri_rt_list_sort, miri_rt_list_with_capacity,
 };
 
 // -----------------------------------------------------------------------
@@ -187,21 +186,25 @@ fn test_slot_size_sits_where_compiled_code_reads_it() {
     }
 }
 
+/// The width of a value word, the payload every word-sized test element has.
+const W: usize = std::mem::size_of::<usize>();
+
 #[test]
-fn test_list_inline_ffi_abi() {
+fn test_list_element_ffi_abi() {
     unsafe {
         let list = miri_rt_list_new(8);
         let (first, second) = ([1.0f32, 2.0], [3.0f32, 4.0]);
-        miri_rt_list_push_inline(list, second.as_ptr() as *const u8, 8, 8);
+        miri_rt_list_push(list, second.as_ptr() as *const u8, 8);
         assert_eq!(
-            miri_rt_list_insert_inline(list, 0, first.as_ptr() as *const u8, 8, 8),
+            miri_rt_list_insert(list, 0, first.as_ptr() as *const u8, 8),
             1
         );
         assert_eq!(miri_rt_list_len(list), 2);
         assert_eq!(*(miri_rt_list_get(list, 0) as *const f32).add(1), 2.0);
         assert_eq!(*(miri_rt_list_get(list, 1) as *const f32), 3.0);
 
-        miri_rt_list_push_inline(std::ptr::null_mut(), first.as_ptr() as *const u8, 8, 8);
+        miri_rt_list_push(std::ptr::null_mut(), first.as_ptr() as *const u8, 8);
+        miri_rt_list_push(list, std::ptr::null(), 8);
         assert_eq!(miri_rt_list_len(list), 2);
         miri_rt_list_free(list);
     }
@@ -213,11 +216,12 @@ fn test_list_ffi_abi() {
         let list = miri_rt_list_new(8);
         assert!(!list.is_null());
         assert_eq!(miri_rt_list_len(list), 0);
+        let word = |v: &usize| v as *const usize as *const u8;
         assert_eq!(miri_rt_list_is_empty(list), 1);
 
-        miri_rt_list_push(list, 10);
-        miri_rt_list_push(list, 20);
-        miri_rt_list_push(list, 30);
+        miri_rt_list_push(list, word(&10), W);
+        miri_rt_list_push(list, word(&20), W);
+        miri_rt_list_push(list, word(&30), W);
         assert_eq!(miri_rt_list_len(list), 3);
         let cap = miri_rt_list_capacity(list);
         assert!(cap >= 3);
@@ -229,8 +233,8 @@ fn test_list_ffi_abi() {
         let pm = miri_rt_list_get_mut(list, 1);
         assert!(!pm.is_null());
 
-        assert_eq!(miri_rt_list_set(list, 1, 99), 1);
-        assert_eq!(miri_rt_list_insert(list, 1, 55), 1);
+        assert_eq!(miri_rt_list_set(list, 1, word(&99), W), 1);
+        assert_eq!(miri_rt_list_insert(list, 1, word(&55), W), 1);
         assert_eq!(miri_rt_list_len(list), 4);
         assert_eq!(miri_rt_list_remove(list, 1), 1);
         assert_eq!(miri_rt_list_len(list), 3);
@@ -292,18 +296,18 @@ fn test_set_ffi_abi() {
         // elem_size bytes from there, which is how an element wider than a value
         // word reaches the set whole.
         let word = |v: &usize| v as *const usize as *const u8;
-        assert_eq!(miri_rt_set_add(set, word(&10)), 1);
-        assert_eq!(miri_rt_set_add(set, word(&20)), 1);
-        assert_eq!(miri_rt_set_add(set, word(&10)), 0); // duplicate
+        assert_eq!(miri_rt_set_add(set, word(&10), W), 1);
+        assert_eq!(miri_rt_set_add(set, word(&20), W), 1);
+        assert_eq!(miri_rt_set_add(set, word(&10), W), 0); // duplicate
         assert_eq!(miri_rt_set_len(set), 2);
 
-        assert_eq!(miri_rt_set_contains(set, word(&10)), 1);
-        assert_eq!(miri_rt_set_contains(set, word(&99)), 0);
+        assert_eq!(miri_rt_set_contains(set, word(&10), W), 1);
+        assert_eq!(miri_rt_set_contains(set, word(&99), W), 0);
 
         let elem = miri_rt_set_element_at(set, 0);
         assert!(elem == 10 || elem == 20);
 
-        assert_eq!(miri_rt_set_remove(set, word(&10)), 1);
+        assert_eq!(miri_rt_set_remove(set, word(&10), W), 1);
         assert_eq!(miri_rt_set_len(set), 1);
 
         miri_rt_set_clear(set);
@@ -337,17 +341,17 @@ fn test_map_ffi_abi() {
         // Key and value each travel by the address of their bytes, for the
         // reason the set test gives.
         let word = |v: &usize| v as *const usize as *const u8;
-        miri_rt_map_set(map, word(&1), word(&100));
-        miri_rt_map_set(map, word(&2), word(&200));
+        miri_rt_map_set(map, word(&1), W, word(&100), W);
+        miri_rt_map_set(map, word(&2), W, word(&200), W);
         assert_eq!(miri_rt_map_len(map), 2);
 
-        assert_eq!(miri_rt_map_get(map, word(&1)), 100);
-        assert_eq!(miri_rt_map_get(map, word(&99)), 0); // not found
+        assert_eq!(miri_rt_map_get(map, word(&1), W), 100);
+        assert_eq!(miri_rt_map_get(map, word(&99), W), 0); // not found
 
-        assert_eq!(miri_rt_map_get_checked(map, word(&2)), 200);
+        assert_eq!(miri_rt_map_get_checked(map, word(&2), W), 200);
 
-        assert_eq!(miri_rt_map_contains_key(map, word(&1)), 1);
-        assert_eq!(miri_rt_map_contains_key(map, word(&99)), 0);
+        assert_eq!(miri_rt_map_contains_key(map, word(&1), W), 1);
+        assert_eq!(miri_rt_map_contains_key(map, word(&99), W), 0);
 
         let k = miri_rt_map_key_at(map, 0);
         assert!(k == 1 || k == 2);
@@ -357,7 +361,7 @@ fn test_map_ffi_abi() {
         miri_rt_map_set_val_drop_fn(map, 0);
         miri_rt_map_set_key_drop_fn(map, 0);
 
-        assert_eq!(miri_rt_map_remove(map, word(&1)), 1);
+        assert_eq!(miri_rt_map_remove(map, word(&1), W), 1);
         assert_eq!(miri_rt_map_len(map), 1);
 
         miri_rt_map_clear(map);

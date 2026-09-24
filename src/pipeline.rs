@@ -268,25 +268,7 @@ fn collect_runtime_info(
 
                 #[cfg(feature = "cranelift")]
                 if let Some(ptr_ty) = ptr_ty {
-                    use crate::codegen::cranelift::translate_type;
-                    use crate::type_checker::resolve_type_name;
-
-                    let param_types: Vec<_> = params
-                        .iter()
-                        .filter_map(|p| {
-                            resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty))
-                        })
-                        .collect();
-
-                    let ret_type = return_type
-                        .as_ref()
-                        .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty)));
-
-                    imports.push(crate::codegen::cranelift::RuntimeImport {
-                        name: name.clone(),
-                        param_types,
-                        return_type: ret_type,
-                    });
+                    imports.push(runtime_import(name, params, return_type.as_deref(), ptr_ty));
                 }
             }
             // Walk class bodies to collect required runtimes for linking and imports.
@@ -303,25 +285,12 @@ fn collect_runtime_info(
 
                         #[cfg(feature = "cranelift")]
                         if let Some(ptr_ty) = ptr_ty {
-                            use crate::codegen::cranelift::translate_type;
-                            use crate::type_checker::resolve_type_name;
-
-                            let param_types: Vec<_> = params
-                                .iter()
-                                .filter_map(|p| {
-                                    resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty))
-                                })
-                                .collect();
-
-                            let ret_type = return_type.as_ref().and_then(|rt| {
-                                resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))
-                            });
-
-                            imports.push(crate::codegen::cranelift::RuntimeImport {
-                                name: name.clone(),
-                                param_types,
-                                return_type: ret_type,
-                            });
+                            imports.push(runtime_import(
+                                name,
+                                params,
+                                return_type.as_deref(),
+                                ptr_ty,
+                            ));
                         }
                     }
                 }
@@ -334,6 +303,33 @@ fn collect_runtime_info(
         #[cfg(feature = "cranelift")]
         imports,
         required_runtimes,
+    }
+}
+
+/// The external declaration of the runtime entry point `name`, from the
+/// parameters and return type its Miri declaration spells.
+///
+/// An element parameter is declared as the address and byte count it is
+/// passed as; see [`crate::runtime_fns::element_abi_params`].
+#[cfg(feature = "cranelift")]
+fn runtime_import(
+    name: &str,
+    params: &[crate::ast::common::Parameter],
+    return_type: Option<&crate::ast::expression::Expression>,
+    ptr_ty: cranelift_codegen::ir::Type,
+) -> crate::codegen::cranelift::RuntimeImport {
+    use crate::codegen::cranelift::translate_type;
+    use crate::type_checker::resolve_type_name;
+
+    let declared: Vec<_> = params
+        .iter()
+        .filter_map(|p| resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty)))
+        .collect();
+    crate::codegen::cranelift::RuntimeImport {
+        name: name.to_string(),
+        param_types: crate::runtime_fns::element_abi_params(name, &declared, ptr_ty),
+        return_type: return_type
+            .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))),
     }
 }
 
@@ -1004,7 +1000,7 @@ impl Pipeline {
 
         match opts.target {
             BuildTarget::Native => {
-                self.build_native(&pipeline_result, &mir_bodies, opts, opts.out_path.clone())
+                self.build_native(&pipeline_result, mir_bodies, opts, opts.out_path.clone())
             }
             BuildTarget::WebGpu => {
                 let gpu_buffer_inits = &pipeline_result.type_checker.gpu_buffer_inits;
@@ -1024,7 +1020,7 @@ impl Pipeline {
                 // callers leave `emit_native_host` off and need no linker.
                 if opts.emit_native_host {
                     let native_out = native_binary_path(&bundle_dir);
-                    self.build_native(&pipeline_result, &mir_bodies, opts, Some(native_out))?;
+                    self.build_native(&pipeline_result, mir_bodies, opts, Some(native_out))?;
                 }
                 Ok(bundle_dir)
             }
@@ -1040,7 +1036,7 @@ impl Pipeline {
     fn build_native(
         &self,
         pipeline_result: &PipelineResult,
-        mir_bodies: &[(String, mir::Body)],
+        mir_bodies: Vec<(String, mir::Body)>,
         opts: &BuildOptions,
         out_override: Option<PathBuf>,
     ) -> Result<PathBuf, CompilerError> {
@@ -1083,9 +1079,17 @@ impl Pipeline {
     /// linked against.
     fn compile_object(
         pipeline_result: &PipelineResult,
-        mir_bodies: &[(String, mir::Body)],
+        mut mir_bodies: Vec<(String, mir::Body)>,
         cpu_backend: CpuBackend,
     ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
+        // Spell the element ABI at the hand-off: reference counting,
+        // verification and every MIR reader before this point see an element
+        // argument as the value it is, and every CPU backend takes it as an
+        // address and a byte count.
+        for (name, body) in &mut mir_bodies {
+            mir::element_abi::pass_elements_by_address(body)
+                .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
+        }
         let (object_bytes, required_runtimes) = match cpu_backend {
             CpuBackend::Cranelift => {
                 #[cfg(feature = "cranelift")]

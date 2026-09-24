@@ -426,6 +426,7 @@ impl Drop for MiriMap {
 /// Stable FFI interface for map operations.
 pub mod ffi {
     use super::*;
+    use crate::element_bytes::{require_fits_slot, with_slot_bytes};
     use crate::guard;
     use std::ptr;
 
@@ -489,33 +490,52 @@ pub mod ffi {
 
     /// Sets a key-value pair in the map.
     ///
-    /// Key and value are each passed by the address of their bytes: the runtime
-    /// copies `key_size`/`value_size` bytes from there, so an entry of any width
-    /// arrives whole. A managed key or value is the reference written at that
-    /// address, donated to the map.
+    /// Key and value are each handed over by address: `key` points at its
+    /// `key_payload` bytes and `value` at its `value_payload` bytes, each laid
+    /// out at the full width of its slot (see [`crate::element_bytes`]), so an
+    /// entry of any width arrives whole. A managed key or value is the
+    /// reference written at that address, donated to the map.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: *const u8, value: *const u8) {
+    pub unsafe extern "C" fn miri_rt_map_set(
+        ptr: *mut MiriMap,
+        key: *const u8,
+        key_payload: usize,
+        value: *const u8,
+        value_payload: usize,
+    ) {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || key.is_null() || value.is_null() {
+        if value.is_null() {
             return;
         }
-        let map = &mut *ptr;
-        map.set(key, value);
+        let Some(map) = key_receiver(ptr, key, key_payload) else {
+            return;
+        };
+        require_fits_slot(value_payload, map.value_size);
+        let value_size = map.value_size;
+        with_slot_bytes(key, key_payload, map.key_size, |key| {
+            with_slot_bytes(value, value_payload, value_size, |value| {
+                map.set(key, value)
+            })
+        });
     }
 
-    /// Gets the value for a key, returning the value as a pointer-sized integer.
+    /// Gets the value for a key, handed over as `miri_rt_map_set` takes it,
+    /// returning the value as a pointer-sized integer.
     ///
     /// Returns 0 if the key is not found.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: *const u8) -> usize {
+    pub unsafe extern "C" fn miri_rt_map_get(
+        ptr: *const MiriMap,
+        key: *const u8,
+        key_payload: usize,
+    ) -> usize {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || key.is_null() {
+        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             return 0;
-        }
-        let map = &*ptr;
-        let result = map.get(key);
+        };
+        let result = with_slot_bytes(key, key_payload, map.key_size, |key| map.get(key));
         if result.is_null() {
             return 0;
         }
@@ -523,13 +543,18 @@ pub mod ffi {
         map.hand_out_value(*(result as *const usize))
     }
 
-    /// Gets the value for a key, aborting if the key is not found.
+    /// Gets the value for a key, handed over as `miri_rt_map_set` takes it,
+    /// aborting if the key is not found.
     ///
     /// Used for direct map indexing (`m[key]`). For safe access, use `m.get(key)`
     /// which returns an Option.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: *const u8) -> usize {
+    pub unsafe extern "C" fn miri_rt_map_get_checked(
+        ptr: *const MiriMap,
+        key: *const u8,
+        key_payload: usize,
+    ) -> usize {
         guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             eprintln!("Runtime error: map index on null map");
@@ -539,8 +564,10 @@ pub mod ffi {
             eprintln!("Runtime error: map index with no key");
             std::process::abort();
         }
-        let map = &*ptr;
-        let result = map.get(key);
+        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
+            std::process::abort();
+        };
+        let result = with_slot_bytes(key, key_payload, map.key_size, |key| map.get(key));
         if result.is_null() {
             eprintln!("Runtime error: map key not found");
             std::process::abort();
@@ -551,38 +578,59 @@ pub mod ffi {
         *(result as *const usize)
     }
 
-    /// Returns true (1) if the map contains the given key.
+    /// Returns true (1) if the map contains the given key, handed over as
+    /// `miri_rt_map_set` takes it.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: *const u8) -> u8 {
+    pub unsafe extern "C" fn miri_rt_map_contains_key(
+        ptr: *const MiriMap,
+        key: *const u8,
+        key_payload: usize,
+    ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || key.is_null() {
+        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             return 0;
-        }
-        let map = &*ptr;
-        if map.contains_key(key) {
-            1
-        } else {
-            0
-        }
+        };
+        with_slot_bytes(key, key_payload, map.key_size, |key| {
+            u8::from(map.contains_key(key))
+        })
     }
 
-    /// Removes the entry with the given key.
+    /// Removes the entry with the given key, handed over as `miri_rt_map_set`
+    /// takes it.
     ///
     /// Returns true (1) if the key was found and removed, false (0) otherwise.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: *const u8) -> u8 {
+    pub unsafe extern "C" fn miri_rt_map_remove(
+        ptr: *mut MiriMap,
+        key: *const u8,
+        key_payload: usize,
+    ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || key.is_null() {
+        let Some(map) = key_receiver(ptr, key, key_payload) else {
             return 0;
+        };
+        let key_size = map.key_size;
+        with_slot_bytes(key, key_payload, key_size, |key| u8::from(map.remove(key)))
+    }
+
+    /// The map a key entry point works on, or `None` when there is no map or no
+    /// key to work with.
+    ///
+    /// A key whose width does not fit the map's key slots is a compiler defect
+    /// that would store or look up part of a key, so the process is aborted.
+    unsafe fn key_receiver<'a>(
+        ptr: *mut MiriMap,
+        key: *const u8,
+        key_payload: usize,
+    ) -> Option<&'a mut MiriMap> {
+        if ptr.is_null() || key.is_null() {
+            return None;
         }
         let map = &mut *ptr;
-        if map.remove(key) {
-            1
-        } else {
-            0
-        }
+        require_fits_slot(key_payload, map.key_size);
+        Some(map)
     }
 
     /// Clears all entries from the map.

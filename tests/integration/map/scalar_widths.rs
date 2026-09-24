@@ -330,3 +330,20 @@ fn main()
 true 1.5 true true",
     );
 }
+
+#[test]
+fn test_map_u8_keys_stay_distinct() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<u8, int>()
+    m.set(1, 10)
+    m.set(255, 20)
+    m.set(1, 30)
+    println(f"{m.length()} {m[1]} {m[255]} {m.contains_key(2)}")
+"#,
+        "2 30 20 false",
+    );
+}
