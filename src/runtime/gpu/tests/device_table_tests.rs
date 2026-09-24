@@ -192,3 +192,75 @@ fn nested_activation_hides_the_callers_resident_buffer() {
     assert!(release(handle), "the caller's release frees its own buffer");
     assert!(resident_buffer(handle).is_none());
 }
+
+/// A move between gpu bindings hands the source's activation — and the buffer
+/// it owns — to the target's handle, and leaves the source a fresh, empty
+/// activation, so a value later uploaded through the source lands in a buffer
+/// of its own.
+#[test]
+fn transfer_hands_the_activation_to_the_target_and_reopens_the_source() {
+    let from = 0xA000_0000_0007u64;
+    let to = 0xA000_0000_0008u64;
+    acquire(from);
+    let moved = active_key(from);
+
+    transfer(from, to);
+
+    assert_eq!(
+        active_key(to),
+        moved,
+        "the target owns the moved activation"
+    );
+    assert!(active_key(from).is_some(), "the source is reopened");
+    assert_ne!(
+        active_key(from),
+        moved,
+        "the source starts a fresh activation"
+    );
+
+    assert!(!release(to));
+    assert!(!release(from));
+    assert_eq!(active_key(to), None);
+    assert_eq!(active_key(from), None);
+    assert!(check_activation_balance().is_ok());
+}
+
+/// The resident buffer travels with the activation it belongs to.
+#[test]
+fn transfer_moves_the_resident_buffer_with_the_activation() {
+    let _table = lock_resident_table();
+    if miri_gpu_init() == 0 {
+        eprintln!(
+            "no GPU adapter; skipping transfer_moves_the_resident_buffer_with_the_activation"
+        );
+        return;
+    }
+    let from = 0xA000_0000_0009u64;
+    let to = 0xA000_0000_000Au64;
+    acquire(from);
+    insert_resident(from, storage_buffer(), 16, WireConversion::Identity)
+        .expect("an acquired handle holds a buffer");
+
+    transfer(from, to);
+
+    assert!(resident_buffer(to).is_some(), "the target holds the buffer");
+    assert!(resident_buffer(from).is_none(), "the source starts empty");
+    assert!(release(to), "the target's release frees the buffer");
+    assert!(!release(from));
+}
+
+/// A source with no open activation has nothing to hand over: the target still
+/// gets an activation of its own for its release to close, and the source's
+/// missing one stays visible to the balance check.
+#[test]
+fn transfer_from_an_unacquired_handle_opens_an_empty_target() {
+    let from = 0xA000_0000_000Bu64;
+    let to = 0xA000_0000_000Cu64;
+
+    transfer(from, to);
+
+    assert!(active_key(to).is_some());
+    assert_eq!(active_key(from), None);
+    assert!(!release(to));
+    assert!(check_activation_balance().is_ok());
+}

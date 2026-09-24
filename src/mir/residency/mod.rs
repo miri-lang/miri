@@ -20,10 +20,12 @@
 //! operands read a gpu binding's whole host value.
 
 mod emit;
+mod mirrors;
 mod readback;
 mod staleness;
 
 pub(crate) use emit::append_readback;
+pub(crate) use mirrors::{HandleCarriers, Mirror};
 pub use readback::insert_readbacks;
 
 use crate::ast::literal::Literal;
@@ -50,14 +52,28 @@ pub(crate) const UPLOAD_FN: &str = "miri_gpu_upload";
 /// own. Codegen closes the activation with `miri_gpu_release` at scope exit.
 pub(crate) const ACQUIRE_FN: &str = "miri_gpu_acquire";
 
+/// Runtime entry that hands one handle's live activation — and the device
+/// buffer it owns — to another handle, and reopens the first with no buffer:
+/// what a gpu-to-gpu move (`gpu var b = a`) does to the two bindings.
+pub(crate) const TRANSFER_FN: &str = "miri_gpu_transfer";
+
 /// What a terminator does to the agreement between device buffers and the host
 /// arrays they mirror.
 pub(crate) enum DeviceEffect<'a> {
-    /// A readback, an upload or a fresh activation: afterwards the handle's host
-    /// array holds what its device buffer holds.
-    Synchronizes(u64),
+    /// A fresh activation: the handle has no device buffer, so every host array
+    /// mirroring it is the only copy of its value.
+    Activates(u64),
+    /// A readback of the handle's device buffer into the host array of the
+    /// binding named, or — for a scalar, read back through a one-element array
+    /// — of no binding in particular.
+    ReadsBack(u64, Option<Local>),
+    /// An upload of a host array into the handle's device buffer.
+    Uploads(u64),
+    /// A gpu-to-gpu move: `to` takes over `from`'s device buffer, and `from` is
+    /// left with none.
+    Transfers { from: u64, to: u64 },
     /// A kernel launch, or a call specialized to launch on a caller's buffer:
-    /// each handle it runs on may now hold results its host array lacks.
+    /// each handle it runs on may now hold results its host arrays lack.
     Launches(&'a [Option<DeviceHandleId>]),
     /// Neither.
     Nothing,
@@ -66,11 +82,12 @@ pub(crate) enum DeviceEffect<'a> {
 /// The effect `kind` has on the handles it names.
 pub(crate) fn device_effect(kind: &TerminatorKind) -> DeviceEffect<'_> {
     match kind {
-        TerminatorKind::Call { func, args, .. } if synchronizes(func) => args
-            .first()
-            .and_then(handle_argument)
-            .map_or(DeviceEffect::Nothing, DeviceEffect::Synchronizes),
-        TerminatorKind::Call { arg_handles, .. } => DeviceEffect::Launches(arg_handles),
+        TerminatorKind::Call {
+            func,
+            args,
+            arg_handles,
+            ..
+        } => runtime_entry_effect(func, args).unwrap_or(DeviceEffect::Launches(arg_handles)),
         TerminatorKind::GpuLaunch { launch_args, .. } => {
             DeviceEffect::Launches(launch_args.arg_handles())
         }
@@ -80,6 +97,25 @@ pub(crate) fn device_effect(kind: &TerminatorKind) -> DeviceEffect<'_> {
         | TerminatorKind::Return
         | TerminatorKind::Unreachable => DeviceEffect::Nothing,
     }
+}
+
+/// The effect of a call to one of the residency runtime entries, or `None` for
+/// any other callee.
+fn runtime_entry_effect<'a>(func: &Operand, args: &[Operand]) -> Option<DeviceEffect<'a>> {
+    let symbol = func.called_symbol()?;
+    let handle = || args.first().and_then(handle_argument);
+    let effect = match symbol {
+        READBACK_FN => {
+            handle().map(|h| DeviceEffect::ReadsBack(h, args.get(1).and_then(whole_local)))
+        }
+        UPLOAD_FN => handle().map(DeviceEffect::Uploads),
+        ACQUIRE_FN => handle().map(DeviceEffect::Activates),
+        TRANSFER_FN => handle()
+            .zip(args.get(1).and_then(handle_argument))
+            .map(|(from, to)| DeviceEffect::Transfers { from, to }),
+        _ => return None,
+    };
+    Some(effect.unwrap_or(DeviceEffect::Nothing))
 }
 
 /// The value of the integer constant a synchronizing call passes as its handle.
@@ -163,9 +199,11 @@ pub(crate) fn readback_destinations(body: &Body) -> HashSet<Local> {
 /// Every operand the store reads counts — a copy into a host binding, a closure
 /// capture, an element of a tuple, array or collection literal, an operand of an
 /// operator — except two that keep the value where it is: seeding the array a
-/// scalar readback is about to fill, and moving a binding into another that
-/// takes over its device buffer (`gpu var b = a`). A copy into a gpu binding
-/// with a buffer of its own is a host read, since it copies the host array.
+/// scalar readback is about to fill, and a copy into another binding carrying
+/// the same handle, which adopts the host array (see [`statement_adoption`]). A
+/// copy into a gpu binding with a handle of its own is a host read, since it
+/// copies the host array — after a move has handed the source's buffer to the
+/// target (`gpu var b = a`), it reads a source the transfer left current.
 pub(crate) fn statement_host_reads(
     body: &Body,
     statement: &Statement,
@@ -186,6 +224,22 @@ pub(crate) fn statement_host_reads(
         .filter_map(whole_local)
         .filter(|&local| gpu_handle(body, local).is_some_and(|h| Some(h) != dest_handle))
         .collect()
+}
+
+/// The binding `statement` hands another binding's host array to without
+/// reading it, as `(target, source)`: a whole copy between two gpu bindings
+/// carrying the same handle, as a move out of a borrowed parameter makes. The
+/// target's host array is then the source's, and lags the device exactly as far.
+pub(crate) fn statement_adoption(body: &Body, statement: &Statement) -> Option<(Local, Local)> {
+    let (StatementKind::Assign(dest, Rvalue::Use(operand))
+    | StatementKind::Reassign(dest, Rvalue::Use(operand))) = &statement.kind
+    else {
+        return None;
+    };
+    let source = whole_local(operand)?;
+    let target = dest.projection.is_empty().then_some(dest.local)?;
+    let handle = gpu_handle(body, target)?;
+    (source != target && gpu_handle(body, source) == Some(handle)).then_some((target, source))
 }
 
 /// The gpu-resident bindings a terminator reads whole on the host: the value a
@@ -222,13 +276,4 @@ fn upload_source(body: &Body, args: &[Operand]) -> Option<Local> {
     let source = args.get(1).and_then(whole_local)?;
     let handle = gpu_handle(body, source)?;
     (Some(handle.0) != target).then_some(source)
-}
-
-/// Whether `func` is a runtime entry after which a handle's host array and
-/// device buffer hold the same values.
-fn synchronizes(func: &Operand) -> bool {
-    matches!(
-        func.called_symbol(),
-        Some(symbol) if symbol == READBACK_FN || symbol == UPLOAD_FN || symbol == ACQUIRE_FN
-    )
 }

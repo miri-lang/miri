@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri_runtime_core::array::ffi::*;
+use miri_runtime_core::array::MiriArray;
 
 #[test]
 fn test_array_new_zeroed() {
@@ -591,5 +592,75 @@ fn test_array_clone_and_list_copy_keep_the_element_order() {
         miri_runtime_core::miri_rt_list_free(list);
         miri_rt_array_free(copy);
         miri_rt_array_free(arr);
+    }
+}
+
+fn rc_slot(arr: *mut MiriArray) -> *mut usize {
+    unsafe { (arr as *mut u8).sub(miri_runtime_core::rc::RC_HEADER_SIZE) as *mut usize }
+}
+
+fn i32_array(values: &[i32]) -> *mut MiriArray {
+    unsafe {
+        let arr = miri_rt_array_new(values.len(), std::mem::size_of::<i32>());
+        for (i, v) in values.iter().enumerate() {
+            miri_rt_array_set(arr, i, v as *const i32 as *const u8);
+        }
+        arr
+    }
+}
+
+#[test]
+fn test_array_cow_null_returns_null() {
+    unsafe {
+        assert!(miri_rt_array_cow(std::ptr::null_mut()).is_null());
+    }
+}
+
+#[test]
+fn test_array_cow_unique_returns_same_pointer() {
+    unsafe {
+        let arr = i32_array(&[1, 2, 3]);
+        let cowed = miri_rt_array_cow(arr);
+        assert_eq!(cowed, arr, "RC=1 → no copy, same pointer");
+        assert_eq!(*rc_slot(arr), 1, "RC unchanged");
+        miri_rt_array_free(arr);
+    }
+}
+
+#[test]
+fn test_array_cow_shared_copies_and_decrefs() {
+    unsafe {
+        let arr = i32_array(&[10, 20, 30]);
+        *rc_slot(arr) = 2;
+
+        let cowed = miri_rt_array_cow(arr);
+        assert_ne!(cowed, arr, "RC>1 → fresh pointer");
+        assert_eq!(*rc_slot(arr), 1, "old RC decremented");
+        assert_eq!(*rc_slot(cowed), 1);
+        assert_eq!(miri_rt_array_len(cowed), 3);
+        assert_eq!(*(miri_rt_array_get(cowed, 2) as *const i32), 30);
+
+        miri_rt_array_free(arr);
+        miri_rt_array_free(cowed);
+    }
+}
+
+/// An immortal array is shared by every reader for the whole run, so it is
+/// never handed out for writing: a copy is, and the original is left alone.
+#[test]
+fn test_array_cow_immortal_copies_and_leaves_the_original() {
+    unsafe {
+        let arr = i32_array(&[4, 5, 6]);
+        let immortal = (-1isize) as usize;
+        *rc_slot(arr) = immortal;
+
+        let cowed = miri_rt_array_cow(arr);
+        assert_ne!(cowed, arr, "immortal RC → fresh pointer");
+        assert_eq!(*rc_slot(arr), immortal, "immortal RC unchanged");
+        assert_eq!(*(miri_rt_array_get(cowed, 0) as *const i32), 4);
+
+        *rc_slot(arr) = 1;
+        miri_rt_array_free(arr);
+        miri_rt_array_free(cowed);
     }
 }

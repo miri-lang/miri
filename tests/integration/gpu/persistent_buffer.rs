@@ -204,6 +204,68 @@ fn main()
     );
 }
 
+/// Assigning a new value to a binding moved out of (`a = ...` after
+/// `gpu var b = a`) gives it storage of its own. Its upload must not land in the
+/// device buffer `b` took over, which holds `b`'s launch results.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn reassigning_a_moved_from_gpu_var_leaves_the_move_target_intact() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.io
+
+fn main()
+    gpu var a = [0, 0, 0, 0]
+    gpu var b = a
+    gpu forall i in 0..4
+        b[i] = i * 5
+    a = [9, 9, 9, 9]
+    let z = b
+    let y = a
+    println(f'{z[2]} {y[2]}')
+",
+        "10 9",
+    );
+}
+
+/// The same hand-over repeated on every turn of a loop: each turn's `b` takes
+/// the buffer `a` holds, launches on it, and `a` is then refilled.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn a_move_and_reassignment_on_every_loop_turn_keep_both_values() {
+    require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.io
+use system.gpu
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var a = [0, 0, 0, 0]
+    var k = 0
+    var sum = 0
+    while k < 3
+        gpu var b = a
+        gpu forall i in 0..4
+            b[i] = b[i] + i * 5 + k
+        a = [k, k, k, k]
+        let z = b
+        sum = sum + z[2]
+        k = k + 1
+    let y = a
+    println(f'{sum} {y[2]} {gpu_launches()} {gpu_releases()}')
+",
+        "34 2 3 3",
+    );
+}
+
 /// A `gpu`-resident binding's persistent device buffer is freed when the
 /// binding leaves scope. `use_gpu` declares `data`, uploads it on the launch,
 /// then returns — `data`'s `StorageDead` releases the buffer. Observed from

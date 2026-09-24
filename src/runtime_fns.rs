@@ -63,6 +63,9 @@ pub mod rt {
     pub const ARRAY_SET_VAL: &str = "miri_rt_array_set_val";
     pub const ARRAY_SORT: &str = "miri_rt_array_sort";
     pub const ARRAY_CLONE: &str = "miri_rt_array_clone";
+    /// Compiler-internal: Copy-on-Write detach of a gpu binding's host array
+    /// before a readback overwrites it, not in stdlib.
+    pub const ARRAY_COW: &str = "miri_rt_array_cow";
     /// Compiler-internal: partial readback of `g.slice(range)`, not in stdlib.
     pub const ARRAY_SLICE: &str = "miri_rt_array_slice";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
@@ -348,6 +351,7 @@ pub mod rt {
         ARRAY_SET_VAL,
         ARRAY_SORT,
         ARRAY_CLONE,
+        ARRAY_COW,
         ARRAY_SLICE,
         ARRAY_PANIC_OOB,
         ARRAY_DECREF_ELEMENT,
@@ -556,7 +560,7 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
         rt::LIST_PUSH | rt::SET_ADD => &[1],
         rt::LIST_INSERT => &[2],
         rt::MAP_SET => &[1, 2],
-        rt::LIST_COW | rt::MAP_COW | rt::SET_COW => &[0],
+        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW => &[0],
         _ => &[],
     }
 }

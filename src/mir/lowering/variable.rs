@@ -59,6 +59,23 @@ pub(crate) fn emit_gpu_activation(ctx: &mut LoweringContext, handle: DeviceHandl
     );
 }
 
+/// Hands the live activation of handle `from`, and the device buffer it holds,
+/// to handle `to`, and reopens `from` with no buffer. Codegen closes the moved
+/// activation when the binding carrying `to` leaves scope.
+fn emit_gpu_transfer(
+    ctx: &mut LoweringContext,
+    from: DeviceHandleId,
+    to: DeviceHandleId,
+    span: Span,
+) {
+    emit_void_runtime_call(
+        ctx,
+        crate::mir::residency::TRANSFER_FN,
+        vec![handle_operand(from, span), handle_operand(to, span)],
+        span,
+    );
+}
+
 /// Frees the device buffer of `handle`'s innermost activation and closes it,
 /// for a binding that stops referring to that handle before its scope ends.
 pub(crate) fn emit_gpu_release(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
@@ -271,17 +288,30 @@ fn apply_variable_residency(
         AstResidency::Host => MirResidency::Host,
         AstResidency::Gpu => MirResidency::Gpu,
     };
-    if ctx.body.local_decls[local.0].residency == MirResidency::Gpu {
-        if let Some((handle, borrowed)) = gpu_move_source_handle(ctx, decl) {
-            // `gpu let/var b = a` where `a` is a gpu-resident binding is a move:
-            // `b` takes over `a`'s persistent device buffer (the type checker
-            // has consumed `a`). Transfer the handle so `b`'s first launch
-            // reuses the already-uploaded buffer, and open no activation — a
-            // fresh one would hide the very buffer being transferred. A move out
-            // of a borrowed parameter stays borrowed: the caller still owns it.
+    if ctx.body.local_decls[local.0].residency != MirResidency::Gpu {
+        return;
+    }
+    match gpu_move_source_handle(ctx, decl) {
+        // A move out of a borrowed parameter shares the caller's handle and
+        // stays borrowed: the caller still owns the buffer, and a parameter is
+        // never assigned a new value that could land in it.
+        Some((handle, true)) => {
             ctx.body.local_decls[local.0].device_handle = Some(handle);
-            ctx.body.local_decls[local.0].device_handle_borrowed = borrowed;
-        } else {
+            ctx.body.local_decls[local.0].device_handle_borrowed = true;
+        }
+        // `gpu let/var b = a` where `a` is a gpu-resident binding is a move (the
+        // type checker has consumed `a`): `b` takes over `a`'s live activation
+        // and the device buffer it holds, so `b`'s first launch reuses the
+        // already-uploaded buffer. `b` gets a handle of its own rather than
+        // sharing `a`'s, because `a` may be assigned a new value afterwards and
+        // that value is uploaded into `a`'s handle — which the transfer leaves
+        // with a fresh activation and no buffer, not the one `b` now holds.
+        Some((source, false)) => {
+            let handle = ctx.fresh_device_handle();
+            ctx.body.local_decls[local.0].device_handle = Some(handle);
+            emit_gpu_transfer(ctx, source, handle, *span);
+        }
+        None => {
             let handle = ctx.fresh_device_handle();
             ctx.body.local_decls[local.0].device_handle = Some(handle);
             emit_gpu_activation(ctx, handle, *span);

@@ -23,11 +23,14 @@ use crate::runtime_fns::rt;
 /// value, returning the block that continues after it. A local with no device
 /// handle needs nothing and gets nothing: `from` itself is returned.
 ///
-/// An array the body owns is first given a host array of its own. Every earlier
-/// host copy of the binding — `let h = g`, a tuple holding it, a closure's
-/// capture — shares that array by reference count, and a readback written in
-/// place would rewrite each of them to the later results. A parameter's array
-/// belongs to the caller and is read back in place.
+/// An array the body owns is first given a host array of its own when anything
+/// else shares it. Every earlier host copy of the binding — `let h = g`, a tuple
+/// holding it, a closure's capture — shares that array by reference count, and
+/// a readback written in place would rewrite each of them to the later results.
+/// The detach is copy-on-write: an array nothing else holds is read back in
+/// place, so a readback costs no allocation and no extra host copy unless a
+/// copy is actually needed. A parameter's array belongs to the caller and is
+/// read back in place.
 ///
 /// A scalar reads back through a one-element array, since the runtime entry
 /// copies a device buffer into a host array.
@@ -61,16 +64,22 @@ fn is_array(ty: &Type) -> bool {
             if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array))
 }
 
-/// Replace `local`'s host array with a copy of it no other value shares.
+/// Make `local`'s host array one no other value shares, copying it only when
+/// something does.
+///
+/// The copy-on-write entry takes the local's reference over and hands back one
+/// — the same array or a fresh copy, having released the original — so the
+/// result is stored back with `Assign`, which releases nothing, from a `Move`,
+/// which retains nothing.
 fn detach_host_array(body: &mut Body, from: BasicBlock, local: Local, span: Span) -> BasicBlock {
     let ty = body.local_decls[local.0].ty.clone();
-    let copy = body.new_local(LocalDecl::new(ty, span));
-    let args = vec![Operand::Copy(Place::new(local))];
-    let next = append_call(body, from, rt::ARRAY_CLONE, args, Place::new(copy), span);
+    let unshared = body.new_local(LocalDecl::new(ty, span));
+    let args = vec![Operand::Move(Place::new(local))];
+    let next = append_call(body, from, rt::ARRAY_COW, args, Place::new(unshared), span);
     body.basic_blocks[next.0].statements.push(Statement {
-        kind: StatementKind::Reassign(
+        kind: StatementKind::Assign(
             Place::new(local),
-            Rvalue::Use(Operand::Move(Place::new(copy))),
+            Rvalue::Use(Operand::Move(Place::new(unshared))),
         ),
         span,
     });

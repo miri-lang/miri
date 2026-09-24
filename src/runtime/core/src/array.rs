@@ -455,6 +455,35 @@ pub mod ffi {
         new_arr
     }
 
+    /// Copy-on-write: hands back an array the caller may write through.
+    ///
+    /// Takes over the caller's reference. An array only the caller holds is
+    /// returned as it is. A shared one is cloned and the caller's reference to
+    /// the original released, so exactly one reference goes in and one comes
+    /// out. An immortal array is cloned too and left untouched: it is shared
+    /// by every reader for the whole run, so nothing may write through it.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_cow(ptr: *mut MiriArray) -> *mut MiriArray {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() {
+            return ptr;
+        }
+        let rc_ptr = (ptr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr as isize;
+        if rc == 1 {
+            return ptr;
+        }
+        let copy = miri_rt_array_clone(ptr);
+        if copy.is_null() {
+            return ptr;
+        }
+        if rc > 1 {
+            *rc_ptr -= 1;
+        }
+        copy
+    }
+
     /// Sorts the array in ascending order.
     ///
     /// Elements are ordered by the comparator registered for the element type,

@@ -92,7 +92,7 @@ use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
-use crate::mir::residency::{self, DeviceEffect};
+use crate::mir::residency::{self, HandleCarriers, Mirror};
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::StatementKind;
 use crate::mir::terminator::Discriminant;
@@ -1334,17 +1334,22 @@ fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
 /// whole into a host value, a branch on its value, and the source of an upload
 /// into another binding.
 ///
-/// A read is fenced when, on every path that reaches it, a readback, an upload
-/// or a fresh activation of its handle — each leaves the host array and the
-/// device buffer agreeing — follows the handle's last launch, or the path took
-/// the clear branch of the flag the readback pass keeps for the handle; see
-/// [`fences_on_entry`]. A handle the body declares starts fenced: until a launch
-/// touches it there is no device buffer to lag behind. A parameter's handle
-/// starts unfenced, since the caller may have launched on it.
+/// A read is fenced when, on every path that reaches it, something that leaves
+/// the binding's own host array agreeing with its handle's device buffer — a
+/// readback into it, an upload, a fresh activation — follows the handle's last
+/// launch, or the path took the clear branch of the flag the readback pass keeps
+/// for the handle; see [`fences_on_entry`]. Fences are kept per binding, not
+/// per handle: two bindings carrying one handle hold host arrays of their own,
+/// so a readback into one fences nothing for the other, and an upload through
+/// one leaves the other lagging a device buffer that no longer holds its value.
+/// A handle the body declares starts fenced: until a launch touches it there is
+/// no device buffer to lag behind. A parameter's handle starts unfenced, since
+/// the caller may have launched on it.
 pub fn verify_cross_residency_readback(body: &Body) -> Vec<VerificationViolation> {
     let destinations = residency::readback_destinations(body);
+    let carriers = HandleCarriers::of(body);
     let mut violations = Vec::new();
-    for (bb, mut fences) in fences_on_entry(body) {
+    for (bb, mut fences) in fences_on_entry(body, &carriers) {
         let block = &body.basic_blocks[bb];
         for statement in &block.statements {
             if let Some(read) = HostRead::of_statement(statement) {
@@ -1457,34 +1462,45 @@ fn unfenced_read_violation(body: &Body, source: Local, read: &HostRead) -> Verif
 /// What the verifier knows about the device handles at one program point.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Fences {
-    /// Handles whose host array may lag their device buffer.
-    unfenced: BTreeSet<u64>,
+    /// Mirrors — a binding's host array and its handle's device buffer — whose
+    /// host array may lag the device buffer.
+    unfenced: HashSet<Mirror>,
     /// Handles for which a clear flag may not prove a fence: the flag may be
-    /// clear while the host array lags. A flag set to true, or cleared while
-    /// the handle is fenced, guards it; a launch leaves it unguarded until the
-    /// flag is set again.
+    /// clear while a host array mirroring the handle lags. A flag set to true,
+    /// or cleared while every mirror of the handle is fenced, guards it; a
+    /// launch leaves it unguarded until the flag is set again.
     unguarded: BTreeSet<u64>,
 }
 
 impl Fences {
-    fn on_body_entry(body: &Body) -> Fences {
-        let parameters: BTreeSet<u64> = (1..=body.arg_count)
-            .filter(|&index| index < body.local_decls.len())
-            .filter_map(|index| residency::gpu_handle(body, Local(index)))
-            .map(|handle| handle.0)
-            .collect();
+    fn on_body_entry(body: &Body, carriers: &HandleCarriers) -> Fences {
+        let unfenced: HashSet<Mirror> = carriers.lagging_at_body_entry(body).into_iter().collect();
+        let unguarded = unfenced.iter().map(|&(handle, _)| handle).collect();
         Fences {
-            unfenced: parameters.clone(),
-            unguarded: parameters,
+            unfenced,
+            unguarded,
         }
     }
 
     fn is_unfenced(&self, body: &Body, local: Local) -> bool {
-        residency::gpu_handle(body, local).is_some_and(|handle| self.unfenced.contains(&handle.0))
+        residency::gpu_handle(body, local)
+            .is_some_and(|handle| self.unfenced.contains(&(handle.0, local)))
     }
 
-    /// A store into a handle's flag decides whether the flag guards it.
+    /// Whether some host array mirroring `handle` may lag it.
+    fn has_unfenced_mirror(&self, handle: u64) -> bool {
+        self.unfenced
+            .iter()
+            .any(|&(unfenced, _)| unfenced == handle)
+    }
+
+    /// A store into a handle's flag decides whether the flag guards it, and a
+    /// whole copy between two bindings carrying one handle hands the target the
+    /// source's fence.
     fn apply_statement(&mut self, body: &Body, statement: &Statement) {
+        if let Some((target, source)) = residency::statement_adoption(body, statement) {
+            self.adopt(body, target, source);
+        }
         let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
             &statement.kind
         else {
@@ -1495,36 +1511,46 @@ impl Fences {
         };
         let sets_the_flag = matches!(rvalue, Rvalue::Use(Operand::Constant(c))
             if c.literal == Literal::Boolean(true));
-        if sets_the_flag || !self.unfenced.contains(&handle.0) {
+        if sets_the_flag || !self.has_unfenced_mirror(handle.0) {
             self.unguarded.remove(&handle.0);
         } else {
             self.unguarded.insert(handle.0);
         }
     }
 
-    fn apply_terminator(&mut self, kind: &TerminatorKind) {
-        match residency::device_effect(kind) {
-            DeviceEffect::Synchronizes(handle) => {
-                self.unfenced.remove(&handle);
-                self.unguarded.remove(&handle);
+    /// `target` now holds `source`'s host array, fenced exactly as far.
+    fn adopt(&mut self, body: &Body, target: Local, source: Local) {
+        let Some(handle) = residency::gpu_handle(body, target) else {
+            return;
+        };
+        if self.unfenced.contains(&(handle.0, source)) {
+            self.unfenced.insert((handle.0, target));
+        } else {
+            self.unfenced.remove(&(handle.0, target));
+        }
+    }
+
+    fn apply_terminator(&mut self, carriers: &HandleCarriers, kind: &TerminatorKind) {
+        let changes = carriers.changes(&residency::device_effect(kind));
+        for mirror in changes.current {
+            self.unfenced.remove(&mirror);
+            if !self.has_unfenced_mirror(mirror.0) {
+                self.unguarded.remove(&mirror.0);
             }
-            DeviceEffect::Launches(handles) => {
-                for handle in handles.iter().flatten() {
-                    self.unfenced.insert(handle.0);
-                    self.unguarded.insert(handle.0);
-                }
-            }
-            DeviceEffect::Nothing => {}
+        }
+        for mirror in changes.lagging {
+            self.unfenced.insert(mirror);
+            self.unguarded.insert(mirror.0);
         }
     }
 
     /// The fences along the edge to `target`: the clear branch of a guarding
-    /// flag fences its handle.
+    /// flag fences every mirror of its handle.
     fn along_edge(&self, body: &Body, kind: &TerminatorKind, target: usize) -> Fences {
         let mut fences = self.clone();
         if let Some(handle) = cleared_flag_on_edge(body, kind, target) {
             if !fences.unguarded.contains(&handle) {
-                fences.unfenced.remove(&handle);
+                fences.unfenced.retain(|&(unfenced, _)| unfenced != handle);
             }
         }
         fences
@@ -1566,17 +1592,18 @@ fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Op
 
 /// The fences on entry to every reachable block.
 ///
-/// A may-analysis on what is unfenced: a join keeps every handle any incoming
-/// edge leaves unfenced or unguarded, and the sets only ever grow, so the
-/// worklist reaches a fixpoint. Statements change a block's state only through
-/// its flags, and its terminator through the handles it synchronizes or
-/// launches on.
-fn fences_on_entry(body: &Body) -> BTreeMap<usize, Fences> {
+/// A may-analysis on what is unfenced: a join keeps every mirror any incoming
+/// edge leaves unfenced and every handle it leaves unguarded, and the sets only
+/// ever grow, so the worklist reaches a fixpoint. Statements change a block's
+/// state only through its flags and through whole copies between bindings
+/// carrying one handle, and its terminator through the mirrors it brings current
+/// or leaves lagging.
+fn fences_on_entry(body: &Body, carriers: &HandleCarriers) -> BTreeMap<usize, Fences> {
     let mut entries = BTreeMap::new();
     if body.basic_blocks.is_empty() {
         return entries;
     }
-    entries.insert(0, Fences::on_body_entry(body));
+    entries.insert(0, Fences::on_body_entry(body, carriers));
     let mut worklist = VecDeque::from([0]);
     while let Some(bb) = worklist.pop_front() {
         let block = &body.basic_blocks[bb];
@@ -1587,7 +1614,7 @@ fn fences_on_entry(body: &Body) -> BTreeMap<usize, Fences> {
         let Some(terminator) = &block.terminator else {
             continue;
         };
-        exit.apply_terminator(&terminator.kind);
+        exit.apply_terminator(carriers, &terminator.kind);
         for successor in successors_of(body, bb) {
             let along = exit.along_edge(body, &terminator.kind, successor);
             let changed = match entries.get_mut(&successor) {
