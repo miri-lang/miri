@@ -492,3 +492,40 @@ fn main()
         "4 0 tag1",
     );
 }
+
+/// A closure's environment holds each capture in one pointer word, so a
+/// captured vector is held as the pointer to its own allocation and the
+/// closure's destructor must release it.
+#[test]
+fn test_lambda_captures_vector_no_leak() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let v = Vec3(1.0, 2.0, 3.0)
+    let f = fn() float: v.x + v.z
+    println(f"{f()} {v.y}")
+"#,
+        "4.0 2.0",
+    );
+}
+
+/// A closure capturing a vector beside a string releases both when dropped.
+#[test]
+fn test_lambda_captures_vector_and_string_no_leak() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let v = Vec3(1.0, 2.0, 3.0)
+    let s = f"hello{1}"
+    let f = fn() float:
+        println(s)
+        return v.y
+    println(f"{f()}")
+"#,
+        "hello1\n2.0",
+    );
+}

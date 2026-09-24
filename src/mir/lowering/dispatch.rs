@@ -128,28 +128,18 @@ fn try_lower_module_alias_call(
     let ExpressionKind::Identifier(func_name, _) = &method_expr.node else {
         return Ok(None);
     };
-    let Some(module_path) = ctx
+    if !ctx
         .type_checker
         .modules
         .module_aliases
-        .get(alias_name.as_str())
-        .cloned()
-    else {
+        .contains_key(alias_name.as_str())
+    {
         return Ok(None);
-    };
+    }
 
-    if module_path == "system.math" {
-        if let Some(intrinsic) = MathIntrinsic::from_name(func_name.as_str()) {
-            return lower_math_intrinsic_call(
-                ctx,
-                span,
-                call_expr_id,
-                intrinsic,
-                args,
-                dest.cloned(),
-            )
+    if let Some(intrinsic) = math_intrinsic_callee(ctx, func_name) {
+        return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest.cloned())
             .map(Some);
-        }
     }
     lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest.cloned())
 }
@@ -276,7 +266,18 @@ fn lower_static_method_impl(
     Ok(Some(result_op))
 }
 
-/// Lower a `system.math` intrinsic call to a `MathIntrinsic` rvalue.
+/// The math intrinsic a call to `name` lowers to: the callee must be declared
+/// `intrinsic` and carry the name of a [`MathIntrinsic`]. The declaration, not
+/// the module that holds it, decides — a plain function that happens to share
+/// an intrinsic's name stays an ordinary call.
+pub(crate) fn math_intrinsic_callee(ctx: &LoweringContext, name: &str) -> Option<MathIntrinsic> {
+    if !ctx.type_checker.is_intrinsic(name) {
+        return None;
+    }
+    MathIntrinsic::from_name(name)
+}
+
+/// Lower a call to a math intrinsic to a `MathIntrinsic` rvalue.
 fn lower_math_intrinsic_call(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -1227,7 +1228,8 @@ fn lower_gpu_slice(
 
     // Fence outstanding device writes and copy the device buffer back to the
     // host array first, so the sub-range read observes the kernel's results.
-    // This is the same readback `let h = g` emits; slice is a partial variant.
+    // The readback pass sees the binding here only as a runtime call's
+    // argument, which it leaves alone, so the slice reads it back itself.
     super::variable::emit_cross_residency_readback(ctx, Some(obj), *span);
 
     let obj_op = move_to_copy(lower_expression(ctx, obj, None)?);
@@ -1685,13 +1687,7 @@ pub(super) fn callee_takes_allocator(ctx: &LoweringContext, name: &str) -> bool 
     if name.starts_with("miri_") {
         return false;
     }
-    let is_math_fn = MathIntrinsic::from_name(name).is_some()
-        && ctx
-            .type_checker
-            .get_variable_module(name)
-            .map(|m| m == "system.math")
-            .unwrap_or(false);
-    !is_math_fn
+    math_intrinsic_callee(ctx, name).is_none()
 }
 
 fn inject_allocator_arg(

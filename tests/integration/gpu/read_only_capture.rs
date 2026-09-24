@@ -140,3 +140,75 @@ fn main()
         wgsl
     );
 }
+
+/// A buffer written only inside a `match` arm is still a written capture: it
+/// binds `read_write`, and the kernel validates.
+#[test]
+fn capture_written_inside_a_match_arm_binds_read_write() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0]
+    forall i in 0..4
+        match i % 2
+            0: dst[i] = 7
+            _: dst[i] = 9
+";
+    let wgsl = compile_to_wgsl(source);
+    assert!(
+        wgsl.contains("var<storage, read_write> dst"),
+        "a buffer written in a match arm must bind read_write:\n{wgsl}"
+    );
+    super::helpers::assert_gpu_wgsl_valid(source);
+}
+
+/// A write nested in a `match` inside an `if` is found through both.
+#[test]
+fn capture_written_in_a_match_nested_in_an_if_binds_read_write() {
+    let wgsl = compile_to_wgsl(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0]
+    forall i in 0..4
+        if i > 0
+            match i
+                1: dst[i] = 1
+                _: dst[i] = 2
+",
+    );
+    assert!(
+        wgsl.contains("var<storage, read_write> dst"),
+        "a buffer written in a nested match arm must bind read_write:\n{wgsl}"
+    );
+}
+
+/// End-to-end: each arm's store lands in the buffer.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn stores_inside_match_arms_reach_the_buffer() {
+    super::device::assert_gpu_runs_with_output(
+        "
+use system.io
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
+
+forall i in 0..4
+    match i % 2
+        0: dst[i] = 7
+        _: dst[i] = 9
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+",
+        "7 9 7 9",
+    );
+}

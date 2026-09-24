@@ -198,52 +198,46 @@ fn lower_zero_arg_method_as_property(
     Ok(op)
 }
 
-fn try_module_alias_constant(
+/// Lower `M.NAME`, a module binding read through the module's alias, exactly
+/// as the bare `NAME` a plain import reads. Any other member — a function, a
+/// type — is left to the general member path.
+fn try_module_alias_binding(
     ctx: &mut LoweringContext,
     obj: &Expression,
     prop: &Expression,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-        if ctx
-            .type_checker
-            .modules
-            .module_aliases
-            .contains_key(alias_name.as_str())
-        {
-            if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
-                let constant_val = match prop_name.as_str() {
-                    "PI" => Some(std::f64::consts::PI),
-                    "E" => Some(std::f64::consts::E),
-                    "INF" => Some(f64::INFINITY),
-                    _ => None,
-                };
-
-                if let Some(val) = constant_val {
-                    let ty = resolve_type(ctx.type_checker, expr);
-                    let operand = Operand::Constant(Box::new(Constant {
-                        span: expr.span,
-                        ty: ty.clone(),
-                        literal: crate::ast::literal::Literal::Float(
-                            crate::ast::literal::FloatLiteral::F64(val.to_bits()),
-                        ),
-                    }));
-
-                    if let Some(d) = dest {
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
-                            span: expr.span,
-                        });
-                        return Ok(Some(Operand::Copy(d)));
-                    } else {
-                        return Ok(Some(operand));
-                    }
-                }
-            }
-        }
+    let (ExpressionKind::Identifier(alias_name, _), ExpressionKind::Identifier(prop_name, _)) =
+        (&obj.node, &prop.node)
+    else {
+        return Ok(None);
+    };
+    if !ctx
+        .type_checker
+        .modules
+        .module_aliases
+        .contains_key(alias_name.as_str())
+    {
+        return Ok(None);
     }
-    Ok(None)
+    let is_binding = ctx
+        .type_checker
+        .global_scope()
+        .get(prop_name.as_str())
+        .is_some_and(|info| info.module_scope && !matches!(info.ty.kind, TypeKind::Function(_)));
+    if !is_binding {
+        return Ok(None);
+    }
+    let operand = super::identifier_expr::build_global_identifier_operand(ctx, prop_name, expr)?;
+    let Some(d) = dest else {
+        return Ok(Some(operand));
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
+        span: expr.span,
+    });
+    Ok(Some(Operand::Copy(d)))
 }
 
 /// Handle GPU intrinsics accessed via kernel context (e.g., kernel.thread_idx.x).
@@ -437,7 +431,7 @@ pub(crate) fn lower_member_expr(
         unreachable!()
     };
 
-    if let Some(result) = try_module_alias_constant(ctx, obj, prop, expr, dest.clone())? {
+    if let Some(result) = try_module_alias_binding(ctx, obj, prop, expr, dest.clone())? {
         return Ok(result);
     }
 

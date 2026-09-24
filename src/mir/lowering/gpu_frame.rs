@@ -22,15 +22,15 @@ use crate::ast::types::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::backend::BackendConfig;
 use crate::mir::body::LaunchUniform;
 use crate::mir::{
-    BackendMetadata, BinOp, Body, Dimension, Discriminant, ExecutionModel, GpuBodyMetadata,
-    GpuLaunchArgs, LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
+    BackendMetadata, BinOp, Body, Dimension, ExecutionModel, GpuBodyMetadata, GpuLaunchArgs,
+    LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
 };
 
 use super::context::LoweringContext;
 use super::forall_gpu;
-use super::statement::lower_statement;
 
 /// Lowers a single-pass `gpu frame` loop into a synthesized kernel + `GpuLaunch`.
 ///
@@ -44,8 +44,6 @@ pub fn lower_gpu_frame(
     iterable: &Expression,
     body: &Statement,
 ) -> Result<(), LoweringError> {
-    let loop_var_name = decls[0].name.clone();
-
     let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
         return Err(LoweringError::unsupported_expression(
             "gpu frame: iterable must be a bounded numeric range like '0..n'".to_string(),
@@ -63,7 +61,7 @@ pub fn lower_gpu_frame(
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
     );
 
-    let captures = forall_gpu::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+    let captures = forall_gpu::collect_capture_infos(ctx, body, decls, *span)?;
     let uses_frame = detect_frame_usage(body);
 
     // Single-pass uses emit_frame_pass with pass_idx=0.
@@ -109,7 +107,7 @@ pub fn lower_gpu_frame_block(
 
     // Flatten the block into an ordered list of `gpu forall` passes, expanding
     // any literal-count `for _ in 0..k` repeat into `k` sequential copies.
-    let passes = flatten_frame_passes(stmts)
+    let passes = crate::ast::gpu_frame_passes::flatten_frame_passes(stmts)
         .map_err(|(msg, sp)| LoweringError::unsupported_expression(msg, sp))?;
 
     if passes.is_empty() {
@@ -128,8 +126,6 @@ pub fn lower_gpu_frame_block(
             ..
         } = &pass_stmt.node
         {
-            let loop_var_name = decls[0].name.clone();
-
             let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
                 return Err(LoweringError::unsupported_expression(
                     "gpu frame: iterable must be a bounded numeric range like '0..n'".to_string(),
@@ -148,7 +144,7 @@ pub fn lower_gpu_frame_block(
                 ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
             );
 
-            let captures = forall_gpu::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+            let captures = forall_gpu::collect_capture_infos(ctx, body, decls, *span)?;
             let uses_frame = detect_frame_usage(body);
 
             // Use emit_frame_pass for each pass in the block.
@@ -204,31 +200,21 @@ fn emit_frame_pass(
     );
 
     if is_literal_end {
-        let end_lit = forall_gpu::read_int_literal(end, *span)?;
-        let length =
-            forall_gpu::compute_range_length(start_lit, end_lit, range_type.clone(), *span)?;
-        let kernel_body = build_frame_kernel_literal(
-            ctx,
-            captures,
-            loop_var_name,
-            start_lit,
-            length,
-            body,
-            *span,
-            uses_frame,
-        )?;
+        let range = literal_frame_range(loop_var_name, start_lit, end, range_type.clone(), *span)?;
+        let kernel_body =
+            build_frame_kernel_literal(ctx, captures, &range, body, *span, uses_frame)?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
             name: kernel_name.clone(),
             body: kernel_body,
             captures: Vec::new(),
         });
-        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, captures, *span, uses_frame)?;
+        emit_gpu_frame_launch_literal(ctx, &kernel_name, range.grid, captures, *span, uses_frame)?;
     } else {
+        let bound = forall_gpu::AxisBound::Runtime(end.clone(), range_type.clone());
         let kernel_body = build_frame_kernel_runtime(
             ctx,
             captures,
-            loop_var_name,
-            start_lit,
+            &frame_axis(loop_var_name, start_lit, bound),
             body,
             *span,
             uses_frame,
@@ -253,18 +239,17 @@ fn emit_frame_pass(
     Ok(())
 }
 
-/// Helper to construct and register grid/block Dim3 locals with a literal grid-x value.
+/// Builds the grid and block `Dim3` locals of a 1-D frame launch: `grid` per
+/// axis, and `block_size` threads along x.
 fn make_grid_block_locals(
     ctx: &mut LoweringContext,
-    grid_x: u32,
+    grid: [Operand; 3],
     block_size: u32,
     span: Span,
 ) -> (crate::mir::Local, crate::mir::Local) {
     let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
-    let one_op = forall_gpu::int_constant(1, span);
-    let grid_x_op = forall_gpu::int_constant(i64::from(grid_x), span);
-    let block_size_i64 = i64::from(block_size);
-    let block_x_op = forall_gpu::int_constant(block_size_i64, span);
+    let one = || forall_gpu::int_constant(1, span);
+    let block_x = forall_gpu::int_constant(i64::from(block_size), span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
     forall_gpu::push_assign(
@@ -272,7 +257,7 @@ fn make_grid_block_locals(
         grid_local,
         Rvalue::Aggregate(
             crate::mir::AggregateKind::Struct(dim3_ty.clone()),
-            vec![grid_x_op, one_op.clone(), one_op.clone()],
+            grid.into(),
         ),
         span,
     );
@@ -281,79 +266,50 @@ fn make_grid_block_locals(
         ctx,
         block_local,
         Rvalue::Aggregate(
-            crate::mir::AggregateKind::Struct(dim3_ty.clone()),
-            vec![block_x_op, one_op.clone(), one_op],
+            crate::mir::AggregateKind::Struct(dim3_ty),
+            vec![block_x, one(), one()],
         ),
         span,
     );
     (grid_local, block_local)
 }
 
-/// Helper to emit bounds-check loop for literal-bound gpu frame kernel.
-fn emit_literal_frame_bounds_check(
-    ctx: &mut LoweringContext,
-    loop_var_name: &str,
+/// The loop axis of a literal-bound frame pass and the grid it dispatches.
+#[derive(Debug, Clone)]
+struct FrameRange {
+    axis: forall_gpu::AxisSpec,
+    grid: [u32; 3],
+}
+
+/// The axis and dispatch grid of a frame pass binding `name` over
+/// `start..end` with a literal `end`.
+fn literal_frame_range(
+    name: &str,
     start: i64,
-    length: i64,
-    body: &Statement,
+    end: &Expression,
+    range_type: crate::ast::RangeExpressionType,
     span: Span,
-) -> Result<(), LoweringError> {
-    let i64_ty = Type::new(TypeKind::Int, span);
-    let thread_int = forall_gpu::compute_thread_index(ctx, Dimension::X, span);
+) -> Result<FrameRange, LoweringError> {
+    let end = forall_gpu::read_int_literal(end, span)?;
+    let length = forall_gpu::compute_range_length(start, end, range_type.clone(), span)?;
+    let block_size = BackendConfig::WEB_GPU.block_size(1)[0];
+    let grid = forall_gpu::literal_grid_1d(length, block_size, span)?;
+    let bound = forall_gpu::AxisBound::Literal(end, range_type);
+    Ok(FrameRange {
+        axis: frame_axis(name, start, bound),
+        grid,
+    })
+}
 
-    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty, span);
-    forall_gpu::push_assign(
-        ctx,
-        loop_local,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(thread_int))),
-            Box::new(forall_gpu::int_constant(start, span)),
-        ),
-        span,
-    );
-
-    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
-    let limit = start
-        .checked_add(length)
-        .ok_or_else(|| forall_gpu::bounds_overflow_err(span))?;
-    forall_gpu::push_assign(
-        ctx,
-        cond_local,
-        Rvalue::BinaryOp(
-            BinOp::Lt,
-            Box::new(Operand::Copy(Place::new(loop_local))),
-            Box::new(forall_gpu::int_constant(limit, span)),
-        ),
-        span,
-    );
-
-    let body_bb = ctx.new_basic_block();
-    let exit_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: Operand::Copy(Place::new(cond_local)),
-            targets: vec![(Discriminant::bool_true(), body_bb)],
-            otherwise: exit_bb,
-        },
-        span,
-    ));
-
-    ctx.set_current_block(body_bb);
-    lower_statement(ctx, body)?;
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: exit_bb },
-            span,
-        ));
+/// The single x axis a frame pass binding `name` iterates, counting from the
+/// literal `start` to `bound`.
+fn frame_axis(name: &str, start: i64, bound: forall_gpu::AxisBound) -> forall_gpu::AxisSpec {
+    forall_gpu::AxisSpec {
+        name: name.to_string(),
+        start: forall_gpu::AxisStart::Literal(start),
+        dimension: Dimension::X,
+        bound,
     }
-
-    ctx.set_current_block(exit_bb);
-    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
-    Ok(())
 }
 
 /// Helper to compute bounds limit operand for a runtime range.
@@ -387,57 +343,18 @@ fn compute_bounds_limit(
     }
 }
 
-/// Helper to construct grid/block Dim3 locals where grid-x comes from a computed local.
-fn make_grid_block_locals_from_local(
-    ctx: &mut LoweringContext,
-    grid_x_local: crate::mir::Local,
-    block_size: u32,
-    span: Span,
-) -> (crate::mir::Local, crate::mir::Local) {
-    let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
-    let one_op = forall_gpu::int_constant(1, span);
-    let block_size_i64 = i64::from(block_size);
-    let block_x_op = forall_gpu::int_constant(block_size_i64, span);
-
-    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
-    forall_gpu::push_assign(
-        ctx,
-        grid_local,
-        Rvalue::Aggregate(
-            crate::mir::AggregateKind::Struct(dim3_ty.clone()),
-            vec![
-                Operand::Copy(Place::new(grid_x_local)),
-                one_op.clone(),
-                one_op.clone(),
-            ],
-        ),
-        span,
-    );
-    let block_local = ctx.push_temp(dim3_ty.clone(), span);
-    forall_gpu::push_assign(
-        ctx,
-        block_local,
-        Rvalue::Aggregate(
-            crate::mir::AggregateKind::Struct(dim3_ty),
-            vec![block_x_op, one_op.clone(), one_op],
-        ),
-        span,
-    );
-    (grid_local, block_local)
-}
-
 fn emit_gpu_frame_launch_literal(
     ctx: &mut LoweringContext,
     kernel_name: &str,
-    length: i64,
+    grid: [u32; 3],
     captures: &[forall_gpu::CaptureInfo],
     span: Span,
     uses_frame: bool,
 ) -> Result<(), LoweringError> {
     let void_ty = Type::new(TypeKind::Void, span);
-    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
-    let grid_x = forall_gpu::literal_grid_x(length, block_size);
-    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_x, block_size, span);
+    let block_size = BackendConfig::WEB_GPU.block_size(1)[0];
+    let grid_ops = grid.map(|axis| forall_gpu::int_constant(i64::from(axis), span));
+    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_ops, block_size, span);
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -519,15 +436,9 @@ fn emit_gpu_frame_launch_runtime(
     let end_op = super::expression::lower_expression(ctx, end, None)?;
 
     let void_ty = Type::new(TypeKind::Void, span);
-
-    let start_op = forall_gpu::int_constant(start, span);
-    let clamped_length_local =
-        forall_gpu::compute_clamped_length(ctx, end_op.clone(), start_op, span);
-    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1)[0];
-    let grid_x_local = forall_gpu::compute_grid_size(ctx, clamped_length_local, block_size, span);
-    let grid_x = crate::mir::Local(grid_x_local.0);
-    let (grid_local, block_local) =
-        make_grid_block_locals_from_local(ctx, grid_x, block_size, span);
+    let block_size = BackendConfig::WEB_GPU.block_size(1)[0];
+    let grid_ops = runtime_frame_grid(ctx, start, &end_op, block_size, span);
+    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_ops, block_size, span);
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -595,6 +506,26 @@ fn emit_gpu_frame_launch_runtime(
     ctx.emit_temp_drop(grid_local, 0, span);
     ctx.emit_temp_drop(block_local, 0, span);
     Ok(())
+}
+
+/// The grid of a frame pass over `start..end` with a runtime `end`, computed on
+/// the host and spilled past one grid axis when it must be.
+fn runtime_frame_grid(
+    ctx: &mut LoweringContext,
+    start: i64,
+    end_op: &Operand,
+    block_size: u32,
+    span: Span,
+) -> [Operand; 3] {
+    let start_op = forall_gpu::int_constant(start, span);
+    let length = forall_gpu::compute_clamped_length(ctx, end_op.clone(), start_op, span);
+    let workgroups = forall_gpu::compute_grid_size(ctx, length, block_size, span);
+    let (columns, rows) = forall_gpu::spill_runtime_grid(ctx, workgroups, span);
+    [
+        Operand::Copy(Place::new(columns)),
+        Operand::Copy(Place::new(rows)),
+        forall_gpu::int_constant(1, span),
+    ]
 }
 
 fn create_frame_input_zeros(ctx: &mut LoweringContext, span: Span) -> Vec<Operand> {
@@ -718,9 +649,13 @@ fn detect_frame_usage_expr(expr: &Expression) -> bool {
         | ExpressionKind::Array(_, _)
         | ExpressionKind::Map(_)
         | ExpressionKind::Set(_)
-        | ExpressionKind::Tuple(_)
-        | ExpressionKind::Match(_, _)
-        | ExpressionKind::Block(_, _) => false,
+        | ExpressionKind::Tuple(_) => false,
+        ExpressionKind::Match(scrutinee, branches) => {
+            detect_frame_usage_expr(scrutinee) || branches.iter().any(detect_frame_usage_branch)
+        }
+        ExpressionKind::Block(stmts, value) => {
+            stmts.iter().any(detect_frame_usage) || detect_frame_usage_expr(value)
+        }
         ExpressionKind::Index(base, idx) => {
             detect_frame_usage_expr(base) || detect_frame_usage_expr(idx)
         }
@@ -768,13 +703,19 @@ fn detect_frame_usage_expr(expr: &Expression) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Whether a `match` branch reads `frame` in its guard or its body.
+fn detect_frame_usage_branch(branch: &crate::ast::pattern::MatchBranch) -> bool {
+    let guard_reads_frame = branch
+        .guard
+        .as_ref()
+        .is_some_and(|guard| detect_frame_usage_expr(guard));
+    guard_reads_frame || detect_frame_usage(&branch.body)
+}
+
 fn build_frame_kernel_literal(
     parent: &mut LoweringContext,
     captures: &[forall_gpu::CaptureInfo],
-    loop_var_name: &str,
-    start: i64,
-    length: i64,
+    range: &FrameRange,
     body: &Statement,
     span: Span,
     uses_frame: bool,
@@ -789,11 +730,10 @@ fn build_frame_kernel_literal(
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
 
-    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1);
-    let grid_x = forall_gpu::literal_grid_x(length, block_size[0]);
+    let block_size = BackendConfig::WEB_GPU.block_size(1);
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some(block_size),
-        grid_size: Some([grid_x, 1, 1]),
+        grid_size: Some(range.grid),
         logical_extent: None,
         required_capabilities: Vec::new(),
         is_frame_step: true,
@@ -834,7 +774,15 @@ fn build_frame_kernel_literal(
         ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
-    emit_literal_frame_bounds_check(&mut ctx, loop_var_name, start, length, body, span)?;
+    forall_gpu::emit_1d_kernel_loop(
+        &mut ctx,
+        &range.axis,
+        Some(range.grid),
+        block_size,
+        None,
+        body,
+        span,
+    )?;
     Ok(ctx.body)
 }
 
@@ -879,8 +827,7 @@ fn register_frame_runtime_params(
 fn build_frame_kernel_runtime(
     parent: &mut LoweringContext,
     captures: &[forall_gpu::CaptureInfo],
-    loop_var_name: &str,
-    start: i64,
+    axis: &forall_gpu::AxisSpec,
     body: &Statement,
     span: Span,
     uses_frame: bool,
@@ -894,7 +841,7 @@ fn build_frame_kernel_runtime(
     kernel
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
-    let block_size = crate::mir::backend::BackendConfig::WEB_GPU.block_size(1);
+    let block_size = BackendConfig::WEB_GPU.block_size(1);
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some(block_size),
         grid_size: None,
@@ -922,115 +869,17 @@ fn build_frame_kernel_runtime(
         span,
     );
 
-    let i64_ty = Type::new(TypeKind::Int, span);
-    let thread_int = forall_gpu::compute_thread_index(&mut ctx, Dimension::X, span);
-
-    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty, span);
-    forall_gpu::push_assign(
+    forall_gpu::emit_1d_kernel_loop(
         &mut ctx,
-        loop_local,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(thread_int))),
-            Box::new(forall_gpu::int_constant(start, span)),
-        ),
+        axis,
+        None,
+        block_size,
+        Some(uniform_param),
+        body,
         span,
-    );
-
-    forall_gpu::emit_bounds_check_loop(&mut ctx, loop_local, uniform_param, body, span)?;
+    )?;
 
     Ok(ctx.body)
-}
-
-/// Flattens a `gpu frame` block body into an ordered list of `gpu forall`
-/// passes. A literal-count `for _ in a..b` repeat wrapping a group of passes
-/// is expanded into `b - a` sequential copies (each inner pass appears once
-/// per iteration), so an 18-iteration Jacobi pressure solve is written as a
-/// loop yet lowers to 18 ordered passes. Ping-pong between passes is expressed
-/// in the source (passes alternate their read/write buffers); no buffer
-/// rewriting happens here.
-///
-/// Returns `(message, span)` on the first malformed child rather than a
-/// `LoweringError`, so the type checker can reuse it for the same diagnostics.
-pub(crate) fn flatten_frame_passes(stmts: &[Statement]) -> Result<Vec<&Statement>, (String, Span)> {
-    let mut passes: Vec<&Statement> = Vec::new();
-    for stmt in stmts {
-        match &stmt.node {
-            // Both `gpu forall` and a bare `forall` are accepted here; residency
-            // routing (a bare pass over host data belongs on the CPU, not in a
-            // frame) is enforced by the type checker before lowering runs.
-            StatementKind::Forall { .. } => passes.push(stmt),
-            StatementKind::For(_, iterable, body) => {
-                expand_frame_repeat(iterable, body, &mut passes)?;
-            }
-            _ => {
-                return Err((
-                    "'gpu frame' block may only contain 'gpu forall' passes or a literal-count 'for _ in 0..k' repeat around them".to_string(),
-                    stmt.span,
-                ));
-            }
-        }
-    }
-    Ok(passes)
-}
-
-/// Appends `count` copies of a repeat body's inner `gpu forall` passes to
-/// `passes`, where `count` is the iteration count of `iterable`. Rejects a
-/// non-block body or a body holding anything other than `gpu forall` passes.
-fn expand_frame_repeat<'a>(
-    iterable: &Expression,
-    body: &'a Statement,
-    passes: &mut Vec<&'a Statement>,
-) -> Result<(), (String, Span)> {
-    let count = frame_repeat_count(iterable)?;
-    let StatementKind::Block(inner) = &body.node else {
-        return Err((
-            "'gpu frame' repeat body must be a block of 'gpu forall' passes".to_string(),
-            body.span,
-        ));
-    };
-    for s in inner {
-        // A repeat body holds `gpu forall` or bare `forall` passes; the type
-        // checker rejects any bare pass that resolves to the CPU by residency.
-        if !matches!(&s.node, StatementKind::Forall { .. }) {
-            return Err((
-                "'gpu frame' repeat body may only contain 'gpu forall' passes".to_string(),
-                s.span,
-            ));
-        }
-    }
-    for _ in 0..count {
-        passes.extend(inner.iter());
-    }
-    Ok(())
-}
-
-/// Reads the iteration count of a `gpu frame` repeat's bounded literal range
-/// (`a..b` → `b - a`). Rejects unbounded, descending, or negative ranges.
-fn frame_repeat_count(iterable: &Expression) -> Result<usize, (String, Span)> {
-    let ExpressionKind::Range(start, Some(end), _) = &iterable.node else {
-        return Err((
-            "'gpu frame' repeat must iterate a bounded literal range like '0..18'".to_string(),
-            iterable.span,
-        ));
-    };
-    let lit = |e: &Expression| {
-        forall_gpu::read_int_literal(e, iterable.span).map_err(|_| {
-            (
-                "'gpu frame' repeat range bounds must be integer literals".to_string(),
-                iterable.span,
-            )
-        })
-    };
-    let s = lit(start)?;
-    let e = lit(end)?;
-    if s < 0 || e < s {
-        return Err((
-            "'gpu frame' repeat range must be non-negative and ascending".to_string(),
-            iterable.span,
-        ));
-    }
-    Ok((e - s) as usize)
 }
 
 #[cfg(test)]

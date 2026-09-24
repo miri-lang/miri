@@ -27,7 +27,7 @@ use crate::mir::{
 use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::forall_gpu::{compute_thread_index, int_constant, needs_wire_conversion, push_assign};
-use super::variable::READBACK_FN;
+use crate::mir::residency::READBACK_FN;
 
 /// Block size for GPU reduction kernels (1D workgroups, 256 threads).
 /// This value is coordinated with `GPU_REDUCE_BLOCK_SIZE`
@@ -145,7 +145,8 @@ pub(crate) fn try_lower_gpu_reduce(
 }
 
 /// Extract a binary operator from a fold function literal.
-/// Accepts only `fn(a T, b T) T: a OP b` where OP is + or * and both operands are the parameters.
+/// Accepts only `fn(a T, b T) T: a OP b` (or `b OP a`) where OP is + or *
+/// and the operands are the two distinct parameters.
 fn extract_reduce_fold_op(
     fold_expr: &crate::ast::expression::Expression,
     span: Span,
@@ -167,13 +168,15 @@ fn extract_reduce_fold_op(
         // Body is a Statement; check if it's an expression statement with a binary operation.
         if let crate::ast::statement::StatementKind::Expression(expr) = &lambda_data.body.node {
             if let ExpressionKind::Binary(lhs, op, rhs) = &expr.node {
-                // Verify both operands are identifiers naming the two parameters (either order).
-                let lhs_is_param =
-                    is_identifier_param(lhs, param1_name) || is_identifier_param(lhs, param2_name);
-                let rhs_is_param =
-                    is_identifier_param(rhs, param1_name) || is_identifier_param(rhs, param2_name);
+                // The operands must be the two parameters, one each, in either
+                // order: the tree reduction combines two partial results, so
+                // `a + a` or `b * b` is a different fold it cannot express.
+                let names_both_params = (is_identifier_param(lhs, param1_name)
+                    && is_identifier_param(rhs, param2_name))
+                    || (is_identifier_param(lhs, param2_name)
+                        && is_identifier_param(rhs, param1_name));
 
-                if !lhs_is_param || !rhs_is_param {
+                if !names_both_params {
                     return Err(LoweringError::unsupported_expression(
                         "reduce fold operands must be the two fold parameters".to_string(),
                         span,

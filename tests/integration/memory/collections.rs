@@ -482,3 +482,20 @@ fn main()
         "x4 x4 x4 x4 x4 2",
     );
 }
+
+/// A vector held in a tuple slot is a pointer to an allocation of its own,
+/// released with the tuple that holds it.
+#[test]
+fn test_tuple_vector_element_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let t = (Vec3(1.0, 2.0, 3.0), 7)
+    let v = t.0
+    println(f"{v.x} {v.y} {v.z} {t.1}")
+"#,
+        "1.0 2.0 3.0 7",
+    );
+}

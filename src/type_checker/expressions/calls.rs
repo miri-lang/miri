@@ -252,6 +252,31 @@ impl TypeChecker {
         }
     }
 
+    /// The math intrinsic a call to `func` lowers to, decided exactly as MIR
+    /// lowering decides it: the callee — a bare name, or a member of a module
+    /// alias (`M.abs`) — must be declared `intrinsic` and carry the name of a
+    /// [`MathIntrinsic`]. The declaration decides, not the module that holds
+    /// it, so a plain function that shares an intrinsic's name keeps its own
+    /// signature and a user module's `intrinsic fn` types like the standard
+    /// library's.
+    fn math_intrinsic_callee(&self, func: &Expression) -> Option<MathIntrinsic> {
+        if let ExpressionKind::Member(obj, _) = &func.node {
+            let through_alias = matches!(
+                &obj.node,
+                ExpressionKind::Identifier(alias, _)
+                    if self.modules.module_aliases.contains_key(alias.as_str())
+            );
+            if !through_alias {
+                return None;
+            }
+        }
+        let name = Self::call_func_name(func)?;
+        if !self.is_intrinsic(name) {
+            return None;
+        }
+        MathIntrinsic::from_name(name)
+    }
+
     /// Inside a GPU kernel, a math intrinsic declared to return `float` (f64)
     /// narrows to f32 when any argument is f32. WGSL on Metal has no enable
     /// directive for 64-bit scalars, so an un-narrowed f64 result forces
@@ -268,20 +293,7 @@ impl TypeChecker {
         if !matches!(result.kind, TypeKind::Float | TypeKind::F64) {
             return result;
         }
-        let Some(func_name) = Self::call_func_name(func) else {
-            return result;
-        };
-        if MathIntrinsic::from_name(func_name).is_none() {
-            return result;
-        }
-        // Sanctioned stdlib-independence deviation (see the module gate in
-        // `try_infer_polymorphic_math_call`): the `system.math` origin check
-        // prevents a user-defined `sqrt`/`log2` from being narrowed.
-        let is_from_math = self
-            .get_variable_module(func_name)
-            .map(|m| m == "system.math")
-            .unwrap_or(false);
-        if !is_from_math {
+        if self.math_intrinsic_callee(func).is_none() {
             return result;
         }
         if positional_args
@@ -393,33 +405,16 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) -> Option<Type> {
-        // Extract the function name from direct identifier or module member access
-        // (`M.abs` where `M` is `use system.math as M`).
-        let func_name = Self::call_func_name(func)?;
-
-        // Check if this is a polymorphic math intrinsic (only Abs, Min, Max).
-        // Bind the intrinsic once; validate arity in exhaustive match below.
-        let intrinsic = match MathIntrinsic::from_name(func_name) {
+        // Only Abs, Min and Max are typed at their argument; bind the intrinsic
+        // once and validate its arity in the exhaustive match below.
+        let intrinsic = match self.math_intrinsic_callee(func) {
             Some(m @ (MathIntrinsic::Abs | MathIntrinsic::Min | MathIntrinsic::Max)) => m,
             _ => return None,
         };
+        let func_name = Self::call_func_name(func)?;
 
-        // Verify it's from the math module.
-        // Deliberate stdlib-independence deviation: the module gate prevents a user-defined `abs`
-        // from being treated as the polymorphic intrinsic. This mirrors MIR intercepts at
-        // src/mir/lowering/dispatch.rs:323 and expression/call_expr.rs:183.
-        let is_from_math = self
-            .get_variable_module(func_name)
-            .map(|m| m == "system.math")
-            .unwrap_or(false);
-
-        if !is_from_math {
-            return None;
-        }
-
-        // Validate arity before type checking.
-        // Note: The guard above (line 191) ensures `intrinsic` is one of Abs, Min, Max,
-        // so the _ arm below should never be reached in well-formed code.
+        // Validate arity before type checking. The binding above admits only
+        // Abs, Min and Max, so the catch-all arm below is never taken.
         match intrinsic {
             MathIntrinsic::Abs => {
                 if positional_args.len() != 1 {

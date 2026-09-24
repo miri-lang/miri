@@ -697,10 +697,6 @@ fn lower_return_expression(
     expr: &Expression,
     ret_ty: &Type,
 ) -> Result<(), LoweringError> {
-    // An implicitly returned gpu binding crosses to the host return
-    // slot exactly as an explicit `return g` does, and is fenced the
-    // same way.
-    super::variable::emit_cross_residency_readback(ctx, Some(expr), expr.span);
     // Read through the instantiation substitution: a body lowered for
     // `Container<String>` returns `String` where the type checker
     // recorded `T`. Read raw, the two spellings never match, so the

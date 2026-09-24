@@ -274,3 +274,94 @@ fn main()
         ">0",
     );
 }
+
+const SCALAR_PARAM_KERNEL: &str = "
+use system.gpu
+use system.io
+use system.collections.array
+
+gpu fn k(dst out Array<int, 4>, s int)
+    let i = kernel.thread_idx.x
+    if i < 4
+        dst[i] = s
+
+fn main()
+    gpu var dst = Array<int,4>()
+    k(dst, 5).launch(Dim3(1, 1, 1), Dim3(4, 1, 1))
+    let h = dst
+    println(f'{h[0]} {h[3]}')
+";
+
+/// A scalar `gpu fn` parameter binds as a uniform the launch fills in.
+#[test]
+fn gpu_fn_scalar_parameter_emits_valid_wgsl() {
+    super::helpers::assert_gpu_wgsl_valid(SCALAR_PARAM_KERNEL);
+}
+
+/// End-to-end: the scalar argument's value reaches every thread.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_fn_scalar_parameter_carries_its_argument() {
+    super::device::assert_gpu_runs_with_output(SCALAR_PARAM_KERNEL, "5 5");
+}
+
+/// Scalar parameters around a buffer, one of them passed as a variable, each
+/// reach the kernel in their own lane.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_fn_scalar_parameters_around_a_buffer_keep_their_lanes() {
+    super::device::assert_gpu_runs_with_output(
+        "
+use system.gpu
+use system.io
+use system.collections.array
+
+gpu fn k(scale f32, dst out Array<f32, 4>, offset int)
+    let i = kernel.thread_idx.x
+    if i < 4
+        dst[i] = scale * (i + offset) as f32
+
+fn main()
+    gpu var dst = Array<f32, 4>()
+    let offset = 10
+    k(2.0, dst, offset).launch(Dim3(1, 1, 1), Dim3(4, 1, 1))
+    let h = dst
+    println(f'{h[0]} {h[3]}')
+",
+        "20.0 26.0",
+    );
+}
+
+/// A launch passes scalar arguments through one uniform block of 32-bit
+/// lanes, so a `gpu fn` parameter whose type keeps a wider (or narrower)
+/// device width — `f64`, `f16` — is refused at the signature, not dropped at
+/// the launch.
+#[test]
+fn gpu_fn_scalar_parameter_without_a_32_bit_lane_rejected() {
+    for ty in ["f64", "f16"] {
+        crate::integration::utils::assert_compiler_error(
+            &format!(
+                "
+use system.gpu
+use system.collections.array
+
+gpu fn k(dst out Array<f32, 4>, b {ty})
+    let i = kernel.thread_idx.x
+    if i < 4
+        dst[i] = 1.0
+
+fn main()
+    gpu var dst = Array<f32, 4>()
+    let h = dst
+"
+            ),
+            &format!("Parameter 'b' has type '{ty}', which cannot be passed to a kernel"),
+        );
+    }
+}

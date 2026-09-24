@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! MIR-level lowering for the `system.testing` assertion intrinsics.
+//! MIR-level lowering for the assertion intrinsics.
 //!
 //! The intrinsics `assert`, `assert_eq`, `assert_ne`, and `assert_panics` are
-//! declared without bodies in `src/stdlib/system/testing.mi`. At call sites we
+//! declared `intrinsic`, without bodies (the standard library declares them in
+//! `src/stdlib/system/testing.mi`). At call sites we
 //! synthesize the failure-path MIR directly here so the runtime diagnostic
 //! message can include the source file and line of the failing call without
 //! requiring every assertion to thread a location parameter explicitly.
@@ -28,21 +29,40 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 
-/// Name of every assertion intrinsic exported from `system.testing`. Used to
-/// short-circuit `lower_call_expr` before its generic-mangling step.
-pub(crate) fn is_testing_intrinsic(name: &str) -> bool {
-    matches!(name, "assert" | "assert_eq" | "assert_ne" | "assert_panics")
+/// An assertion the compiler lowers in place rather than calling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestingIntrinsic {
+    Assert,
+    AssertEq,
+    AssertNe,
+    AssertPanics,
 }
 
-/// Returns true if the named function was imported from `system.testing` in
-/// the current compilation. Mirrors the `system.math` guard used by the math
-/// intrinsics so that user code shadowing the assertion names with their own
-/// functions is unaffected.
-pub(crate) fn is_from_testing_module(ctx: &LoweringContext<'_>, name: &str) -> bool {
-    ctx.type_checker
-        .get_variable_module(name)
-        .map(|m| m == "system.testing")
-        .unwrap_or(false)
+impl TestingIntrinsic {
+    /// The assertion an intrinsic declaration named `name` stands for.
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "assert" => Some(TestingIntrinsic::Assert),
+            "assert_eq" => Some(TestingIntrinsic::AssertEq),
+            "assert_ne" => Some(TestingIntrinsic::AssertNe),
+            "assert_panics" => Some(TestingIntrinsic::AssertPanics),
+            _ => None,
+        }
+    }
+}
+
+/// The assertion a call to `name` lowers to: the callee must be declared
+/// `intrinsic` and carry an assertion's name. The declaration, not the module
+/// that holds it, decides — a plain function named `assert_eq` stays a call.
+/// Checked before `lower_call_expr` mangles a generic callee's name.
+pub(crate) fn testing_intrinsic_callee(
+    ctx: &LoweringContext<'_>,
+    name: &str,
+) -> Option<TestingIntrinsic> {
+    if !ctx.type_checker.is_intrinsic(name) {
+        return None;
+    }
+    TestingIntrinsic::from_name(name)
 }
 
 /// Lower a call to an assertion intrinsic. Returns the void-typed call result
@@ -50,18 +70,17 @@ pub(crate) fn is_from_testing_module(ctx: &LoweringContext<'_>, name: &str) -> b
 pub(crate) fn lower_testing_intrinsic(
     ctx: &mut LoweringContext,
     expr: &Expression,
-    name: &str,
+    intrinsic: TestingIntrinsic,
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let span = expr.span;
 
-    match name {
-        "assert" => lower_assert(ctx, span, args, dest),
-        "assert_eq" => lower_assert_eq(ctx, expr, span, args, dest, AssertCmp::Eq),
-        "assert_ne" => lower_assert_eq(ctx, expr, span, args, dest, AssertCmp::Ne),
-        "assert_panics" => lower_assert_panics(ctx, span, args, dest),
-        _ => unreachable!("non-testing intrinsic dispatched to testing lowering"),
+    match intrinsic {
+        TestingIntrinsic::Assert => lower_assert(ctx, span, args, dest),
+        TestingIntrinsic::AssertEq => lower_assert_eq(ctx, expr, span, args, dest, AssertCmp::Eq),
+        TestingIntrinsic::AssertNe => lower_assert_eq(ctx, expr, span, args, dest, AssertCmp::Ne),
+        TestingIntrinsic::AssertPanics => lower_assert_panics(ctx, span, args, dest),
     }
 }
 
@@ -71,10 +90,7 @@ enum AssertCmp {
     Ne,
 }
 
-// ----------------------------------------------------------------------------
-// `assert(condition bool, message String = "")`
-// ----------------------------------------------------------------------------
-
+/// Lowers `assert(condition bool, message String = "")`.
 fn lower_assert(
     ctx: &mut LoweringContext,
     span: Span,
@@ -127,11 +143,6 @@ fn lower_assert(
     drop_managed_operands(ctx, span, &[&expr_text_op, &msg_op, &path_op], watermark);
     Ok(materialize_void(ctx, span, dest))
 }
-
-// ----------------------------------------------------------------------------
-// `assert_eq<T>(actual T, expected T, message String = "")`
-// `assert_ne<T>(a T, b T, message String = "")`
-// ----------------------------------------------------------------------------
 
 /// Build operands and metadata for assert_eq/assert_ne failure path.
 struct AssertEqPreamble {
@@ -260,6 +271,8 @@ fn emit_assert_eq_fail_block(
     Ok(())
 }
 
+/// Lowers `assert_eq<T>(actual T, expected T, message String = "")` and
+/// `assert_ne<T>(a T, b T, message String = "")`, which differ only in `cmp`.
 fn lower_assert_eq(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -325,10 +338,7 @@ fn lower_assert_eq(
     Ok(materialize_void(ctx, span, dest))
 }
 
-// ----------------------------------------------------------------------------
-// `assert_panics(f fn(), expected String = "")`
-// ----------------------------------------------------------------------------
-
+/// Lowers `assert_panics(f fn(), expected String = "")`.
 fn lower_assert_panics(
     ctx: &mut LoweringContext,
     span: Span,
@@ -392,10 +402,6 @@ fn drop_managed_operands(
         }
     }
 }
-
-// ----------------------------------------------------------------------------
-// Shared helpers
-// ----------------------------------------------------------------------------
 
 /// Build an `Operand` carrying the source file path as a string.
 /// Returns empty string if no path is available.

@@ -109,22 +109,37 @@ fn ensure_context() -> Result<Arc<GpuContext>, GpuError> {
     init_gpu_context()
 }
 
-/// Narrows a signed i64 loop bound to an unsigned u32 for WGSL uniform storage.
-///
-/// # Contract
-/// - Negative bounds result in 0 (empty loop, no error).
-/// - Bounds exceeding u32::MAX reject with GridTooLarge (grid would be too large).
-/// - Other values are cast to u32.
-fn narrow_uniform_bound(value: i64) -> Result<u32, GpuError> {
-    if value < 0 {
-        Ok(0)
-    } else if value > u32::MAX as i64 {
-        Err(GpuError::GridTooLarge(
-            "loop bound exceeds u32::MAX".to_string(),
-        ))
+/// The device value of a launch's loop bound or range start. A launch whose
+/// grid is empty runs no thread, so it never reads its bounds: an empty range
+/// is a no-op whatever its endpoints, exactly as on the host, and only a launch
+/// that dispatches threads needs each value inside the device `int`.
+fn launch_uniform_value(desc: &GpuLaunchDesc, value: i64) -> Result<i32, GpuError> {
+    let dispatches_threads = [desc.grid_x, desc.grid_y, desc.grid_z]
+        .iter()
+        .all(|&workgroups| workgroups > 0);
+    if dispatches_threads {
+        narrow_uniform_bound(value)
     } else {
-        Ok(value as u32)
+        Ok(0)
     }
+}
+
+/// Narrows a loop bound or range start to the device's signed 32-bit `int`,
+/// the type a kernel declares its launch uniforms with.
+///
+/// A value outside `i32` is refused with `GridTooLarge` rather than clamped or
+/// wrapped: the kernel cannot represent the indices it names, and a clamped
+/// value would silently change which iterations run. A negative value is kept,
+/// so a range over negative indices runs exactly as it does on the host.
+fn narrow_uniform_bound(value: i64) -> Result<i32, GpuError> {
+    i32::try_from(value).map_err(|_| {
+        GpuError::GridTooLarge(format!(
+            "loop range value {} is outside the device's 32-bit int range [{}, {}]",
+            value,
+            i32::MIN,
+            i32::MAX
+        ))
+    })
 }
 
 #[repr(C)]
@@ -310,7 +325,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         .ok_or_else(|| GpuError::GridTooLarge("grid product (x*y*z) overflows u64".to_string()))?;
 
     // The per-axis loop bounds (bits 0..3) and runtime range starts (bits 3..6),
-    // each a 4-byte `u32` uniform. Ordered bounds-then-starts so the binding
+    // each a 4-byte `i32` uniform. Ordered bounds-then-starts so the binding
     // indices match the WGSL emitter, which emits the `_bound_*` params before
     // the `_start_*` params.
     let uniform_scalars: [(u64, i64, &str); 6] = [
@@ -325,7 +340,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     // Validate every present uniform's range before creating any buffers.
     for (bit, value, _) in uniform_scalars {
         if (desc.uniform_bound_present & bit) != 0 {
-            let _ = narrow_uniform_bound(value)?;
+            let _ = launch_uniform_value(desc, value)?;
         }
     }
     refuse_unindexable_loop(desc)?;
@@ -351,7 +366,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         buf_wire_conversion,
     )?;
 
-    // Create one 4-byte `u32` uniform buffer per present bound/start, in the
+    // Create one 4-byte `i32` uniform buffer per present bound/start, in the
     // bounds-then-starts order established above. Each must live until the bind
     // group is created.
     let mut uniform_bufs: Vec<wgpu::Buffer> = Vec::new();
@@ -360,14 +375,14 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         if (desc.uniform_bound_present & bit) == 0 {
             continue;
         }
-        let value_u32 = narrow_uniform_bound(value)?;
+        let value_i32 = launch_uniform_value(desc, value)?;
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: 4,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, &value_u32.to_le_bytes());
+        queue.write_buffer(&buf, 0, &value_i32.to_le_bytes());
         uniform_bufs.push(buf);
     }
 
@@ -881,43 +896,38 @@ mod narrow_uniform_bound_tests {
     use super::{narrow_uniform_bound, GpuError};
 
     #[test]
-    fn negative_bound_returns_zero() {
-        assert_eq!(narrow_uniform_bound(-1).unwrap(), 0);
-        assert_eq!(narrow_uniform_bound(-10).unwrap(), 0);
-        assert_eq!(narrow_uniform_bound(i64::MIN).unwrap(), 0);
+    fn negative_values_keep_their_sign() {
+        assert_eq!(narrow_uniform_bound(-1).unwrap(), -1);
+        assert_eq!(narrow_uniform_bound(-300).unwrap(), -300);
+        assert_eq!(narrow_uniform_bound(i64::from(i32::MIN)).unwrap(), i32::MIN);
     }
 
     #[test]
-    fn zero_bound_returns_zero() {
+    fn zero_and_small_values_pass_through() {
         assert_eq!(narrow_uniform_bound(0).unwrap(), 0);
-    }
-
-    #[test]
-    fn small_positive_bounds_work() {
         assert_eq!(narrow_uniform_bound(1).unwrap(), 1);
-        assert_eq!(narrow_uniform_bound(256).unwrap(), 256);
         assert_eq!(narrow_uniform_bound(4096).unwrap(), 4096);
     }
 
     #[test]
-    fn u32_max_succeeds() {
-        assert_eq!(narrow_uniform_bound(u32::MAX as i64).unwrap(), u32::MAX);
+    fn i32_max_succeeds() {
+        assert_eq!(narrow_uniform_bound(i64::from(i32::MAX)).unwrap(), i32::MAX);
     }
 
     #[test]
-    fn exceeding_u32_max_errors() {
-        assert!(matches!(
-            narrow_uniform_bound(u32::MAX as i64 + 1),
-            Err(GpuError::GridTooLarge(_))
-        ));
-        assert!(matches!(
-            narrow_uniform_bound(i64::MAX),
-            Err(GpuError::GridTooLarge(_))
-        ));
-        assert!(matches!(
-            narrow_uniform_bound(5_000_000_000),
-            Err(GpuError::GridTooLarge(_))
-        ));
+    fn values_outside_i32_are_refused() {
+        for value in [
+            i64::from(i32::MAX) + 1,
+            i64::from(i32::MIN) - 1,
+            i64::from(u32::MAX),
+            i64::MAX,
+            i64::MIN,
+        ] {
+            assert!(
+                matches!(narrow_uniform_bound(value), Err(GpuError::GridTooLarge(_))),
+                "{value} was not refused"
+            );
+        }
     }
 }
 

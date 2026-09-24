@@ -11,6 +11,8 @@ pub mod codegen;
 pub mod diagnostics;
 /// Error and diagnostic types for all compiler phases.
 pub mod error;
+/// GPU-target facts shared by the type checker, MIR lowering and code generation.
+pub mod gpu_target;
 /// Lexer (tokenizer) for Miri source code.
 pub mod lexer;
 /// Mid-level Intermediate Representation (MIR).

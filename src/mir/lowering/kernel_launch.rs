@@ -4,11 +4,12 @@
 //! GPU kernel launch lowering.
 
 use crate::ast::expression::Expression;
+use crate::ast::gpu_wire::scalar_capture_wire;
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{GpuLaunchArgs, Operand, TerminatorKind};
+use crate::mir::{GpuLaunchArgs, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind};
 
 use super::forall_gpu::needs_wire_conversion;
 use super::{lower_expression, LoweringContext};
@@ -17,6 +18,14 @@ use super::{lower_expression, LoweringContext};
 pub(super) struct ThreadedGpuFnArgs {
     pub(super) kernel_op: Operand,
     pub(super) kernel_name: String,
+    pub(super) args: GpuFnArgs,
+}
+
+/// The arguments of a `gpu fn` call, split the way a launch binds them: each
+/// buffer with its device handle, access and wire conversion, and each scalar
+/// packed into the kernel's scalar-input uniform, all in argument order.
+#[derive(Default)]
+pub(super) struct GpuFnArgs {
     pub(super) buffer_args: Vec<Operand>,
     pub(super) arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>>,
     pub(super) arg_read_only: Vec<bool>,
@@ -24,22 +33,21 @@ pub(super) struct ThreadedGpuFnArgs {
     pub(super) scalar_args: Vec<Operand>,
 }
 
-/// Process buffer arguments and metadata for a GPU function call.
-#[allow(clippy::type_complexity)]
-pub(super) fn process_gpu_buffer_args(
+/// Lowers the arguments of a call to the `gpu fn` `func_name`: a buffer must be
+/// a gpu-resident place, and a scalar is any type the GPU wire format gives a
+/// uniform lane ([`scalar_capture_wire`]). Any other argument is an internal
+/// error rather than a silently dropped binding: the type checker refuses a
+/// scalar parameter with no 32-bit lane.
+// TODO: a vector parameter (`Vec3<f32>`) is admitted by the type checker but
+// has no launch binding yet, so launching such a `gpu fn` reaches the internal
+// error below; it needs either a uniform/storage binding or a refusal at the
+// signature.
+pub(super) fn process_gpu_fn_args(
     ctx: &mut LoweringContext,
     func_name: &str,
     call_args: &[Expression],
     span: Span,
-) -> Result<
-    (
-        Vec<Operand>,
-        Vec<Option<crate::mir::body::DeviceHandleId>>,
-        Vec<bool>,
-        Vec<bool>,
-    ),
-    LoweringError,
-> {
+) -> Result<GpuFnArgs, LoweringError> {
     let out_params = ctx
         .type_checker
         .function_out_params()
@@ -47,11 +55,7 @@ pub(super) fn process_gpu_buffer_args(
         .cloned()
         .unwrap_or_default();
 
-    let mut buffer_args = Vec::new();
-    let mut arg_handles = Vec::new();
-    let mut arg_read_only = Vec::new();
-    let mut arg_int_narrow = Vec::new();
-
+    let mut args = GpuFnArgs::default();
     for (arg_idx, arg) in call_args.iter().enumerate() {
         let arg_ty = ctx
             .type_checker
@@ -61,40 +65,87 @@ pub(super) fn process_gpu_buffer_args(
         let arg_op = lower_expression(ctx, arg, None)?;
 
         if is_gpu_buffer_type(&arg_ty.kind) {
-            if let Operand::Copy(place) | Operand::Move(place) = &arg_op {
-                let local_decl = &ctx.body.local_decls[place.local.0];
-
-                if !matches!(
-                    local_decl.residency,
-                    crate::mir::body::BindingResidency::Gpu
-                ) {
-                    let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
-                    return Err(LoweringError::coded(DiagnosticCode::TypGpuFunctionHostBufferMismatch,
-                        format!("cannot pass host-resident array '{}' to gpu function", buffer_name),
-                        span,
-                        Some(format!(
-                            "mark the binding as gpu-resident: 'gpu let {} = ...' or 'gpu var {} = ...'",
-                            buffer_name, buffer_name
-                        )),
-                    ));
-                }
-
-                let handle = local_decl.device_handle;
-                arg_handles.push(handle);
-                buffer_args.push(arg_op.clone());
-
-                arg_read_only.push(!out_params.get(arg_idx).copied().unwrap_or(false));
-                arg_int_narrow.push(needs_wire_conversion(&arg_ty));
-            } else {
-                return Err(LoweringError::unsupported_expression(
-                    "gpu fn buffer args must be places".to_string(),
-                    span,
-                ));
-            }
+            let is_out = out_params.get(arg_idx).copied().unwrap_or(false);
+            push_buffer_arg(ctx, &mut args, arg_op, &arg_ty, is_out, span)?;
+        } else if scalar_capture_wire(&arg_ty.kind).is_some() {
+            let scalar = scalar_arg_place(ctx, arg_op, arg_ty, span);
+            args.scalar_args.push(scalar);
+        } else {
+            return Err(LoweringError::internal(
+                DiagnosticCode::MirGpuLaunchMetadataMismatch,
+                format!(
+                    "argument {arg_idx} of the launch of '{func_name}' has type '{arg_ty}', \
+                     which binds neither as a buffer nor as a scalar input"
+                ),
+                arg.span,
+            ));
         }
     }
+    Ok(args)
+}
 
-    Ok((buffer_args, arg_handles, arg_read_only, arg_int_narrow))
+/// A scalar launch argument as a projection-free local, the form the launch
+/// reads its scalar inputs from: a constant or projected value is first
+/// copied into a temporary of its type.
+fn scalar_arg_place(
+    ctx: &mut LoweringContext,
+    arg_op: Operand,
+    arg_ty: Type,
+    span: Span,
+) -> Operand {
+    if let Operand::Copy(place) | Operand::Move(place) = &arg_op {
+        if place.projection.is_empty() {
+            return arg_op;
+        }
+    }
+    let temp = ctx.push_temp(arg_ty, span);
+    ctx.push_statement(Statement {
+        kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(arg_op)),
+        span,
+    });
+    Operand::Copy(Place::new(temp))
+}
+
+/// Records one buffer argument, refusing a host-resident or non-place buffer.
+fn push_buffer_arg(
+    ctx: &LoweringContext,
+    args: &mut GpuFnArgs,
+    arg_op: Operand,
+    arg_ty: &Type,
+    is_out: bool,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let (Operand::Copy(place) | Operand::Move(place)) = &arg_op else {
+        return Err(LoweringError::unsupported_expression(
+            "gpu fn buffer args must be places".to_string(),
+            span,
+        ));
+    };
+    let local_decl = &ctx.body.local_decls[place.local.0];
+    if !matches!(
+        local_decl.residency,
+        crate::mir::body::BindingResidency::Gpu
+    ) {
+        let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
+        return Err(LoweringError::coded(
+            DiagnosticCode::TypGpuFunctionHostBufferMismatch,
+            format!(
+                "cannot pass host-resident array '{}' to gpu function",
+                buffer_name
+            ),
+            span,
+            Some(format!(
+                "mark the binding as gpu-resident: 'gpu let {} = ...' or 'gpu var {} = ...'",
+                buffer_name, buffer_name
+            )),
+        ));
+    }
+
+    args.arg_handles.push(local_decl.device_handle);
+    args.arg_read_only.push(!is_out);
+    args.arg_int_narrow.push(needs_wire_conversion(arg_ty));
+    args.buffer_args.push(arg_op);
+    Ok(())
 }
 
 /// Analyze GPU function arguments for a kernel launch, producing operands and metadata.
@@ -113,17 +164,11 @@ pub(super) fn thread_gpu_fn_args(
         ));
     };
 
-    let (buffer_args, arg_handles, arg_read_only, arg_int_narrow) =
-        process_gpu_buffer_args(ctx, func_name, call_args, span)?;
-
+    let args = process_gpu_fn_args(ctx, func_name, call_args, span)?;
     Ok(ThreadedGpuFnArgs {
         kernel_op,
         kernel_name,
-        buffer_args,
-        arg_handles,
-        arg_read_only,
-        arg_int_narrow,
-        scalar_args: Vec::new(),
+        args,
     })
 }
 
@@ -218,36 +263,21 @@ pub(crate) fn try_lower_kernel_launch(
     let (destination, op) = super::dispatch::call_destination(ctx, return_ty, dest, *span);
     let target_bb = ctx.new_basic_block();
 
-    let (
-        kernel_op,
-        kernel_name,
-        call_args,
-        arg_handles,
-        arg_read_only,
-        arg_int_narrow,
-        scalar_args,
-    ) = if let ExpressionKind::Call(callee, call_args) = &obj.node {
-        let gpu_args = thread_gpu_fn_args(ctx, callee, call_args, *span)?;
-        (
-            gpu_args.kernel_op,
-            Some(gpu_args.kernel_name),
-            gpu_args.buffer_args,
-            gpu_args.arg_handles,
-            gpu_args.arg_read_only,
-            gpu_args.arg_int_narrow,
-            gpu_args.scalar_args,
-        )
-    } else {
-        (
-            lower_expression(ctx, obj, None)?,
-            None,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )
-    };
+    let (kernel_op, kernel_name, gpu_args) =
+        if let ExpressionKind::Call(callee, call_args) = &obj.node {
+            let threaded = thread_gpu_fn_args(ctx, callee, call_args, *span)?;
+            (
+                threaded.kernel_op,
+                Some(threaded.kernel_name),
+                threaded.args,
+            )
+        } else {
+            (
+                lower_expression(ctx, obj, None)?,
+                None,
+                GpuFnArgs::default(),
+            )
+        };
 
     if let Some(ref kernel_name) = kernel_name {
         let workgroup_size = try_extract_dim3_literal(&args[1]).ok_or_else(|| {
@@ -276,10 +306,17 @@ pub(crate) fn try_lower_kernel_launch(
         }
     }
 
-    let launch_args = GpuLaunchArgs::new(call_args, arg_handles, arg_read_only, arg_int_narrow)
+    let GpuFnArgs {
+        buffer_args,
+        arg_handles,
+        arg_read_only,
+        arg_int_narrow,
+        scalar_args,
+    } = gpu_args;
+    let launch_args = GpuLaunchArgs::new(buffer_args, arg_handles, arg_read_only, arg_int_narrow)
         .map_err(|e| {
-            LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, *span)
-        })?;
+        LoweringError::internal(DiagnosticCode::MirGpuLaunchMetadataMismatch, e, *span)
+    })?;
 
     ctx.set_terminator(crate::mir::Terminator::new(
         TerminatorKind::GpuLaunch {

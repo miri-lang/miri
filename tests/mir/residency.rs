@@ -85,3 +85,137 @@ fn main()
         printed
     );
 }
+
+/// A conditional's branch value reads the binding it names into the host value
+/// the conditional produces, so a gpu binding there is read back first.
+///
+/// Checked on the lowered body after the readback pass rather than a run:
+/// moving a binding out on one
+/// branch of a conditional unbalances its reference count, host or gpu alike,
+/// which the RC verifier refuses before the program could run.
+#[test]
+fn a_conditional_branch_value_reads_a_gpu_binding_back_first() {
+    let body = get_main_mir(
+        "
+use system.collections.array
+
+fn main()
+    gpu var buf = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        buf[i] = i
+    let k = 5
+    let h = if k > 1: buf else: [1, 1, 1, 1]
+",
+    );
+
+    let mut body = body;
+    miri::mir::residency::insert_readbacks(&mut body);
+    let violations = miri::mir::verify::verify_cross_residency_readback(&body);
+    assert!(
+        violations.is_empty(),
+        "the branch value must be fenced, got: {}",
+        violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+}
+
+/// `main` of `source` as lowering leaves it, then through the readback pass.
+fn main_after_readback_pass(source: &str) -> miri::mir::Body {
+    let mut body = get_main_mir(source);
+    miri::mir::residency::insert_readbacks(&mut body);
+    body
+}
+
+/// The readback calls in `body`.
+fn readback_calls(body: &miri::mir::Body) -> usize {
+    body.basic_blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.terminator.as_ref().map(|t| &t.kind),
+                Some(miri::mir::TerminatorKind::Call { func, .. })
+                    if func.called_symbol() == Some("miri_gpu_readback")
+            )
+        })
+        .count()
+}
+
+fn assert_verifies_clean(body: &miri::mir::Body) {
+    let violations = miri::mir::verify::verify_cross_residency_readback(body);
+    assert!(
+        violations.is_empty(),
+        "the pass's output must verify clean, got: {}",
+        violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+}
+
+/// A read inside a loop after one launch before it: the first turn finds the
+/// device ahead, every later turn finds the host array current. One readback,
+/// guarded by the handle's flag, covers every turn.
+#[test]
+fn a_read_in_a_loop_after_a_launch_is_guarded_by_a_flag() {
+    let body = main_after_readback_pass(
+        "
+use system.collections.array
+
+fn main()
+    gpu var g = [0, 0, 0, 0]
+    forall i in 0..4
+        g[i] = 1
+    var s = 0
+    for k in 0..200
+        let c = g
+        s = s + c[0]
+",
+    );
+    assert_verifies_clean(&body);
+    assert_eq!(readback_calls(&body), 1, "one readback site:\n{body}");
+    assert_eq!(body.device_stale_flags.len(), 1, "one flag:\n{body}");
+}
+
+/// Reads in different positions after one launch share the readback the first
+/// of them needs.
+#[test]
+fn reads_after_one_launch_share_one_readback() {
+    let body = main_after_readback_pass(
+        "
+use system.collections.array
+
+fn main()
+    gpu var g = [0, 0, 0, 0]
+    forall i in 0..4
+        g[i] = 1
+    let t = (g, 1)
+    let h = g
+    var s = 0
+    for x in g
+        s = s + x
+",
+    );
+    assert_verifies_clean(&body);
+    assert_eq!(readback_calls(&body), 1, "one readback:\n{body}");
+    assert!(body.device_stale_flags.is_empty(), "no read needs a flag");
+}
+
+/// A binding no launch touched has no device buffer to read back.
+#[test]
+fn a_binding_no_launch_touched_is_not_read_back() {
+    let body = main_after_readback_pass(
+        "
+use system.collections.array
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    let h = g
+",
+    );
+    assert_verifies_clean(&body);
+    assert_eq!(readback_calls(&body), 0, "no readback:\n{body}");
+}

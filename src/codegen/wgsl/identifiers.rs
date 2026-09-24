@@ -17,7 +17,7 @@
 //! No synthesized name begins with [`ESCAPE_PREFIX`], so an escaped name cannot
 //! meet one either.
 
-use crate::mir::backend::gpu::wgsl_name_conflict;
+use crate::gpu_target::wgsl_name_conflict;
 
 /// Prefix of an escaped source name. It must begin with `_` (the injectivity
 /// argument above relies on it) and no synthesized name may begin with it.

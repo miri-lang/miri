@@ -114,11 +114,21 @@ fn handle_managed_place_assign(
         sync_closure_captures(ctx, local, &rhs_place);
     }
 
-    // Check for cross-residency upload: gpu-resident LHS assigned from host-resident RHS array.
-    let lhs_residency = ctx.body.local_decls[local.0].residency;
-    let rhs_residency = ctx.body.local_decls[rhs_place.local.0].residency;
-    let should_upload = lhs_residency == MirResidency::Gpu
-        && rhs_residency == MirResidency::Host
+    // A whole array assigned into a gpu-resident binding is uploaded into the
+    // binding's device buffer: a host value, and equally another gpu binding's
+    // value (`b = a`), which the readback pass reads back before the upload
+    // copies its host array. Only a binding sharing the target's device buffer
+    // needs no upload.
+    // TODO: a host value assigned into a gpu *scalar* is not uploaded. Once the
+    // scalar has a device buffer (it holds a reduction's result), `s = 3` writes
+    // only the host copy, and the next readback of `s` overwrites it with the
+    // stale device value.
+    let lhs_decl = &ctx.body.local_decls[local.0];
+    let rhs_decl = &ctx.body.local_decls[rhs_place.local.0];
+    let shares_the_device_buffer =
+        rhs_decl.residency == MirResidency::Gpu && rhs_decl.device_handle == lhs_decl.device_handle;
+    let should_upload = lhs_decl.residency == MirResidency::Gpu
+        && !shares_the_device_buffer
         && rhs_place.projection.is_empty()
         && ctx.is_perceus_managed(&lhs_ty.kind);
 
@@ -990,7 +1000,7 @@ fn emit_gpu_upload(
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: Literal::Identifier("miri_gpu_upload".to_string()),
+        literal: Literal::Identifier(crate::mir::residency::UPLOAD_FN.to_string()),
     }));
 
     let target_bb = ctx.new_basic_block();
@@ -1011,52 +1021,6 @@ fn emit_gpu_upload(
     Ok(())
 }
 
-/// A gpu-resident binding read into an existing host binding (`h = g`) is the
-/// same cross-residency transfer the declaring spelling (`let h = g`) performs,
-/// and it has to be fenced here too. The assignment copies the gpu binding's
-/// *host* array, which holds its zero initialisation until the device buffer is
-/// copied into it — so without this the transfer silently does not happen and
-/// the program reads its own initial values back as a result.
-///
-/// Emitted before the right-hand side is lowered, so the value the assignment
-/// copies is the one the device produced.
-///
-/// A gpu-resident target is left alone: `gpu_b = gpu_a` stays on the device,
-/// and a host array assigned into a gpu binding is an upload, which
-/// `handle_managed_place_assign` emits instead.
-// TODO: a host value assigned into a gpu *scalar* is not uploaded. Once the
-// scalar has a device buffer (it holds a reduction's result), `s = 3` writes
-// only the host copy, and the next readback of `s` overwrites it with the
-// stale device value.
-fn emit_assigned_source_readback(
-    ctx: &mut LoweringContext,
-    lhs: &crate::ast::expression::LeftHandSideExpression,
-    rhs: &Expression,
-    span: crate::error::syntax::Span,
-) {
-    if assignment_target_is_gpu_resident(ctx, lhs) {
-        return;
-    }
-    crate::mir::lowering::variable::emit_cross_residency_readback(ctx, Some(rhs), span);
-}
-
-/// Whether an assignment writes into a `gpu`-resident binding. Only a bare
-/// identifier can name one: a field or an element belongs to a host object.
-fn assignment_target_is_gpu_resident(
-    ctx: &LoweringContext,
-    lhs: &crate::ast::expression::LeftHandSideExpression,
-) -> bool {
-    let crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) = lhs else {
-        return false;
-    };
-    let ExpressionKind::Identifier(name, _) = &id_expr.node else {
-        return false;
-    };
-    ctx.variable_map
-        .get(name.as_str())
-        .is_some_and(|local| ctx.body.local_decls[local.0].residency == MirResidency::Gpu)
-}
-
 pub(crate) fn lower_assignment_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -1065,7 +1029,6 @@ pub(crate) fn lower_assignment_expr(
     let ExpressionKind::Assignment(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
-    emit_assigned_source_readback(ctx, lhs, rhs, expr.span);
     match &**lhs {
         crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) => {
             assign_to_identifier(ctx, id_expr, op, rhs, expr, dest)

@@ -1715,8 +1715,17 @@ impl Pipeline {
         // each to the corresponding GPU kernel body's backend metadata.
         Self::stamp_kernel_workgroups(&mut bodies)?;
 
+        // Read back every gpu-resident binding a host read needs fresh, in every
+        // build. Runs before RC insertion, which accounts for the host arrays the
+        // readbacks detach.
+        for (_name, body) in &mut bodies {
+            mir::residency::insert_readbacks(body);
+        }
+
         // Insert Perceus RC operations on all function bodies, exactly once,
-        // after all optimization passes have converged.
+        // on the bodies as lowering and the GPU passes above left them. No MIR
+        // optimization pass runs before this: `mir::optimization::optimize` is
+        // not called anywhere in the pipeline.
         for (_name, body) in &mut bodies {
             mir::optimization::insert_rc(body);
         }

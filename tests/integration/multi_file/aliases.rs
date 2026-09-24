@@ -231,3 +231,79 @@ fn test_module_alias_undefined_member_error() {
         "nonexistent",
     );
 }
+
+/// A module's own constants named like mathematical ones read their declared
+/// values through the alias; the name alone picks no value.
+#[test]
+fn test_module_alias_reads_constants_named_like_math_constants() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.utils.consts as K\n",
+                    "println(f\"{K.E}\")\n",
+                    "println(f\"{K.PI}\")\n",
+                    "println(f\"{K.INF}\")\n",
+                ),
+            ),
+            (
+                "utils/consts.mi",
+                concat!(
+                    "let E = 5\n",
+                    "let PI float = 1.5\n",
+                    "let INF = \"none\"\n",
+                ),
+            ),
+        ],
+        "5\n1.5\nnone",
+    );
+}
+
+/// Alias member reads of a module's boolean and string constants carry their
+/// declared values.
+#[test]
+fn test_module_alias_reads_bool_and_string_constants() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.utils.flags as F\n",
+                    "println(f\"{F.VERBOSE}\")\n",
+                    "println(F.LABEL)\n",
+                ),
+            ),
+            (
+                "utils/flags.mi",
+                concat!("let VERBOSE = true\n", "const LABEL = \"tag\"\n",),
+            ),
+        ],
+        "true\ntag",
+    );
+}
+
+/// Reading a module-level binding with no compile-time value through an alias
+/// is refused, as it is through a plain import.
+#[test]
+fn test_module_alias_binding_without_constant_initializer_is_refused() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.utils.consts as K\n",
+                    "println(f\"{K.COUNT}\")\n",
+                ),
+            ),
+            (
+                "utils/consts.mi",
+                concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
+            ),
+        ],
+        "'COUNT' has no value at run time",
+    );
+}

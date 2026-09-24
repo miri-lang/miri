@@ -104,6 +104,15 @@ pub trait OptimizationPass {
 /// # Arguments
 ///
 /// * `body` - The MIR function body to optimize (mutated in place)
+///
+/// TODO: nothing in the compilation pipeline calls this function, and neither
+/// these passes nor the SSA construction and destruction in `crate::mir::ssa`
+/// are sound as written. Constant propagation treats a local as the constant
+/// of any constant assignment to it and ignores later reassignments; SSA
+/// renaming versions only whole-local assignments, so writes through a
+/// projection and `StorageLive`/`StorageDead` keep naming the pre-SSA local.
+/// Rebuild them over a proper reaching-definitions analysis, or remove them,
+/// before any optimization level wires them into the pipeline.
 pub fn optimize(body: &mut Body) {
     let mut passes: Vec<Box<dyn OptimizationPass>> = vec![
         Box::new(SimplifyCfg),

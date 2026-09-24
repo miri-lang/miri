@@ -476,47 +476,7 @@ impl<'a> LoweringContext<'a> {
     /// resolving variables (the current basic block will be dead after Return,
     /// but the MIR lowering loop still runs over remaining AST statements).
     pub fn emit_return_cleanup(&mut self, span: Span) {
-        // Simulate pop_scope for each level without mutating the real structures.
-        // `effective` tracks what the variable_map would look like after each
-        // simulated pop, so shadowed variables are handled correctly.
-        //
-        // Collect the locals to drop first (avoiding a simultaneous mutable +
-        // immutable borrow of `self`), then emit statements in a second pass.
-        let mut to_drop: Vec<Local> = Vec::new();
-        let mut temps_to_drop: Vec<Local> = Vec::new();
-        let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
-
-        for scope in self.scope_stack.iter().rev() {
-            // Collect StorageDead targets for each variable introduced by this scope.
-            // `effective[name]` is the local bound by this scope at this point.
-            for name in scope.introduced.iter().rev() {
-                if let Some(&local) = effective.get(name.as_ref()) {
-                    to_drop.push(local);
-                }
-            }
-            temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
-
-            // Simulate the pop: restore shadowed bindings and remove fresh
-            // introductions, so the next (outer) scope sees the right locals.
-            for (name, &local) in &scope.shadowed {
-                effective.insert(name.clone(), local);
-            }
-            for name in &scope.introduced {
-                if !scope.shadowed.contains_key(name) {
-                    effective.remove(name.as_ref());
-                }
-            }
-        }
-
-        for local in to_drop {
-            self.push_statement(crate::mir::Statement {
-                kind: StatementKind::StorageDead(Place::new(local)),
-                span,
-            });
-        }
-        for local in temps_to_drop {
-            self.emit_managed_temp_dead(local, span);
-        }
+        self.emit_scope_exit_drops(0, span);
     }
 
     /// Emits `StorageDead` for all named locals introduced in scopes that were
@@ -528,27 +488,14 @@ impl<'a> LoweringContext<'a> {
     /// `DecRef` via Perceus even when control exits the scope early without
     /// the normal `pop_scope` path running.
     pub fn emit_break_cleanup(&mut self, loop_scope_depth: usize, span: Span) {
-        let mut to_drop: Vec<Local> = Vec::new();
-        let mut temps_to_drop: Vec<Local> = Vec::new();
-        let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
+        self.emit_scope_exit_drops(loop_scope_depth, span);
+    }
 
-        for scope in self.scope_stack[loop_scope_depth..].iter().rev() {
-            for name in scope.introduced.iter().rev() {
-                if let Some(&local) = effective.get(name.as_ref()) {
-                    to_drop.push(local);
-                }
-            }
-            temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
-            for (name, &local) in &scope.shadowed {
-                effective.insert(name.clone(), local);
-            }
-            for name in &scope.introduced {
-                if !scope.shadowed.contains_key(name) {
-                    effective.remove(name.as_ref());
-                }
-            }
-        }
-
+    /// Emit `StorageDead` for every named local and scope-owned temp of the
+    /// scopes at `outermost..`, innermost first, leaving the scope stack and
+    /// `variable_map` untouched.
+    fn emit_scope_exit_drops(&mut self, outermost: usize, span: Span) {
+        let (to_drop, temps_to_drop) = self.scope_exit_drops(outermost);
         for local in to_drop {
             self.push_statement(crate::mir::Statement {
                 kind: StatementKind::StorageDead(Place::new(local)),
@@ -558,6 +505,43 @@ impl<'a> LoweringContext<'a> {
         for local in temps_to_drop {
             self.emit_managed_temp_dead(local, span);
         }
+    }
+
+    /// The named locals and the temps that popping the scopes at `outermost..`
+    /// would release, innermost scope first.
+    ///
+    /// The pops are simulated: each scope sees the bindings its inner scopes
+    /// leave behind once they restore what they shadowed and drop what they
+    /// introduced, so a shadowed name releases the local of the scope that
+    /// bound it. Only the names the walk has popped past are overlaid on
+    /// `variable_map`; every other name still resolves through the map itself.
+    fn scope_exit_drops(&self, outermost: usize) -> (Vec<Local>, Vec<Local>) {
+        let mut to_drop: Vec<Local> = Vec::new();
+        let mut temps_to_drop: Vec<Local> = Vec::new();
+        // `Some` is a binding a popped scope restored, `None` one it removed.
+        let mut popped: HashMap<&str, Option<Local>> = HashMap::new();
+        let scopes = self.scope_stack.get(outermost..).unwrap_or(&[]);
+
+        for scope in scopes.iter().rev() {
+            for name in scope.introduced.iter().rev() {
+                let binding = match popped.get(name.as_ref()) {
+                    Some(overlaid) => *overlaid,
+                    None => self.variable_map.get(name.as_ref()).copied(),
+                };
+                to_drop.extend(binding);
+            }
+            temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
+
+            for (name, &local) in &scope.shadowed {
+                popped.insert(name.as_ref(), Some(local));
+            }
+            for name in &scope.introduced {
+                if !scope.shadowed.contains_key(name) {
+                    popped.insert(name.as_ref(), None);
+                }
+            }
+        }
+        (to_drop, temps_to_drop)
     }
 
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {

@@ -185,3 +185,75 @@ fn main()
         "1\n1",
     );
 }
+
+/// A vector held in an enum payload is a pointer to an allocation of its own,
+/// released with the enum value that holds it.
+#[test]
+fn test_enum_vector_payload_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+enum Shape
+    Point(Vec3<float>)
+    Empty
+
+fn main()
+    let s = Shape.Point(Vec3(1.0, 2.0, 3.0))
+    match s
+        Shape.Point(v): println(f"{v.x} {v.y} {v.z}")
+        Shape.Empty: println("empty")
+"#,
+        "1.0 2.0 3.0",
+    );
+}
+
+/// A generic enum instantiated at a vector releases the vector its payload
+/// holds.
+#[test]
+fn test_generic_enum_vector_payload_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+enum Slot<T>
+    Filled(T)
+    Vacant
+
+fn main()
+    let s Slot<Vec3<float>> = Slot.Filled(Vec3(4.0, 5.0, 6.0))
+    match s
+        Slot.Filled(v): println(f"{v.x} {v.z}")
+        Slot.Vacant: println("vacant")
+"#,
+        "4.0 6.0",
+    );
+}
+
+/// A vector read out of an enum payload outlives the enum value it came from,
+/// and replacing that value releases the vector its old payload held.
+#[test]
+fn test_vector_read_from_enum_payload_outlives_enum() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+enum Shape
+    Point(Vec3<float>)
+    Empty
+
+fn pick(s Shape) Vec3<float>
+    match s
+        Shape.Point(v): v
+        Shape.Empty: Vec3(0.0, 0.0, 0.0)
+
+fn main()
+    var s = Shape.Point(Vec3(1.0, 2.0, 3.0))
+    let v = pick(s)
+    s = Shape.Point(Vec3(9.0, 8.0, 7.0))
+    s = Shape.Empty
+    println(f"{v.x} {v.y} {v.z}")
+"#,
+        "1.0 2.0 3.0",
+    );
+}

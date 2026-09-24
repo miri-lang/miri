@@ -208,8 +208,6 @@ pub fn decref_in_range(
         .any(|stmt| matches!(&stmt.kind, StatementKind::DecRef(p) if p.local == local && p.projection.is_empty()))
 }
 
-// ─── RC op counters (used by tests) ─────────────────────────────────────────
-
 /// Count IncRef and DecRef operations for a specific local across all blocks.
 ///
 /// Used by tests to assert that RC operations were eliminated.

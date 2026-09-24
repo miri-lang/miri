@@ -1206,12 +1206,11 @@ pub(super) fn resolve_execution_model(
     }
 }
 
-/// Assign WGSL storage classes to the parameters of an explicit `gpu fn`.
-///
-/// Collection-typed (buffer-shaped) parameters become `GpuGlobal` so the WGSL
-/// backend emits them as `var<storage>` bindings; scalar parameters keep their
-/// default class. A no-op for non-GPU functions. The `forall`-extracted kernel
-/// path assigns its own classes separately in `forall_gpu`.
+/// Assign WGSL storage classes to the parameters of an explicit `gpu fn`: a
+/// buffer-shaped parameter becomes a `GpuGlobal` `var<storage>` binding, and a
+/// scalar with a GPU wire lane a `UniformBuffer` field of the kernel's scalar
+/// inputs, which the launch fills from the call's scalar arguments. A no-op
+/// for non-GPU functions; `forall_gpu` assigns its own kernels' classes.
 fn assign_gpu_param_storage_classes(ctx: &mut LoweringContext, param_count: usize) {
     if ctx.body.execution_model != ExecutionModel::GpuKernel {
         return;
@@ -1220,6 +1219,8 @@ fn assign_gpu_param_storage_classes(ctx: &mut LoweringContext, param_count: usiz
         let kind = &ctx.body.local_decls[param_idx].ty.kind;
         if is_gpu_storage_param(kind) {
             ctx.body.local_decls[param_idx].storage_class = StorageClass::GpuGlobal;
+        } else if crate::ast::gpu_wire::scalar_capture_wire(kind).is_some() {
+            ctx.body.local_decls[param_idx].storage_class = StorageClass::UniformBuffer;
         }
     }
 }

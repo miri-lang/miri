@@ -379,7 +379,7 @@ impl CraneliftBackend {
                 continue;
             }
             let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
-                crate::mir::rc::is_field_managed(&body.local_decls[cap_local.0].ty.kind)
+                crate::mir::rc::is_word_slot_managed(&body.local_decls[cap_local.0].ty.kind)
             });
             if has_managed {
                 FunctionTranslator::generate_closure_destructor(

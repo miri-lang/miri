@@ -9,49 +9,24 @@ use crate::error::syntax::Span;
 use crate::mir::body::{BindingResidency as MirResidency, DeviceHandleId};
 use crate::mir::types::MirType;
 use crate::mir::{
-    Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass,
-    Terminator, TerminatorKind,
+    Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass, Terminator,
+    TerminatorKind,
 };
 
 use super::helpers::{coerce_rvalue_in, release_coerced_source};
 use super::{lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
-// These two GPU intrinsics are synthesized by the compiler, never written in
-// Miri source, so they are not declared as `runtime "gpu" fn` in any `.mi`
-// (their device-handle / array-header arguments are not expressible Miri
-// types). Like `miri_gpu_launch_inline`, codegen declares the import on
-// demand from the emitted call's operands.
-
-/// Runtime entry that fences outstanding device writes and copies a
-/// `gpu`-resident buffer back to its host array.
-///
-/// Shared with the verifier, which recognizes a fenced copy by this symbol:
-/// spelling it twice would let a rename turn that check off without failing
-/// anything.
-pub(crate) const READBACK_FN: &str = "miri_gpu_readback";
-
-/// Runtime entry that opens a fresh activation of a `gpu`-resident binding's
-/// handle, so each execution of its declaration owns a device buffer of its
-/// own. Codegen closes the activation with `miri_gpu_release` at scope exit.
-const ACQUIRE_FN: &str = "miri_gpu_acquire";
-
 /// Runtime entry that frees the device buffer of a handle's innermost
-/// activation and closes that activation.
+/// activation and closes that activation. Synthesized by the compiler like the
+/// other entries in [`crate::mir::residency`]; codegen declares the import on
+/// demand.
 const RELEASE_FN: &str = "miri_gpu_release";
 
-/// When a host binding is initialized directly from a `gpu`-resident
-/// identifier (`let h = g`), emit the cross-residency readback before the
-/// copy so `h` observes the device-side results. This is the only point that
-/// fences device work; reuse and launch never do.
-///
-/// Modeled as a borrowing call: the array is passed by `Copy` (no Perceus
-/// IncRef on terminator operands), so the gpu binding survives the readback
-/// and remains available for a second readback.
-///
-/// Shared with `g.slice(range)` lowering, which fences the same way before
-/// copying a sub-range of the device buffer back to host, and with `return g`,
-/// whose return slot is a host local.
+/// Fence outstanding device writes and copy the gpu binding `initializer` names
+/// back to its host value, for a read the readback pass cannot see: one that
+/// hands the binding to a runtime call as an argument, as `g.slice(range)` does.
+/// Any other expression, and a host binding, emits nothing.
 pub(crate) fn emit_cross_residency_readback(
     ctx: &mut LoweringContext,
     initializer: Option<&Expression>,
@@ -67,136 +42,8 @@ pub(crate) fn emit_cross_residency_readback(
     let Some(&src_local) = ctx.variable_map.get(name.as_str()) else {
         return;
     };
-    emit_local_readback(ctx, src_local, span);
-}
-
-/// Fence outstanding device writes and copy `src_local`'s device buffer back
-/// to its host value, when `src_local` carries a device handle; a host local
-/// needs nothing and emits nothing.
-///
-/// The spelling-independent core of [`emit_cross_residency_readback`], for a
-/// boundary that already knows the local it copies, such as a closure capturing
-/// an enclosing binding.
-///
-/// For gpu-resident scalars (e.g., a reduce result), creates a temporary
-/// 1-element array wrapper, reads into it, then copies the scalar back.
-// TODO: the readback writes the device buffer into the binding's host array in
-// place, and every earlier host copy of the binding (`let h = g`, a closure's
-// capture) shares that array by reference count. A later readback therefore
-// rewrites those copies too: `let h = g`, a launch, then `let h2 = g` leaves
-// `h` holding the second results. The readback has to land in storage no
-// earlier copy shares.
-pub(crate) fn emit_local_readback(ctx: &mut LoweringContext, src_local: Local, span: Span) {
-    let Some(handle) = ctx.body.local_decls[src_local.0].device_handle else {
-        return;
-    };
-
-    let src_ty = ctx.body.local_decls[src_local.0].ty.clone();
-    let is_array = matches!(src_ty.kind, TypeKind::Array(_, _))
-        || matches!(src_ty.kind, TypeKind::Custom(ref n, _)
-            if crate::ast::types::BuiltinCollectionKind::from_name(n)
-                == Some(crate::ast::types::BuiltinCollectionKind::Array));
-
-    if is_array {
-        // Standard array readback: pass the array directly
-        let array_op = Operand::Copy(Place::new(src_local));
-        emit_void_runtime_call(
-            ctx,
-            READBACK_FN,
-            vec![handle_operand(handle, span), array_op],
-            span,
-        );
-    } else {
-        emit_scalar_readback(ctx, handle, src_local, &src_ty, span);
-    }
-}
-
-/// Reads a gpu-resident scalar (e.g. a `gpu let` reduce result) back to host.
-///
-/// The readback runtime entry copies a device buffer into a host *array*, so a
-/// lone scalar has no destination. Wrap it in a temporary 1-element
-/// `Array<T, 1>`, read the device buffer into that array, then copy element 0
-/// into the scalar local. The wrapper is dropped immediately afterwards.
-///
-/// The wrapper is seeded with the scalar's own host value. A scalar no launch
-/// has touched has no device buffer, and the runtime then leaves the wrapper
-/// as it found it; the unconditional copy back must hand the scalar its own
-/// value, not a placeholder the readback never overwrote.
-fn emit_scalar_readback(
-    ctx: &mut LoweringContext,
-    handle: DeviceHandleId,
-    src_local: Local,
-    src_ty: &Type,
-    span: Span,
-) {
-    use crate::ast::expression::ExpressionKind as AstExprKind;
-    use crate::ast::types::BuiltinCollectionKind;
-    use crate::mir::{AggregateKind, PlaceElem, Statement};
-
-    let type_arg = |node| Expression { id: 0, node, span };
-    let array_ty = Type::new(
-        TypeKind::Custom(
-            BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![
-                type_arg(AstExprKind::Type(Box::new(src_ty.clone()), false)),
-                type_arg(AstExprKind::Literal(Literal::Integer(IntegerLiteral::I64(
-                    1,
-                )))),
-            ]),
-        ),
-        span,
-    );
-
-    let temp_array = ctx.push_temp(array_ty, span);
-    ctx.push_statement(Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(temp_array),
-            Rvalue::Aggregate(
-                AggregateKind::Array,
-                vec![Operand::Copy(Place::new(src_local))],
-            ),
-        ),
-        span,
-    });
-
-    emit_void_runtime_call(
-        ctx,
-        READBACK_FN,
-        vec![
-            handle_operand(handle, span),
-            Operand::Copy(Place::new(temp_array)),
-        ],
-        span,
-    );
-
-    let zero_idx = ctx.push_temp(Type::new(TypeKind::Int, span), span);
-    ctx.push_statement(Statement {
-        kind: MirStatementKind::Assign(Place::new(zero_idx), Rvalue::Use(int_constant(0, span))),
-        span,
-    });
-    let mut elem_place = Place::new(temp_array);
-    elem_place.projection.push(PlaceElem::Index(zero_idx));
-
-    ctx.push_statement(Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(src_local),
-            Rvalue::Use(Operand::Copy(elem_place)),
-        ),
-        span,
-    });
-    ctx.push_statement(Statement {
-        kind: MirStatementKind::StorageDead(Place::new(temp_array)),
-        span,
-    });
-}
-
-/// An `int`-typed integer constant operand.
-fn int_constant(value: i64, span: Span) -> Operand {
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Int, span),
-        literal: Literal::Integer(IntegerLiteral::I64(value)),
-    }))
+    ctx.current_block =
+        crate::mir::residency::append_readback(&mut ctx.body, ctx.current_block, src_local, span);
 }
 
 /// Opens a fresh activation of `handle`, so this execution of a `gpu`
@@ -204,7 +51,12 @@ fn int_constant(value: i64, span: Span) -> Operand {
 /// uploads the host value — while an enclosing activation of the same binding
 /// (a recursive caller) keeps its own buffer.
 pub(crate) fn emit_gpu_activation(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
-    emit_void_runtime_call(ctx, ACQUIRE_FN, vec![handle_operand(handle, span)], span);
+    emit_void_runtime_call(
+        ctx,
+        crate::mir::residency::ACQUIRE_FN,
+        vec![handle_operand(handle, span)],
+        span,
+    );
 }
 
 /// Frees the device buffer of `handle`'s innermost activation and closes it,
@@ -386,9 +238,6 @@ fn lower_single_variable(
     decl: &VariableDeclaration,
     span: &Span,
 ) -> Result<(), LoweringError> {
-    if decl.residency == AstResidency::Host {
-        emit_cross_residency_readback(ctx, decl.initializer.as_deref(), *span);
-    }
     let (var_ty, init_expr_opt, pre_lowered_op) = resolve_decl_init(ctx, decl, span)?;
     let var_ty_kind = var_ty.kind.clone();
     // Allocate the local but defer binding its name: a shadowing initializer

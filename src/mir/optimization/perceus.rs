@@ -493,6 +493,11 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// names a class without its type arguments.
 fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
     let decl = &ctx.local_decls[place.local.0];
+    if place.projection.is_empty() {
+        return decl
+            .mir_ty
+            .is_managed(ctx.unmanaged_type_names, ctx.type_params);
+    }
     let mut current: MirType = decl.mir_ty.clone();
     let mut declared: Option<Type> = Some(decl.ty.clone());
 

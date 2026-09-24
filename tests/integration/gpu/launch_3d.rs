@@ -164,3 +164,46 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "0 1 10 11");
 }
+
+/// Every loop variable of a 2-D `forall` shadows an outer binding of the same
+/// name; none is mistaken for a capture of the outer value.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn second_loop_variable_shadows_an_outer_binding() {
+    super::device::assert_gpu_runs_with_output(
+        "
+use system.io
+use system.collections.array
+
+fn main()
+    let j = [5, 6]
+    println(f'{j[0]}')
+    gpu var dst = Array<int, 16>()
+    forall i, j in 0..4, 0..4
+        dst[i * 4 + j] = j
+    let h = dst
+    println(f'{h[5]} {h[14]}')
+",
+        "5\n1 2",
+    );
+}
+
+/// The shadowing loop variable compiles to a valid kernel with no capture of
+/// the outer binding.
+#[test]
+fn second_loop_variable_shadowing_an_outer_binding_emits_valid_wgsl() {
+    super::helpers::assert_gpu_wgsl_valid(
+        "
+use system.collections.array
+
+fn main()
+    let j = [5, 6]
+    gpu var dst = Array<int, 16>()
+    forall i, j in 0..4, 0..4
+        dst[i * 4 + j] = j
+",
+    );
+}

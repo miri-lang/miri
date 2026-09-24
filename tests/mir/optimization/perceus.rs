@@ -530,6 +530,36 @@ fn test_copy_of_managed_list_element_increfs_the_indexed_place() {
     );
 }
 
+/// The whole collection is managed even when its elements are not: a copy of the
+/// bare local is judged by the local's own type, a copy through `Index` by the
+/// element type the projection reaches.
+#[test]
+fn test_copy_of_scalar_list_increfs_the_list_but_not_its_element() {
+    let mut body = body_with(
+        &[
+            ty(TypeKind::Void),
+            collection("List", vec![TypeKind::Int]),
+            ty(TypeKind::Int),
+            ty(TypeKind::Int),
+            collection("List", vec![TypeKind::Int]),
+        ],
+        0,
+        vec![
+            assign(place(4), use_copy(place(1))),
+            assign(place(3), use_copy(index(1, 2))),
+        ],
+    );
+
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![
+            StatementKind::IncRef(place(1)),
+            StatementKind::Assign(place(4), use_copy(place(1))),
+            StatementKind::Assign(place(3), use_copy(index(1, 2))),
+        ],
+    );
+}
+
 #[test]
 fn test_copy_of_scalar_list_element_gets_no_incref() {
     let mut body = body_with(
