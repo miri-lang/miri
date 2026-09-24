@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+mod matrix;
+
 use crate::utils::miri_cmd;
 use miri::diagnostics::codes::DiagnosticCode;
 use std::collections::HashMap;
