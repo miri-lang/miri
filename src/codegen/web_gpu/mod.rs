@@ -208,6 +208,7 @@ fn plan_kernels<'a>(
         .map(|&(name, body)| {
             let site = host.launch_of(name, body)?;
             let grid = buffers::fixed_grid(name, body, resolve_grid_size(body), host, &site)?;
+            buffers::refuse_scalar_inputs(body, is_frame_step_kernel(body), &site)?;
             let handles = site
                 .handles
                 .iter()

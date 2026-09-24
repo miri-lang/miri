@@ -11,10 +11,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
-/// Maximum byte size for a type to qualify as auto-copy.
-/// Types with all primitive/auto-copy fields and total size <= this are auto-copy.
-pub const AUTO_COPY_MAX_SIZE: usize = 128;
-
 /// The body of a function in MIR.
 ///
 /// A `Body` represents the complete control flow graph (CFG) for a single function
@@ -119,6 +115,14 @@ pub struct Body {
     /// the pipeline adds it to the registry that decides which per-instantiation
     /// method bodies and drop functions get emitted.
     pub generic_class_instantiations: Vec<GenericClassInstantiation>,
+    /// Boolean locals the readback pass keeps, each paired with the device
+    /// handle it watches. A flag is set while its handle's device buffer may
+    /// hold results the host array lacks, and cleared when a readback, an
+    /// upload or a fresh activation brings the two back into agreement. A host
+    /// read reached along paths that disagree about the buffer tests the flag
+    /// rather than reading back every time, and the verifier takes a flag found
+    /// clear as a fence.
+    pub device_stale_flags: HashMap<Local, DeviceHandleId>,
 }
 
 /// One generic class at concrete type arguments.
@@ -167,6 +171,7 @@ impl Body {
             kernel_grids: Vec::new(),
             generic_function_calls: Vec::new(),
             generic_class_instantiations: Vec::new(),
+            device_stale_flags: HashMap::new(),
         }
     }
 
@@ -388,10 +393,11 @@ impl fmt::Display for DeviceHandleId {
 ///
 /// Lowering stamps this on the kernel parameters it injects for a `forall`
 /// (the per-axis loop bound and runtime range start) and for a `gpu frame`
-/// (the element-count bound). Each binds as its own `u32` uniform, filled by
-/// the launch; every other uniform parameter is a captured scalar, pooled into
-/// the kernel's scalar-capture uniform. Backends classify a parameter by this
-/// marker, never by its name, so a capture may be called anything.
+/// (the element-count bound). Each binds as its own `i32` uniform, filled by
+/// the launch, so a negative range start keeps its sign; every other uniform
+/// parameter is a captured scalar, pooled into the kernel's scalar-capture
+/// uniform. Backends classify a parameter by this marker, never by its name,
+/// so a capture may be called anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LaunchUniform {
     /// The exclusive end of an iteration axis.

@@ -437,18 +437,12 @@ fn test_enum_of_scalar_variants_collects_nothing() {
     );
 }
 
+/// An atomic written with its scalar component is stored as that scalar, by
+/// value inside the payload slot, so a DecRef on it would treat raw bytes as a
+/// pointer.
 #[test]
-fn test_inline_value_fields_are_not_collected_as_managed() {
-    // A vector and an atomic written with the component they hold are stored by
-    // value inside the payload, so a DecRef on them would treat raw bytes as a
-    // pointer.
-    let shape = enum_def([(
-        "Inline",
-        vec![
-            custom_of(VEC3_TYPE_NAME, TypeKind::F32),
-            custom_of(ATOMIC_TYPE_NAME, TypeKind::U32),
-        ],
-    )]);
+fn test_inline_atomic_payload_is_not_collected_as_managed() {
+    let shape = enum_def([("Inline", vec![custom_of(ATOMIC_TYPE_NAME, TypeKind::U32)])]);
     let defs = HashMap::new();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
@@ -457,6 +451,30 @@ fn test_inline_value_fields_are_not_collected_as_managed() {
 
     assert!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
+    );
+}
+
+/// An enum payload slot is one word wide (`enum_payload_slot_size` never
+/// grows it for a vector, which translates to a pointer), so a `Vec3<f32>`
+/// payload is held as the pointer to its own allocation, and dropping the enum
+/// must release it.
+#[test]
+fn test_vector_payload_is_collected_as_managed() {
+    let vector = custom_of(VEC3_TYPE_NAME, TypeKind::F32);
+    let shape = enum_def([(
+        "Mixed",
+        vec![vector.clone(), custom_of(ATOMIC_TYPE_NAME, TypeKind::U32)],
+    )]);
+    let defs = HashMap::new();
+    let captures = HashMap::new();
+    let out_ptrs = HashMap::new();
+    let instantiations = HashMap::new();
+    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+
+    assert_eq!(
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
+        vec![(0, vec![(0, vector)])],
+        "only the vector's pointer word is released; the atomic is inline"
     );
 }
 

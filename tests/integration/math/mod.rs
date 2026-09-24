@@ -18,6 +18,42 @@ fn test_math_constants() {
     );
 }
 
+/// The constants read through a plain `use system.math` carry their declared
+/// values, exactly as through a module alias.
+#[test]
+fn test_math_constants_imported_directly() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.math
+
+println(f"{PI}")
+println(f"{E}")
+println(f"{INF}")
+"#,
+        "3.141592653589793\n2.718281828459045\ninf",
+    );
+}
+
+/// A constant used inside a function body reads the same value as at the
+/// top level of a script.
+#[test]
+fn test_math_constant_read_inside_function() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.math.{PI}
+
+fn half_turn() float
+    return PI
+
+fn main()
+    println(f"{half_turn()}")
+"#,
+        "3.141592653589793",
+    );
+}
+
 #[test]
 fn test_math_functions_basic() {
     assert_runs_with_output(

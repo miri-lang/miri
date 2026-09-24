@@ -6,24 +6,27 @@
 //! Extracts the loop body into a synthesized anonymous `gpu fn` kernel and
 //! emits a `TerminatorKind::GpuLaunch` at the call site.
 //!
-//! Range bound modes:
-//! - Range start must be an Int literal.
-//! - Range end may be a runtime Int expression (e.g., `let n = 4; forall i in 0..n`).
-//!   When end is a literal, uses fast constant-grid path.
-//!   When end is a runtime expression, computes grid at runtime and passes the
-//!   bounds-check limit as a uniform buffer to the kernel.
+//! Range bounds, per axis:
+//! - The start and the end may each be an Int literal or a runtime Int
+//!   expression (e.g., `let n = 4; forall i in 0..n`). When both are literals
+//!   the grid is a compile-time constant and the start is baked into the
+//!   kernel. Otherwise the grid is computed at run time, and each runtime
+//!   bound and each runtime start reaches the kernel as an `int` uniform.
 //!
-//! Other restrictions:
-//! - Accepts 1, 2, or 3 loop variables (1D, 2D, and 3D all supported).
-//! - The body may reference outer-scope variables whose types are GPU
-//!   buffers (`Array<T, N>`); all such captures are exposed as read-write
-//!   storage buffers.
+//! Loop variables and captures:
+//! - Accepts 1, 2, or 3 loop variables (1D, 2D, and 3D).
+//! - A captured array or list must be gpu-resident. It binds as a read-write
+//!   storage buffer when the body writes it — by a store or as the first
+//!   argument of an atomic builtin — or when its elements are atomic, and as a
+//!   read-only storage buffer otherwise.
+//! - A captured scalar is passed by value and is read-only in the kernel.
 
 use crate::diagnostics::DiagnosticCode;
 use std::collections::HashSet;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::gpu_wire::{buffer_conversion, scalar_capture_wire};
+use crate::ast::gpu_writes::visit_buffer_writes;
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::node::IdNode;
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
@@ -135,7 +138,7 @@ const DEVICE_INDEX_OVERFLOW: &str = "more threads than a 32-bit device index can
 
 /// How a `forall` kernel maps its dispatch grid onto the loop's x index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GridLayout {
+pub(crate) enum GridLayout {
     /// Each loop axis owns its grid axis: `workgroup_id * block + local_id`.
     PerAxis,
     /// A 1-D loop whose workgroups may exceed one grid axis and spill into the
@@ -144,10 +147,13 @@ enum GridLayout {
 }
 
 /// How a kernel turns its thread coordinates into loop variables: the grid
-/// layout it was dispatched with, and each axis's runtime start uniform
-/// (`None` for a literal start).
+/// layout it was dispatched with, the literal grid and workgroup size (`None`
+/// grid when it is computed at run time), and each axis's runtime start
+/// uniform (`None` for a literal start).
 struct LoopIndexing<'a> {
     layout: GridLayout,
+    grid: Option<[u32; 3]>,
+    block: [u32; 3],
     start_uniforms: &'a [Option<Local>],
 }
 
@@ -179,8 +185,7 @@ pub fn lower_forall_gpu(
     // path (a real dispatch grid) rather than the runtime `_bound` uniform.
     let folded_iterable = fold_iterable_bounds(ctx, iterable);
     let axes = extract_axes(decls, &folded_iterable, span, rank)?;
-    let loop_var_name = decls[0].name.clone();
-    let captures = collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+    let captures = collect_capture_infos(ctx, body, decls, *span)?;
 
     let kernel_name = format!("miri_gpu_forall_{}", ctx.kernel_index(stmt_id));
 
@@ -312,14 +317,37 @@ fn compute_kernel_grid_size(
             unreachable!("literal mode checked above");
         }
     }
-    let grid = spill_literal_grid(axes.len(), grid);
-    if axes.len() == 1 && dispatched_threads(grid, block) > MAX_INDEXED_THREADS {
+    fit_literal_grid(axes.len(), grid, block, span).map(Some)
+}
+
+/// The dispatch grid of a 1-D loop of `length` iterations in workgroups of
+/// `block` threads, spilled past one grid axis when it must be.
+pub(crate) fn literal_grid_1d(
+    length: i64,
+    block: u32,
+    span: Span,
+) -> Result<[u32; 3], LoweringError> {
+    let grid = [literal_grid_dim(length, block), 1, 1];
+    fit_literal_grid(1, grid, [block, 1, 1], span)
+}
+
+/// Spreads a rank-`rank` literal grid so no axis exceeds
+/// [`MAX_WORKGROUPS_PER_AXIS`], refusing a 1-D loop with more threads than the
+/// device index can number.
+fn fit_literal_grid(
+    rank: usize,
+    grid: [u32; 3],
+    block: [u32; 3],
+    span: Span,
+) -> Result<[u32; 3], LoweringError> {
+    let grid = spill_literal_grid(rank, grid);
+    if rank == 1 && dispatched_threads(grid, block) > MAX_INDEXED_THREADS {
         return Err(LoweringError::unsupported_expression(
             format!("forall: this loop dispatches {DEVICE_INDEX_OVERFLOW}"),
             span,
         ));
     }
-    Ok(Some(grid))
+    Ok(grid)
 }
 
 /// Every thread a grid of `block`-sized workgroups dispatches.
@@ -330,7 +358,7 @@ fn dispatched_threads(grid: [u32; 3], block: [u32; 3]) -> u64 {
 /// A 1-D literal grid with its x workgroups spread over the x and y axes so
 /// neither exceeds [`MAX_WORKGROUPS_PER_AXIS`]. A grid that fits one axis, and
 /// every 2-D or 3-D grid, is returned unchanged.
-fn spill_literal_grid(rank: usize, grid: [u32; 3]) -> [u32; 3] {
+pub(crate) fn spill_literal_grid(rank: usize, grid: [u32; 3]) -> [u32; 3] {
     if rank != 1 {
         return grid;
     }
@@ -340,7 +368,7 @@ fn spill_literal_grid(rank: usize, grid: [u32; 3]) -> [u32; 3] {
 
 /// The kernel grid layout: a 1-D loop spills when its grid is computed at run
 /// time or its literal grid exceeds one axis.
-fn grid_layout(kernel_grid: Option<[u32; 3]>, rank: usize) -> GridLayout {
+pub(crate) fn grid_layout(kernel_grid: Option<[u32; 3]>, rank: usize) -> GridLayout {
     match kernel_grid {
         _ if rank != 1 => GridLayout::PerAxis,
         Some([_, 1, _]) => GridLayout::PerAxis,
@@ -372,7 +400,7 @@ fn compute_kernel_logical_extent(
 }
 
 /// The kernel-side start offset for an axis: a compile-time constant for a
-/// literal start, or the (i64-cast) start uniform for a runtime start.
+/// literal start, or the start uniform, read as `int`, for a runtime start.
 ///
 /// `start_uniform` is the kernel's `_start_{x,y,z}` uniform parameter local; it
 /// is `Some` exactly when the axis start is runtime. When it is missing for a
@@ -401,38 +429,108 @@ fn axis_start_operand(
     }
 }
 
+/// One loop variable of a kernel: its local, the start it counts from, and
+/// whether its bounds guard must also check `local >= start`.
+struct LoopVariable {
+    local: Local,
+    start: Operand,
+    guards_start: bool,
+}
+
 /// Builds loop local variables from thread indices and axis starts.
 fn build_loop_locals(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
     indexing: LoopIndexing,
     span: Span,
-) -> Vec<Local> {
+) -> Vec<LoopVariable> {
     let i64_ty = Type::new(TypeKind::Int, span);
-    let mut loop_locals = Vec::new();
+    let mut loop_vars = Vec::new();
 
     for (i, axis) in axes.iter().enumerate() {
-        let thread_int = match indexing.layout {
-            GridLayout::PerAxis => compute_thread_index(ctx, axis.dimension, span),
-            GridLayout::SpilledX => compute_spilled_thread_index(ctx, span),
-        };
+        let thread_int = compute_loop_thread_index(ctx, indexing.layout, axis.dimension, span);
         let start_uniform = indexing.start_uniforms.get(i).copied().flatten();
-        let start_op = axis_start_operand(ctx, axis, start_uniform, span);
-        let loop_local = ctx.push_local(axis.name.clone(), i64_ty.clone(), span);
+        let start = axis_start_operand(ctx, axis, start_uniform, span);
+        let local = ctx.push_local(axis.name.clone(), i64_ty.clone(), span);
         push_assign(
             ctx,
-            loop_local,
+            local,
             Rvalue::BinaryOp(
                 BinOp::Add,
                 Box::new(Operand::Copy(Place::new(thread_int))),
-                Box::new(start_op),
+                Box::new(start.clone()),
             ),
             span,
         );
-        loop_locals.push(loop_local);
+        let guards_start = index_may_wrap(axis, &indexing);
+        loop_vars.push(LoopVariable {
+            local,
+            start,
+            guards_start,
+        });
     }
 
-    loop_locals
+    loop_vars
+}
+
+/// Whether a thread of `axis` past the end of its range can carry the loop
+/// variable past the device `int`'s maximum, wrapping it negative and under the
+/// `< end` guard. Such an axis also guards `>= start`: a wrapped index is
+/// always below the start it was counted from. A literal grid decides it
+/// statically; a grid computed at run time always needs the guard.
+fn index_may_wrap(axis: &AxisSpec, indexing: &LoopIndexing) -> bool {
+    let (AxisStart::Literal(start), Some(grid)) = (&axis.start, indexing.grid) else {
+        return true;
+    };
+    let dim = axis.dimension as usize;
+    let threads = match indexing.layout {
+        GridLayout::PerAxis => u64::from(grid[dim]) * u64::from(indexing.block[dim]),
+        GridLayout::SpilledX => {
+            dispatched_threads([grid[0], grid[1], 1], [indexing.block[0], 1, 1])
+        }
+    };
+    i128::from(*start) + i128::from(threads) - 1 > i128::from(i32::MAX)
+}
+
+/// Lowers the body of a 1-D kernel over `axis` behind its bounds guard, the
+/// way a `forall` kernel does: the loop variable counts from the axis start,
+/// the guard checks `< end` against the literal end or `bound_uniform`, and
+/// `>= start` too wherever the loop variable can wrap. `grid` is the literal
+/// dispatch grid, `None` when it is computed at run time.
+pub(crate) fn emit_1d_kernel_loop(
+    ctx: &mut LoweringContext,
+    axis: &AxisSpec,
+    grid: Option<[u32; 3]>,
+    block: [u32; 3],
+    bound_uniform: Option<Local>,
+    body: &Statement,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let axes = std::slice::from_ref(axis);
+    let indexing = LoopIndexing {
+        layout: grid_layout(grid, 1),
+        grid,
+        block,
+        start_uniforms: &[None],
+    };
+    let loop_vars = build_loop_locals(ctx, axes, indexing, span);
+    let bounds: Vec<Local> = bound_uniform.into_iter().collect();
+    let runtime = bound_uniform.is_some();
+    emit_bounds_check_nd(ctx, axes, &loop_vars, &bounds, runtime, body, span)
+}
+
+/// The zero-based index of the calling thread along `dimension` of a grid laid
+/// out as `layout`.
+pub(crate) fn compute_loop_thread_index(
+    ctx: &mut LoweringContext,
+    layout: GridLayout,
+    dimension: Dimension,
+    span: Span,
+) -> Local {
+    match layout {
+        GridLayout::PerAxis => compute_thread_index(ctx, dimension, span),
+        GridLayout::SpilledX => compute_spilled_thread_index(ctx, span),
+    }
 }
 
 /// The kernel parameter locals for the runtime uniforms of a `forall` loop.
@@ -572,16 +670,8 @@ fn build_kernel_body_nd(
         captures.iter().partition(|c| !c.is_scalar);
 
     let runtime = axes.iter().any(|a| a.is_runtime());
-
-    let bound_count = if runtime { rank } else { 0 };
-    let start_count = if runtime {
-        axes.iter()
-            .filter(|a| matches!(a.start, AxisStart::Runtime(_)))
-            .count()
-    } else {
-        0
-    };
-    let arg_count = buffer_captures.len() + scalar_captures.len() + bound_count + start_count;
+    let uniform_count = launch_uniform_count(axes, runtime);
+    let arg_count = buffer_captures.len() + scalar_captures.len() + uniform_count;
 
     let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
     kernel
@@ -603,7 +693,7 @@ fn build_kernel_body_nd(
     mark_written_params(
         &mut kernel,
         &buffer_captures,
-        bound_count + start_count + scalar_captures.len(),
+        uniform_count + scalar_captures.len(),
     );
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
@@ -619,14 +709,16 @@ fn build_kernel_body_nd(
 
     let indexing = LoopIndexing {
         layout: grid_layout(grid_size, rank),
+        grid: grid_size,
+        block,
         start_uniforms: &uniforms.starts,
     };
-    let loop_locals = build_loop_locals(&mut ctx, axes, indexing, span);
+    let loop_vars = build_loop_locals(&mut ctx, axes, indexing, span);
 
     emit_bounds_check_nd(
         &mut ctx,
         axes,
-        &loop_locals,
+        &loop_vars,
         &uniforms.bounds,
         runtime,
         body,
@@ -634,6 +726,19 @@ fn build_kernel_body_nd(
     )?;
 
     Ok(ctx.body)
+}
+
+/// How many launch uniforms a kernel over `axes` takes: in runtime mode, one
+/// loop bound per axis plus one start per axis whose start is runtime.
+fn launch_uniform_count(axes: &[AxisSpec], runtime: bool) -> usize {
+    if !runtime {
+        return 0;
+    }
+    let runtime_starts = axes
+        .iter()
+        .filter(|a| matches!(a.start, AxisStart::Runtime(_)))
+        .count();
+    axes.len() + runtime_starts
 }
 
 /// Records which kernel params the kernel writes. Mirrors the param push order
@@ -653,14 +758,16 @@ fn mark_written_params(
     kernel.param_written = param_written;
 }
 
-/// Builds a per-axis bounds check condition: `loop_var_i < limit_i`.
+/// Builds a per-axis bounds check condition: `loop_var_i < limit_i`, and
+/// `loop_var_i >= start_i` too when the loop variable can wrap.
 fn build_per_axis_check(
     ctx: &mut LoweringContext,
     axis: &AxisSpec,
-    loop_local: Local,
+    loop_var: &LoopVariable,
     uniform_bound: Option<Local>,
     span: Span,
 ) -> Result<Local, LoweringError> {
+    let loop_local = loop_var.local;
     let i64_ty = Type::new(TypeKind::Int, span);
 
     let limit_operand = if let Some(uniform_local) = uniform_bound {
@@ -698,8 +805,22 @@ fn build_per_axis_check(
         ),
         span,
     );
+    if !loop_var.guards_start {
+        return Ok(check_local);
+    }
 
-    Ok(check_local)
+    let from_start = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        from_start,
+        Rvalue::BinaryOp(
+            BinOp::Ge,
+            Box::new(Operand::Copy(Place::new(loop_local))),
+            Box::new(loop_var.start.clone()),
+        ),
+        span,
+    );
+    Ok(fold_conditions(ctx, &[check_local, from_start], span))
 }
 
 /// Folds per-axis conditions into a single AND condition.
@@ -732,21 +853,20 @@ fn fold_conditions(ctx: &mut LoweringContext, conditions: &[Local], span: Span) 
 fn emit_bounds_check_nd(
     ctx: &mut LoweringContext,
     axes: &[AxisSpec],
-    loop_locals: &[Local],
+    loop_vars: &[LoopVariable],
     uniform_bounds: &[Local],
     runtime: bool,
     body: &Statement,
     span: Span,
 ) -> Result<(), LoweringError> {
     let mut bound_checks = Vec::new();
-    for (i, axis) in axes.iter().enumerate() {
-        let loop_local = loop_locals[i];
+    for (i, (axis, loop_var)) in axes.iter().zip(loop_vars).enumerate() {
         let uniform_bound = if runtime {
             Some(uniform_bounds[i])
         } else {
             None
         };
-        let check = build_per_axis_check(ctx, axis, loop_local, uniform_bound, span)?;
+        let check = build_per_axis_check(ctx, axis, loop_var, uniform_bound, span)?;
         bound_checks.push(check);
     }
 
@@ -1079,93 +1199,14 @@ fn emit_gpu_launch_nd(
     )
 }
 
+/// The names `body` writes, through a store or an atomic builtin, wherever in
+/// the body the write sits.
 fn collect_written_captures(body: &Statement) -> HashSet<String> {
     let mut written = HashSet::new();
-    visit_written_stmt(body, &mut written);
+    visit_buffer_writes(body, &mut |name, _| {
+        written.insert(name.to_string());
+    });
     written
-}
-
-fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
-    match &stmt.node {
-        StatementKind::Block(stmts) => {
-            for s in stmts {
-                visit_written_stmt(s, written);
-            }
-        }
-        StatementKind::Expression(expr) => visit_written_expr(expr, written),
-        StatementKind::Variable(_, _) => {}
-        StatementKind::Return(_) => {}
-        StatementKind::If(_, then_branch, else_branch, _) => {
-            visit_written_stmt(then_branch, written);
-            if let Some(eb) = else_branch {
-                visit_written_stmt(eb, written);
-            }
-        }
-        StatementKind::While(_, body, _) => visit_written_stmt(body, written),
-        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
-            visit_written_stmt(body, written);
-        }
-        StatementKind::Forall { body, .. } => {
-            visit_written_stmt(body, written);
-        }
-        StatementKind::GpuFrameBlock(block) => {
-            visit_written_stmt(block, written);
-        }
-        StatementKind::Empty
-        | StatementKind::Break
-        | StatementKind::Continue
-        | StatementKind::Use(_, _)
-        | StatementKind::Type(_, _)
-        | StatementKind::FunctionDeclaration(_)
-        | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _, _)
-        | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
-        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
-    }
-}
-
-fn visit_written_expr(expr: &Expression, written: &mut HashSet<String>) {
-    match &expr.node {
-        ExpressionKind::Assignment(lhs, _, rhs) => {
-            extract_written_lhs(lhs, written);
-            visit_written_expr(rhs, written);
-        }
-        ExpressionKind::Call(func, args) => {
-            if let ExpressionKind::Identifier(name, _) = &func.node {
-                if crate::mir::backend::gpu::GpuAtomicOp::from_builtin_name(name).is_some() {
-                    if let Some(buf) = args.first() {
-                        if let ExpressionKind::Identifier(buf_name, _) = &buf.node {
-                            written.insert(buf_name.clone());
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn extract_written_lhs(
-    lhs: &crate::ast::expression::LeftHandSideExpression,
-    written: &mut HashSet<String>,
-) {
-    use crate::ast::expression::LeftHandSideExpression;
-    match lhs {
-        LeftHandSideExpression::Identifier(expr) => {
-            if let ExpressionKind::Identifier(name, _) = &expr.node {
-                written.insert(name.clone());
-            }
-        }
-        LeftHandSideExpression::Index(expr) | LeftHandSideExpression::Member(expr) => {
-            if let ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) = &expr.node {
-                if let ExpressionKind::Identifier(name, _) = &base.node {
-                    written.insert(name.clone());
-                }
-            }
-        }
-    }
 }
 
 fn visit_lhs(
@@ -1240,13 +1281,15 @@ pub fn int_literal_to_i64(lit: &IntegerLiteral) -> i64 {
     }
 }
 
+/// The outer bindings `body` reads or writes, in first-use order. Every loop
+/// variable in `loop_vars` is bound by the loop itself, so none of them is a
+/// capture even where it shadows an outer binding of the same name.
 pub fn collect_outer_captures(
     body: &Statement,
-    loop_var: &str,
+    loop_vars: &[VariableDeclaration],
     ctx: &LoweringContext,
 ) -> Vec<String> {
-    let mut bound: HashSet<String> = HashSet::new();
-    bound.insert(loop_var.to_string());
+    let mut bound: HashSet<String> = loop_vars.iter().map(|d| d.name.clone()).collect();
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut ordered: Vec<String> = Vec::new();
@@ -1465,10 +1508,10 @@ pub struct CaptureInfo {
 pub fn collect_capture_infos(
     ctx: &LoweringContext,
     body: &Statement,
-    loop_var_name: &str,
+    loop_vars: &[VariableDeclaration],
     span: Span,
 ) -> Result<Vec<CaptureInfo>, LoweringError> {
-    let capture_names = collect_outer_captures(body, loop_var_name, ctx);
+    let capture_names = collect_outer_captures(body, loop_vars, ctx);
     let written = collect_written_captures(body);
     let mut captures: Vec<CaptureInfo> = Vec::with_capacity(capture_names.len());
 
@@ -1709,7 +1752,7 @@ pub fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Spa
 /// grid axis: `(workgroup_id.y * num_workgroups.x + workgroup_id.x) * block +
 /// local_id.x`. The flattened workgroup id stays below `65535²`, inside `u32`;
 /// the multiply by the block size is done in `int` so the index does not wrap.
-fn compute_spilled_thread_index(ctx: &mut LoweringContext, span: Span) -> Local {
+pub fn compute_spilled_thread_index(ctx: &mut LoweringContext, span: Span) -> Local {
     let local_id = push_u32_intrinsic(ctx, GpuIntrinsic::ThreadIdx(Dimension::X), span);
     let column = push_u32_intrinsic(ctx, GpuIntrinsic::BlockIdx(Dimension::X), span);
     let row = push_u32_intrinsic(ctx, GpuIntrinsic::BlockIdx(Dimension::Y), span);
@@ -1737,7 +1780,11 @@ fn compute_spilled_thread_index(ctx: &mut LoweringContext, span: Span) -> Local 
 /// neither exceeds [`MAX_WORKGROUPS_PER_AXIS`]: `rows = (count - 1) / max + 1`
 /// and `columns = ceil(count / rows)`. A count that fits one axis keeps one
 /// row, and a count of zero yields zero columns.
-fn spill_runtime_grid(ctx: &mut LoweringContext, workgroups: Local, span: Span) -> (Local, Local) {
+pub(crate) fn spill_runtime_grid(
+    ctx: &mut LoweringContext,
+    workgroups: Local,
+    span: Span,
+) -> (Local, Local) {
     let i64_ty = Type::new(TypeKind::Int, span);
     let int = |value: i64| int_constant(value, span);
     let binary = |ctx: &mut LoweringContext, op: BinOp, lhs: Operand, rhs: Operand| {
@@ -1954,63 +2001,4 @@ pub fn compute_clamped_length(
         span,
     );
     clamped_local
-}
-
-/// Emits bounds check loop with uniform parameter (for 1D GPU frame or forall).
-/// Assumes loop_local and uniform_param are already initialized.
-pub fn emit_bounds_check_loop(
-    ctx: &mut LoweringContext,
-    loop_local: Local,
-    uniform_param: Local,
-    body: &Statement,
-    span: Span,
-) -> Result<(), LoweringError> {
-    let i64_ty = Type::new(TypeKind::Int, span);
-    let uniform_cast_local = ctx.push_temp(i64_ty.clone(), span);
-    push_assign(
-        ctx,
-        uniform_cast_local,
-        Rvalue::Cast(Box::new(Operand::Copy(Place::new(uniform_param))), i64_ty),
-        span,
-    );
-
-    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
-    push_assign(
-        ctx,
-        cond_local,
-        Rvalue::BinaryOp(
-            BinOp::Lt,
-            Box::new(Operand::Copy(Place::new(loop_local))),
-            Box::new(Operand::Copy(Place::new(uniform_cast_local))),
-        ),
-        span,
-    );
-
-    let body_bb = ctx.new_basic_block();
-    let exit_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: Operand::Copy(Place::new(cond_local)),
-            targets: vec![(Discriminant::bool_true(), body_bb)],
-            otherwise: exit_bb,
-        },
-        span,
-    ));
-
-    ctx.set_current_block(body_bb);
-    lower_statement(ctx, body)?;
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: exit_bb },
-            span,
-        ));
-    }
-
-    ctx.set_current_block(exit_bb);
-    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
-
-    Ok(())
 }

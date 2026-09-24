@@ -364,8 +364,9 @@ fn main()
 }
 
 /// The assignment spelling pays exactly one readback, and the gpu binding
-/// survives it: a declaring readback afterwards answers with the same values
-/// and costs a second one.
+/// survives it: a declaring read afterwards answers with the same values, and
+/// with no launch between the two it finds the host array current and costs
+/// no second readback.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
@@ -390,7 +391,7 @@ fn main()
     let h2 = arr
     println(f\"{h2[3]} {gpu_readbacks()}\")
 ",
-        "9 1\n9 2",
+        "9 1\n9 1",
     );
 }
 

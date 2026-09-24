@@ -41,6 +41,7 @@
 
 use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::factory::make_type;
+use crate::ast::gpu_writes::{visit_buffer_writes, BufferWrite};
 use crate::ast::statement;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
@@ -925,7 +926,7 @@ impl TypeChecker {
 
         // Flatten the block into its ordered passes, expanding any literal-count
         // `for _ in 0..k` repeat. Malformed children are reported here.
-        let passes = match crate::mir::lowering::gpu_frame::flatten_frame_passes(stmts) {
+        let passes = match crate::ast::gpu_frame_passes::flatten_frame_passes(stmts) {
             Ok(passes) => passes,
             Err((msg, sp)) => {
                 self.report_error(DiagnosticCode::TarGpuParallelConstruct, msg, sp);
@@ -1391,141 +1392,25 @@ fn collect_pass_buffer_sets(
     (read_set, write_set)
 }
 
-/// Helper: collects all variable names that are written to in a statement.
+/// Collects every name a statement writes, through a store or an atomic
+/// builtin, wherever in the statement the write sits.
 fn collect_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
     let mut written = std::collections::HashSet::new();
-    visit_written_stmt(stmt, &mut written);
+    visit_buffer_writes(stmt, &mut |name, _| {
+        written.insert(name.to_string());
+    });
     written
 }
 
 /// Collects the names of buffers mutated by an atomic builtin in a pass body.
 fn collect_atomic_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
-    visit_atomic_written_stmt(stmt, &mut names);
+    visit_buffer_writes(stmt, &mut |name, kind| {
+        if kind == BufferWrite::Atomic {
+            names.insert(name.to_string());
+        }
+    });
     names
-}
-
-fn visit_atomic_written_stmt(stmt: &Statement, names: &mut std::collections::HashSet<String>) {
-    match &stmt.node {
-        StatementKind::Block(stmts) => {
-            for s in stmts {
-                visit_atomic_written_stmt(s, names);
-            }
-        }
-        StatementKind::Expression(expr) => visit_atomic_written_expr(expr, names),
-        StatementKind::If(_, then_branch, else_branch, _) => {
-            visit_atomic_written_stmt(then_branch, names);
-            if let Some(eb) = else_branch {
-                visit_atomic_written_stmt(eb, names);
-            }
-        }
-        StatementKind::While(_, body, _) => visit_atomic_written_stmt(body, names),
-        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
-            visit_atomic_written_stmt(body, names);
-        }
-        StatementKind::Forall { body, .. } => visit_atomic_written_stmt(body, names),
-        StatementKind::GpuFrameBlock(block) => visit_atomic_written_stmt(block, names),
-        _ => {}
-    }
-}
-
-fn visit_atomic_written_expr(expr: &Expression, names: &mut std::collections::HashSet<String>) {
-    if let ExpressionKind::Call(func, args) = &expr.node {
-        if let Some(name) = atomic_builtin_buffer_name(func, args) {
-            names.insert(name);
-        }
-    }
-}
-
-fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<String>) {
-    match &stmt.node {
-        StatementKind::Block(stmts) => {
-            for s in stmts {
-                visit_written_stmt(s, written);
-            }
-        }
-        StatementKind::Expression(expr) => visit_written_expr(expr, written),
-        StatementKind::Variable(_, _) => {}
-        StatementKind::Return(_) => {}
-        StatementKind::If(_, then_branch, else_branch, _) => {
-            visit_written_stmt(then_branch, written);
-            if let Some(eb) = else_branch {
-                visit_written_stmt(eb, written);
-            }
-        }
-        StatementKind::While(_, body, _) => visit_written_stmt(body, written),
-        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
-            visit_written_stmt(body, written);
-        }
-        StatementKind::Forall { body, .. } => {
-            visit_written_stmt(body, written);
-        }
-        StatementKind::GpuFrameBlock(block) => {
-            visit_written_stmt(block, written);
-        }
-        StatementKind::Empty
-        | StatementKind::Break
-        | StatementKind::Continue
-        | StatementKind::Use(_, _)
-        | StatementKind::Type(_, _)
-        | StatementKind::FunctionDeclaration(_)
-        | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _, _)
-        | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
-        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
-    }
-}
-
-fn visit_written_expr(expr: &Expression, written: &mut std::collections::HashSet<String>) {
-    match &expr.node {
-        ExpressionKind::Assignment(lhs, _, rhs) => {
-            extract_written_lhs(lhs, written);
-            visit_written_expr(rhs, written);
-        }
-        // An atomic builtin (`atomic_add(buf, ..)`) writes its buffer argument.
-        ExpressionKind::Call(func, args) => {
-            if let Some(name) = atomic_builtin_buffer_name(func, args) {
-                written.insert(name);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// If `func`/`args` form an atomic builtin call (`atomic_add(buf, ..)`), returns
-/// the identifier name of the buffer argument it mutates.
-fn atomic_builtin_buffer_name(func: &Expression, args: &[Expression]) -> Option<String> {
-    let ExpressionKind::Identifier(fname, _) = &func.node else {
-        return None;
-    };
-    crate::mir::backend::gpu::GpuAtomicOp::from_builtin_name(fname)?;
-    match args.first().map(|a| &a.node) {
-        Some(ExpressionKind::Identifier(buf, _)) => Some(buf.clone()),
-        _ => None,
-    }
-}
-
-fn extract_written_lhs(
-    lhs: &crate::ast::expression::LeftHandSideExpression,
-    written: &mut std::collections::HashSet<String>,
-) {
-    use crate::ast::expression::LeftHandSideExpression;
-    match lhs {
-        LeftHandSideExpression::Identifier(expr) => {
-            if let ExpressionKind::Identifier(name, _) = &expr.node {
-                written.insert(name.clone());
-            }
-        }
-        LeftHandSideExpression::Index(expr) | LeftHandSideExpression::Member(expr) => {
-            if let ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) = &expr.node {
-                if let ExpressionKind::Identifier(name, _) = &base.node {
-                    written.insert(name.clone());
-                }
-            }
-        }
-    }
 }
 
 /// Helper: determines if a type is a gpu-compatible buffer type.

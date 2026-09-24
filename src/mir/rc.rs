@@ -6,6 +6,7 @@
 //! This module is the single authority on whether a type requires RC management.
 //! Both the Perceus optimization pass and the MIR lowering context delegate here.
 
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use std::collections::HashSet;
 
@@ -56,8 +57,8 @@ pub fn is_managed_type(
                 return false;
             }
 
-            // Atomic<u32> and Atomic<i32> are scalar wrappers, not managed.
-            if name == crate::ast::types::ATOMIC_TYPE_NAME {
+            // `Atomic<u32>` and `Atomic<i32>` are scalar wrappers, not managed.
+            if is_builtin_atomic(name, args.as_deref()) {
                 return false;
             }
 
@@ -85,31 +86,23 @@ pub fn is_managed_type(
 /// as a collection element or aggregate field they are raw bytes, not a managed
 /// pointer, so they must never be DecRef'd here.
 ///
-/// A function value is a closure allocation of its own wherever it is held: a
-/// closure's capture, a collection element, and an aggregate field all release
-/// it the same way.
+/// A function value is a closure allocation of its own wherever it is held, so
+/// a collection element or an aggregate field holding one releases it. A
+/// closure's captures are one-word slots and are decided by
+/// [`is_word_slot_managed`] instead.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
-    if let TypeKind::Custom(name, _) = kind {
+    if let TypeKind::Custom(name, args) = kind {
         // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
         // stored by value, never reference-counted — exclude them from the
-        // managed-element drop path. A vector is recognized as the field-layout
-        // path recognizes one, so a user type that merely reuses the name stays
-        // managed and its allocation is released.
+        // managed-element drop path. Each is recognized by its component, as
+        // the field-layout path recognizes it, so a user type that merely
+        // reuses the name stays managed and its allocation is released.
         //
-        // TODO: `Atomic` is still matched by name alone, so a user type of that
-        // name is wrongly treated as an inline scalar and its allocation leaks.
-        // Applying the same rule here needs `MirType::Custom` to carry the
-        // component type too, or MIR keeps calling the user type unmanaged and
-        // the two layers disagree about who releases it.
-        //
-        // TODO: a vector held as a field of a user struct reads back garbage and
-        // leaks. A vector binding now carries its own allocation, so the struct's
-        // slot holds a pointer while this predicate and the field-layout path
-        // both read it as inline bytes — `s.v.x` decodes the pointer's low half
-        // as a component. Deciding inline-versus-pointer by the field's position
-        // rather than by its type alone is what closes it.
+        // A class or struct field, a tuple element, and an enum or optional
+        // payload hold a vector as a pointer instead; the drop path for those
+        // slots asks `is_word_slot_managed`.
         if crate::ast::types::vec_type_dim(kind).is_some()
-            || name == crate::ast::types::ATOMIC_TYPE_NAME
+            || is_builtin_atomic(name, args.as_deref())
         {
             return false;
         }
@@ -128,12 +121,31 @@ pub fn is_field_managed(kind: &TypeKind) -> bool {
     )
 }
 
-/// Returns true if a value held in an optional's payload slot is managed.
+/// Whether `name<args>` is the compiler-known atomic element type.
 ///
-/// An optional stores its payload as one value word, never as inline bytes, so a
-/// vector reaches it as the pointer to an allocation of its own — the one place
-/// the inline-layout reasoning behind [`is_field_managed`] does not hold. Freeing
-/// the box without releasing that pointer leaks the vector.
-pub fn is_optional_payload_managed(kind: &TypeKind) -> bool {
+/// That type is always written with its scalar component (`Atomic<u32>`), and
+/// is stored as that scalar. A user type that only shares the name carries no
+/// component, and is an ordinary heap object like any other class or struct.
+pub fn is_builtin_atomic(name: &str, args: Option<&[Expression]>) -> bool {
+    name == crate::ast::types::ATOMIC_TYPE_NAME && atomic_component(args).is_some()
+}
+
+/// The scalar component `args` names for the atomic element type, if any.
+pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
+    args?
+        .first()
+        .filter(|arg| matches!(arg.node, ExpressionKind::Type(_, _)))
+}
+
+/// Returns true if a value held in a one-word slot — an optional's payload, an
+/// enum's payload, a tuple element, a field of a class or struct, or a
+/// closure's capture — is managed.
+///
+/// Such a slot holds its value as one word laid out at the field's own type,
+/// never as inline bytes, so a vector reaches it as the pointer to an allocation
+/// of its own — where the inline-layout reasoning behind [`is_field_managed`]
+/// does not hold. Freeing the holder without releasing that pointer leaks the
+/// vector.
+pub fn is_word_slot_managed(kind: &TypeKind) -> bool {
     is_field_managed(kind) || crate::ast::types::vec_type_dim(kind).is_some()
 }

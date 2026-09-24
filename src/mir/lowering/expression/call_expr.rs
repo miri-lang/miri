@@ -113,20 +113,13 @@ fn try_lower_testing_intrinsic(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let ExpressionKind::Identifier(name, _) = &func.node {
-        if testing_intrinsic::is_testing_intrinsic(name.as_str())
-            && testing_intrinsic::is_from_testing_module(ctx, name.as_str())
-        {
-            return Ok(Some(testing_intrinsic::lower_testing_intrinsic(
-                ctx,
-                expr,
-                name.as_str(),
-                args,
-                dest,
-            )?));
-        }
-    }
-    Ok(None)
+    let ExpressionKind::Identifier(name, _) = &func.node else {
+        return Ok(None);
+    };
+    let Some(intrinsic) = testing_intrinsic::testing_intrinsic_callee(ctx, name) else {
+        return Ok(None);
+    };
+    testing_intrinsic::lower_testing_intrinsic(ctx, expr, intrinsic, args, dest).map(Some)
 }
 
 fn try_lower_gpu_or_math_intrinsic(
@@ -510,19 +503,9 @@ fn try_lower_math_intrinsic(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let Some(intrinsic) = MathIntrinsic::from_name(name) else {
+    let Some(intrinsic) = crate::mir::lowering::dispatch::math_intrinsic_callee(ctx, name) else {
         return Ok(None);
     };
-
-    let is_from_math_module = ctx
-        .type_checker
-        .get_variable_module(name)
-        .map(|m| m == "system.math")
-        .unwrap_or(false);
-
-    if !is_from_math_module {
-        return Ok(None);
-    }
 
     let mut arg_ops = Vec::with_capacity(args.len());
     for arg in args {

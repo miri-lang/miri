@@ -212,6 +212,36 @@ pub(super) fn fixed_grid(
         })
 }
 
+/// Refuses a kernel outside a frame pass that reads a scalar input — a `gpu
+/// fn` scalar argument or a scalar a `forall` captures. Both are pooled into
+/// the kernel's scalar-input uniform, and the browser binds that uniform only
+/// for a frame pass (from the frame's own inputs), so any other kernel reading
+/// one would fail pipeline creation in the browser.
+pub(super) fn refuse_scalar_inputs(
+    body: &Body,
+    is_frame_step: bool,
+    site: &LaunchSite,
+) -> Result<(), CompilerError> {
+    let reads_scalar_input = body
+        .local_decls
+        .iter()
+        .skip(1)
+        .take(body.arg_count)
+        .any(|decl| {
+            decl.storage_class == StorageClass::UniformBuffer && decl.launch_uniform.is_none()
+        });
+    if is_frame_step || !reads_scalar_input {
+        return Ok(());
+    }
+    Err(refusal(
+        "this kernel reads a scalar input (a scalar argument or captured scalar); a web \
+         bundle binds scalar inputs only for a frame pass"
+            .to_string(),
+        site.span,
+        "fold the value into a literal or a `const`, or pass it in a device buffer",
+    ))
+}
+
 /// One device buffer of the bundle.
 #[derive(Debug, Clone)]
 pub(super) struct WebBuffer {

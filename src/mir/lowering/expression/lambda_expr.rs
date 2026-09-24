@@ -15,8 +15,9 @@
 //!   Local N+2..  = captured values (loaded from env_ptr in codegen)
 //!
 //! Capture detection: outer-scope variables are added to the lambda context so the
-//! body can reference them. After lowering, only those that are actually READ in the
-//! body MIR are kept as real captures. Unused ones are pruned.
+//! body can reference them. After lowering, only those the body MIR references —
+//! reads, stores through, indexes with, or passes to a call or kernel launch —
+//! are kept as real captures. Unused ones are pruned.
 
 use crate::ast::common::{FunctionProperties, Parameter};
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -25,10 +26,12 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
+use crate::mir::place::PlaceContext;
 use crate::mir::rvalue::AggregateKind;
+use crate::mir::visitor::Visitor;
 use crate::mir::{
-    Body, Local, LocalDecl, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
-    TerminatorKind,
+    BasicBlock, Body, Local, LocalDecl, Operand, Place, Rvalue, StatementKind as MirStatementKind,
+    Terminator, TerminatorKind,
 };
 
 use crate::mir::lowering::context::LoweringContext;
@@ -38,103 +41,63 @@ use crate::mir::lowering::{apply_generic_sub, resolve_execution_model};
 use std::collections::HashSet;
 use std::rc::Rc;
 
-/// Collect all `Local` indices that appear as operand sources in the body.
-/// This is used to detect which "potential captures" are actually referenced.
-fn collect_read_locals(body: &Body) -> HashSet<Local> {
-    let mut used = HashSet::new();
-    for block in &body.basic_blocks {
-        for stmt in &block.statements {
-            match &stmt.kind {
-                MirStatementKind::Assign(_, rvalue) | MirStatementKind::Reassign(_, rvalue) => {
-                    collect_rvalue_locals(rvalue, &mut used);
-                }
-                MirStatementKind::IncRef(place)
-                | MirStatementKind::DecRef(place)
-                | MirStatementKind::Dealloc(place) => {
-                    used.insert(place.local);
-                }
-                _ => {}
-            }
-        }
-        if let Some(term) = &block.terminator {
-            use crate::mir::TerminatorKind;
-            match &term.kind {
-                TerminatorKind::Call { func, args, .. } => {
-                    collect_operand_locals(func, &mut used);
-                    for arg in args {
-                        collect_operand_locals(arg, &mut used);
-                    }
-                }
-                TerminatorKind::VirtualCall { args, .. } => {
-                    for arg in args {
-                        collect_operand_locals(arg, &mut used);
-                    }
-                }
-                TerminatorKind::SwitchInt { discr, .. } => {
-                    collect_operand_locals(discr, &mut used);
-                }
-                _ => {}
-            }
-        }
-    }
-    used
+/// The locals a closure body references: every local it reads, stores
+/// through, indexes with, or hands to a call or a kernel launch.
+///
+/// Writing a local whole is not a reference: the body's copy of an enclosing
+/// variable it only ever overwrites needs no value from the environment.
+#[derive(Default)]
+struct ReferencedLocals {
+    locals: HashSet<Local>,
 }
 
-fn collect_operand_locals(op: &Operand, out: &mut HashSet<Local>) {
-    match op {
-        Operand::Copy(place) | Operand::Move(place) => {
-            out.insert(place.local);
+impl Visitor for ReferencedLocals {
+    fn visit_place(&mut self, place: &Place, context: PlaceContext, location: BasicBlock) {
+        if is_reference_to_base(place, context) {
+            self.visit_local(place.local, context, location);
         }
-        Operand::Constant(_) => {}
+        self.visit_projection(place, context, location);
+    }
+
+    fn visit_local(&mut self, local: Local, _context: PlaceContext, _location: BasicBlock) {
+        self.locals.insert(local);
+    }
+
+    fn visit_statement(&mut self, block: BasicBlock, statement: &crate::mir::Statement) {
+        match &statement.kind {
+            MirStatementKind::DecRef(place) | MirStatementKind::Dealloc(place) => {
+                self.visit_local(place.local, PlaceContext::MutatingUse, block);
+                self.visit_projection(place, PlaceContext::MutatingUse, block);
+            }
+            MirStatementKind::Assign(place, rvalue) | MirStatementKind::Reassign(place, rvalue) => {
+                self.visit_assign(block, place, rvalue);
+            }
+            MirStatementKind::IncRef(place) => {
+                self.visit_place(place, PlaceContext::NonMutatingUse, block);
+            }
+            MirStatementKind::StorageLive(_)
+            | MirStatementKind::StorageDead(_)
+            | MirStatementKind::Nop => {}
+        }
     }
 }
 
-fn collect_rvalue_locals(rv: &Rvalue, out: &mut HashSet<Local>) {
-    match rv {
-        Rvalue::Use(op) => collect_operand_locals(op, out),
-        Rvalue::Ref(place) => {
-            out.insert(place.local);
-        }
-        Rvalue::BinaryOp(_, lhs, rhs) => {
-            collect_operand_locals(lhs, out);
-            collect_operand_locals(rhs, out);
-        }
-        Rvalue::UnaryOp(_, op) => collect_operand_locals(op, out),
-        Rvalue::Cast(op, _) => collect_operand_locals(op, out),
-        Rvalue::Len(place) => {
-            out.insert(place.local);
-        }
-        Rvalue::Aggregate(_, ops) => {
-            for op in ops {
-                collect_operand_locals(op, out);
-            }
-        }
-        Rvalue::Phi(pairs) => {
-            for (op, _) in pairs {
-                collect_operand_locals(op, out);
-            }
-        }
-        Rvalue::GpuIntrinsic(_) => {}
-        Rvalue::MathIntrinsic(_, args) => {
-            for op in args {
-                collect_operand_locals(op, out);
-            }
-        }
-        Rvalue::AtomicOp {
-            buffer,
-            index,
-            value,
-            compare_expected,
-            ..
-        } => {
-            collect_operand_locals(buffer, out);
-            collect_operand_locals(index, out);
-            collect_operand_locals(value, out);
-            if let Some(expected) = compare_expected {
-                collect_operand_locals(expected, out);
-            }
-        }
+/// Whether `context` on `place` needs the value its base local already holds.
+/// A projected place always does — a store into `b.v` or `xs[i]` goes through
+/// the object `b` or `xs` holds — and so does any use that is not a write.
+fn is_reference_to_base(place: &Place, context: PlaceContext) -> bool {
+    match context {
+        PlaceContext::NonMutatingUse => true,
+        PlaceContext::MutatingUse => !place.projection.is_empty(),
+        PlaceContext::StorageLive | PlaceContext::StorageDead => false,
     }
+}
+
+/// Collect every local `body` references (see [`ReferencedLocals`]).
+fn collect_referenced_locals(body: &Body) -> HashSet<Local> {
+    let mut referenced = ReferencedLocals::default();
+    referenced.visit_body(body);
+    referenced.locals
 }
 
 pub(crate) fn lower_lambda_expr(
@@ -177,7 +140,7 @@ pub(crate) struct ClosureSource<'a> {
 /// Lower `closure`'s body as a separate function and store a closure over it in
 /// `dest` (a fresh temporary when `None`).
 ///
-/// The body sees every enclosing local; only those it actually reads become
+/// The body sees every enclosing local; only those it references become
 /// captures. That includes the enclosing `allocator`, so a call the body makes
 /// to a Miri function forwards the enclosing function's allocator.
 pub(crate) fn lower_closure(
@@ -226,7 +189,7 @@ fn lower_closure_body(
         lambda_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
     }
 
-    let captures = keep_read_captures(&mut lambda_ctx.body, &tentative_captures);
+    let captures = keep_referenced_captures(&mut lambda_ctx.body, &tentative_captures);
 
     // A body lowered inside this one — a nested lambda, or the thunk a function
     // reference needs — was registered against the inner context and would be
@@ -293,8 +256,8 @@ fn closure_context<'a>(
 /// closure's own name resolvable in the closure body, returning
 /// `(name, outer_local, lambda_local)` for each.
 ///
-/// All of them are potential captures; [`keep_read_captures`] prunes the ones
-/// the body never reads.
+/// All of them are potential captures; [`keep_referenced_captures`] prunes the ones
+/// the body never references.
 fn declare_tentative_captures(
     ctx: &LoweringContext,
     lambda_ctx: &mut LoweringContext,
@@ -332,21 +295,24 @@ fn capture_type(ctx: &LoweringContext, outer_local: Local) -> Type {
     }
 }
 
-/// Keep only the tentative captures whose closure-body local is actually READ,
-/// recording each kept one in `body.env_capture_locals`.
+/// Keep only the tentative captures whose closure-body local the body
+/// references, recording each kept one in `body.env_capture_locals`.
 ///
-/// An unread capture's local stays allocated but is left out of
+/// An unreferenced capture's local stays allocated but is left out of
 /// `env_capture_locals` and of the closure aggregate's operands. When the body
 /// never writes it either, its storage markers are removed too: the local is
 /// never initialized, and a `StorageDead` would have Perceus release whatever
 /// the uninitialized slot holds.
-fn keep_read_captures(body: &mut Body, tentative: &[(Rc<str>, Local, Local)]) -> Vec<CapturedVar> {
-    let read_locals = collect_read_locals(body);
+fn keep_referenced_captures(
+    body: &mut Body,
+    tentative: &[(Rc<str>, Local, Local)],
+) -> Vec<CapturedVar> {
+    let referenced_locals = collect_referenced_locals(body);
     let written_locals = body.written_locals();
     let mut captures = Vec::new();
     let mut untouched = HashSet::new();
     for (name, outer_local, lambda_local) in tentative {
-        if read_locals.contains(lambda_local) {
+        if referenced_locals.contains(lambda_local) {
             body.env_capture_locals.push(*lambda_local);
             captures.push(CapturedVar {
                 name: name.clone(),
@@ -378,18 +344,6 @@ fn remove_storage_markers(body: &mut Body, locals: &HashSet<Local>) {
     }
 }
 
-/// Read back every captured `gpu` binding before the closure copies it.
-///
-/// A capture is a copy taken when the closure is created, and a gpu binding's
-/// host value holds its initial contents until a readback writes the device's
-/// results over it. The closure therefore sees the device's results as of its
-/// creation; a launch after that point does not reach the closure's copy.
-fn fence_device_resident_captures(ctx: &mut LoweringContext, captures: &[CapturedVar], span: Span) {
-    for cap in captures {
-        crate::mir::lowering::variable::emit_local_readback(ctx, cap.outer_local, span);
-    }
-}
-
 /// Allocate the closure struct over `captures` at the creation site and store
 /// it in `dest` (a fresh temporary when `None`).
 fn emit_closure_aggregate(
@@ -398,8 +352,6 @@ fn emit_closure_aggregate(
     captures: &[CapturedVar],
     dest: Option<Place>,
 ) -> Operand {
-    fence_device_resident_captures(ctx, captures, closure.span);
-
     // Build capture operands from the outer scope's locals. A self-reference
     // becomes a counted closure value first, released once the aggregate has
     // taken its own reference.

@@ -40,6 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::gpu_wire::{device_scalar, scalar_capture_wire};
 use crate::ast::types::{
     TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, GPU_CONTEXT_TYPE_NAME, KERNEL_CONTEXT_IDENT,
     KERNEL_TYPE_NAME,
@@ -408,7 +409,7 @@ impl TypeChecker {
     /// at shader-module compilation with a generic backend error. Reporting here
     /// gives a source-cited diagnostic and a rename hint instead.
     fn check_gpu_function_name(&mut self, name: &str, span: Span) {
-        let Some(conflict) = crate::mir::backend::gpu::wgsl_name_conflict(name) else {
+        let Some(conflict) = crate::gpu_target::wgsl_name_conflict(name) else {
             return;
         };
         self.report_error_with_help(DiagnosticCode::TarGpuIncompatibleSignature,
@@ -459,6 +460,7 @@ impl TypeChecker {
             }
             if is_gpu_signature_type(&param_type.kind) {
                 self.reject_device_wide_integer(&param_type.kind, param.typ.span);
+                self.reject_laneless_scalar_param(param, &param_type);
                 continue;
             }
             self.report_error(DiagnosticCode::TarGpuIncompatibleSignature,
@@ -469,6 +471,32 @@ impl TypeChecker {
                 param.typ.span,
             );
         }
+    }
+
+    /// Rejects a scalar `gpu fn` parameter with no 32-bit lane.
+    ///
+    /// A launch hands a kernel its scalar arguments in one uniform block of
+    /// 32-bit lanes, the same block a `forall` fills from its captured
+    /// scalars, so a scalar is admitted on the rule captures follow
+    /// ([`scalar_capture_wire`]): `f64` and `f16` keep their own widths on the
+    /// device and have no lane to travel in.
+    fn reject_laneless_scalar_param(&mut self, param: &Parameter, param_type: &Type) {
+        let kind = &param_type.kind;
+        if device_scalar(kind).is_none() || scalar_capture_wire(kind).is_some() {
+            return;
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TarGpuIncompatibleSignature,
+            format!(
+                "Parameter '{}' has type '{}', which cannot be passed to a kernel: a launch \
+                 passes scalar arguments in 32-bit lanes",
+                param.name, param_type
+            ),
+            param.typ.span,
+            "declare the parameter as 'f32', 'i32', 'u32', 'int', 'float' or 'bool', and \
+             convert the value at the call site"
+                .to_string(),
+        );
     }
 
     fn check_function_body(

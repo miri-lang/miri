@@ -1367,7 +1367,7 @@ fn is_auto_copy_struct<'a>(
     }
     let mut size_visited = std::collections::HashSet::new();
     estimated_type_size(kind, type_definitions, &mut size_visited)
-        <= crate::mir::body::AUTO_COPY_MAX_SIZE
+        <= crate::ast::types::AUTO_COPY_MAX_SIZE
 }
 
 fn is_auto_copy_enum<'a>(
@@ -1386,7 +1386,7 @@ fn is_auto_copy_enum<'a>(
     }
     let mut size_visited = std::collections::HashSet::new();
     estimated_type_size(kind, type_definitions, &mut size_visited)
-        <= crate::mir::body::AUTO_COPY_MAX_SIZE
+        <= crate::ast::types::AUTO_COPY_MAX_SIZE
 }
 
 /// Estimates the byte size of a type for auto-copy threshold checking.

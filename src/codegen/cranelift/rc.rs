@@ -15,7 +15,7 @@ use crate::codegen::cranelift::translator::{
     empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::error::CodegenError;
-use crate::mir::rc::{is_field_managed, is_optional_payload_managed};
+use crate::mir::rc::{is_field_managed, is_word_slot_managed};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{EnumDefinition, TypeDefinition};
 
@@ -864,7 +864,7 @@ impl<'a> FunctionTranslator<'a> {
                 let ExpressionKind::Type(ty, _) = &expr.node else {
                     return None;
                 };
-                if !is_field_managed(&ty.kind) {
+                if !is_word_slot_managed(&ty.kind) {
                     return None;
                 }
                 let (offset, _) =
@@ -888,7 +888,7 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if is_optional_payload_managed(&inner.kind) {
+        if is_word_slot_managed(&inner.kind) {
             let ptr_type = type_ctx.ptr_type;
             let cl_inner_ty =
                 crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
@@ -1202,7 +1202,7 @@ impl<'a> FunctionTranslator<'a> {
                     {
                         continue;
                     }
-                    if is_field_managed(kind) {
+                    if is_word_slot_managed(kind) {
                         managed_fields.push((idx, kind.clone()));
                     }
                 }
@@ -1250,7 +1250,7 @@ impl<'a> FunctionTranslator<'a> {
             {
                 continue;
             }
-            if is_field_managed(&resolved.kind) {
+            if is_word_slot_managed(&resolved.kind) {
                 managed.push((idx, resolved.kind));
             }
         }
@@ -1385,7 +1385,7 @@ impl<'a> FunctionTranslator<'a> {
                         let kind = layout::enum_payload_field_kind(enum_def, &ty.kind, type_args);
                         let unresolved = enum_def.generics.is_some()
                             && Self::is_unresolved_generic_elem(&kind, type_ctx.type_definitions);
-                        (!unresolved && is_field_managed(&kind)).then_some((fi, kind))
+                        (!unresolved && is_word_slot_managed(&kind)).then_some((fi, kind))
                     })
                     .collect();
                 if managed.is_empty() {

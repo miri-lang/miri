@@ -60,10 +60,12 @@ pub enum GpuError {
         element_index: usize,
         value: u64,
     },
-    /// Grid dimensions exceed device limits or loop bound exceeds u32::MAX.
-    /// The reason string clarifies which: "grid dimensions" or "loop bound".
-    /// This is rejected before dispatch to avoid wgpu validation failures or
-    /// silent truncation of the bounds-check uniform.
+    /// The launch cannot be dispatched as sized: the grid exceeds the device's
+    /// per-dimension workgroup limit, the dispatch has more threads than a
+    /// 32-bit device index can number, a loop bound or range start lies outside
+    /// the device's 32-bit signed `int` range, or a buffer's device size
+    /// overflows. The reason string says which. It is rejected before dispatch
+    /// to avoid wgpu validation failures or a silently truncated uniform.
     GridTooLarge(String),
     /// A gpu binding's handle was used or released with no live activation —
     /// the compiled acquire/release pairing went wrong, so the device table is

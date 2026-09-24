@@ -95,6 +95,10 @@ pub const STRING_TYPE_NAME: &str = "String";
 /// rather than looking the name up.
 pub const VALUE_GENERIC_MARKER: &str = "__value_generic__";
 
+/// Maximum byte size for a type to qualify as auto-copy.
+/// Types with all primitive/auto-copy fields and total size <= this are auto-copy.
+pub const AUTO_COPY_MAX_SIZE: usize = 128;
+
 /// Canonical class name for the built-in `Regex` compiled pattern type.
 ///
 /// Regex literals (`re"pattern"`) are typed as `TypeKind::Custom(REGEX_TYPE_NAME, None)`.

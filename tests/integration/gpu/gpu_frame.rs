@@ -999,3 +999,230 @@ println(f"a0={h[0]}")
 "#;
     crate::integration::utils::assert_runs_with_output(code, "a0=7");
 }
+
+/// A frame pass whose only store sits in a `match` arm writes that buffer:
+/// the pass is accepted, and the arm reading `frame.time` still receives the
+/// frame inputs.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_pass_writing_inside_a_match_arm() {
+    let code = r#"use system.io
+use system.collections.array
+
+const N = 4
+gpu var img = Array<f32, N>()
+
+gpu frame
+    forall i in 0..N
+        match i % 2
+            0: img[i] = frame.time + 2.0
+            _: img[i] = 1.0
+
+let host = img
+println(f"{host[0]} {host[1]} {host[2]} {host[3]}")
+"#;
+    assert_runs_with_output(code, "2.0 1.0 2.0 1.0");
+}
+
+/// The frame scan and lowering agree on a store inside a `match` arm: the
+/// type checker accepts the pass and the kernel binds the buffer read_write.
+#[test]
+fn test_gpu_frame_match_arm_store_binds_read_write() {
+    let wgsl = super::helpers::compile_to_wgsl(
+        r#"use system.collections.array
+
+const N = 16
+
+fn main()
+    gpu var img = Array<f32, N>()
+    gpu frame
+        forall i in 0..N
+            match i % 2
+                0: img[i] = frame.time
+                _: img[i] = 1.0
+"#,
+    );
+    assert!(
+        wgsl.contains("var<storage, read_write> img"),
+        "a frame buffer written in a match arm must bind read_write:\n{wgsl}"
+    );
+}
+
+/// The source of a frame pass over `n` elements, bound by a literal `const`
+/// or by a runtime `let`.
+fn large_frame_source(bound_decl: &str) -> String {
+    format!(
+        "use system.collections.array
+
+{bound_decl}
+
+fn main()
+    gpu var img = Array<f32, 16777216>()
+    gpu frame
+        forall i in 0..N
+            img[i] = frame.time
+"
+    )
+}
+
+/// The dispatch grid recorded on the single frame kernel of `source`.
+fn frame_kernel_grid(source: &str) -> Option<[u32; 3]> {
+    let bodies = miri::pipeline::Pipeline::new()
+        .get_gpu_mir_bodies(source)
+        .expect("lowering failed");
+    let kernel = bodies
+        .iter()
+        .find(|(_, b)| b.execution_model == miri::mir::ExecutionModel::GpuKernel)
+        .expect("expected a frame kernel");
+    let Some(miri::mir::BackendMetadata::Gpu(meta)) = &kernel.1.backend_metadata else {
+        panic!("frame kernel carries no GPU metadata");
+    };
+    assert!(meta.is_frame_step, "the kernel is not a frame step");
+    meta.grid_size
+}
+
+/// A 4096x4096 frame pass needs 65536 workgroups of 256 threads — one more
+/// than a grid axis may hold — so its grid spills into the y axis, and the
+/// kernel numbers its threads through the spilled (x, y) workgroup id.
+#[test]
+fn test_gpu_frame_literal_grid_spills_past_one_axis() {
+    let source = large_frame_source("const N = 16777216");
+    let grid = frame_kernel_grid(&source).expect("a literal frame grid");
+    assert!(
+        grid.iter().all(|&axis| axis <= 65_535),
+        "a grid axis exceeds 65535 workgroups: {grid:?}"
+    );
+    assert!(
+        grid.iter().map(|&axis| u64::from(axis)).product::<u64>() * 256 >= 16_777_216,
+        "the spilled grid no longer covers every element: {grid:?}"
+    );
+    let wgsl = super::helpers::compile_to_wgsl(&source);
+    assert!(
+        wgsl.contains("_workgroup_id.y") && wgsl.contains("_num_workgroups.x"),
+        "the frame kernel does not index through the spilled grid:\n{wgsl}"
+    );
+}
+
+/// A runtime-bound frame pass computes its grid on the host, so its kernel
+/// indexes through the spilled form whatever the bound turns out to be.
+#[test]
+fn test_gpu_frame_runtime_bound_indexes_through_the_spilled_grid() {
+    let source =
+        large_frame_source("").replace("    gpu frame", "    let N = 16777216\n    gpu frame");
+    assert_eq!(frame_kernel_grid(&source), None);
+    let wgsl = super::helpers::compile_to_wgsl(&source);
+    assert!(
+        wgsl.contains("_workgroup_id.y") && wgsl.contains("_num_workgroups.x"),
+        "the runtime frame kernel does not index through the spilled grid:\n{wgsl}"
+    );
+}
+
+/// End-to-end: a frame pass past one grid axis writes its last element.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_past_one_grid_axis_writes_every_element() {
+    let code = r#"use system.io
+use system.collections.array
+
+const N = 16777472
+gpu var img = Array<f32, N>()
+
+gpu frame
+    forall i in 0..N
+        img[i] = frame.time + 1.0
+
+let host = img
+println(f"{host[0]} {host[16777215]} {host[16777471]}")
+"#;
+    assert_runs_with_output(code, "1.0 1.0 1.0");
+}
+
+/// A frame pass whose last dispatched thread would carry the loop variable
+/// past the device `int`'s maximum: its tail threads wrap negative, so the
+/// kernel must guard `>= start` as well as `< end`.
+const FRAME_NEAR_INT_MAX: &str = r#"use system.io
+use system.collections.array
+
+gpu var img = Array<int, 647>()
+
+gpu frame
+    forall i in 2147483000..2147483647
+        img[i - 2147483000] = i - 2147483000
+
+let h = img
+println(f'{h[0]} {h[645]} {h[646]}')
+"#;
+
+/// The same pass with its end known only at run time: the grid is computed at
+/// launch, so the start guard is always emitted.
+const RUNTIME_FRAME_NEAR_INT_MAX: &str = r#"use system.io
+use system.collections.array
+
+gpu var img = Array<int, 647>()
+let n = 2147483647
+
+gpu frame
+    forall i in 2147483000..n
+        img[i - 2147483000] = i - 2147483000
+
+let h = img
+println(f'{h[0]} {h[645]} {h[646]}')
+"#;
+
+/// End-to-end: no wrapped thread of a literal frame pass writes an element.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_frame_near_int_max_masks_wrapped_threads() {
+    assert_runs_with_output(FRAME_NEAR_INT_MAX, "0 645 646");
+}
+
+/// End-to-end: no wrapped thread of a runtime-bound frame pass writes an
+/// element.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_runtime_gpu_frame_near_int_max_masks_wrapped_threads() {
+    assert_runs_with_output(RUNTIME_FRAME_NEAR_INT_MAX, "0 645 646");
+}
+
+/// A frame pass over `range` inside `main`, the form the kernel inspector
+/// lowers.
+fn frame_pass_source(range: &str) -> String {
+    format!(
+        "use system.collections.array
+
+fn main()
+    gpu var img = Array<int, 647>()
+    gpu frame
+        forall i in {range}
+            img[0] = i
+"
+    )
+}
+
+/// The frame kernel near the maximum guards its start; an ordinary `0..N`
+/// frame pass cannot wrap and keeps the single `< end` guard.
+#[test]
+fn test_gpu_frame_start_guard_only_where_the_index_can_wrap() {
+    let wrapping = super::helpers::compile_to_wgsl(&frame_pass_source("2147483000..2147483647"));
+    assert!(
+        wrapping.contains(">= 2147483000"),
+        "missing start guard:\n{wrapping}"
+    );
+    let ordinary = super::helpers::compile_to_wgsl(&frame_pass_source("0..647"));
+    assert!(
+        !ordinary.contains(">="),
+        "unexpected start guard:\n{ordinary}"
+    );
+}

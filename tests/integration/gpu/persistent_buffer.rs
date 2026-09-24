@@ -107,15 +107,16 @@ fn main()
     );
 }
 
-/// A `gpu`-resident binding survives two readbacks, each fencing once and
-/// producing an independent host array. The persistent buffer means a single
-/// upload still covers both stages.
+/// A `gpu`-resident binding survives being read twice, and each read produces
+/// the device's results. With no launch between them, the second read finds
+/// the host array current and needs no readback of its own. The persistent
+/// buffer means a single upload still covers both stages.
 #[test]
 #[cfg_attr(
     not(feature = "gpu_hardware"),
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
-fn two_readbacks_each_fence_and_survive() {
+fn a_second_read_with_no_launch_between_needs_no_second_readback() {
     require_gpu_int64();
     assert_runs_with_output(
         "
@@ -131,7 +132,7 @@ fn main()
     let h2 = arr
     println(f'{h[3]} {h2[3]} {gpu_uploads()} {gpu_readbacks()}')
 ",
-        "9 9 1 2",
+        "9 9 1 1",
     );
 }
 

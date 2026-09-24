@@ -330,3 +330,203 @@ fn main()
         "w",
     );
 }
+
+/// A user class that shares its name with the compiler-known atomic element
+/// type is an ordinary class: held in a field, it is released with its holder,
+/// and a copy read out of the field keeps it alive past the holder.
+#[test]
+fn test_class_named_like_atomic_in_field_is_released() {
+    assert_heap_guard_output(
+        r#"
+class Atomic
+    value String
+    fn init(value String)
+        self.value = value
+
+class Holder
+    var a Atomic
+    fn init(v String)
+        self.a = Atomic(v)
+
+fn main()
+    var h = Holder("X".to_lower())
+    let a = h.a
+    h = Holder("Y".to_lower())
+    println(a.value)
+    println(h.a.value)
+"#,
+        "x\ny",
+    );
+}
+
+/// A user class named like the atomic element type, held only by its holder, is
+/// released when the holder is.
+#[test]
+fn test_class_named_like_atomic_released_with_holder() {
+    assert_heap_guard_output(
+        r#"
+class Atomic
+    value String
+    fn init(value String)
+        self.value = value
+
+class Holder
+    a Atomic
+    fn init(v String)
+        self.a = Atomic(v)
+
+fn main()
+    let h = Holder("X".to_lower())
+    println(h.a.value)
+"#,
+        "x",
+    );
+}
+
+/// A user class named like the atomic element type, held in a local of its
+/// own, is released when the local goes out of scope.
+#[test]
+fn test_class_named_like_atomic_local_is_released() {
+    assert_heap_guard_output(
+        r#"
+class Atomic
+    value String
+    fn init(value String)
+        self.value = value
+
+fn main()
+    let a = Atomic("X".to_lower())
+    println(a.value)
+"#,
+        "x",
+    );
+}
+
+/// A vector held in a class field is a pointer to an allocation of its own,
+/// released with the instance that holds it.
+#[test]
+fn test_vector_in_class_field_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+class Holder
+    pos Vec3<float>
+    fn init(v Vec3<float>)
+        self.pos = v
+
+fn main()
+    var h = Holder(Vec3(1.0, 2.0, 3.0))
+    println(f"{h.pos.x} {h.pos.y} {h.pos.z}")
+"#,
+        "1.0 2.0 3.0",
+    );
+}
+
+/// Replacing a vector held in a class field releases the vector it replaces, and
+/// the instance releases the new one.
+#[test]
+fn test_vector_in_class_field_reassigned_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+class Holder
+    var pos Vec3<float>
+    fn init(v Vec3<float>)
+        self.pos = v
+
+fn main()
+    var h = Holder(Vec3(1.0, 2.0, 3.0))
+    h.pos = Vec3(4.0, 5.0, 6.0)
+    println(f"{h.pos.x} {h.pos.y} {h.pos.z}")
+"#,
+        "4.0 5.0 6.0",
+    );
+}
+
+/// A vector read out of a class field outlives the instance it came from.
+#[test]
+fn test_vector_read_from_class_field_outlives_instance() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+class Holder
+    pos Vec3<float>
+    fn init(v Vec3<float>)
+        self.pos = v
+
+fn main()
+    var h = Holder(Vec3(1.0, 2.0, 3.0))
+    let p = h.pos
+    h = Holder(Vec3(7.0, 8.0, 9.0))
+    println(f"{p.x} {p.y} {p.z}")
+    println(f"{h.pos.x}")
+"#,
+        "1.0 2.0 3.0\n7.0",
+    );
+}
+
+/// A vector held in a struct field reads back its components and is released
+/// with the struct.
+#[test]
+fn test_vector_in_struct_field_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+struct Particle
+    pos Vec3<float>
+    mass float
+
+fn main()
+    let p = Particle(pos: Vec3(1.0, 2.0, 3.0), mass: 0.5)
+    println(f"{p.pos.x} {p.pos.y} {p.pos.z} {p.mass}")
+"#,
+        "1.0 2.0 3.0 0.5",
+    );
+}
+
+/// A vector held in a class field beside another managed field is released with
+/// the instance, as that field is.
+#[test]
+fn test_vector_beside_managed_class_field_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+class Holder
+    name String
+    pos Vec3<float>
+    fn init(name String, v Vec3<float>)
+        self.name = name
+        self.pos = v
+
+fn main()
+    let h = Holder("A".to_lower(), Vec3(1.0, 2.0, 3.0))
+    println(f"{h.name} {h.pos.x} {h.pos.y} {h.pos.z}")
+"#,
+        "a 1.0 2.0 3.0",
+    );
+}
+
+/// A vector held in a struct field beside another managed field is released
+/// with the struct, as that field is.
+#[test]
+fn test_vector_beside_managed_struct_field_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+struct Particle
+    tag String
+    pos Vec3<float>
+
+fn main()
+    let p = Particle(tag: "B".to_lower(), pos: Vec3(1.0, 2.0, 3.0))
+    println(f"{p.tag} {p.pos.x} {p.pos.y} {p.pos.z}")
+"#,
+        "b 1.0 2.0 3.0",
+    );
+}

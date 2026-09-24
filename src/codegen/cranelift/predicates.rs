@@ -641,7 +641,7 @@ impl<'a> FunctionTranslator<'a> {
             Some(TypeDefinition::Struct(def)) => def
                 .fields
                 .iter()
-                .any(|(_, ty, _)| crate::mir::rc::is_field_managed(&ty.kind)),
+                .any(|(_, ty, _)| crate::mir::rc::is_word_slot_managed(&ty.kind)),
             Some(TypeDefinition::Class(_)) => {
                 crate::mir::lowering::inherited_instantiation::instantiated_field_types(
                     type_defs,
@@ -649,12 +649,12 @@ impl<'a> FunctionTranslator<'a> {
                     &[],
                 )
                 .iter()
-                .any(|ty| crate::mir::rc::is_field_managed(&ty.kind))
+                .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
             }
             Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
                 fields
                     .iter()
-                    .any(|ty| crate::mir::rc::is_field_managed(&ty.kind))
+                    .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
             }),
             None
             | Some(TypeDefinition::Generic(_))

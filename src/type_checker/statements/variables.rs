@@ -223,18 +223,15 @@ impl TypeChecker {
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
         // A binding that cannot be reassigned holds one value for its whole
-        // lifetime, so an integer initializer that folds is known at every use
-        // site and can be folded there too. `var` is excluded: a later
-        // assignment would invalidate the recorded value.
+        // lifetime, so an initializer known at compile time is known at every
+        // use site too. `var` is excluded: a later assignment would invalidate
+        // the recorded value.
         let const_value = if is_mutable {
             None
         } else {
-            decl.initializer.as_ref().and_then(|init| {
-                Self::try_eval_const_int_with_context(init, context).and_then(|v| {
-                    crate::ast::literal::IntegerLiteral::from_type_kind(&inferred_type.kind, v)
-                        .map(Literal::Integer)
-                })
-            })
+            decl.initializer
+                .as_ref()
+                .and_then(|init| Self::constant_literal(init, &inferred_type.kind, context))
         };
 
         // A top-level binding is shadow-checked once, in the declaration-collection
@@ -273,6 +270,44 @@ impl TypeChecker {
                 .insert(decl.name.clone(), info.clone());
         }
         context.define(decl.name.clone(), info);
+    }
+
+    /// The compile-time value of an immutable binding's initializer, shaped to
+    /// the binding's type `kind`.
+    ///
+    /// An integer expression that folds becomes an integer of that type, or a
+    /// float when the binding is a float. Otherwise the initializer must be a
+    /// float, boolean or string literal, a negated float, or the name of a
+    /// binding that already has a value. Anything else has no value until it
+    /// runs, and yields `None`.
+    fn constant_literal(init: &Expression, kind: &TypeKind, context: &Context) -> Option<Literal> {
+        if let Some(value) = Self::try_eval_const_int_with_context(init, context) {
+            return integer_constant(kind, value);
+        }
+        match &init.node {
+            ExpressionKind::Literal(
+                literal @ (Literal::Float(_) | Literal::Boolean(_) | Literal::String(_)),
+            ) => Some(literal.clone()),
+            ExpressionKind::Unary(UnaryOp::Negate, inner) => {
+                match Self::constant_literal(inner, kind, context)? {
+                    Literal::Float(float) => Some(Literal::Float(negated_float(float))),
+                    Literal::Integer(_)
+                    | Literal::String(_)
+                    | Literal::Boolean(_)
+                    | Literal::Identifier(_)
+                    | Literal::Regex(_)
+                    | Literal::None => None,
+                }
+            }
+            ExpressionKind::Identifier(name, _) => {
+                let info = context.resolve_info(name)?;
+                if info.mutable && !info.is_constant {
+                    return None;
+                }
+                info.value.clone()
+            }
+            _ => None,
+        }
     }
 
     fn check_gpu_variable_type(
@@ -648,4 +683,30 @@ impl TypeChecker {
 /// (`i128`/`u64`/`u128`), for which a literal may legitimately exceed `i64::MAX`.
 fn int_type_exceeds_i64(kind: &TypeKind) -> bool {
     matches!(kind, TypeKind::I128 | TypeKind::U64 | TypeKind::U128)
+}
+
+/// A folded integer `value` as a literal of the binding type `kind`: an integer
+/// of that width, or a float when an integer was written for a float binding.
+fn integer_constant(kind: &TypeKind, value: i128) -> Option<Literal> {
+    if let Some(integer) = crate::ast::literal::IntegerLiteral::from_type_kind(kind, value) {
+        return Some(Literal::Integer(integer));
+    }
+    match kind {
+        TypeKind::Float | TypeKind::F64 => Some(Literal::Float(
+            crate::ast::literal::FloatLiteral::F64((value as f64).to_bits()),
+        )),
+        TypeKind::F32 => Some(Literal::Float(crate::ast::literal::FloatLiteral::F32(
+            (value as f32).to_bits(),
+        ))),
+        _ => None,
+    }
+}
+
+/// `float` with its sign flipped, at the same width.
+fn negated_float(float: crate::ast::literal::FloatLiteral) -> crate::ast::literal::FloatLiteral {
+    use crate::ast::literal::FloatLiteral;
+    match float {
+        FloatLiteral::F32(bits) => FloatLiteral::F32((-f32::from_bits(bits)).to_bits()),
+        FloatLiteral::F64(bits) => FloatLiteral::F64((-f64::from_bits(bits)).to_bits()),
+    }
 }

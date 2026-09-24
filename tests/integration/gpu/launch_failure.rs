@@ -123,3 +123,55 @@ fn main()
         "exceeds i32 range",
     );
 }
+
+/// A runtime `forall` bound past the device's signed 32-bit `int` is refused
+/// with its reason and a clean exit, rather than clamped or wrapped into a
+/// different range: `2147483645..2147483649` would otherwise run two of its
+/// four iterations.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn runtime_loop_bound_past_the_device_int_range_exits_cleanly() {
+    assert_launch_failure(
+        "
+use system.io
+use system.collections.array
+
+fn main() int:
+    gpu var dst = Array<int, 4>()
+    let s = 2147483645
+    forall i in s..s + 4
+        dst[i - s] = 1
+    let h = dst
+    println(f'{h[0]} {h[3]}')
+    return 0
+",
+        "outside the device's 32-bit int range",
+    );
+}
+
+/// A negative runtime start below the device's `int` range is refused the
+/// same way.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn runtime_range_start_below_the_device_int_range_exits_cleanly() {
+    assert_launch_failure(
+        "
+use system.io
+use system.collections.array
+
+fn main() int:
+    gpu var dst = Array<int, 4>()
+    let s = 0 - 2147483650
+    forall i in s..s + 4
+        dst[0] = 1
+    return 0
+",
+        "outside the device's 32-bit int range",
+    );
+}

@@ -278,6 +278,115 @@ fn test_local_module_imports_constant() {
     );
 }
 
+/// A module's immutable bindings with literal initializers are constants of
+/// every literal kind, read by a plain import at their declared values.
+#[test]
+fn test_local_module_imports_literal_constants_of_each_kind() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.config.values\n",
+                    "println(f'{COUNT}')\n",
+                    "println(f'{RATIO}')\n",
+                    "println(f'{NEGATIVE}')\n",
+                    "println(NAME)\n",
+                    "println(f'{ENABLED}')\n",
+                    "println(f'{LIMIT}')\n",
+                ),
+            ),
+            (
+                "config/values.mi",
+                concat!(
+                    "let COUNT = 5\n",
+                    "let RATIO float = 1.5\n",
+                    "let NEGATIVE = -2.25\n",
+                    "let NAME = \"miri\"\n",
+                    "let ENABLED = true\n",
+                    "const LIMIT = 0.75\n",
+                ),
+            ),
+        ],
+        "5\n1.5\n-2.25\nmiri\ntrue\n0.75",
+    );
+}
+
+/// A module's constant read by that module's own function carries its value.
+#[test]
+fn test_local_module_function_reads_its_own_constant() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.config.values\n",
+                    "println(greeting())\n",
+                    "println(f'{scaled(2.0)}')\n",
+                ),
+            ),
+            (
+                "config/values.mi",
+                concat!(
+                    "let GREETING = \"hello\"\n",
+                    "let FACTOR = 2.5\n",
+                    "fn greeting() String\n",
+                    "    return GREETING\n",
+                    "fn scaled(x float) float\n",
+                    "    return x * FACTOR\n",
+                ),
+            ),
+        ],
+        "hello\n5.0",
+    );
+}
+
+/// A module-level binding whose initializer is not a compile-time constant
+/// never runs — a module has no initialization pass — so reading it is refused
+/// rather than yielding a zero.
+#[test]
+fn test_local_module_binding_without_constant_initializer_is_refused() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.config.values\n",
+                    "println(f'{COUNT}')\n",
+                ),
+            ),
+            (
+                "config/values.mi",
+                concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
+            ),
+        ],
+        "'COUNT' has no value at run time",
+    );
+}
+
+/// A module-level `var` has no storage for the same reason, so reading it is
+/// refused too.
+#[test]
+fn test_local_module_mutable_binding_is_refused() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.config.values\n",
+                    "println(f'{COUNTER}')\n",
+                ),
+            ),
+            ("config/values.mi", "var COUNTER = 1\n"),
+        ],
+        "'COUNTER' has no value at run time",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Wildcard and selective imports for local modules
 // ---------------------------------------------------------------------------

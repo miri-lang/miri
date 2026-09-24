@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod e2e;
 pub mod error;
 pub mod evals;
+pub mod gpu_target;
 pub mod grammar;
 pub mod integration;
 pub mod lexer;

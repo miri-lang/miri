@@ -28,6 +28,24 @@ pub enum Operand {
 }
 
 impl Operand {
+    /// The symbol this operand names when it is a call's callee spelled as a
+    /// function name; `None` for any other constant and for a place, whose
+    /// callee is only known at run time.
+    pub fn called_symbol(&self) -> Option<&str> {
+        let Operand::Constant(constant) = self else {
+            return None;
+        };
+        match &constant.literal {
+            Literal::Identifier(name) => Some(name.as_str()),
+            Literal::Integer(_)
+            | Literal::Float(_)
+            | Literal::String(_)
+            | Literal::Boolean(_)
+            | Literal::Regex(_)
+            | Literal::None => None,
+        }
+    }
+
     /// Returns a reference to the type of this operand.
     ///
     /// For place operands (Move/Copy), returns the type from the body's local declarations.

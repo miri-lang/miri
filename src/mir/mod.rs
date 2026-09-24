@@ -25,6 +25,7 @@ pub mod operand;
 pub mod optimization;
 pub mod place;
 pub mod rc;
+pub mod residency;
 pub mod rvalue;
 pub mod ssa;
 pub mod statement;

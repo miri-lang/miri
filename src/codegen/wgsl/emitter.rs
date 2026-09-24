@@ -453,7 +453,7 @@ fn collect_storage_bindings(
 
 /// Binds the uniform parameters after the storage buffers. A launch uniform
 /// (loop bound, runtime range start), recognised by the marker lowering sets,
-/// binds as its own `u32` uniform; every other uniform parameter is a captured
+/// binds as its own signed `i32` uniform; every other uniform parameter is a captured
 /// scalar, pooled as a field of the one `_Inputs` uniform, whose binding index
 /// is reserved when the first such field is seen.
 fn collect_uniform_bindings(
@@ -484,8 +484,11 @@ fn collect_uniform_bindings(
     Ok(())
 }
 
-/// A launch uniform bound on its own at `index`. Its name is compiler-authored
-/// and already a synthesized (`_`-prefixed) WGSL identifier, so it is kept.
+/// A launch uniform bound on its own at `index`. It is the device's signed
+/// `int`, so a negative range start or end keeps its sign; the host refuses a
+/// value outside `i32` rather than reinterpreting it. Its name is
+/// compiler-authored and already a synthesized (`_`-prefixed) WGSL
+/// identifier, so it is kept.
 fn launch_uniform_binding(param_idx: usize, decl: &LocalDecl, index: u32) -> BufferBinding {
     BufferBinding {
         param_local: Local(param_idx),
@@ -495,7 +498,7 @@ fn launch_uniform_binding(param_idx: usize, decl: &LocalDecl, index: u32) -> Buf
             .name
             .as_deref()
             .map_or_else(|| format!("_uniform{}", param_idx), str::to_owned),
-        element_type: WgslScalar::U32,
+        element_type: WgslScalar::I32,
         element_typename: None,
         read_write: false,
         is_uniform: true,

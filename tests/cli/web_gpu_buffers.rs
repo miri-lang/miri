@@ -338,3 +338,40 @@ fn web_gpu_refuses_a_kernel_that_is_never_launched() {
     let build = build_web(KERNEL_NEVER_LAUNCHED, &[]);
     assert_refused(&build, &["MER_TAR_010", "never launched"]);
 }
+
+const GPU_FN_WITH_SCALAR_ARG: &str = r#"use system.gpu
+use system.collections.array
+
+gpu fn fill(dst out Array<f32, 4>, scale f32)
+    dst[kernel.global_idx.x] = scale
+
+fn main()
+    gpu var dst = Array<f32, 4>()
+    fill(dst, 2.0).launch(Dim3(4, 1, 1), Dim3(1, 1, 1))
+"#;
+
+/// The browser runtime binds a scalar-input uniform only for a frame pass, so
+/// a launched kernel that reads a scalar argument would fail pipeline creation
+/// in the browser.
+#[test]
+fn web_gpu_refuses_a_gpu_fn_launch_with_a_scalar_argument() {
+    let build = build_web(GPU_FN_WITH_SCALAR_ARG, &[]);
+    assert_refused(&build, &["MER_TAR_010", "scalar input"]);
+}
+
+const FORALL_CAPTURING_A_SCALAR: &str = r#"use system.collections.array
+
+fn main()
+    let scale = 2.0
+    gpu var buf = Array<f32, 4>()
+    gpu forall i in 0..4
+        buf[i] = scale
+"#;
+
+/// A `forall` outside a frame pass passes a captured scalar in the same
+/// scalar-input uniform, which the browser does not bind for it.
+#[test]
+fn web_gpu_refuses_a_forall_capturing_a_scalar() {
+    let build = build_web(FORALL_CAPTURING_A_SCALAR, &[]);
+    assert_refused(&build, &["MER_TAR_010", "scalar input"]);
+}

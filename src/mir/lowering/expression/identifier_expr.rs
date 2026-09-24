@@ -5,7 +5,8 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
-use crate::error::lowering::LoweringError;
+use crate::diagnostics::DiagnosticCode;
+use crate::error::lowering::{LoweringError, LoweringErrorKind};
 use crate::mir::{Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind};
 
 use crate::mir::lowering::context::LoweringContext;
@@ -83,7 +84,7 @@ pub(crate) fn lower_identifier_symbol(
         return lower_local_identifier(ctx, local, expr, dest);
     }
 
-    let constant = build_global_identifier_operand(ctx, name, expr);
+    let constant = build_global_identifier_operand(ctx, name, expr)?;
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(constant.clone())),
@@ -133,15 +134,20 @@ fn lower_local_identifier(
     }
 }
 
-/// Build the constant operand for a global identifier. Non-function constants
-/// with a known compile-time value are inlined as a literal; everything else
-/// (functions, value-less constants, unknown globals) emits the symbol name —
-/// preferring the original name for import aliases so the linker resolves it.
-fn build_global_identifier_operand(
+/// Build the constant operand for a global identifier. A binding with a known
+/// compile-time value is inlined as that literal; everything else (functions,
+/// unknown globals) emits the symbol name — preferring the original name for
+/// import aliases so the linker resolves it.
+///
+/// A module-level binding has no storage: nothing runs a module's top-level
+/// statements, so its compile-time value is the only value it has. One without
+/// such a value is refused rather than read as a symbol codegen cannot
+/// materialize.
+pub(crate) fn build_global_identifier_operand(
     ctx: &LoweringContext,
     name: &str,
     expr: &Expression,
-) -> Operand {
+) -> Result<Operand, LoweringError> {
     let identifier_const = |ident: String| {
         Operand::Constant(Box::new(Constant {
             span: expr.span,
@@ -150,17 +156,42 @@ fn build_global_identifier_operand(
         }))
     };
     let Some(info) = ctx.type_checker.global_scope().get(name) else {
-        return identifier_const(name.to_string());
+        return Ok(identifier_const(name.to_string()));
     };
-    let emit_name = info.original_name.as_deref().unwrap_or(name).to_string();
-    if info.is_constant && !matches!(info.ty.kind, TypeKind::Function(_)) {
-        if let Some(lit) = &info.value {
-            return Operand::Constant(Box::new(Constant {
-                span: expr.span,
-                ty: info.ty.clone(),
-                literal: lit.clone(),
-            }));
-        }
+    if matches!(info.ty.kind, TypeKind::Function(_)) {
+        return Ok(identifier_const(
+            info.original_name.as_deref().unwrap_or(name).to_string(),
+        ));
     }
-    identifier_const(emit_name)
+    let has_fixed_value = info.is_constant || !info.mutable;
+    match &info.value {
+        Some(literal) if has_fixed_value => Ok(Operand::Constant(Box::new(Constant {
+            span: expr.span,
+            ty: info.ty.clone(),
+            literal: literal.clone(),
+        }))),
+        _ if info.module_scope => Err(module_binding_without_value(name, expr)),
+        _ => Ok(identifier_const(
+            info.original_name.as_deref().unwrap_or(name).to_string(),
+        )),
+    }
+}
+
+/// The refusal for reading a module-level binding that has no compile-time
+/// value.
+fn module_binding_without_value(name: &str, expr: &Expression) -> LoweringError {
+    LoweringError::new(
+        LoweringErrorKind::Coded {
+            code: DiagnosticCode::MirUndefinedVariable,
+            message: format!(
+                "module-level binding '{name}' has no value at run time: a module's top-level \
+                 statements never run, so only a binding with a compile-time value can be read"
+            ),
+            help: Some(format!(
+                "initialize '{name}' with a literal or a constant expression, or read it through \
+                 a function that computes the value."
+            )),
+        },
+        expr.span,
+    )
 }

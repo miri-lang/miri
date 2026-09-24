@@ -92,12 +92,14 @@ use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
+use crate::mir::residency::{self, DeviceEffect};
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::StatementKind;
+use crate::mir::terminator::Discriminant;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::{Body, ExecutionModel, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 /// Largest delta the domain represents; past it a local is reported rather than
@@ -247,9 +249,15 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     let mut violations = verify_collection_element_width(body);
     flag_decref_on_params(body, &managed_params, &mut violations);
 
-    let entries = run_to_fixpoint(body, &tracked, &reachable);
-    report_path_findings(body, &tracked, &reachable, &entries, &mut violations);
-    report_join_divergences(body, &tracked, &reachable, &entries, &mut violations);
+    let fixpoint = run_to_fixpoint(body, &tracked, &reachable);
+    report_path_findings(
+        body,
+        &tracked,
+        &reachable,
+        &fixpoint.entries,
+        &mut violations,
+    );
+    report_join_divergences(body, &reachable, &tracked, &fixpoint.exits, &mut violations);
     violations
 }
 
@@ -330,46 +338,93 @@ fn flag_decref_on_params(
     }
 }
 
-/// Forward dataflow to a fixpoint, returning each reachable block's entry state.
+/// The converged ownership dataflow: each reachable block's entry state, and
+/// the state that entry leaves at the block's exit.
+struct Fixpoint {
+    entries: HashMap<usize, PathState>,
+    exits: HashMap<usize, PathState>,
+}
+
+/// Forward dataflow to a fixpoint over the reachable blocks.
 ///
 /// Findings are not raised here: a block is re-analysed whenever a predecessor
 /// changes, so reporting mid-iteration would emit the same finding repeatedly and
 /// report states that later iterations correct.
-fn run_to_fixpoint(
-    body: &Body,
-    tracked: &[Local],
-    reachable: &[usize],
-) -> HashMap<usize, PathState> {
+///
+/// Each block's exit is kept from its last analysis. That analysis ran over the
+/// converged entry: a change to an entry always queues its block again, and a
+/// queued block reads its entry only when it is dequeued. A reachable block the
+/// walk never enters still gets an exit, computed from the empty state.
+fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpoint {
+    let is_reachable = block_mask(body, reachable);
     let mut entries: HashMap<usize, PathState> = HashMap::new();
-    let mut analysed: HashSet<usize> = HashSet::new();
+    let mut exits: HashMap<usize, PathState> = HashMap::new();
+    let mut analysed = vec![false; body.basic_blocks.len()];
+    let mut queued = vec![false; body.basic_blocks.len()];
     let mut worklist: VecDeque<usize> = VecDeque::new();
 
-    if reachable.contains(&0) {
+    if is_reachable.first().copied().unwrap_or(false) {
         entries.insert(0, PathState::new());
         worklist.push_back(0);
+        queued[0] = true;
     }
 
     while let Some(bb) = worklist.pop_front() {
-        analysed.insert(bb);
+        queued[bb] = false;
+        analysed[bb] = true;
         let mut state = entries.get(&bb).cloned().unwrap_or_default();
         run_block(body, bb, tracked, &mut state, &mut Vec::new());
 
         for successor in successors_of(body, bb) {
-            if !reachable.contains(&successor) {
+            if !is_reachable[successor] {
                 continue;
             }
             let entry = entries.entry(successor).or_default();
             let before = entry.clone();
             join_states(entry, &state);
             let changed = *entry != before;
-            if (changed || !analysed.contains(&successor)) && !worklist.contains(&successor) {
+            if (changed || !analysed[successor]) && !queued[successor] {
                 worklist.push_back(successor);
+                queued[successor] = true;
+            }
+        }
+        exits.insert(bb, state);
+    }
+
+    for bb in reachable {
+        if !exits.contains_key(bb) {
+            exits.insert(*bb, exit_state_of(body, *bb, tracked, &entries));
+        }
+    }
+    Fixpoint { entries, exits }
+}
+
+/// A per-block flag, set for each block in `blocks`.
+fn block_mask(body: &Body, blocks: &[usize]) -> Vec<bool> {
+    let mut mask = vec![false; body.basic_blocks.len()];
+    for bb in blocks {
+        mask[*bb] = true;
+    }
+    mask
+}
+
+/// Each reachable block's reachable predecessors, in ascending block order and
+/// listed once however many edges they send it.
+fn reachable_predecessors(body: &Body, reachable: &[usize]) -> HashMap<usize, Vec<usize>> {
+    let is_reachable = block_mask(body, reachable);
+    let mut predecessors: HashMap<usize, Vec<usize>> = HashMap::new();
+    for candidate in reachable {
+        for successor in successors_of(body, *candidate) {
+            if !is_reachable[successor] {
+                continue;
+            }
+            let incoming = predecessors.entry(successor).or_default();
+            if incoming.last() != Some(candidate) {
+                incoming.push(*candidate);
             }
         }
     }
-
-    entries.retain(|bb, _| reachable.contains(bb));
-    entries
+    predecessors
 }
 
 /// Blocks the analysis follows out of `bb`.
@@ -458,28 +513,27 @@ fn report_path_findings(
 /// takes, and the reason this analysis is path-sensitive.
 fn report_join_divergences(
     body: &Body,
-    tracked: &[Local],
     reachable: &[usize],
-    entries: &HashMap<usize, PathState>,
+    tracked: &[Local],
+    exits: &HashMap<usize, PathState>,
     violations: &mut Vec<VerificationViolation>,
 ) {
+    let predecessors = reachable_predecessors(body, reachable);
     for bb in reachable {
-        let predecessors: Vec<usize> = reachable
-            .iter()
-            .copied()
-            .filter(|candidate| successors_of(body, *candidate).contains(bb))
-            .collect();
-        if predecessors.len() < 2 {
+        let Some(incoming) = predecessors.get(bb) else {
+            continue;
+        };
+        if incoming.len() < 2 {
             continue;
         }
 
-        let exits: Vec<(usize, PathState)> = predecessors
+        let incoming_exits: Vec<(usize, &PathState)> = incoming
             .iter()
-            .map(|pred| (*pred, exit_state_of(body, *pred, tracked, entries)))
+            .filter_map(|pred| exits.get(pred).map(|state| (*pred, state)))
             .collect();
 
         for local in tracked {
-            if let Some(divergence) = first_divergence(&exits, *local) {
+            if let Some(divergence) = first_divergence(&incoming_exits, *local) {
                 let (base_bb, base, other_bb, other) = divergence;
                 violations.push(VerificationViolation {
                     local: *local,
@@ -500,10 +554,10 @@ fn report_join_divergences(
 /// was never written and one that was written and released both own nothing, and
 /// arriving at a merge by either route is the same thing.
 fn first_divergence(
-    exits: &[(usize, PathState)],
+    exits: &[(usize, &PathState)],
     local: Local,
 ) -> Option<(usize, Delta, usize, Delta)> {
-    let counted = |(bb, state): &(usize, PathState)| (*bb, delta_of(state, local));
+    let counted = |(bb, state): &(usize, &PathState)| (*bb, delta_of(state, local));
     let comparable = |(_, delta): &(usize, Delta)| !matches!(delta, Delta::Suppressed);
 
     let (base_bb, base) = exits.iter().map(counted).find(comparable)?;
@@ -1265,161 +1319,288 @@ fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
         .is_some_and(|(class, _)| BuiltinCollectionKind::from_name(class).is_some())
 }
 
-/// Report every copy of a `gpu`-resident binding into a host binding that no
-/// readback fences.
+/// Report every read of a `gpu`-resident binding's host value that no readback
+/// fences.
 ///
 /// Bringing a device buffer to the host is the language's only boundary
 /// crossing, and it is a *copy of the host array* — the gpu binding's host-side
 /// bytes hold whatever they were initialized with until a readback writes the
-/// device's results over them. So a copy emitted without one does not fail: it
+/// device's results over them. So a read emitted without one does not fail: it
 /// hands back the initial values, exits 0, and reports nothing, which reads as
 /// a result rather than as a transfer that did not happen.
 ///
-/// A closure capturing a gpu binding is the same crossing: the capture copies
-/// the host array into the closure's environment when the closure is created.
+/// Which operands are such reads is [`residency::statement_host_reads`] and
+/// [`residency::terminator_host_reads`]: every operand that reads the binding
+/// whole into a host value, a branch on its value, and the source of an upload
+/// into another binding.
 ///
-/// This is checked per body rather than per statement so that a spelling the
-/// lowering grows later is covered the day it lands: whichever statement
-/// performs the copy, the handle it copies from has to have been read back
-/// somewhere in the same body. Asking only that much is deliberate — a readback
-/// on one branch and a copy on another is unusual but not wrong, and a verifier
-/// that reported it would be reporting a shape the compiler can legitimately
-/// emit.
+/// A read is fenced when, on every path that reaches it, a readback, an upload
+/// or a fresh activation of its handle — each leaves the host array and the
+/// device buffer agreeing — follows the handle's last launch, or the path took
+/// the clear branch of the flag the readback pass keeps for the handle; see
+/// [`fences_on_entry`]. A handle the body declares starts fenced: until a launch
+/// touches it there is no device buffer to lag behind. A parameter's handle
+/// starts unfenced, since the caller may have launched on it.
 pub fn verify_cross_residency_readback(body: &Body) -> Vec<VerificationViolation> {
-    let fenced = fenced_device_handles(body);
+    let destinations = residency::readback_destinations(body);
     let mut violations = Vec::new();
-    for block in &body.basic_blocks {
+    for (bb, mut fences) in fences_on_entry(body) {
+        let block = &body.basic_blocks[bb];
         for statement in &block.statements {
-            let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
-                &statement.kind
-            else {
-                continue;
-            };
-            if let Some(source) = unfenced_gpu_source(body, dest, rvalue, &fenced) {
-                violations.push(unfenced_copy_violation(body, source, dest.local));
+            if let Some(read) = HostRead::of_statement(statement) {
+                violations.extend(
+                    residency::statement_host_reads(body, statement, &destinations)
+                        .into_iter()
+                        .filter(|&local| fences.is_unfenced(body, local))
+                        .map(|local| unfenced_read_violation(body, local, &read)),
+                );
             }
+            fences.apply_statement(body, statement);
+        }
+        if let Some(terminator) = &block.terminator {
+            let read = HostRead::of_terminator(&terminator.kind);
             violations.extend(
-                unfenced_gpu_captures(body, rvalue, &fenced)
-                    .map(|source| unfenced_capture_violation(body, source, dest.local)),
+                residency::terminator_host_reads(body, &terminator.kind)
+                    .into_iter()
+                    .filter(|&local| fences.is_unfenced(body, local))
+                    .map(|local| unfenced_read_violation(body, local, &read)),
             );
         }
     }
     violations
 }
 
-fn unfenced_copy_violation(body: &Body, source: Local, dest: Local) -> VerificationViolation {
-    VerificationViolation {
-        local: source,
-        local_name: local_display_name(body, source),
-        message: format!(
-            "`{}` is gpu-resident and is copied into host-resident `{}` with no \
-             readback fencing its device buffer, so the copy hands back the host \
-             array's initial values instead of the device's results",
-            local_display_name(body, source),
-            local_display_name(body, dest),
-        ),
-    }
+/// How a read hands a gpu binding's host value on, for the report.
+enum HostRead {
+    Copy(Local),
+    Capture(Local),
+    Operand(Local),
+    Branch,
+    Upload,
 }
 
-fn unfenced_capture_violation(body: &Body, source: Local, closure: Local) -> VerificationViolation {
-    VerificationViolation {
-        local: source,
-        local_name: local_display_name(body, source),
-        message: format!(
-            "`{}` is gpu-resident and is captured into closure `{}` with no readback \
-             fencing its device buffer, so the closure holds the host array's initial \
-             values instead of the device's results",
-            local_display_name(body, source),
-            local_display_name(body, closure),
-        ),
-    }
-}
-
-/// The gpu-resident locals a closure aggregate captures whole, when no readback
-/// in this body fenced their device buffers.
-fn unfenced_gpu_captures<'a>(
-    body: &'a Body,
-    rvalue: &'a Rvalue,
-    fenced: &'a HashSet<u64>,
-) -> impl Iterator<Item = Local> + 'a {
-    let captured: &[Operand] =
-        if let Rvalue::Aggregate(crate::mir::AggregateKind::Closure(_, _), operands) = rvalue {
-            operands
-        } else {
-            &[]
-        };
-    captured.iter().filter_map(move |operand| match operand {
-        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-            unfenced_gpu_local(body, place.local, fenced)
-        }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
-    })
-}
-
-/// `local`, when it is a gpu-resident binding whose device buffer no readback
-/// in this body fenced.
-fn unfenced_gpu_local(body: &Body, local: Local, fenced: &HashSet<u64>) -> Option<Local> {
-    let decl = &body.local_decls[local.0];
-    let handle = decl.device_handle?;
-    if decl.residency != crate::mir::body::BindingResidency::Gpu || fenced.contains(&handle.0) {
-        return None;
-    }
-    Some(local)
-}
-
-/// The device handles some `miri_gpu_readback` call in this body fences.
-fn fenced_device_handles(body: &Body) -> HashSet<u64> {
-    let mut fenced = HashSet::new();
-    for block in &body.basic_blocks {
-        let Some(TerminatorKind::Call { func, args, .. }) =
-            block.terminator.as_ref().map(|t| &t.kind)
+impl HostRead {
+    /// How `statement` reads, when it is a store — the only statement that
+    /// reads a value.
+    fn of_statement(statement: &Statement) -> Option<HostRead> {
+        let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
+            &statement.kind
         else {
+            return None;
+        };
+        Some(match rvalue {
+            Rvalue::Use(_) => HostRead::Copy(dest.local),
+            Rvalue::Aggregate(crate::mir::AggregateKind::Closure(_, _), _) => {
+                HostRead::Capture(dest.local)
+            }
+            Rvalue::Aggregate(_, _)
+            | Rvalue::Ref(_)
+            | Rvalue::BinaryOp(..)
+            | Rvalue::UnaryOp(..)
+            | Rvalue::Cast(..)
+            | Rvalue::Len(_)
+            | Rvalue::GpuIntrinsic(_)
+            | Rvalue::MathIntrinsic(..)
+            | Rvalue::AtomicOp { .. }
+            | Rvalue::Phi(_) => HostRead::Operand(dest.local),
+        })
+    }
+
+    /// How a terminator reads: a call reads the source of an upload, anything
+    /// else the value it branches on.
+    fn of_terminator(kind: &TerminatorKind) -> HostRead {
+        match kind {
+            TerminatorKind::Call { .. } => HostRead::Upload,
+            TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::VirtualCall { .. }
+            | TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => HostRead::Branch,
+        }
+    }
+
+    fn describe(&self, body: &Body) -> String {
+        match self {
+            HostRead::Copy(dest) => format!(
+                "is copied into host-resident `{}`",
+                local_display_name(body, *dest)
+            ),
+            HostRead::Capture(closure) => format!(
+                "is captured into closure `{}`",
+                local_display_name(body, *closure)
+            ),
+            HostRead::Operand(dest) => format!(
+                "is read into host value `{}`",
+                local_display_name(body, *dest)
+            ),
+            HostRead::Branch => "is branched on".to_string(),
+            HostRead::Upload => "is uploaded into another binding's device buffer".to_string(),
+        }
+    }
+}
+
+fn unfenced_read_violation(body: &Body, source: Local, read: &HostRead) -> VerificationViolation {
+    VerificationViolation {
+        local: source,
+        local_name: local_display_name(body, source),
+        message: format!(
+            "`{}` is gpu-resident and {} with no readback fencing its device buffer \
+             since its last launch, so the host receives the host array's stale \
+             contents instead of the device's results",
+            local_display_name(body, source),
+            read.describe(body),
+        ),
+    }
+}
+
+/// What the verifier knows about the device handles at one program point.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Fences {
+    /// Handles whose host array may lag their device buffer.
+    unfenced: BTreeSet<u64>,
+    /// Handles for which a clear flag may not prove a fence: the flag may be
+    /// clear while the host array lags. A flag set to true, or cleared while
+    /// the handle is fenced, guards it; a launch leaves it unguarded until the
+    /// flag is set again.
+    unguarded: BTreeSet<u64>,
+}
+
+impl Fences {
+    fn on_body_entry(body: &Body) -> Fences {
+        let parameters: BTreeSet<u64> = (1..=body.arg_count)
+            .filter(|&index| index < body.local_decls.len())
+            .filter_map(|index| residency::gpu_handle(body, Local(index)))
+            .map(|handle| handle.0)
+            .collect();
+        Fences {
+            unfenced: parameters.clone(),
+            unguarded: parameters,
+        }
+    }
+
+    fn is_unfenced(&self, body: &Body, local: Local) -> bool {
+        residency::gpu_handle(body, local).is_some_and(|handle| self.unfenced.contains(&handle.0))
+    }
+
+    /// A store into a handle's flag decides whether the flag guards it.
+    fn apply_statement(&mut self, body: &Body, statement: &Statement) {
+        let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
+            &statement.kind
+        else {
+            return;
+        };
+        let Some(handle) = body.device_stale_flags.get(&dest.local) else {
+            return;
+        };
+        let sets_the_flag = matches!(rvalue, Rvalue::Use(Operand::Constant(c))
+            if c.literal == Literal::Boolean(true));
+        if sets_the_flag || !self.unfenced.contains(&handle.0) {
+            self.unguarded.remove(&handle.0);
+        } else {
+            self.unguarded.insert(handle.0);
+        }
+    }
+
+    fn apply_terminator(&mut self, kind: &TerminatorKind) {
+        match residency::device_effect(kind) {
+            DeviceEffect::Synchronizes(handle) => {
+                self.unfenced.remove(&handle);
+                self.unguarded.remove(&handle);
+            }
+            DeviceEffect::Launches(handles) => {
+                for handle in handles.iter().flatten() {
+                    self.unfenced.insert(handle.0);
+                    self.unguarded.insert(handle.0);
+                }
+            }
+            DeviceEffect::Nothing => {}
+        }
+    }
+
+    /// The fences along the edge to `target`: the clear branch of a guarding
+    /// flag fences its handle.
+    fn along_edge(&self, body: &Body, kind: &TerminatorKind, target: usize) -> Fences {
+        let mut fences = self.clone();
+        if let Some(handle) = cleared_flag_on_edge(body, kind, target) {
+            if !fences.unguarded.contains(&handle) {
+                fences.unfenced.remove(&handle);
+            }
+        }
+        fences
+    }
+
+    /// Keep only what both `self` and `other` prove, reporting whether `self`
+    /// changed.
+    fn join(&mut self, other: &Fences) -> bool {
+        let before = (self.unfenced.len(), self.unguarded.len());
+        self.unfenced.extend(other.unfenced.iter().copied());
+        self.unguarded.extend(other.unguarded.iter().copied());
+        before != (self.unfenced.len(), self.unguarded.len())
+    }
+}
+
+/// The handle whose flag `kind` switches on, when only the flag's clear value
+/// leads to `target`.
+fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Option<u64> {
+    let TerminatorKind::SwitchInt {
+        discr,
+        targets,
+        otherwise,
+    } = kind
+    else {
+        return None;
+    };
+    let handle = body
+        .device_stale_flags
+        .get(&residency::whole_local(discr)?)?;
+    let only_when_clear = otherwise.0 != target
+        && targets
+            .iter()
+            .all(|(value, block)| block.0 != target || *value == Discriminant::bool_false());
+    let reached_when_clear = targets
+        .iter()
+        .any(|(value, block)| block.0 == target && *value == Discriminant::bool_false());
+    (only_when_clear && reached_when_clear).then_some(handle.0)
+}
+
+/// The fences on entry to every reachable block.
+///
+/// A may-analysis on what is unfenced: a join keeps every handle any incoming
+/// edge leaves unfenced or unguarded, and the sets only ever grow, so the
+/// worklist reaches a fixpoint. Statements change a block's state only through
+/// its flags, and its terminator through the handles it synchronizes or
+/// launches on.
+fn fences_on_entry(body: &Body) -> BTreeMap<usize, Fences> {
+    let mut entries = BTreeMap::new();
+    if body.basic_blocks.is_empty() {
+        return entries;
+    }
+    entries.insert(0, Fences::on_body_entry(body));
+    let mut worklist = VecDeque::from([0]);
+    while let Some(bb) = worklist.pop_front() {
+        let block = &body.basic_blocks[bb];
+        let mut exit = entries[&bb].clone();
+        for statement in &block.statements {
+            exit.apply_statement(body, statement);
+        }
+        let Some(terminator) = &block.terminator else {
             continue;
         };
-        if called_symbol(func) != Some(crate::mir::lowering::variable::READBACK_FN) {
-            continue;
+        exit.apply_terminator(&terminator.kind);
+        for successor in successors_of(body, bb) {
+            let along = exit.along_edge(body, &terminator.kind, successor);
+            let changed = match entries.get_mut(&successor) {
+                Some(state) => state.join(&along),
+                None => {
+                    entries.insert(successor, along);
+                    true
+                }
+            };
+            if changed && !worklist.contains(&successor) {
+                worklist.push_back(successor);
+            }
         }
-        if let Some(handle) = args.first().and_then(integer_operand) {
-            fenced.insert(handle);
-        }
     }
-    fenced
-}
-
-/// The gpu-resident local a host-resident destination is copied from, when no
-/// readback in this body fenced that local's device buffer.
-///
-/// Only a whole-local copy qualifies: a projection reads a part of the host
-/// array, which the element cross-read diagnostic refuses at the source level
-/// before lowering ever sees it.
-fn unfenced_gpu_source(
-    body: &Body,
-    dest: &Place,
-    rvalue: &Rvalue,
-    fenced: &HashSet<u64>,
-) -> Option<Local> {
-    if !dest.projection.is_empty() {
-        return None;
-    }
-    if body.local_decls[dest.local.0].residency != crate::mir::body::BindingResidency::Host {
-        return None;
-    }
-    let Rvalue::Use(Operand::Copy(source) | Operand::Move(source)) = rvalue else {
-        return None;
-    };
-    if !source.projection.is_empty() {
-        return None;
-    }
-    unfenced_gpu_local(body, source.local, fenced)
-}
-
-/// The value of an integer constant operand, or `None` for anything else.
-fn integer_operand(operand: &Operand) -> Option<u64> {
-    let Operand::Constant(constant) = operand else {
-        return None;
-    };
-    let Literal::Integer(value) = &constant.literal else {
-        return None;
-    };
-    u64::try_from(value.to_i128()).ok()
+    entries
 }

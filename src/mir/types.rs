@@ -147,11 +147,19 @@ impl MirType {
     }
 
     /// Map a `Custom(name, args)` back to a MirType collection variant if the
-    /// name canonicalizes to a built-in collection and the args are instantiated.
+    /// name canonicalizes to a built-in collection and the args are instantiated,
+    /// and the atomic element type to the scalar it is stored as.
     /// When `args` is `None`, the name appears as an unresolved self-reference
     /// inside a stdlib class body — keep it as `MirType::Custom` so the managed-
     /// type check excludes it correctly.
     fn from_custom(name: &str, args: Option<&[crate::ast::expression::Expression]>) -> Self {
+        // The atomic element type is stored as its scalar component, so it is
+        // that scalar to every analysis — a user type sharing the name is not.
+        if name == crate::ast::types::ATOMIC_TYPE_NAME {
+            if let Some(component) = crate::mir::rc::atomic_component(args) {
+                return Self::from_expr(component);
+            }
+        }
         let Some(builtin) = BuiltinCollectionKind::from_name(name) else {
             return MirType::Custom(name.to_string());
         };
@@ -208,7 +216,6 @@ impl MirType {
                     && !unmanaged_type_names.contains(name.as_str())
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
-                    && name != crate::ast::types::ATOMIC_TYPE_NAME
             }
             // All other types (primitives) are not managed.
             _ => false,

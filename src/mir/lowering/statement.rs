@@ -131,11 +131,6 @@ fn lower_return(
     span: Span,
 ) -> Result<(), LoweringError> {
     if let Some(expr) = ret_expr {
-        // The return slot is a host local and the binding's device buffer is
-        // released on the way out, so `return g` is a host boundary like
-        // `let h = g`: without the fence it returns the host array's initial
-        // values.
-        super::variable::emit_cross_residency_readback(ctx, Some(expr), span);
         let ret_ty = ctx.body.local_decls[0].ty.clone();
         // The returned expression's type is read through the instantiation
         // substitution: a body lowered for `Container<String>` returns `String`

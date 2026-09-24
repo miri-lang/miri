@@ -22,8 +22,8 @@ use miri::mir::verify::{
     VerificationViolation,
 };
 use miri::mir::{
-    AggregateKind, Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand, Place,
-    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, Body, Constant, Discriminant, ExecutionModel, GpuLaunchArgs, Local, LocalDecl,
+    Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use std::collections::HashSet;
 
@@ -1155,12 +1155,23 @@ fn dealloc_in_one_arm_and_decref_in_the_other_verifies_clean() {
     assert_clean(&mixed, "a dealloc on one arm and a decref on the other");
 }
 
-/// A body whose local 1 is a `gpu`-resident binding carrying `handle`, local 2
+/// A body whose local 1 is a `gpu`-resident parameter carrying `handle`, local 2
 /// a host binding of the same type, and local 3 an unmanaged call destination.
+///
+/// The parameter borrows its caller's device buffer, which the caller may have
+/// launched on, so it starts unfenced.
 fn cross_residency_body(handle: u64, blocks: Vec<BasicBlockData>) -> Body {
-    let mut body = body_of(&[void_ty(), string_ty(), string_ty(), void_ty()], 0, blocks);
+    let mut body = body_of(&[void_ty(), string_ty(), string_ty(), void_ty()], 1, blocks);
     body.local_decls[1].residency = BindingResidency::Gpu;
     body.local_decls[1].device_handle = Some(DeviceHandleId(handle));
+    body
+}
+
+/// [`cross_residency_body`] with local 1 a binding the body declares rather than
+/// a parameter: it has no device buffer until a launch touches it.
+fn declared_binding_body(handle: u64, blocks: Vec<BasicBlockData>) -> Body {
+    let mut body = cross_residency_body(handle, blocks);
+    body.arg_count = 0;
     body
 }
 
@@ -1248,20 +1259,86 @@ fn a_readback_of_another_handle_does_not_fence_this_copy() {
     );
 }
 
-/// A copy between two gpu-resident bindings stays on the device, so nothing
-/// has to be fenced for it.
-#[test]
-fn a_gpu_to_gpu_copy_needs_no_readback() {
-    let mut gpu_to_gpu = cross_residency_body(7, vec![block(vec![assign_copy(2, 1)], ret())]);
-    gpu_to_gpu.local_decls[2].residency = BindingResidency::Gpu;
-    gpu_to_gpu.local_decls[2].device_handle = Some(DeviceHandleId(8));
+/// A body copying local 1 into local 2, a gpu binding carrying `target_handle`.
+fn gpu_to_gpu_copy(target_handle: u64) -> Body {
+    let mut body = cross_residency_body(7, vec![block(vec![assign_copy(2, 1)], ret())]);
+    body.local_decls[2].residency = BindingResidency::Gpu;
+    body.local_decls[2].device_handle = Some(DeviceHandleId(target_handle));
+    body
+}
 
-    let violations = verify_cross_residency_readback(&gpu_to_gpu);
-    assert!(
-        violations.is_empty(),
-        "a gpu-to-gpu copy must verify clean, got: {}",
-        messages(&violations)
+/// A binding that takes over the source's device buffer (`gpu var b = a`)
+/// keeps the value on the device, so nothing has to be fenced for it.
+#[test]
+fn a_move_into_a_binding_sharing_the_device_buffer_needs_no_readback() {
+    assert_fenced(&gpu_to_gpu_copy(7), "a move that keeps the device buffer");
+}
+
+/// A copy into a gpu binding with a buffer of its own (`b = a`) copies the
+/// source's host array, which lags whatever the device did to it.
+#[test]
+fn a_copy_into_a_gpu_binding_with_its_own_buffer_needs_a_readback() {
+    assert_one_unfenced_read(&gpu_to_gpu_copy(8));
+}
+
+/// Until a launch touches it a declared binding has no device buffer, so its
+/// host value is its only copy and reading it needs no readback.
+#[test]
+fn a_declared_binding_no_launch_touched_needs_no_readback() {
+    let untouched = declared_binding_body(7, vec![block(vec![assign_copy(2, 1)], ret())]);
+    assert_fenced(&untouched, "a binding no launch touched");
+}
+
+#[test]
+fn a_launch_leaves_a_declared_binding_unfenced() {
+    let launched = declared_binding_body(
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
     );
+    assert_one_unfenced_read(&launched);
+}
+
+/// A fresh activation opens the handle with no device buffer, so it fences the
+/// handle the way a readback does — a binding redeclared on each turn of a loop
+/// starts current however the previous turn left it.
+#[test]
+fn an_activation_fences_its_handle() {
+    let reactivated = cross_residency_body(
+        7,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call("miri_gpu_acquire", vec![handle_argument(7)], 3, 1),
+            ),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_fenced(&reactivated, "a copy after a fresh activation");
+}
+
+/// An upload into another binding's buffer copies the source's host array, so
+/// the source has to be fenced as for any other host read.
+#[test]
+fn uploading_one_gpu_binding_into_another_needs_a_readback_of_the_source() {
+    let upload = cross_residency_body(
+        7,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_upload",
+                    vec![handle_argument(8), Operand::Copy(place(1))],
+                    3,
+                    1,
+                ),
+            ),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_one_unfenced_read(&upload);
 }
 
 /// Capturing a gpu binding into a closure copies its host array into the
@@ -1321,6 +1398,320 @@ fn a_readback_before_the_capture_verifies_clean() {
         "a fenced capture must verify clean, got: {}",
         messages(&violations)
     );
+}
+
+/// A readback of local 1's buffer under `handle`, continuing at `target`.
+fn readback_of_binding(handle: u64, target: usize) -> Terminator {
+    runtime_call(
+        "miri_gpu_readback",
+        vec![handle_argument(handle), Operand::Copy(place(1))],
+        3,
+        target,
+    )
+}
+
+/// `dest = (source, 0)`: a tuple built around a whole local.
+fn tuple_around(dest: usize, source: usize) -> Statement {
+    stmt(StatementKind::Assign(
+        place(dest),
+        Rvalue::Aggregate(
+            AggregateKind::Tuple,
+            vec![
+                Operand::Copy(place(source)),
+                constant(
+                    Type::new(TypeKind::Int, span()),
+                    Literal::Integer(IntegerLiteral::I64(0)),
+                ),
+            ],
+        ),
+    ))
+}
+
+/// A kernel launch over local 1's buffer under `handle`, continuing at `target`.
+fn launch_over_binding(handle: u64, target: usize) -> Terminator {
+    let launch_args = GpuLaunchArgs::new(
+        vec![Operand::Copy(place(1))],
+        vec![Some(DeviceHandleId(handle))],
+        vec![false],
+        vec![false],
+    )
+    .expect("one capture, one entry per metadata vector");
+    let int_operand = || {
+        constant(
+            Type::new(TypeKind::Int, span()),
+            Literal::Integer(IntegerLiteral::I64(1)),
+        )
+    };
+    terminator(TerminatorKind::GpuLaunch {
+        kernel: constant(void_ty(), Literal::Identifier("kernel_0".to_string())),
+        grid: int_operand(),
+        block: int_operand(),
+        launch_args,
+        scalar_args: Vec::new(),
+        uniform_bound_x: None,
+        uniform_bound_y: None,
+        uniform_bound_z: None,
+        uniform_start_x: None,
+        uniform_start_y: None,
+        uniform_start_z: None,
+        destination: place(3),
+        target: Some(BasicBlock(target)),
+    })
+}
+
+/// A call passing local 1 to a body specialized to launch on its buffer.
+fn specialized_call_on_binding(handle: u64, target: usize) -> Terminator {
+    terminator(TerminatorKind::Call {
+        func: callee(void_ty()),
+        args: vec![Operand::Copy(place(1))],
+        out_args: Vec::new(),
+        arg_handles: vec![Some(DeviceHandleId(handle))],
+        destination: place(3),
+        target: Some(BasicBlock(target)),
+    })
+}
+
+fn assert_one_unfenced_read(body: &Body) {
+    let violations = verify_cross_residency_readback(body);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert_eq!(violations[0].local, Local(1));
+    assert!(
+        violations[0].message.contains("no readback"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+fn assert_fenced(body: &Body, what: &str) {
+    let violations = verify_cross_residency_readback(body);
+    assert!(
+        violations.is_empty(),
+        "{} must verify clean, got: {}",
+        what,
+        messages(&violations)
+    );
+}
+
+/// `let t = (g, 1)` puts the host array into the tuple as surely as `let h = g`
+/// copies it: without a readback the tuple holds the initial values.
+#[test]
+fn a_gpu_binding_built_into_a_tuple_without_a_readback_is_reported() {
+    let unfenced = cross_residency_body(7, vec![block(vec![tuple_around(2, 1)], ret())]);
+    assert_one_unfenced_read(&unfenced);
+}
+
+#[test]
+fn a_readback_before_the_tuple_verifies_clean() {
+    let fenced = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), readback_of_binding(7, 1)),
+            block(vec![tuple_around(2, 1)], ret()),
+        ],
+    );
+    assert_fenced(&fenced, "a fenced tuple");
+}
+
+/// Comparing a gpu binding with a host value reads the host array.
+#[test]
+fn a_gpu_binding_read_by_an_operator_without_a_readback_is_reported() {
+    let comparison = stmt(StatementKind::Assign(
+        place(3),
+        Rvalue::BinaryOp(
+            miri::mir::BinOp::Eq,
+            Box::new(Operand::Copy(place(1))),
+            Box::new(Operand::Copy(place(2))),
+        ),
+    ));
+    let unfenced = cross_residency_body(7, vec![block(vec![comparison], ret())]);
+    assert_one_unfenced_read(&unfenced);
+}
+
+/// A call argument is the type checker's residency gate to judge: what reaches
+/// a call is either a device buffer or a binding whose callee reads only its
+/// length, and MIR cannot tell the second from a data read.
+#[test]
+fn a_gpu_binding_passed_to_a_call_is_left_to_the_residency_gate() {
+    let length_only = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(Vec::new(), call_returning_void(1, 3, 2)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_fenced(&length_only, "a call argument");
+}
+
+/// An upload leaves the host array and the device buffer holding the same
+/// values, so a copy after it reads what the device holds.
+#[test]
+fn an_upload_after_the_launch_fences_the_copy() {
+    let uploaded = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_upload",
+                    vec![handle_argument(7), Operand::Copy(place(2))],
+                    3,
+                    2,
+                ),
+            ),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_fenced(&uploaded, "a copy after an upload");
+}
+
+/// A residency-specialized callee launches on the caller's device buffer and
+/// never reads the host array, so the argument needs no fence.
+#[test]
+fn a_gpu_binding_passed_to_a_residency_specialized_call_needs_no_readback() {
+    let on_device = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), specialized_call_on_binding(7, 1)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_fenced(&on_device, "a residency-specialized argument");
+}
+
+/// A launch reads its capture on the device, not the host array.
+#[test]
+fn a_kernel_launch_over_a_gpu_binding_needs_no_readback() {
+    let on_device = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_fenced(&on_device, "a launch capture");
+}
+
+/// A readback anywhere in the body used to fence every copy in it. One that
+/// runs after the copy has written nothing the copy could see.
+#[test]
+fn a_readback_after_the_copy_does_not_fence_it() {
+    let late = cross_residency_body(
+        7,
+        vec![
+            block(vec![assign_copy(2, 1)], readback_of_binding(7, 1)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_one_unfenced_read(&late);
+}
+
+/// A launch after the readback leaves results on the device that the host
+/// array does not hold, so the copy after the launch is unfenced again.
+#[test]
+fn a_launch_between_the_readback_and_the_copy_reopens_the_fence() {
+    let relaunched = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), readback_of_binding(7, 1)),
+            block(Vec::new(), launch_over_binding(7, 2)),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_one_unfenced_read(&relaunched);
+}
+
+/// A call specialized to launch on the buffer reopens the fence as a launch
+/// does.
+#[test]
+fn a_specialized_call_between_the_readback_and_the_copy_reopens_the_fence() {
+    let relaunched = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), readback_of_binding(7, 1)),
+            block(Vec::new(), specialized_call_on_binding(7, 2)),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_one_unfenced_read(&relaunched);
+}
+
+/// A readback on one arm fences nothing on the path through the other arm.
+#[test]
+fn a_readback_on_one_branch_does_not_fence_a_copy_after_the_join() {
+    let one_arm = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), branch(1, 3)),
+            block(Vec::new(), readback_of_binding(7, 2)),
+            block(Vec::new(), goto(3)),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_one_unfenced_read(&one_arm);
+}
+
+#[test]
+fn a_readback_on_every_branch_fences_a_copy_after_the_join() {
+    let both_arms = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), branch(1, 2)),
+            block(Vec::new(), readback_of_binding(7, 3)),
+            block(Vec::new(), readback_of_binding(7, 3)),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    assert_fenced(&both_arms, "a copy fenced on every incoming path");
+}
+
+/// Launch, read back, copy, repeat: every turn of the loop fences its own copy.
+#[test]
+fn a_loop_that_relaunches_and_reads_back_each_turn_verifies_clean() {
+    let looping = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), goto(1)),
+            block(Vec::new(), launch_over_binding(7, 2)),
+            block(Vec::new(), readback_of_binding(7, 3)),
+            block(vec![assign_copy(2, 1)], branch(1, 4)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_fenced(&looping, "a copy fenced on every turn of a loop");
+}
+
+/// A gpu scalar reads back through a one-element array seeded from the
+/// scalar's host value. The seed is the readback's own destination, written
+/// before the readback fills it, not a host copy of the result.
+#[test]
+fn seeding_a_scalar_readback_wrapper_needs_no_readback() {
+    let mut scalar = cross_residency_body(
+        7,
+        vec![
+            block(
+                vec![stmt(StatementKind::Assign(
+                    place(4),
+                    Rvalue::Aggregate(AggregateKind::Array, vec![Operand::Copy(place(1))]),
+                ))],
+                runtime_call(
+                    "miri_gpu_readback",
+                    vec![handle_argument(7), Operand::Copy(place(4))],
+                    3,
+                    1,
+                ),
+            ),
+            block(vec![assign_copy(2, 1)], ret()),
+        ],
+    );
+    scalar.new_local(LocalDecl::new(string_ty(), span()));
+    assert_fenced(&scalar, "a scalar readback wrapper");
 }
 
 /// A built-in collection class reference, e.g. `Set<String>`, spelled the way
@@ -1609,4 +2000,137 @@ fn an_element_typed_by_an_unpinned_type_parameter_verifies_clean() {
     );
     body.type_params.insert("T".to_string());
     assert_clean(&body, "an element typed by an unpinned type parameter");
+}
+
+fn bool_ty() -> Type {
+    Type::new(TypeKind::Boolean, span())
+}
+
+/// `flag = value`.
+fn assign_flag(flag: usize, value: bool) -> Statement {
+    stmt(StatementKind::Assign(
+        place(flag),
+        Rvalue::Use(constant(bool_ty(), Literal::Boolean(value))),
+    ))
+}
+
+/// `switchInt(flag)`: to `when_clear` on false, else to `when_set`.
+fn switch_on_flag(flag: usize, when_clear: usize, when_set: usize) -> Terminator {
+    terminator(TerminatorKind::SwitchInt {
+        discr: Operand::Copy(place(flag)),
+        targets: vec![(Discriminant::bool_false(), BasicBlock(when_clear))],
+        otherwise: BasicBlock(when_set),
+    })
+}
+
+/// A declared binding launched on, then copied behind a test of flag local 4:
+/// read back when the flag is set, copied directly when it is clear. The flag
+/// is set after the launch when `set_after_launch`, and is known to the body as
+/// the handle's stale flag when `registered`.
+fn flag_guarded_copy(set_after_launch: bool, registered: bool) -> Body {
+    let after_launch = if set_after_launch {
+        vec![assign_flag(4, true)]
+    } else {
+        Vec::new()
+    };
+    let mut body = declared_binding_body(
+        7,
+        vec![
+            block(vec![assign_flag(4, false)], launch_over_binding(7, 1)),
+            block(after_launch, switch_on_flag(4, 3, 2)),
+            block(Vec::new(), readback_of_binding(7, 4)),
+            block(vec![assign_copy(2, 1)], ret()),
+            block(vec![assign_flag(4, false)], goto(3)),
+        ],
+    );
+    body.new_local(LocalDecl::new(bool_ty(), span()));
+    if registered {
+        body.device_stale_flags.insert(Local(4), DeviceHandleId(7));
+    }
+    body
+}
+
+/// The clear branch of a flag set by every launch fences the read: the device
+/// has not run since the flag was last cleared by a readback.
+#[test]
+fn the_clear_branch_of_a_stale_flag_fences_the_read() {
+    assert_fenced(&flag_guarded_copy(true, true), "a copy on a clear flag");
+}
+
+/// A flag the launch did not set proves nothing when found clear.
+#[test]
+fn a_flag_left_clear_by_a_launch_does_not_fence_the_read() {
+    assert_one_unfenced_read(&flag_guarded_copy(false, true));
+}
+
+/// Only the flags the readback pass keeps count: branching on any other
+/// boolean fences nothing.
+#[test]
+fn a_boolean_the_body_does_not_keep_as_a_stale_flag_fences_nothing() {
+    assert_one_unfenced_read(&flag_guarded_copy(true, false));
+}
+
+/// Readback calls in `body`.
+fn readback_calls(body: &Body) -> usize {
+    body.basic_blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.terminator.as_ref().map(|t| &t.kind),
+                Some(TerminatorKind::Call { func, .. })
+                    if func.called_symbol() == Some("miri_gpu_readback")
+            )
+        })
+        .count()
+}
+
+/// A loop whose first block reads a declared binding and whose back edge
+/// launches on it: the read is behind on some entries and current on the first,
+/// so the pass guards it with a flag, which it has to set before the loop
+/// without running that assignment again on every turn.
+#[test]
+fn the_readback_pass_keeps_a_flag_for_a_read_at_the_head_of_a_loop() {
+    let mut looping = declared_binding_body(
+        7,
+        vec![
+            block(vec![assign_copy(2, 1)], branch(1, 2)),
+            block(Vec::new(), launch_over_binding(7, 0)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_one_unfenced_read(&looping);
+
+    miri::mir::residency::insert_readbacks(&mut looping);
+
+    assert_fenced(&looping, "the pass's output");
+    assert_eq!(readback_calls(&looping), 1, "one guarded readback");
+    assert_eq!(looping.device_stale_flags.len(), 1, "one flag for handle 7");
+    let enters_the_entry_block = looping
+        .basic_blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|t| t.successors().contains(&BasicBlock(0)));
+    assert!(
+        !enters_the_entry_block,
+        "the flag's initialization must run once, before the loop:\n{looping}"
+    );
+}
+
+/// A read every path reaches behind reads back unconditionally, and a second
+/// read with no launch between finds the host array current.
+#[test]
+fn the_readback_pass_reads_back_once_for_two_reads_after_a_launch() {
+    let mut twice = declared_binding_body(
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(vec![assign_copy(2, 1), tuple_around(2, 1)], ret()),
+        ],
+    );
+
+    miri::mir::residency::insert_readbacks(&mut twice);
+
+    assert_fenced(&twice, "the pass's output");
+    assert_eq!(readback_calls(&twice), 1);
+    assert!(twice.device_stale_flags.is_empty(), "no read needs a flag");
 }

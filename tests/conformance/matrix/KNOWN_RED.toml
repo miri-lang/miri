@@ -1278,19 +1278,6 @@ cells = [
     "class_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "class_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "class_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/overwrite/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/overwrite/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/overwrite/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/vec3_f32/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "closure_capture/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
@@ -1455,29 +1442,13 @@ cells = [
     "closure_capture/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "closure_capture/vec3_f32/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "enum_payload/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "enum_payload/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "enum_payload/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "generic_field/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -1576,19 +1547,6 @@ cells = [
     "inherited_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/overwrite/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/overwrite/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/overwrite/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/vec3_f32/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "list_element/array_string/construct/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/array_string/construct/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/array_string/construct/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -1679,16 +1637,12 @@ cells = [
     "struct_field/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "struct_field/vec3_f32/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "struct_field/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/vec3_f32/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
 ]
 
 # operator-to-trait dispatch
