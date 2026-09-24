@@ -15,110 +15,6 @@
 cells = [
     "array_element/closure/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
     "array_element/closure/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "closure_capture/f32/eq/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/f32/eq/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/f32/eq/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/f32/eq/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/f32/render/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/f32/store_read/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/f32/store_read/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/f32/store_read/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/f32/store_read/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/float/eq/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/float/eq/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/float/eq/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/float/eq/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/float/render/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/float/store_read/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/float/store_read/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/float/store_read/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/float/store_read/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/i128/eq/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/i128/eq/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/i128/eq/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/i128/eq/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/i128/render/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/i128/store_read/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/i128/store_read/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/i128/store_read/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/i128/store_read/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/u128/eq/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/u128/eq/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/u128/eq/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/u128/eq/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/u128/render/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/u128/store_read/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/u128/store_read/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "closure_capture/u128/store_read/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
-    "closure_capture/u128/store_read/mono", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
-    "generic_field/f32/compound_assign/generic_class", # compile error MER_CG_008: = Failed to define function 'CellN_run__f32': Compilation error: Verifier errors
-    "generic_field/f32/compound_assign/generic_fn", # compile error MER_CG_008: = Failed to define function 'cellN__f32': Compilation error: Verifier errors
-    "generic_field/f32/compound_assign/inherited", # compile error MER_CG_008: = Failed to define function 'BaseN_run__f32': Compilation error: Verifier errors
-    "generic_field/f32/compound_assign/mono", # compile error MER_CG_008: = Failed to define function 'cellN': Compilation error: Verifier errors
-    "generic_field/f32/eq/generic_class", # wrong value: got `0`, expected `1`
-    "generic_field/f32/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "generic_field/f32/eq/inherited", # wrong value: got `0`, expected `1`
-    "generic_field/f32/eq/mono", # wrong value: got `0`, expected `1`
-    "generic_field/f32/overwrite/generic_class", # wrong value: got `1074790400.0`, expected `2.25`
-    "generic_field/f32/overwrite/generic_fn", # wrong value: got `1074790400.0`, expected `2.25`
-    "generic_field/f32/overwrite/inherited", # wrong value: got `1074790400.0`, expected `2.25`
-    "generic_field/f32/overwrite/mono", # wrong value: got `1074790400.0`, expected `2.25`
-    "generic_field/f32/render/mono", # wrong value: got `1.0`, expected `1.5`
-    "generic_field/f32/store_read/generic_class", # wrong value: got `1.0`, expected `1.5`
-    "generic_field/f32/store_read/generic_fn", # wrong value: got `1.0`, expected `1.5`
-    "generic_field/f32/store_read/inherited", # wrong value: got `1.0`, expected `1.5`
-    "generic_field/f32/store_read/mono", # wrong value: got `1.0`, expected `1.5`
-    "generic_field/f32/write_literal/mono", # wrong value: got `1074790400.0`, expected `2.25`
-    "generic_field/float/compound_assign/generic_class", # compile error MER_CG_008: = Failed to define function 'CellN_run__float': Compilation error: Verifier errors
-    "generic_field/float/compound_assign/generic_fn", # compile error MER_CG_008: = Failed to define function 'cellN__float': Compilation error: Verifier errors
-    "generic_field/float/compound_assign/inherited", # compile error MER_CG_008: = Failed to define function 'BaseN_run__float': Compilation error: Verifier errors
-    "generic_field/float/compound_assign/mono", # compile error MER_CG_008: = Failed to define function 'cellN': Compilation error: Verifier errors
-    "generic_field/float/eq/generic_class", # wrong value: got `0`, expected `1`
-    "generic_field/float/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "generic_field/float/eq/inherited", # wrong value: got `0`, expected `1`
-    "generic_field/float/eq/mono", # wrong value: got `0`, expected `1`
-    "generic_field/float/overwrite/generic_class", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "generic_field/float/overwrite/generic_fn", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "generic_field/float/overwrite/inherited", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "generic_field/float/overwrite/mono", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "generic_field/float/render/mono", # wrong value: got `0.0`, expected `0.5`
-    "generic_field/float/store_read/generic_class", # wrong value: got `0.0`, expected `0.5`
-    "generic_field/float/store_read/generic_fn", # wrong value: got `0.0`, expected `0.5`
-    "generic_field/float/store_read/inherited", # wrong value: got `0.0`, expected `0.5`
-    "generic_field/float/store_read/mono", # wrong value: got `0.0`, expected `0.5`
-    "generic_field/float/write_literal/mono", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "generic_field/i128/eq/generic_class", # wrong value: got `0`, expected `1`
-    "generic_field/i128/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "generic_field/i128/eq/inherited", # wrong value: got `0`, expected `1`
-    "generic_field/i128/eq/mono", # wrong value: got `0`, expected `1`
-    "generic_field/i128/overwrite/generic_class", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "generic_field/i128/overwrite/generic_fn", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "generic_field/i128/overwrite/inherited", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "generic_field/i128/overwrite/mono", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "generic_field/i128/render/mono", # wrong value: got `-5`, expected `-18446744073709551621`
-    "generic_field/i128/store_read/generic_class", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "generic_field/i128/store_read/generic_fn", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "generic_field/i128/store_read/inherited", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "generic_field/i128/store_read/mono", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "generic_field/i128/write_literal/mono", # compile error MER_TYP_068
-    "generic_field/u128/compound_assign/generic_class", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "generic_field/u128/compound_assign/generic_fn", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "generic_field/u128/compound_assign/inherited", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "generic_field/u128/compound_assign/mono", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "generic_field/u128/eq/generic_class", # wrong value: got `0`, expected `1`
-    "generic_field/u128/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "generic_field/u128/eq/inherited", # wrong value: got `0`, expected `1`
-    "generic_field/u128/eq/mono", # wrong value: got `0`, expected `1`
-    "generic_field/u128/overwrite/generic_class", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "generic_field/u128/overwrite/generic_fn", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "generic_field/u128/overwrite/inherited", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "generic_field/u128/overwrite/mono", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "generic_field/u128/render/mono", # wrong value: got `0`, expected `18446744073709551616`
-    "generic_field/u128/store_read/generic_class", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "generic_field/u128/store_read/generic_fn", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "generic_field/u128/store_read/inherited", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "generic_field/u128/store_read/mono", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "generic_field/u128/write_literal/mono", # compile error MER_TYP_068
     "map_value/vec3_f32/eq/generic_class", # crashed without a report
     "map_value/vec3_f32/eq/generic_fn", # crashed without a report
     "map_value/vec3_f32/eq/inherited", # crashed without a report
@@ -301,6 +197,9 @@ cells = [
     "enum_payload/u128/store_read/generic_class", # error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'getN__u128': Failed to declare function 'pickN__u128': Function pickN__u128 signature Signature { params: [AbiParam { value_type: types::I128, purpose: Normal, extens
     "enum_payload/u128/store_read/generic_fn", # error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'getN__u128': Failed to declare function 'pickN__u128': Function pickN__u128 signature Signature { params: [AbiParam { value_type: types::I128, purpose: Normal, extens
     "enum_payload/u128/store_read/inherited", # error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'getN__u128': Failed to declare function 'pickN__u128': Function pickN__u128 signature Signature { params: [AbiParam { value_type: types::I128, purpose: Normal, extens
+    "generic_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
+    "generic_field/closure/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
+    "generic_field/closure/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
     "inherited_field/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _9 (_9): released more references than it owns (double-release)
     "inherited_field/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
@@ -524,95 +423,12 @@ cells = [
     "return/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/class/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
+    "struct_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "struct_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/enum/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/f32/compound_assign/generic_class", # compile error MER_CG_008: = Failed to define function 'CellN_run__f32': Compilation error: Verifier errors
-    "struct_field/f32/compound_assign/generic_fn", # compile error MER_CG_008: = Failed to define function 'cellN__f32': Compilation error: Verifier errors
-    "struct_field/f32/compound_assign/inherited", # compile error MER_CG_008: = Failed to define function 'BaseN_run__f32': Compilation error: Verifier errors
-    "struct_field/f32/eq/generic_class", # wrong value: got `0`, expected `1`
-    "struct_field/f32/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "struct_field/f32/eq/inherited", # wrong value: got `0`, expected `1`
-    "struct_field/f32/overwrite/generic_class", # wrong value: got `1074790400.0`, expected `2.25`
-    "struct_field/f32/overwrite/generic_fn", # wrong value: got `1074790400.0`, expected `2.25`
-    "struct_field/f32/overwrite/inherited", # wrong value: got `1074790400.0`, expected `2.25`
-    "struct_field/f32/store_read/generic_class", # wrong value: got `1.0`, expected `1.5`
-    "struct_field/f32/store_read/generic_fn", # wrong value: got `1.0`, expected `1.5`
-    "struct_field/f32/store_read/inherited", # wrong value: got `1.0`, expected `1.5`
-    "struct_field/float/compound_assign/generic_class", # compile error MER_CG_008: = Failed to define function 'CellN_run__float': Compilation error: Verifier errors
-    "struct_field/float/compound_assign/generic_fn", # compile error MER_CG_008: = Failed to define function 'cellN__float': Compilation error: Verifier errors
-    "struct_field/float/compound_assign/inherited", # compile error MER_CG_008: = Failed to define function 'BaseN_run__float': Compilation error: Verifier errors
-    "struct_field/float/eq/generic_class", # wrong value: got `0`, expected `1`
-    "struct_field/float/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "struct_field/float/eq/inherited", # wrong value: got `0`, expected `1`
-    "struct_field/float/overwrite/generic_class", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "struct_field/float/overwrite/generic_fn", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "struct_field/float/overwrite/inherited", # wrong value: got `4608308318706860032.0`, expected `1.25`
-    "struct_field/float/store_read/generic_class", # wrong value: got `0.0`, expected `0.5`
-    "struct_field/float/store_read/generic_fn", # wrong value: got `0.0`, expected `0.5`
-    "struct_field/float/store_read/inherited", # wrong value: got `0.0`, expected `0.5`
-    "struct_field/i128/eq/generic_class", # wrong value: got `0`, expected `1`
-    "struct_field/i128/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "struct_field/i128/eq/inherited", # wrong value: got `0`, expected `1`
-    "struct_field/i128/overwrite/generic_class", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "struct_field/i128/overwrite/generic_fn", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "struct_field/i128/overwrite/inherited", # wrong value: got `7 false true`, expected `18446744073709551623 true false`
-    "struct_field/i128/store_read/generic_class", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "struct_field/i128/store_read/generic_fn", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "struct_field/i128/store_read/inherited", # wrong value: got `-5 false true`, expected `-18446744073709551621 true false`
-    "struct_field/string/compound_assign/generic_class", # crashed without a report
-    "struct_field/string/compound_assign/generic_fn", # crashed without a report
-    "struct_field/string/compound_assign/inherited", # crashed without a report
-    "struct_field/struct/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/struct/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/u128/compound_assign/generic_class", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "struct_field/u128/compound_assign/generic_fn", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "struct_field/u128/compound_assign/inherited", # wrong value: got `0 false true`, expected `55340232221128654848 true false`
-    "struct_field/u128/eq/generic_class", # wrong value: got `0`, expected `1`
-    "struct_field/u128/eq/generic_fn", # wrong value: got `0`, expected `1`
-    "struct_field/u128/eq/inherited", # wrong value: got `0`, expected `1`
-    "struct_field/u128/overwrite/generic_class", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "struct_field/u128/overwrite/generic_fn", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "struct_field/u128/overwrite/inherited", # wrong value: got `0 false true`, expected `36893488147419103232 true false`
-    "struct_field/u128/store_read/generic_class", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "struct_field/u128/store_read/generic_fn", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
-    "struct_field/u128/store_read/inherited", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
 ]
 
 # drop hooks, release paths and ownership transfer
@@ -802,91 +618,12 @@ cells = [
     "enum_payload/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "enum_payload/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "enum_payload/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "generic_field/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/array_string/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/class/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/render/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/enum/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/render/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/string/compound_assign/generic_class", # crashed without a report
-    "generic_field/string/compound_assign/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/string/compound_assign/inherited", # crashed without a report
-    "generic_field/string/compound_assign/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/struct/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/vec3_f32/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
@@ -912,26 +649,6 @@ cells = [
     "return/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "return/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "return/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/vec3_f32/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/vec3_f32/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
 ]
 
 # operator-to-trait dispatch

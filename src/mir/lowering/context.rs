@@ -798,20 +798,29 @@ impl<'a> LoweringContext<'a> {
         field_types
     }
 
-    /// Builds a map from each generic class name to its type parameter names,
-    /// in declaration order — the order a `Custom(class, Some(args))` spells its
-    /// arguments in.
+    /// Builds a map from each generic class or struct name to its type
+    /// parameter names, in declaration order — the order a
+    /// `Custom(name, Some(args))` spells its arguments in.
+    ///
+    /// A struct belongs here as much as a class: its fields are stored at the
+    /// instance's type arguments, so reading one declared at a parameter
+    /// without them would see an `Option<int>` field as an unmanaged word.
     fn compute_class_type_params(
         type_checker: &crate::type_checker::TypeChecker,
     ) -> HashMap<String, Vec<String>> {
+        use crate::type_checker::context::TypeDefinition;
         type_checker
             .type_definitions()
             .iter()
             .filter_map(|(name, def)| {
-                let crate::type_checker::context::TypeDefinition::Class(class_def) = def else {
-                    return None;
+                let generics = match def {
+                    TypeDefinition::Class(class_def) => class_def.generics.as_ref()?,
+                    TypeDefinition::Struct(struct_def) => struct_def.generics.as_ref()?,
+                    TypeDefinition::Enum(_)
+                    | TypeDefinition::Alias(_)
+                    | TypeDefinition::Generic(_)
+                    | TypeDefinition::Trait(_) => return None,
                 };
-                let generics = class_def.generics.as_ref()?;
                 let params = generics.iter().map(|g| g.name.clone()).collect();
                 Some((name.clone(), params))
             })

@@ -124,3 +124,59 @@ fn main()
         "3",
     );
 }
+
+/// A generic struct's field is stored at the type the struct is instantiated
+/// with, whatever the field reads through: a float keeps its fraction, and a
+/// 128-bit value keeps its high word.
+#[test]
+fn test_generic_struct_fields_keep_their_instantiated_width() {
+    assert_runs_with_output(
+        r#"
+struct H<U>
+    v U
+
+fn held_wide(w i128) i128
+    var h = H<i128>(v: w)
+    return h.v
+
+fn main()
+    let a f32 = 1.5
+    let d float = 0.5
+    let w i128 = -18446744073709551621
+    var h = H<f32>(v: a)
+    let y = h.v
+    let hd = H<float>(v: d)
+    let z = hd.v
+    let back = held_wide(w)
+    println(f"{y} {z} {back == w} {back == -5}")
+"#,
+        "1.5 0.5 true false",
+    );
+}
+
+/// A generic struct instantiated at a reference-counted type retains the value
+/// it is built with and releases the one a field write replaces, reading the
+/// field declared at the parameter at the instance's type argument.
+#[test]
+fn test_generic_struct_field_of_a_managed_type_is_counted() {
+    assert_heap_guard_output(
+        r#"
+struct H<U>
+    v U
+
+fn swapped(a Option<int>, b Option<int>) Option<int>
+    var h = H<Option<int>>(v: a)
+    h.v = b
+    return h.v
+
+fn main()
+    let a Option<int> = Some(1)
+    let b Option<int> = Some(2)
+    let name = "x" + "y"
+    var hs = H<String>(v: name)
+    hs.v = "z" + "w"
+    println(f"{swapped(a, b) ?? 0} {hs.v} {name}")
+"#,
+        "2 zw xy",
+    );
+}

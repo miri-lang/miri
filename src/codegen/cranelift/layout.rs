@@ -191,7 +191,7 @@ fn custom_field_layout(
     };
     match def {
         TypeDefinition::Struct(struct_def) => {
-            struct_field_layout(name, struct_def, field_idx, ptr_ty)
+            struct_field_layout(name, struct_def, type_args, field_idx, ptr_ty)
         }
         TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, type_args, field_idx, ptr_ty),
         TypeDefinition::Alias(alias_def) => field_layout(
@@ -214,9 +214,27 @@ fn custom_field_layout(
     }
 }
 
+/// The Cranelift type a struct field occupies at the instantiation
+/// `type_args` names.
+///
+/// A field spelled as the struct's type parameter is laid out at its argument,
+/// the way a generic class's field is: the constructor stores the argument's
+/// value at its own width, so a read must find it at that width too.
+fn struct_field_type(
+    struct_def: &StructDefinition,
+    field_ty: &crate::ast::types::Type,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> CraneliftType {
+    let kind =
+        substitute_generic_field_kind(&field_ty.kind, type_args, struct_def.generics.as_ref());
+    translate_type_kind(&kind, ptr_ty)
+}
+
 fn struct_field_layout(
     name: &str,
     struct_def: &StructDefinition,
+    type_args: Option<&[Expression]>,
     field_idx: usize,
     ptr_ty: CraneliftType,
 ) -> (i32, CraneliftType) {
@@ -229,7 +247,7 @@ fn struct_field_layout(
     );
     let mut offset: i32 = 0;
     for (i, (_field_name, field_ty, _vis)) in struct_def.fields.iter().enumerate() {
-        let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
+        let cl_ty = struct_field_type(struct_def, field_ty, type_args, ptr_ty);
         let alignment = type_alignment(cl_ty);
         offset = align_to(offset, alignment);
         if i == field_idx {
@@ -462,7 +480,9 @@ fn custom_aggregate_size(
 ) -> u32 {
     let ptr_size = ptr_ty.bytes();
     match type_definitions.get(name) {
-        Some(TypeDefinition::Struct(struct_def)) => struct_aggregate_size(struct_def, ptr_ty),
+        Some(TypeDefinition::Struct(struct_def)) => {
+            struct_aggregate_size(struct_def, type_args, ptr_ty)
+        }
         Some(TypeDefinition::Enum(enum_def)) => enum_aggregate_size(enum_def, type_args, ptr_ty),
         Some(TypeDefinition::Alias(alias_def)) => {
             aggregate_size(&alias_def.template.kind, type_definitions, ptr_ty)
@@ -476,12 +496,16 @@ fn custom_aggregate_size(
 
 /// Size of a struct aggregate: sum of field sizes with per-field alignment,
 /// padded to the maximum encountered alignment (at least ptr-sized).
-fn struct_aggregate_size(struct_def: &StructDefinition, ptr_ty: CraneliftType) -> u32 {
+fn struct_aggregate_size(
+    struct_def: &StructDefinition,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> u32 {
     let ptr_size = ptr_ty.bytes() as i32;
     let mut max_align = ptr_size;
     let mut total: i32 = 0;
     for (_field_name, field_ty, _vis) in &struct_def.fields {
-        let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
+        let cl_ty = struct_field_type(struct_def, field_ty, type_args, ptr_ty);
         let alignment = type_alignment(cl_ty);
         max_align = max_align.max(alignment);
         total = align_to(total, alignment);

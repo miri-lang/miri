@@ -6,7 +6,7 @@
 //! This module provides the Cranelift-based code generator for CPU targets.
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
-mod closure;
+pub(crate) mod closure;
 mod element_method_thunks;
 mod gpu_launch;
 pub mod layout;
