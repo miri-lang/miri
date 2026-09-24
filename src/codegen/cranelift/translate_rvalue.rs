@@ -7,7 +7,7 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::layout::{
     class_payload_layout, enum_payload_slot_size, field_layout, ClassPayloadLayout,
 };
-use crate::codegen::cranelift::rc::{ContainerSetter, ElementIdentitySetters, ElementOrderSetters};
+use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
@@ -342,6 +342,11 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Build a heap-allocated `Array`, `List`, `Map`, or `Set` aggregate from `operands`.
+    ///
+    /// Only an array is built from its elements here. A list, set or map literal
+    /// is lowered as its empty collection followed by one element-ABI call per
+    /// element, so the aggregate that reaches codegen for a set or a map is the
+    /// empty collection alone, and a list is allocated by `miri_rt_list_new`.
     fn build_collection_aggregate(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -351,51 +356,23 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
-
-        // Translate all element operands
-        let translated: Vec<Value> = operands
-            .iter()
-            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
-            .collect::<Result<_, _>>()?;
-
-        // Determine element size from the first operand (all are homogeneous).
-        // Inline vector elements occupy their std430 stride even though the
-        // operand value is a pointer to the source aggregate; pointer-sized and
-        // scalar elements use the operand's Cranelift width.
-        let first_elem_kind = operands
-            .first()
-            .and_then(|op| Self::direct_operand_kind(op, type_ctx));
-        let inline_stride = first_elem_kind.and_then(|k| {
-            crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
-                .map(|(stride, _, _)| stride)
-        });
-        let elem_size = match (inline_stride, translated.is_empty()) {
-            (Some(stride), _) => stride,
-            (None, true) => ptr_size as i64,
-            (None, false) => builder.func.dfg.value_type(translated[0]).bytes() as i64,
-        };
-        let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
-
         match kind {
-            AggregateKind::Array => Self::build_array_aggregate(
-                builder, ctx, operands, &translated, elem_size, elem_size_val, type_ctx,
-            ),
-            AggregateKind::List => Self::build_list_aggregate(
-                builder, ctx, operands, translated, elem_size_val, type_ctx,
-            ),
-            AggregateKind::Map => Self::build_map_aggregate(
-                builder, ctx, operands, translated, type_ctx, expected_ty,
-            ),
-            AggregateKind::Set => Self::build_set_aggregate(
-                builder,
-                ctx,
-                operands,
-                translated,
-                Self::set_elem_bytes(expected_ty, first_elem_kind, ptr_type),
-                type_ctx,
-            ),
+            AggregateKind::Array => {
+                Self::build_array_from_operands(builder, ctx, operands, locals, type_ctx)
+            }
+            AggregateKind::Map if operands.is_empty() => {
+                Self::allocate_empty_map(builder, ctx, type_ctx, expected_ty)
+            }
+            AggregateKind::Set if operands.is_empty() => {
+                Self::allocate_empty_set(builder, ctx, type_ctx, expected_ty)
+            }
+            AggregateKind::List | AggregateKind::Map | AggregateKind::Set => {
+                Err(CodegenError::Internal(format!(
+                    "internal codegen error: a {kind:?} aggregate with {} element(s) reached \
+                     codegen; MIR lowering fills collection literals through element-ABI calls",
+                    operands.len()
+                )))
+            }
             AggregateKind::Tuple
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_)
@@ -407,6 +384,47 @@ impl<'a> FunctionTranslator<'a> {
                 kind
             ))),
         }
+    }
+
+    /// Translate an array literal's elements and build the array from them.
+    ///
+    /// Inline vector elements occupy their std430 stride even though the operand
+    /// value is a pointer to the source aggregate; pointer-sized and scalar
+    /// elements use the operand's Cranelift width.
+    fn build_array_from_operands(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        operands: &[Operand],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let translated: Vec<Value> = operands
+            .iter()
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
+            .collect::<Result<_, _>>()?;
+        let inline_stride = operands
+            .first()
+            .and_then(|op| Self::direct_operand_kind(op, type_ctx))
+            .and_then(|k| {
+                crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
+                    .map(|(stride, _, _)| stride)
+            });
+        let elem_size = match (inline_stride, translated.first()) {
+            (Some(stride), _) => stride,
+            (None, None) => i64::from(ptr_type.bytes()),
+            (None, Some(first)) => i64::from(builder.func.dfg.value_type(*first).bytes()),
+        };
+        let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
+        Self::build_array_aggregate(
+            builder,
+            ctx,
+            operands,
+            &translated,
+            elem_size,
+            elem_size_val,
+            type_ctx,
+        )
     }
 
     /// Build a heap-allocated `Array` aggregate populated from `translated`.
@@ -480,125 +498,25 @@ impl<'a> FunctionTranslator<'a> {
         Ok(array_ptr)
     }
 
-    /// Build a heap-allocated `List` aggregate populated from `translated`.
-    fn build_list_aggregate(
+    /// Allocate the empty map a `Map<K, V>()` or a map literal starts from,
+    /// with key and value slots as wide as the declared types.
+    ///
+    /// How the map matches, releases and clones its entries is registered from
+    /// the same declared type once the value is bound (`apply_empty_map_init`).
+    fn allocate_empty_map(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        translated: Vec<Value>,
-        elem_size_val: Value,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let list_ptr = Self::call_rt_list_new(builder, ctx, elem_size_val)?;
-
-        let elem_kind = operands
-            .first()
-            .and_then(|op| Self::direct_operand_kind(op, type_ctx));
-        let spill = LiteralSpill::new(builder, elem_kind, translated.first().copied(), ptr_type);
-        for val in translated {
-            let (elem, payload) = spill.element_argument(builder, val, ptr_type);
-            Self::call_rt_list_push(builder, ctx, list_ptr, elem, payload)?;
-        }
-
-        if let Some(first_op) = operands.first() {
-            if let Some(elem_kind) = Self::first_operand_kind(first_op, type_ctx) {
-                Self::register_elem_drop_clone(
-                    builder,
-                    ctx,
-                    elem_kind,
-                    list_ptr,
-                    ptr_type,
-                    type_ctx,
-                    ElementCallbackSetters {
-                        set_drop: Self::call_rt_list_set_elem_drop_fn,
-                        set_clone: Self::call_rt_list_set_elem_clone_fn,
-                        order: Some(Self::LIST_ORDER_SETTERS),
-                    },
-                )?;
-            }
-        }
-        Ok(list_ptr)
-    }
-
-    /// Build a heap-allocated `Map` aggregate populated from `translated`.
-    fn build_map_aggregate(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        translated: Vec<Value>,
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
+        let word = ptr_type.bytes();
         let (key_size, value_size) =
-            Self::map_aggregate_sizes(builder, &translated, ptr_type, expected_ty);
-
+            Self::declared_map_entry_bytes(expected_ty, ptr_type).unwrap_or((word, word));
         let key_size_val = builder.ins().iconst(ptr_type, i64::from(key_size));
         let value_size_val = builder.ins().iconst(ptr_type, i64::from(value_size));
         let bytes_key_kind = builder.ins().iconst(ptr_type, 0);
-
-        let map_ptr =
-            Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, bytes_key_kind)?;
-
-        Self::register_map_value_callbacks(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
-        Self::register_map_key_callbacks_from_operand(
-            builder, ctx, operands, map_ptr, ptr_type, type_ctx,
-        )?;
-
-        // A literal's entries are homogeneous, so one spill slot per side serves
-        // the whole literal: each call copies the bytes out before it returns.
-        let key_spill = LiteralSpill::new(
-            builder,
-            operands
-                .first()
-                .and_then(|op| Self::direct_operand_kind(op, type_ctx)),
-            translated.first().copied(),
-            ptr_type,
-        );
-        let value_spill = LiteralSpill::new(
-            builder,
-            operands
-                .get(1)
-                .and_then(|op| Self::direct_operand_kind(op, type_ctx)),
-            translated.get(1).copied(),
-            ptr_type,
-        );
-        for chunk in translated.chunks(2) {
-            if let [key, value] = chunk {
-                let key = key_spill.element_argument(builder, *key, ptr_type);
-                let value = value_spill.element_argument(builder, *value, ptr_type);
-                Self::call_rt_map_set(builder, ctx, map_ptr, key, value)?;
-            }
-        }
-        Ok(map_ptr)
-    }
-
-    /// Returns `(key_size, value_size)` for the upcoming map.
-    ///
-    /// The declared key and value types decide both, so a map allocates slots
-    /// wide enough for the entries it was declared to hold whether or not the
-    /// literal that builds it has any. The widths of the first entry's operands
-    /// answer only for a map whose declaration did not reach here, and a value
-    /// word answers when there is no entry either — and is the floor under both,
-    /// because that word is what a caller spilling an entry writes into the
-    /// buffer.
-    fn map_aggregate_sizes(
-        builder: &FunctionBuilder,
-        translated: &[Value],
-        ptr_type: cl_types::Type,
-        expected_ty: Option<&crate::ast::types::Type>,
-    ) -> (u32, u32) {
-        let word = ptr_type.bytes();
-        let measured = if translated.len() >= 2 {
-            (
-                builder.func.dfg.value_type(translated[0]).bytes().max(word),
-                builder.func.dfg.value_type(translated[1]).bytes().max(word),
-            )
-        } else {
-            (word, word)
-        };
-        Self::declared_map_entry_bytes(expected_ty, ptr_type).unwrap_or(measured)
+        Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, bytes_key_kind)
     }
 
     /// The byte widths a map declared as `expected_ty` gives its key and value
@@ -615,151 +533,28 @@ impl<'a> FunctionTranslator<'a> {
         ))
     }
 
-    /// The byte width a set literal gives its element slot.
+    /// Allocate the empty set a `Set<T>()` or a set literal starts from, with
+    /// element slots as wide as the declared element type — a value word when
+    /// the destination spells none.
     ///
-    /// The declared element type decides it, so a set allocates slots wide
-    /// enough for the elements it was declared to hold whether or not the
-    /// literal that builds it has any. The first element's own type answers for
-    /// a set whose declaration did not reach here, and a value word answers when
-    /// there is no element either — never less, because that word is what a
-    /// caller spilling an element writes into the buffer.
-    fn set_elem_bytes(
+    /// How the set matches, releases and clones its elements is registered from
+    /// the same declared type once the value is bound (`apply_empty_set_init`).
+    fn allocate_empty_set(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-        first_elem_kind: Option<&TypeKind>,
-        ptr_type: cl_types::Type,
-    ) -> u32 {
+    ) -> Result<Value, CodegenError> {
         use crate::codegen::cranelift::translator::{declared_element_bytes, type_argument};
-        let declared = expected_ty
+        let ptr_type = type_ctx.ptr_type;
+        let elem_size = expected_ty
             .and_then(|ty| FunctionTranslator::set_elem_expr(&ty.kind))
             .and_then(type_argument)
-            .map(|elem| &elem.kind)
-            .or(first_elem_kind);
-        declared.map_or(ptr_type.bytes(), |kind| {
-            declared_element_bytes(kind, ptr_type)
-        })
-    }
-
-    /// Registers how a map literal matches its keys and, for managed keys, the
-    /// `key_drop_fn` that releases each key the map drops. The key type is read
-    /// from the first key operand, which a literal always carries; both run
-    /// before the first entry is stored.
-    fn register_map_key_callbacks_from_operand(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        map_ptr: Value,
-        ptr_type: cl_types::Type,
-        type_ctx: &TypeCtx,
-    ) -> Result<(), CodegenError> {
-        let Some(key_kind) = operands
-            .first()
-            .and_then(|op| Self::first_operand_kind(op, type_ctx))
-        else {
-            return Ok(());
-        };
-        Self::emit_element_identity(
-            builder,
-            ctx,
-            key_kind,
-            map_ptr,
-            type_ctx,
-            ElementIdentitySetters {
-                set_kind: Self::call_rt_map_set_key_kind,
-                set_equals_fn: Self::call_rt_map_set_key_equals_fn,
-            },
-        )?;
-        let Some(drop_fn_addr) =
-            Self::key_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)?
-        else {
-            return Ok(());
-        };
-        Self::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)
-    }
-
-    /// Registers `elem_drop_fn` / `elem_clone_fn` callbacks for the value side
-    /// of a map, when the value type tells us which managed decref/clone helper
-    /// to wire up.
-    fn register_map_value_callbacks(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        map_ptr: Value,
-        ptr_type: cl_types::Type,
-        type_ctx: &TypeCtx,
-    ) -> Result<(), CodegenError> {
-        if operands.len() < 2 {
-            return Ok(());
-        }
-        let Some(val_kind) = Self::first_operand_kind(&operands[1], type_ctx) else {
-            return Ok(());
-        };
-        Self::register_elem_drop_clone(
-            builder,
-            ctx,
-            val_kind,
-            map_ptr,
-            ptr_type,
-            type_ctx,
-            ElementCallbackSetters {
-                set_drop: Self::call_rt_map_set_val_drop_fn,
-                set_clone: Self::call_rt_map_set_val_clone_fn,
-                order: None,
-            },
-        )
-    }
-
-    /// Build a heap-allocated `Set` aggregate populated from `translated`.
-    fn build_set_aggregate(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        translated: Vec<Value>,
-        elem_size: u32,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
+            .map_or(ptr_type.bytes(), |elem| {
+                declared_element_bytes(&elem.kind, ptr_type)
+            });
         let elem_size_val = builder.ins().iconst(ptr_type, i64::from(elem_size));
-        let set_ptr = Self::call_rt_set_new(builder, ctx, elem_size_val)?;
-        let elem_kind = operands
-            .first()
-            .and_then(|op| Self::first_operand_kind(op, type_ctx));
-
-        // Everything the runtime needs to know about the elements is registered
-        // before the first add: the identity decides where each element lands,
-        // and the drop callback releases a literal's duplicate operand.
-        if let Some(elem_kind) = elem_kind {
-            Self::emit_element_identity(
-                builder,
-                ctx,
-                elem_kind,
-                set_ptr,
-                type_ctx,
-                ElementIdentitySetters {
-                    set_kind: Self::call_rt_set_set_elem_kind,
-                    set_equals_fn: Self::call_rt_set_set_elem_equals_fn,
-                },
-            )?;
-            Self::register_elem_drop_clone(
-                builder,
-                ctx,
-                elem_kind,
-                set_ptr,
-                ptr_type,
-                type_ctx,
-                ElementCallbackSetters {
-                    set_drop: Self::call_rt_set_set_elem_drop_fn,
-                    set_clone: Self::call_rt_set_set_elem_clone_fn,
-                    order: None,
-                },
-            )?;
-        }
-
-        let spill = LiteralSpill::new(builder, elem_kind, translated.first().copied(), ptr_type);
-        for val in translated {
-            let (elem, payload) = spill.element_argument(builder, val, ptr_type);
-            Self::call_rt_set_add(builder, ctx, set_ptr, elem, payload)?;
-        }
-        Ok(set_ptr)
+        Self::call_rt_set_new(builder, ctx, elem_size_val)
     }
 
     /// The type an operand reads, when the operand names a whole local or a
@@ -2161,20 +1956,6 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.ins().func_addr(ptr_type, dtor_ref))
     }
 
-    /// Returns the `TypeKind` of a single operand, consulting either the constant's
-    /// type or the local variable's declared type.
-    fn first_operand_kind<'op>(
-        operand: &'op Operand,
-        type_ctx: &'op TypeCtx,
-    ) -> Option<&'op TypeKind> {
-        match operand {
-            Operand::Copy(place) | Operand::Move(place) => {
-                Some(&type_ctx.local_types[place.local.0].kind)
-            }
-            Operand::Constant(c) => Some(&c.ty.kind),
-        }
-    }
-
     /// Translate a binary operation.
     ///
     /// `is_unsigned` indicates whether the operands are unsigned integer types.
@@ -2909,73 +2690,5 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         Ok(result)
-    }
-}
-
-/// Where a collection literal hands the runtime its elements from.
-///
-/// Every element travels as the address of its bytes and their count, the way
-/// the element ABI passes a stored or looked-up element anywhere else. An
-/// element the collection lays out inline is already that address. Any other
-/// element is written into one stack slot sized by the literal's first element:
-/// a literal's elements are homogeneous, and each call copies the bytes out
-/// before the next element overwrites them.
-struct LiteralSpill {
-    /// The slot a value element is written into, or `None` when the operand
-    /// already is the element's address.
-    slot: Option<Value>,
-    /// The number of the element's bytes the runtime reads.
-    payload: i64,
-}
-
-impl LiteralSpill {
-    /// The spill for a literal whose elements have type `kind` and whose first
-    /// element translated to `first`.
-    fn new(
-        builder: &mut FunctionBuilder,
-        kind: Option<&TypeKind>,
-        first: Option<Value>,
-        ptr_type: cl_types::Type,
-    ) -> Self {
-        let layout = kind.map(crate::ast::types::element_layout);
-        if let Some(layout) = layout.filter(|layout| layout.is_address) {
-            return Self {
-                slot: None,
-                payload: layout.payload,
-            };
-        }
-        let Some(first) = first else {
-            return Self {
-                slot: None,
-                payload: 0,
-            };
-        };
-        let bytes = builder.func.dfg.value_type(first).bytes();
-        let slot = builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            bytes,
-            bytes.trailing_zeros().min(4) as u8,
-        ));
-        Self {
-            slot: Some(builder.ins().stack_addr(ptr_type, slot, 0)),
-            payload: i64::from(bytes),
-        }
-    }
-
-    /// The address and byte count the runtime reads the element `val` from.
-    fn element_argument(
-        &self,
-        builder: &mut FunctionBuilder,
-        val: Value,
-        ptr_type: cl_types::Type,
-    ) -> (Value, Value) {
-        let address = match self.slot {
-            Some(slot) => {
-                builder.ins().store(MemFlags::new(), val, slot, 0);
-                slot
-            }
-            None => val,
-        };
-        (address, builder.ins().iconst(ptr_type, self.payload))
     }
 }

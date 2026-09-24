@@ -635,12 +635,27 @@ pub(crate) fn lower_list_constructor(
             });
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
-        _ => {
-            let size_op = int_constant(elem_size, span);
-            emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
-        }
+        _ => emit_empty_list(ctx, span, &list_ty, destination),
     }
     Ok(result_op)
+}
+
+/// Allocate an empty list of type `list_ty` into `destination`, with slots as
+/// wide as its element type.
+///
+/// The allocation call is also where codegen registers how the list releases,
+/// clones and orders its elements, read from the destination's declared type.
+pub(crate) fn emit_empty_list(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    list_ty: &Type,
+    destination: Place,
+) {
+    let elem_size = sequence_elem_kind(ctx, list_ty)
+        .as_ref()
+        .map_or(8, compute_elem_size_from_type);
+    let size_op = int_constant(elem_size, span);
+    emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
 }
 
 /// Lowers `List(array)`: the runtime copies the array's element words into a

@@ -63,7 +63,10 @@ fn test_set_literal() {
         "fn main(): let s = {1, 2, 3}",
         &[
             "// s",
-            "{const Integer(I8(1)), const Integer(I8(2)), const Integer(I8(3))}",
+            "_1 = {};",
+            r#"_3 = const Identifier("miri_rt_set_add")(_1, _2)"#,
+            r#"_5 = const Identifier("miri_rt_set_add")(_1, _4)"#,
+            r#"_7 = const Identifier("miri_rt_set_add")(_1, _6)"#,
         ],
     );
 }
@@ -74,7 +77,9 @@ fn test_map_literal() {
         r#"fn main(): let m = {"a": 1, "b": 2}"#,
         &[
             "// m",
-            r#"{const String("a"): const Integer(I8(1)), const String("b"): const Integer(I8(2))}"#,
+            "_1 = {};",
+            r#"_4 = const Identifier("miri_rt_map_set")(_1, _2, _3)"#,
+            r#"_7 = const Identifier("miri_rt_map_set")(_1, _5, _6)"#,
         ],
     );
 }
