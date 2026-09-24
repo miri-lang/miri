@@ -492,17 +492,13 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let list_ptr = Self::call_rt_list_new(builder, ctx, elem_size_val)?;
 
+        let elem_kind = operands
+            .first()
+            .and_then(|op| Self::direct_operand_kind(op, type_ctx));
+        let spill = LiteralSpill::new(builder, elem_kind, translated.first().copied(), ptr_type);
         for val in translated {
-            // Widen or narrow to ptr_type for the FFI call
-            let val_ty = builder.func.dfg.value_type(val);
-            let widened = if val_ty.bytes() < ptr_type.bytes() {
-                builder.ins().sextend(ptr_type, val)
-            } else if val_ty.bytes() > ptr_type.bytes() {
-                builder.ins().ireduce(ptr_type, val)
-            } else {
-                val
-            };
-            Self::call_rt_list_push(builder, ctx, list_ptr, widened)?;
+            let (elem, payload) = spill.element_argument(builder, val, ptr_type);
+            Self::call_rt_list_push(builder, ctx, list_ptr, elem, payload)?;
         }
 
         if let Some(first_op) = operands.first() {
@@ -550,27 +546,29 @@ impl<'a> FunctionTranslator<'a> {
             builder, ctx, operands, map_ptr, ptr_type, type_ctx,
         )?;
 
-        // The type checker refuses a literal whose entries are not already
-        // spelled at the key and value types the destination declares, so every
-        // entry reaching here fills its slot and one slot per side serves the
-        // whole literal.
-        let key_slot = Self::literal_spill_slot(
+        // A literal's entries are homogeneous, so one spill slot per side serves
+        // the whole literal: each call copies the bytes out before it returns.
+        let key_spill = LiteralSpill::new(
             builder,
-            Self::spilled_literal_value(operands.first(), translated.first(), type_ctx),
-            key_size,
+            operands
+                .first()
+                .and_then(|op| Self::direct_operand_kind(op, type_ctx)),
+            translated.first().copied(),
             ptr_type,
         );
-        let value_slot = Self::literal_spill_slot(
+        let value_spill = LiteralSpill::new(
             builder,
-            Self::spilled_literal_value(operands.get(1), translated.get(1), type_ctx),
-            value_size,
+            operands
+                .get(1)
+                .and_then(|op| Self::direct_operand_kind(op, type_ctx)),
+            translated.get(1).copied(),
             ptr_type,
         );
         for chunk in translated.chunks(2) {
-            if chunk.len() == 2 {
-                let key_val = Self::element_argument(builder, chunk[0], key_slot);
-                let val_val = Self::element_argument(builder, chunk[1], value_slot);
-                Self::call_rt_map_set(builder, ctx, map_ptr, key_val, val_val)?;
+            if let [key, value] = chunk {
+                let key = key_spill.element_argument(builder, *key, ptr_type);
+                let value = value_spill.element_argument(builder, *value, ptr_type);
+                Self::call_rt_map_set(builder, ctx, map_ptr, key, value)?;
             }
         }
         Ok(map_ptr)
@@ -756,87 +754,12 @@ impl<'a> FunctionTranslator<'a> {
             )?;
         }
 
-        // The type checker refuses a literal whose elements are not already
-        // spelled at the element type the destination declares, so every element
-        // reaching here fills the slot and one slot serves the whole literal.
-        let elem_slot = Self::literal_spill_slot(
-            builder,
-            Self::spilled_literal_value(operands.first(), translated.first(), type_ctx),
-            elem_size,
-            ptr_type,
-        );
+        let spill = LiteralSpill::new(builder, elem_kind, translated.first().copied(), ptr_type);
         for val in translated {
-            let elem = Self::element_argument(builder, val, elem_slot);
-            Self::call_rt_set_add(builder, ctx, set_ptr, elem)?;
+            let (elem, payload) = spill.element_argument(builder, val, ptr_type);
+            Self::call_rt_set_add(builder, ctx, set_ptr, elem, payload)?;
         }
         Ok(set_ptr)
-    }
-
-    /// The value a literal's slot is sized from, or `None` when the literal has
-    /// no element or lays its elements out inline and so spills none.
-    fn spilled_literal_value(
-        operand: Option<&Operand>,
-        translated: Option<&Value>,
-        type_ctx: &TypeCtx,
-    ) -> Option<Value> {
-        let kind = operand.and_then(|op| Self::direct_operand_kind(op, type_ctx));
-        if Self::is_inline_element(kind, type_ctx.ptr_type) {
-            return None;
-        }
-        translated.copied()
-    }
-
-    /// The one stack slot a literal's elements are spilled into, or `None` when
-    /// the literal has no element to size it from.
-    ///
-    /// A literal's elements are homogeneous, so the slot — and the zeroing of
-    /// the bytes no element covers — is decided once and reused: each entry
-    /// point copies the bytes out before it returns, which is what lets the next
-    /// element overwrite them.
-    fn literal_spill_slot(
-        builder: &mut FunctionBuilder,
-        first_value: Option<Value>,
-        slot_bytes: u32,
-        ptr_type: cl_types::Type,
-    ) -> Option<Value> {
-        let value_bytes = builder.func.dfg.value_type(first_value?).bytes();
-        Some(FunctionTranslator::allocate_element_slot(
-            builder,
-            value_bytes,
-            slot_bytes,
-            ptr_type,
-        ))
-    }
-
-    /// The address a set or map entry point reads one element from: the slot the
-    /// element is stored into, or the operand itself when the collection lays
-    /// the element out inline and the operand already points at its bytes.
-    pub(crate) fn element_argument(
-        builder: &mut FunctionBuilder,
-        val: Value,
-        slot: Option<Value>,
-    ) -> Value {
-        match slot {
-            Some(address) => {
-                builder.ins().store(MemFlags::new(), val, address, 0);
-                address
-            }
-            None => val,
-        }
-    }
-
-    /// Whether a collection lays an element of type `kind` out inline, so the
-    /// operand carrying one is already the address of its bytes rather than its
-    /// value.
-    ///
-    /// Both seams that hand a set or a map an element — the literal built here
-    /// and the method call prepared alongside it — ask this, so an inline vector
-    /// travels the same way whichever wrote it.
-    pub(crate) fn is_inline_element(kind: Option<&TypeKind>, ptr_type: cl_types::Type) -> bool {
-        kind.is_some_and(|kind| {
-            crate::codegen::cranelift::translator::inline_vec_element_layout(kind, ptr_type)
-                .is_some()
-        })
     }
 
     /// The type an operand reads, when the operand names a whole local or a
@@ -2986,5 +2909,73 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         Ok(result)
+    }
+}
+
+/// Where a collection literal hands the runtime its elements from.
+///
+/// Every element travels as the address of its bytes and their count, the way
+/// the element ABI passes a stored or looked-up element anywhere else. An
+/// element the collection lays out inline is already that address. Any other
+/// element is written into one stack slot sized by the literal's first element:
+/// a literal's elements are homogeneous, and each call copies the bytes out
+/// before the next element overwrites them.
+struct LiteralSpill {
+    /// The slot a value element is written into, or `None` when the operand
+    /// already is the element's address.
+    slot: Option<Value>,
+    /// The number of the element's bytes the runtime reads.
+    payload: i64,
+}
+
+impl LiteralSpill {
+    /// The spill for a literal whose elements have type `kind` and whose first
+    /// element translated to `first`.
+    fn new(
+        builder: &mut FunctionBuilder,
+        kind: Option<&TypeKind>,
+        first: Option<Value>,
+        ptr_type: cl_types::Type,
+    ) -> Self {
+        let layout = kind.map(crate::ast::types::element_layout);
+        if let Some(layout) = layout.filter(|layout| layout.is_address) {
+            return Self {
+                slot: None,
+                payload: layout.payload,
+            };
+        }
+        let Some(first) = first else {
+            return Self {
+                slot: None,
+                payload: 0,
+            };
+        };
+        let bytes = builder.func.dfg.value_type(first).bytes();
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            bytes,
+            bytes.trailing_zeros().min(4) as u8,
+        ));
+        Self {
+            slot: Some(builder.ins().stack_addr(ptr_type, slot, 0)),
+            payload: i64::from(bytes),
+        }
+    }
+
+    /// The address and byte count the runtime reads the element `val` from.
+    fn element_argument(
+        &self,
+        builder: &mut FunctionBuilder,
+        val: Value,
+        ptr_type: cl_types::Type,
+    ) -> (Value, Value) {
+        let address = match self.slot {
+            Some(slot) => {
+                builder.ins().store(MemFlags::new(), val, slot, 0);
+                slot
+            }
+            None => val,
+        };
+        (address, builder.ins().iconst(ptr_type, self.payload))
     }
 }

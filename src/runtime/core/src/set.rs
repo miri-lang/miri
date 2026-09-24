@@ -235,6 +235,7 @@ impl MiriSet {
 /// Stable FFI interface for set operations.
 pub mod ffi {
     use super::*;
+    use crate::element_bytes::{require_fits_slot, with_slot_bytes};
     use crate::guard;
     use std::ptr;
 
@@ -346,8 +347,9 @@ pub mod ffi {
 
     /// Adds an element to the set.
     ///
-    /// The element is passed by the address of its bytes: the runtime copies
-    /// `elem_size` bytes from there, so an element of any width arrives whole.
+    /// The element is handed over by address: `elem` points at its `payload`
+    /// bytes, which the set lays out at the full width of its slot (see
+    /// [`crate::element_bytes`]), so an element of any width arrives whole.
     /// Returns true (1) if the element was newly inserted, false (0) if duplicate.
     ///
     /// A managed element arrives with a reference donated to the set, the
@@ -356,54 +358,82 @@ pub mod ffi {
     /// donated reference, so an add that changes nothing leaves no count raised.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: *const u8) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_add(
+        ptr: *mut MiriSet,
+        elem: *const u8,
+        payload: usize,
+    ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || elem.is_null() {
+        let Some(set) = element_receiver(ptr, elem, payload) else {
             return 0;
-        }
-        let set = &mut *ptr;
-        if set.insert(elem) {
-            1
-        } else {
-            set.release_element(elem);
-            0
-        }
+        };
+        with_slot_bytes(elem, payload, set.elem_size, |elem| {
+            if set.insert(elem) {
+                1
+            } else {
+                set.release_element(elem);
+                0
+            }
+        })
     }
 
-    /// Returns true (1) if the set contains the given element.
+    /// Returns true (1) if the set contains the given element, handed over as
+    /// `miri_rt_set_add` takes it.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: *const u8) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_contains(
+        ptr: *const MiriSet,
+        elem: *const u8,
+        payload: usize,
+    ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || elem.is_null() {
+        let Some(set) = element_receiver(ptr as *mut MiriSet, elem, payload) else {
             return 0;
-        }
-        let set = &*ptr;
-        if set.contains_key(elem) {
-            1
-        } else {
-            0
-        }
+        };
+        with_slot_bytes(elem, payload, set.elem_size, |elem| {
+            u8::from(set.contains_key(elem))
+        })
     }
 
-    /// Removes an element from the set.
+    /// Removes an element, handed over as `miri_rt_set_add` takes it.
     /// Returns true (1) if removed, false (0) if not found.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
-    pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: *const u8) -> u8 {
+    pub unsafe extern "C" fn miri_rt_set_remove(
+        ptr: *mut MiriSet,
+        elem: *const u8,
+        payload: usize,
+    ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        if ptr.is_null() || elem.is_null() {
+        let Some(set) = element_receiver(ptr, elem, payload) else {
             return 0;
+        };
+        let Some(idx) = with_slot_bytes(elem, payload, set.elem_size, |elem| set.find_slot(elem))
+        else {
+            return 0;
+        };
+        set.release_element(set.data.add(idx * set.elem_size));
+        *set.states.add(idx) = SLOT_TOMBSTONE;
+        set.len -= 1;
+        1
+    }
+
+    /// The set an element entry point works on, or `None` when there is no set
+    /// or no element to work with.
+    ///
+    /// An element whose width does not fit the set's slots is a compiler defect
+    /// that would store or look up part of a value, so the process is aborted.
+    unsafe fn element_receiver<'a>(
+        ptr: *mut MiriSet,
+        elem: *const u8,
+        payload: usize,
+    ) -> Option<&'a mut MiriSet> {
+        if ptr.is_null() || elem.is_null() {
+            return None;
         }
         let set = &mut *ptr;
-        if let Some(idx) = set.find_slot(elem) {
-            set.release_element(set.data.add(idx * set.elem_size));
-            *set.states.add(idx) = SLOT_TOMBSTONE;
-            set.len -= 1;
-            1
-        } else {
-            0
-        }
+        require_fits_slot(payload, set.elem_size);
+        Some(set)
     }
 
     /// Removes all elements from the set.

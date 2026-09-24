@@ -227,52 +227,6 @@ cells = [
     "inherited_field/i128/write_literal/mono", # compile error MER_TYP_068
     "inherited_field/u128/write_literal/mono", # compile error MER_TYP_068
     "inherited_field/u64/write_literal/mono", # compile error MER_TYP_068
-    "list_element/f32/compound_assign/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/compound_assign/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/compound_assign/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/compound_assign/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/contains/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/contains/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/contains/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/contains/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/eq/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/eq/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/eq/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/eq/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/first/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/first/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/first/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/first/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/last/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/last/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/last/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/last/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/overwrite/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/overwrite/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/overwrite/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/overwrite/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/pop/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/pop/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/pop/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/pop/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/remove_at/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/remove_at/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/remove_at/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/remove_at/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/render/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/reversed/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/reversed/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/reversed/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/reversed/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/sort/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/sort/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/sort/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/sort/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/store_read/generic_class", # compile error MER_CG_008: = Failed to translate function 'CellN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/store_read/generic_fn", # compile error MER_CG_008: = Failed to translate function 'cellN__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolve
-    "list_element/f32/store_read/inherited", # compile error MER_CG_008: = Failed to translate function 'BaseN_run__f32': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unres
-    "list_element/f32/store_read/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
-    "list_element/f32/write_literal/mono", # compile error MER_CG_008: = Failed to translate function 'cellN': Internal codegen error: Call arg 1: f32 element values are not supported in collections yet; the element stride for floats narrower than i64 is unresolved and
     "list_element/i128/write_literal/mono", # compile error MER_TYP_068
     "list_element/u128/write_literal/mono", # compile error MER_TYP_068
     "list_element/u64/write_literal/mono", # compile error MER_TYP_068
@@ -614,10 +568,6 @@ cells = [
     "map_key/struct/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "map_key/struct/dedup/inherited", # wrong value: got `2`, expected `1`
     "map_key/struct/dedup/mono", # wrong value: got `2`, expected `1`
-    "map_key/vec3_f32/dedup/generic_class", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "map_key/vec3_f32/dedup/generic_fn", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "map_key/vec3_f32/dedup/inherited", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "map_key/vec3_f32/dedup/mono", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
     "set_element/array_string/dedup/generic_class", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
@@ -654,10 +604,6 @@ cells = [
     "set_element/struct/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "set_element/struct/dedup/inherited", # wrong value: got `2`, expected `1`
     "set_element/struct/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/vec3_f32/dedup/generic_class", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "set_element/vec3_f32/dedup/generic_fn", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "set_element/vec3_f32/dedup/inherited", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "set_element/vec3_f32/dedup/mono", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
 ]
 
 # generic instantiation read after substitution

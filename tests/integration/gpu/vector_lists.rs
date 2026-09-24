@@ -553,3 +553,23 @@ fn main()
 ";
     assert_runs_with_output(source, "true\n1 4.0 5.0 6.0\nstill there");
 }
+
+/// A vector is copied into the list as its components, so pushing or
+/// inserting one hands the list no reference: every vector the program built
+/// is released by the program, and the heap guard sees nothing left over.
+#[test]
+fn vectors_pushed_and_inserted_into_a_list_are_all_released() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    var vs = List<Vec3<f32>>()
+    let kept = Vec3<f32>(1.0, 2.0, 3.0)
+    vs.push(kept)
+    vs.push(Vec3<f32>(7.0, 8.0, 9.0))
+    vs.insert(1, Vec3<f32>(4.0, 5.0, 6.0))
+    println(f'{vs[1].y} {kept.z} {vs.length()}')
+";
+    assert_heap_guard_output(source, "5.0 3.0 3");
+}

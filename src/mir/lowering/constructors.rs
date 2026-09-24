@@ -1080,43 +1080,8 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
     }
 }
 
-/// Computes the element size in bytes for a collection element type.
-///
-/// Primitives use their natural size. Vector value types (Vec2/3/4) are stored
-/// inline at their std430 stride. Other managed types (String, collections,
-/// custom types/classes) are pointer-sized since they are heap-allocated.
+/// Computes the element size in bytes for a collection element type: the
+/// stride [`types::element_layout`] gives it.
 pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
-    use crate::ast::expression::ExpressionKind;
-    // Inline-stored vector elements occupy their std430 stride, not a pointer.
-    if let Some(layout) = types::inline_element_layout(kind) {
-        return layout.stride;
-    }
-
-    // Atomic<u32> and Atomic<i32> are scalar wrappers — unwrap to inner type size
-    if let TypeKind::Custom(name, Some(args)) = kind {
-        if name == types::ATOMIC_TYPE_NAME && args.len() == 1 {
-            if let ExpressionKind::Type(inner_ty, _) = &args[0].node {
-                return compute_elem_size_from_type(&inner_ty.kind);
-            }
-        }
-    }
-
-    match kind {
-        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
-        TypeKind::I16 | TypeKind::U16 => 2,
-        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
-        TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => 8,
-        TypeKind::I128 | TypeKind::U128 => types::WIDE_SCALAR_BYTES,
-        // All heap-allocated types are pointer-sized (8 bytes on 64-bit).
-        // This includes String, Custom (structs/enums/classes).
-        // Note: canonical collection variants (List/Array/Map/Set) are normalized to
-        // Custom before MIR lowering, so they fall through to the Custom arm here.
-        TypeKind::String | TypeKind::Custom(_, _) | TypeKind::RawPtr => 8,
-        // Canonical variants are normalized to Custom before this point.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        // Default to 8 for unknown/complex types
-        _ => 8,
-    }
+    types::element_layout(kind).stride
 }

@@ -28,7 +28,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride for floats narrower than a word is unresolved, so a stored value reads back as zero. Fails closed rather than corrupting; float/f64 round-trips correctly."]
 fn test_list_push_f32_preserves_value() {
     assert_runs_with_output(
         r#"
@@ -103,14 +102,16 @@ fn main()
 }
 
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride for floats narrower than a word is unresolved, so a stored value reads back as zero. Fails closed rather than corrupting; float/f64 round-trips correctly."]
 fn test_list_remove_at_f32() {
     assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn main()
-    var l = List<f32>([1.5, 2.5, 3.5])
+    var l = List<f32>()
+    l.push(1.5)
+    l.push(2.5)
+    l.push(3.5)
     let r = l.remove_at(1)
     println(f"{r}")
 "#,
@@ -161,17 +162,19 @@ fn main()
 }
 
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride for floats narrower than a word is unresolved, so a stored value reads back as zero. Fails closed rather than corrupting; float/f64 round-trips correctly."]
 fn test_list_first_f32() {
     assert_runs_with_output(
         r#"
 use system.collections.list
 
 fn main()
-    let l = List<f32>([10.5, 20.5, 30.5])
-    println(f"{l.first() ?? 0.0}")
+    var l = List<f32>()
+    l.push(10.5)
+    l.push(20.5)
+    l.push(30.5)
+    println(f"{l.first() ?? 0.0} {l.last() ?? 0.0}")
 "#,
-        "10.5",
+        "10.5 30.5",
     );
 }
 
@@ -208,5 +211,54 @@ fn main()
     println(f"{r}")
 "#,
         "20",
+    );
+}
+
+#[test]
+fn test_list_insert_f32_shifts_later_elements() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<f32>()
+    l.push(1.5)
+    l.push(3.5)
+    l.insert(1, 2.5)
+    println(f"{l[0]} {l[1]} {l[2]}")
+"#,
+        "1.5 2.5 3.5",
+    );
+}
+
+#[test]
+fn test_list_f32_index_assignment_replaces_the_element() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List<f32>()
+    l.push(1.5)
+    l.push(2.5)
+    l[1] = 7.25
+    println(f"{l[0]} {l[1]}")
+"#,
+        "1.5 7.25",
+    );
+}
+
+#[test]
+#[ignore = "a float literal inside `List<f32>([...])` builds its array at the literal's default f64 width, so the f32 list is filled from half-read eight-byte elements and reads back zeros; the literal needs the width of the slot it is written into"]
+fn test_list_f32_built_from_a_literal_keeps_its_values() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let l = List<f32>([1.5, 3.5])
+    println(f"{l[0]} {l[1]}")
+"#,
+        "1.5 3.5",
     );
 }

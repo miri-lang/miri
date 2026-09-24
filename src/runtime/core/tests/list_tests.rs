@@ -1,8 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use by_address::{miri_rt_list_insert, miri_rt_list_push, miri_rt_list_set};
 use miri_runtime_core::list::ffi::*;
 use miri_runtime_core::list::*;
+
+/// The three list entry points that take an element, called the way compiled
+/// code calls them: by the address of the element's bytes and their count.
+///
+/// A test spells an element as a value word, so each wrapper lends out that
+/// word's address. The wrappers shadow the glob-imported entry points of the
+/// same name, which the element-width tests below call directly.
+mod by_address {
+    use miri_runtime_core::list::{ffi, MiriList};
+
+    const WORD: usize = std::mem::size_of::<usize>();
+
+    /// # Safety
+    /// `list` is a live list or null.
+    pub unsafe fn miri_rt_list_push(list: *mut MiriList, elem: usize) {
+        ffi::miri_rt_list_push(list, &elem as *const usize as *const u8, WORD)
+    }
+
+    /// # Safety
+    /// `list` is a live list or null.
+    pub unsafe fn miri_rt_list_set(list: *mut MiriList, index: usize, elem: usize) -> u8 {
+        ffi::miri_rt_list_set(list, index, &elem as *const usize as *const u8, WORD)
+    }
+
+    /// # Safety
+    /// `list` is a live list or null.
+    pub unsafe fn miri_rt_list_insert(list: *mut MiriList, index: usize, elem: usize) -> u8 {
+        ffi::miri_rt_list_insert(list, index, &elem as *const usize as *const u8, WORD)
+    }
+}
 
 /// Helper: create a list and push i32 values via the internal API.
 unsafe fn make_i32_list(values: &[i32]) -> *mut MiriList {
@@ -822,13 +853,13 @@ unsafe fn vec3_at(list: *const MiriList, index: usize) -> [f32; 3] {
 }
 
 #[test]
-fn test_list_push_inline_copies_components_and_zeroes_padding() {
+fn test_list_push_copies_the_payload_and_zeroes_the_padding() {
     unsafe {
         let list = miri_rt_list_new(16);
         let first = [1.0f32, 2.0, 3.0];
         let second = [4.0f32, 5.0, 6.0];
-        miri_rt_list_push_inline(list, first.as_ptr() as *const u8, 12, 16);
-        miri_rt_list_push_inline(list, second.as_ptr() as *const u8, 12, 16);
+        ffi::miri_rt_list_push(list, first.as_ptr() as *const u8, 12);
+        ffi::miri_rt_list_push(list, second.as_ptr() as *const u8, 12);
 
         assert_eq!(miri_rt_list_len(list), 2);
         assert_eq!(vec3_at(list, 0), first);
@@ -841,19 +872,19 @@ fn test_list_push_inline_copies_components_and_zeroes_padding() {
 }
 
 #[test]
-fn test_list_insert_inline_shifts_later_elements() {
+fn test_list_insert_of_a_padded_element_shifts_later_elements() {
     unsafe {
         let list = miri_rt_list_new(16);
         let (a, b, c) = ([1.0f32, 1.5, 2.0], [3.0f32, 3.5, 4.0], [5.0f32, 5.5, 6.0]);
-        miri_rt_list_push_inline(list, a.as_ptr() as *const u8, 12, 16);
-        miri_rt_list_push_inline(list, c.as_ptr() as *const u8, 12, 16);
+        ffi::miri_rt_list_push(list, a.as_ptr() as *const u8, 12);
+        ffi::miri_rt_list_push(list, c.as_ptr() as *const u8, 12);
 
         assert_eq!(
-            miri_rt_list_insert_inline(list, 1, b.as_ptr() as *const u8, 12, 16),
+            ffi::miri_rt_list_insert(list, 1, b.as_ptr() as *const u8, 12),
             1
         );
         assert_eq!(
-            miri_rt_list_insert_inline(list, 9, b.as_ptr() as *const u8, 12, 16),
+            ffi::miri_rt_list_insert(list, 9, b.as_ptr() as *const u8, 12),
             0
         );
 
@@ -867,17 +898,47 @@ fn test_list_insert_inline_shifts_later_elements() {
 }
 
 #[test]
-fn test_list_inline_element_must_match_the_slot_size() {
+fn test_list_narrow_element_fills_only_its_own_bytes() {
+    unsafe {
+        let list = miri_rt_list_new(std::mem::size_of::<f32>());
+        let value = 2.5f32;
+        ffi::miri_rt_list_push(list, (&value as *const f32).cast(), 4);
+        ffi::miri_rt_list_push(list, (&value as *const f32).cast(), 4);
+        let replacement = 7.25f32;
+        assert_eq!(
+            ffi::miri_rt_list_set(list, 1, (&replacement as *const f32).cast(), 4),
+            1
+        );
+
+        assert_eq!(*(miri_rt_list_get(list, 0) as *const f32), 2.5);
+        assert_eq!(*(miri_rt_list_get(list, 1) as *const f32), 7.25);
+
+        miri_rt_list_free(list);
+    }
+}
+
+#[test]
+fn test_list_element_must_fit_the_slot_size() {
     unsafe {
         let pointer_slots = miri_rt_list_new(std::mem::size_of::<usize>());
-        assert!(!(*pointer_slots).fits_inline_element(12, 16));
-        assert!((*pointer_slots).fits_value_word());
+        assert!(!(*pointer_slots).fits_element(12));
+        assert!((*pointer_slots).fits_element(std::mem::size_of::<usize>()));
         miri_rt_list_free(pointer_slots);
 
         let vec3_slots = miri_rt_list_new(16);
-        assert!((*vec3_slots).fits_inline_element(12, 16));
-        assert!(!(*vec3_slots).fits_inline_element(24, 16));
-        assert!(!(*vec3_slots).fits_value_word());
+        assert!((*vec3_slots).fits_element(12));
+        assert!(!(*vec3_slots).fits_element(24));
+        assert!(
+            !(*vec3_slots).fits_element(std::mem::size_of::<usize>()),
+            "a value word never fills a slot wider than itself"
+        );
         miri_rt_list_free(vec3_slots);
+
+        let byte_slots = miri_rt_list_new(1);
+        assert!(
+            (*byte_slots).fits_element(std::mem::size_of::<usize>()),
+            "a type-parameter element travels in a value word"
+        );
+        miri_rt_list_free(byte_slots);
     }
 }

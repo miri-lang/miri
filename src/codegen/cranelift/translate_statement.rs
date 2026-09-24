@@ -842,17 +842,13 @@ impl<'a> FunctionTranslator<'a> {
                 let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
                 out_arg_slots.push((addr, local));
                 addr
-            } else if Self::is_element_address_param(func_name, i) {
-                Self::element_address_argument(builder, val, arg, type_ctx)
             } else {
                 let is_unsigned = Self::operand_is_unsigned(arg, type_ctx);
                 Self::cast_arg_to_predeclared(
                     builder,
                     val,
                     i,
-                    func_name,
                     predeclared_sig.as_ref(),
-                    ptr_type,
                     is_unsigned,
                 )?
             };
@@ -913,72 +909,24 @@ impl<'a> FunctionTranslator<'a> {
         val: cranelift_codegen::ir::Value,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> cranelift_codegen::ir::Value {
-        FunctionTranslator::spill_element_to_address(builder, val, 0, ptr_type)
-    }
-
-    /// Whether an argument to a runtime function carries an element value as
-    /// opaque bytes in a value word, and so must keep its bit pattern rather
-    /// than be converted numerically.
-    fn is_opaque_value_param(func_name: Option<&str>, arg_index: usize) -> bool {
-        func_name.is_some_and(|name| {
-            crate::runtime_fns::element_value_positions(name).contains(&arg_index)
-        })
-    }
-
-    /// Whether an argument to a runtime function carries an element by the
-    /// address of its bytes, and so is spilled rather than passed.
-    fn is_element_address_param(func_name: Option<&str>, arg_index: usize) -> bool {
-        func_name.is_some_and(|name| {
-            crate::runtime_fns::element_address_positions(name).contains(&arg_index)
-        })
-    }
-
-    /// The address a set or map entry point reads one element argument from.
-    ///
-    /// An element the collection lays out inline is already an address — the
-    /// operand points at the bytes the collection copies — and travels
-    /// unchanged, the same as it does when a literal builds the collection.
-    /// Everything else is a value, spilled into a slot no narrower than the
-    /// value word these containers allocate their slots from.
-    ///
-    /// This is settled before the declared signature is consulted: the parameter
-    /// is pointer-width whatever the element is, so an argument that already
-    /// matches it would otherwise be handed over as the element itself rather
-    /// than as its address.
-    ///
-    /// TODO: only a call the lowering intercepts reaches here with the element's
-    /// concrete type. A collection method compiled once for the class — `Set`'s
-    /// own `contains` and `remove`, which forward their parameter to the runtime
-    /// — still carries it at the bare type parameter, so an inline vector is
-    /// spilled there as the pointer it arrives in and no lookup through those
-    /// methods matches a stored element. Substituting the method body's local
-    /// types at each instantiation is what closes it.
-    fn element_address_argument(
-        builder: &mut FunctionBuilder,
-        val: cranelift_codegen::ir::Value,
-        arg: &Operand,
-        type_ctx: &TypeCtx,
-    ) -> cranelift_codegen::ir::Value {
-        let ptr_type = type_ctx.ptr_type;
-        let elem_kind = Self::direct_operand_kind(arg, type_ctx);
-        if Self::is_inline_element(elem_kind, ptr_type) {
-            return val;
-        }
-        FunctionTranslator::spill_element_to_address(builder, val, ptr_type.bytes(), ptr_type)
+        let bytes = builder.func.dfg.value_type(val).bytes();
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            bytes,
+            bytes.trailing_zeros().min(4) as u8,
+        ));
+        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
+        builder.ins().store(MemFlags::new(), val, addr, 0);
+        addr
     }
 
     /// Cast a call argument to match the pre-declared parameter type when one
-    /// is known. For opaque-value-parameter arguments (e.g., items passed to
-    /// LIST_PUSH), preserves the bit pattern via stack-slot reinterpretation
-    /// rather than numeric conversion. For other arguments, uses `cast_value_with_sign`
-    /// for proper numeric conversion.
+    /// is known, converting it numerically with `cast_value_with_sign`.
     fn cast_arg_to_predeclared(
         builder: &mut FunctionBuilder,
         val: cranelift_codegen::ir::Value,
         i: usize,
-        func_name: Option<&str>,
         predeclared_sig: Option<&Signature>,
-        ptr_type: cranelift_codegen::ir::Type,
         is_unsigned: bool,
     ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
         let Some(pre_sig) = predeclared_sig else {
@@ -993,43 +941,18 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(val);
         }
 
-        if Self::is_opaque_value_param(func_name, i) {
-            if actual_ty.bytes() == expected_ty.bytes() {
-                Self::bitcast_via_stack(builder, val, actual_ty, expected_ty, ptr_type)
-                    .map_err(|e| CodegenError::Internal(format!("Bitcast for arg {i} failed: {e}")))
-            } else if actual_ty.bytes() < expected_ty.bytes() {
-                if actual_ty.is_float() {
-                    // A narrower-than-word float would have to be placed in the
-                    // low bytes of the value word and read back at the
-                    // collection's element stride. That stride is not yet
-                    // resolved for sub-word floats, so the element reads back as
-                    // zero. Refuse rather than store a value that cannot be
-                    // recovered.
-                    Err(CodegenError::Internal(format!(
-                        "Call arg {i}: {actual_ty} element values are not supported in \
-                         collections yet; the element stride for floats narrower than \
-                         {expected_ty} is unresolved and the value would read back as zero"
-                    )))
-                } else {
-                    Ok(builder.ins().uextend(expected_ty, val))
-                }
-            } else {
-                Ok(builder.ins().ireduce(expected_ty, val))
-            }
-        } else {
-            crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
-                builder,
-                val,
-                actual_ty,
-                expected_ty,
-                is_unsigned,
-            )
-            .map_err(|e| {
-                CodegenError::Internal(format!(
-                    "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
-                ))
-            })
-        }
+        crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
+            builder,
+            val,
+            actual_ty,
+            expected_ty,
+            is_unsigned,
+        )
+        .map_err(|e| {
+            CodegenError::Internal(format!(
+                "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
+            ))
+        })
     }
 
     /// Reinterpret a value's bit pattern by storing to a stack slot and loading

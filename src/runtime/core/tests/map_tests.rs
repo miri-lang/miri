@@ -22,32 +22,50 @@ mod by_address {
         ffi::miri_rt_map_set(
             map,
             &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
             &value as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
         )
     }
 
     /// # Safety
     /// `map` is a live map or null.
     pub unsafe fn miri_rt_map_get(map: *const MiriMap, key: usize) -> usize {
-        ffi::miri_rt_map_get(map, &key as *const usize as *const u8)
+        ffi::miri_rt_map_get(
+            map,
+            &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 
     /// # Safety
     /// `map` is a live map or null, and holds `key`.
     pub unsafe fn miri_rt_map_get_checked(map: *const MiriMap, key: usize) -> usize {
-        ffi::miri_rt_map_get_checked(map, &key as *const usize as *const u8)
+        ffi::miri_rt_map_get_checked(
+            map,
+            &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 
     /// # Safety
     /// `map` is a live map or null.
     pub unsafe fn miri_rt_map_contains_key(map: *const MiriMap, key: usize) -> u8 {
-        ffi::miri_rt_map_contains_key(map, &key as *const usize as *const u8)
+        ffi::miri_rt_map_contains_key(
+            map,
+            &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 
     /// # Safety
     /// `map` is a live map or null.
     pub unsafe fn miri_rt_map_remove(map: *mut MiriMap, key: usize) -> u8 {
-        ffi::miri_rt_map_remove(map, &key as *const usize as *const u8)
+        ffi::miri_rt_map_remove(
+            map,
+            &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
     }
 }
 use miri_runtime_core::string::MiriString;
@@ -922,26 +940,28 @@ mod wide {
         ffi::miri_rt_map_set(
             map,
             (&key as *const i128).cast(),
+            16,
             (&value as *const usize).cast(),
+            std::mem::size_of::<usize>(),
         )
     }
 
     /// # Safety
     /// `map` is a live map whose key size is sixteen bytes.
     pub unsafe fn get(map: *const MiriMap, key: i128) -> usize {
-        ffi::miri_rt_map_get(map, (&key as *const i128).cast())
+        ffi::miri_rt_map_get(map, (&key as *const i128).cast(), 16)
     }
 
     /// # Safety
     /// `map` is a live map whose key size is sixteen bytes.
     pub unsafe fn contains_key(map: *const MiriMap, key: i128) -> u8 {
-        ffi::miri_rt_map_contains_key(map, (&key as *const i128).cast())
+        ffi::miri_rt_map_contains_key(map, (&key as *const i128).cast(), 16)
     }
 
     /// # Safety
     /// `map` is a live map whose key size is sixteen bytes.
     pub unsafe fn remove(map: *mut MiriMap, key: i128) -> u8 {
-        ffi::miri_rt_map_remove(map, (&key as *const i128).cast())
+        ffi::miri_rt_map_remove(map, (&key as *const i128).cast(), 16)
     }
 }
 
@@ -990,20 +1010,20 @@ fn test_map_entry_points_refuse_a_null_key_or_value_address() {
         miri_rt_map_set(map, 1, 100);
         let word = |v: &usize| v as *const usize as *const u8;
 
-        miri_runtime_core::map::ffi::miri_rt_map_set(map, std::ptr::null(), word(&5));
-        miri_runtime_core::map::ffi::miri_rt_map_set(map, word(&2), std::ptr::null());
+        miri_runtime_core::map::ffi::miri_rt_map_set(map, std::ptr::null(), 8, word(&5), 8);
+        miri_runtime_core::map::ffi::miri_rt_map_set(map, word(&2), 8, std::ptr::null(), 8);
         assert_eq!(miri_rt_map_len(map), 1);
 
         assert_eq!(
-            miri_runtime_core::map::ffi::miri_rt_map_get(map, std::ptr::null()),
+            miri_runtime_core::map::ffi::miri_rt_map_get(map, std::ptr::null(), 8),
             0
         );
         assert_eq!(
-            miri_runtime_core::map::ffi::miri_rt_map_contains_key(map, std::ptr::null()),
+            miri_runtime_core::map::ffi::miri_rt_map_contains_key(map, std::ptr::null(), 8),
             0
         );
         assert_eq!(
-            miri_runtime_core::map::ffi::miri_rt_map_remove(map, std::ptr::null()),
+            miri_runtime_core::map::ffi::miri_rt_map_remove(map, std::ptr::null(), 8),
             0
         );
         assert_eq!(miri_rt_map_len(map), 1);

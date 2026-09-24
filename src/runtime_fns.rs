@@ -94,10 +94,6 @@ pub mod rt {
     pub const LIST_POP: &str = "miri_rt_list_pop";
     pub const LIST_SET: &str = "miri_rt_list_set";
     pub const LIST_INSERT: &str = "miri_rt_list_insert";
-    /// Compiler-internal: appends an element stored inline, handed by address, not in stdlib.
-    pub const LIST_PUSH_INLINE: &str = "miri_rt_list_push_inline";
-    /// Compiler-internal: inserts an element stored inline, handed by address, not in stdlib.
-    pub const LIST_INSERT_INLINE: &str = "miri_rt_list_insert_inline";
     pub const LIST_REMOVE: &str = "miri_rt_list_remove";
     pub const LIST_TAKE_AT: &str = "miri_rt_list_take_at";
     pub const LIST_CLEAR: &str = "miri_rt_list_clear";
@@ -369,8 +365,6 @@ pub mod rt {
         LIST_POP,
         LIST_SET,
         LIST_INSERT,
-        LIST_PUSH_INLINE,
-        LIST_INSERT_INLINE,
         LIST_REMOVE,
         LIST_TAKE_AT,
         LIST_CLEAR,
@@ -565,51 +559,51 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
-/// Argument positions of `name` that carry an element value as opaque bytes in
-/// a value word.
+/// Argument positions of `name`, as a Miri call spells them, that carry an
+/// element the container stores or looks up.
 ///
-/// A collection stores whatever bit pattern it is handed and compares later
-/// lookups against those same bytes, so an element argument is never a number to
-/// the runtime — it is the element's representation widened into a value word.
-/// Converting it numerically would store one thing and search for another: a
-/// float turned into the integer nearest its value can never match the float
-/// that was stored.
+/// Every such argument travels by address. The runtime entry point takes two
+/// arguments in its place — the address of the element's bytes and the number
+/// of those bytes that are the element — and lays the element out at the full
+/// width of the container's slot itself, zeroing what it does not cover. So an
+/// element of any width arrives whole, a store and the lookup that must match
+/// it see the same bytes, and a float is never converted into an integer on the
+/// way in.
 ///
-/// Only the list entry points are listed. A set or a map takes its element by
-/// address at every width — those positions are listed by
-/// [`element_address_positions`] — while the list keeps a value word here and
-/// settles its wide and inline element cases in MIR lowering, where it can hand
-/// over the element's payload and its stride as a pair of operands.
-pub fn element_value_positions(name: &str) -> &'static [usize] {
+/// The address-taking is spelled in MIR, by `mir::element_abi`, after
+/// reference counting has read the calls in this form; the runtime import is
+/// declared with the expanded parameters by [`element_abi_params`]. Both the
+/// storing entry points and the lookups are listed, because a lookup that
+/// reads an element differently from the store it must match is exactly the
+/// mismatch this prevents. Positions naming an index or a size are not listed;
+/// those really are numbers.
+pub fn element_positions(name: &str) -> &'static [usize] {
     match name {
-        rt::LIST_PUSH => &[1],
+        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
         rt::LIST_SET | rt::LIST_INSERT => &[2],
-        _ => &[],
-    }
-}
-
-/// Argument positions of `name` that carry an element by the address of its
-/// bytes.
-///
-/// The set and map entry points read an element out of the buffer the caller
-/// points them at, copying the container's whole slot from it. An element of any
-/// width therefore arrives intact, where a value word truncates one wider than
-/// itself and leaves two elements agreeing in their low bytes indistinguishable.
-///
-/// Both the storing entry points and the lookup ones are listed, because a
-/// lookup that reads an element differently from the store it must match is
-/// exactly the mismatch this prevents. Positions naming an index or a size are
-/// not listed; those really are numbers.
-///
-/// The caller owes the buffer the container's slot width: it is spilled at the
-/// width the slot was allocated for, which is never narrower than a value word.
-pub fn element_address_positions(name: &str) -> &'static [usize] {
-    match name {
-        rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
         rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
         rt::MAP_SET => &[1, 2],
         _ => &[],
     }
+}
+
+/// The parameter list the runtime entry point `name` really takes, given the
+/// one its Miri declaration spells.
+///
+/// Each element position (see [`element_positions`]) becomes an address and a
+/// byte count, both pointer-sized. Every other parameter is kept as declared.
+pub fn element_abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
+    let positions = element_positions(name);
+    let mut params = Vec::with_capacity(declared.len() + positions.len());
+    for (index, param) in declared.iter().enumerate() {
+        if positions.contains(&index) {
+            params.push(pointer.clone());
+            params.push(pointer.clone());
+        } else {
+            params.push(param.clone());
+        }
+    }
+    params
 }
 
 /// Whether `name` orders the elements of the container it is handed.
