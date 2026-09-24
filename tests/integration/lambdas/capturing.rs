@@ -139,3 +139,28 @@ fn main()
         "1 42\n1 2 3",
     );
 }
+
+/// Each capture has a slot as wide as its own value: a float is read back as a
+/// float, and a 128-bit value keeps its high word without spilling into the
+/// capture after it.
+#[test]
+fn test_captures_of_every_width_read_back_whole() {
+    assert_heap_guard_output(
+        "
+fn main()
+    let half f32 = 1.5
+    let third float = 2.25
+    let big i128 = 170141183460469231731687303715884105727
+    let top u128 = 18446744073709551621
+    let small u8 = 200
+    let name = \"n\" + \"m\"
+    let c = fn() i128: big
+    let d = fn() u128: top
+    let e = fn() String: f'{half} {third} {small} {name}'
+    let bigs = c()
+    let tops = d()
+    println(f'{bigs == big} {bigs == -1} {tops == top} {e()}')
+",
+        "true false true 1.5 2.25 200 nm",
+    );
+}

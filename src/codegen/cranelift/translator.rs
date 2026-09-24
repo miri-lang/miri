@@ -7,6 +7,7 @@
 //! which can then be compiled to machine code.
 
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
@@ -369,9 +370,8 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Closure bodies: load captured values from `env_ptr` (Local 1) at the
-    /// top of the entry block. Closure layout: `payload[0]=fn_ptr,
-    /// payload[1]=dtor_ptr, payload[2+i]=cap_i`. Loads as ptr_type, then
-    /// reduces to the capture's target Cranelift type if narrower.
+    /// top of the entry block, each at its own type from where
+    /// [`CaptureLayout`] places it.
     fn load_closure_captures(
         builder: &mut FunctionBuilder,
         body: &Body,
@@ -380,18 +380,12 @@ impl<'a> FunctionTranslator<'a> {
     ) {
         let env_ptr_var = locals[&Local(1)];
         let env_ptr_val = builder.use_var(env_ptr_var);
-        for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
-            let offset = (i + 2) as i64 * ptr_type.bytes() as i64;
-            let cap_ptr = builder.ins().iadd_imm(env_ptr_val, offset);
+        let layout = CaptureLayout::of_body(body, ptr_type);
+        for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
             let cap_cl_type = translate_type(&body.local_decls[cap_local.0].ty, ptr_type);
-            let raw_val = builder.ins().load(ptr_type, MemFlags::new(), cap_ptr, 0);
-            let cap_val = if cap_cl_type == ptr_type {
-                raw_val
-            } else if cap_cl_type.is_int() && cap_cl_type.bits() < ptr_type.bits() {
-                builder.ins().ireduce(cap_cl_type, raw_val)
-            } else {
-                raw_val
-            };
+            let cap_val = builder
+                .ins()
+                .load(cap_cl_type, MemFlags::new(), env_ptr_val, offset);
             if let Some(&cap_var) = locals.get(&cap_local) {
                 builder.def_var(cap_var, cap_val);
             }

@@ -8,6 +8,7 @@
 //! without needing static knowledge of capture types at the drop site.
 
 use crate::ast::types::Type;
+use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
 use crate::mir::rc::is_word_slot_managed;
@@ -23,6 +24,57 @@ use cranelift_object::ObjectModule;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+/// Where each capture lives in a closure's payload, and how many bytes the
+/// payload takes.
+///
+/// The payload starts with the function pointer and the destructor pointer,
+/// one word each, and then holds each capture in a slot as wide as its value,
+/// rounded up to whole words: a float keeps its own bits and a 128-bit value
+/// both of its words. The store that builds the closure, the loads that open
+/// its body and its destructor all place a capture here, so they cannot
+/// disagree about where it is.
+pub(crate) struct CaptureLayout {
+    /// The byte offset of each capture from the start of the payload.
+    pub(crate) offsets: Vec<i32>,
+    /// The payload's size in bytes, both pointers included.
+    pub(crate) payload_bytes: i64,
+}
+
+impl CaptureLayout {
+    /// The layout of captures of Cranelift types `capture_types`, in order.
+    pub(crate) fn new(
+        capture_types: impl IntoIterator<Item = cl_types::Type>,
+        ptr_type: cl_types::Type,
+    ) -> Self {
+        let word = i64::from(ptr_type.bytes());
+        let mut next = 2 * word;
+        let offsets = capture_types
+            .into_iter()
+            .map(|ty| {
+                let offset = next;
+                let bytes = i64::from(ty.bytes()).max(word);
+                next += (bytes + word - 1) / word * word;
+                i32::try_from(offset).unwrap_or(i32::MAX)
+            })
+            .collect();
+        Self {
+            offsets,
+            payload_bytes: next,
+        }
+    }
+
+    /// The layout of the captures a lambda body declares, read from their
+    /// local types.
+    pub(crate) fn of_body(body: &Body, ptr_type: cl_types::Type) -> Self {
+        Self::new(
+            body.env_capture_locals
+                .iter()
+                .map(|local| translate_type(&body.local_decls[local.0].ty, ptr_type)),
+            ptr_type,
+        )
+    }
+}
+
 impl<'a> FunctionTranslator<'a> {
     /// Generates `__dtor_{lambda_name}(env_ptr)` for a lambda that has managed captures.
     ///
@@ -31,7 +83,8 @@ impl<'a> FunctionTranslator<'a> {
     /// have compile-time knowledge of the capture types (e.g., after being returned
     /// from a function). Called by `emit_type_drop` when the closure RC reaches 0.
     ///
-    /// Closure layout:  payload[0]=fn_ptr  payload[1]=dtor_ptr  payload[2+i]=cap_i
+    /// Closure layout: `payload[0]=fn_ptr`, `payload[1]=dtor_ptr`, then the
+    /// captures where [`CaptureLayout`] places them.
     pub(crate) fn generate_closure_destructor(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
@@ -43,7 +96,6 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
-        let ptr_size = ptr_type.bytes() as i64;
 
         let dtor_name = format!("__dtor_{}", lambda_name);
         let mut sig = Signature::new(call_conv);
@@ -67,7 +119,6 @@ impl<'a> FunctionTranslator<'a> {
             type_definitions,
             generic_class_instantiations,
             ptr_type,
-            ptr_size,
         )?;
 
         module
@@ -78,8 +129,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Emit the body of `__dtor_{lambda_name}(env_ptr)`: DecRef every managed
-    /// capture at `env_ptr + (2+i)*ptr_size`, then return.
-    /// Layout: `env_ptr[0]=fn_ptr, env_ptr[1]=dtor_ptr, env_ptr[2+i]=cap_i`.
+    /// capture where [`CaptureLayout`] places it, then return.
     #[allow(clippy::too_many_arguments)]
     fn emit_closure_destructor_body(
         module: &mut ObjectModule,
@@ -89,7 +139,6 @@ impl<'a> FunctionTranslator<'a> {
         type_definitions: &HashMap<String, TypeDefinition>,
         generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
         ptr_type: cl_types::Type,
-        ptr_size: i64,
     ) -> Result<(), CodegenError> {
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
 
@@ -113,13 +162,13 @@ impl<'a> FunctionTranslator<'a> {
             generic_class_instantiations,
         };
 
-        for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
+        let layout = CaptureLayout::of_body(body, ptr_type);
+        for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
             let cap_ty = &body.local_decls[cap_local.0].ty;
             if is_word_slot_managed(&cap_ty.kind) {
-                let offset = (2 + i as i64) * ptr_size;
                 let cap_ptr = builder
                     .ins()
-                    .load(ptr_type, MemFlags::new(), env_ptr, offset as i32);
+                    .load(ptr_type, MemFlags::new(), env_ptr, offset);
                 Self::emit_decref_value(
                     &mut builder,
                     &mut module_ctx,

@@ -1080,7 +1080,8 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
     /// then decrement the closure-balance counter and free the closure struct.
-    /// Layout: `payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i`.
+    /// Layout: `payload[0]=fn_ptr, payload[1]=dtor_ptr`, then the captures
+    /// (see `CaptureLayout`).
     fn emit_drop_closure(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,

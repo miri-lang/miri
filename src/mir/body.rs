@@ -52,14 +52,14 @@ pub struct Body {
     /// Used by Perceus to resolve `Field(i)` place projections and determine
     /// whether the projected field is a managed type.
     pub field_types: HashMap<String, Vec<Type>>,
-    /// Maps each generic class to the names of its type parameters, in
-    /// declaration order.
+    /// Maps each generic class or struct to the names of its type parameters,
+    /// in declaration order.
     /// Used by Perceus to read a `field_types` entry declared at a parameter
     /// (`value T`) at the type arguments of the instance it is projected from.
     pub class_type_params: HashMap<String, Vec<String>>,
     /// For closure/lambda bodies: the list of locals that hold captured values.
-    /// Entry `i` is loaded from `env_ptr + (i+2) * ptr_size` at function entry.
-    /// (slot 0 = fn_ptr, slot 1 = destructor_ptr, slots 2+ = captures)
+    /// Entry `i` is loaded at function entry from where codegen's capture
+    /// layout places it, after the function and destructor pointers.
     /// Empty for non-closure functions.
     pub env_capture_locals: Vec<Local>,
     /// Names of generic type parameters in scope for this function body.

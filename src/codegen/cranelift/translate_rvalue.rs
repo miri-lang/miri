@@ -4,6 +4,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
+use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout::{
     class_payload_layout, enum_payload_slot_size, field_layout, ClassPayloadLayout,
 };
@@ -1795,7 +1796,8 @@ impl<'a> FunctionTranslator<'a> {
     }
     /// Translate a closure aggregate into a heap-allocated closure struct.
     ///
-    /// Layout: [raw_ptr(=malloc_ptr)][RC=1][fn_ptr][cap0][cap1]...
+    /// Layout: [raw_ptr(=malloc_ptr)][RC=1][fn_ptr][dtor_ptr], then the
+    /// captures where [`CaptureLayout`] places them.
     /// The returned value is `payload_ptr` = `raw_ptr + 2*ptr_size`.
     fn translate_closure_aggregate(
         builder: &mut FunctionBuilder,
@@ -1814,8 +1816,14 @@ impl<'a> FunctionTranslator<'a> {
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
 
+        let layout = CaptureLayout::new(
+            capture_vals
+                .iter()
+                .map(|val| builder.func.dfg.value_type(*val)),
+            ptr_type,
+        );
         let payload_ptr =
-            Self::alloc_closure_payload(builder, ctx, capture_vals.len(), ptr_type, ptr_size)?;
+            Self::alloc_closure_payload(builder, ctx, layout.payload_bytes, ptr_type, ptr_size)?;
 
         // Store fn_ptr at payload[0].
         let fn_ptr = Self::declare_closure_fn_ptr(builder, ctx, lambda_name, fn_type, ptr_type)?;
@@ -1828,38 +1836,29 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .store(MemFlags::new(), dtor_val, payload_ptr, ptr_size as i32);
 
-        // Store each captured value starting at payload[2].
-        // Layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i.
-        for (i, val) in capture_vals.into_iter().enumerate() {
-            let val_ty = builder.func.dfg.value_type(val);
-            let widened =
-                if val_ty != ptr_type && val_ty.is_int() && val_ty.bits() < ptr_type.bits() {
-                    builder.ins().sextend(ptr_type, val)
-                } else {
-                    val
-                };
-            let offset = (2 + i as i32) * ptr_size as i32;
+        // Each capture is stored at its own type, where the body loads it.
+        for (val, offset) in capture_vals.into_iter().zip(layout.offsets) {
             builder
                 .ins()
-                .store(MemFlags::new(), widened, payload_ptr, offset);
+                .store(MemFlags::new(), val, payload_ptr, offset);
         }
 
         Ok(payload_ptr)
     }
 
-    /// Heap-allocate `[malloc_ptr][RC][fn_ptr][dtor_ptr][cap_0..cap_{N-1}]`
-    /// for a closure with `n_captures` captures. Initializes RC = 1 and stores
+    /// Heap-allocate `[malloc_ptr][RC]` followed by a `payload_bytes` payload
+    /// (`fn_ptr`, `dtor_ptr`, then the captures). Initializes RC = 1 and stores
     /// the malloc pointer at offset 0 so `free()` can recover the original
     /// allocation. Records the alloc with `miri_rt_closure_alloc_track` so the
     /// leak detector sees it. Returns `payload_ptr = raw_ptr + 2*ptr_size`.
     fn alloc_closure_payload(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        n_captures: usize,
+        payload_bytes: i64,
         ptr_type: cl_types::Type,
         ptr_size: i64,
     ) -> Result<Value, CodegenError> {
-        let total_size = (2 + 1 + 1 + n_captures as i64) * ptr_size;
+        let total_size = 2 * ptr_size + payload_bytes;
         let size_val = builder.ins().iconst(ptr_type, total_size);
         let raw_ptr = Self::call_libc_malloc(builder, ctx, size_val)?;
 

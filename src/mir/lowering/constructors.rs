@@ -16,6 +16,7 @@ use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, St
 
 use super::dispatch::resolve_inherited_method;
 use super::helpers::coerce_rvalue_in;
+use super::variable::canonical_declared_type;
 use super::{
     apply_generic_sub, build_class_generic_substitution, lower_expression, LoweringContext,
 };
@@ -43,6 +44,11 @@ pub fn lower_struct_constructor(
         None
     };
 
+    // A field is stored at the type the struct is instantiated with: the
+    // declared `U` names the struct's own parameter, and converting an argument
+    // to it would turn a float into an integer word or cut a 128-bit value.
+    let field_subs = struct_type_arguments(def, type_args);
+
     // Build operands in field declaration order
     let mut operands = Vec::with_capacity(def.fields.len());
     let mut pos_iter = positional_args.into_iter();
@@ -60,24 +66,17 @@ pub fn lower_struct_constructor(
             ));
         };
 
-        let op_ty = op.ty(&ctx.body).clone();
-        let target_ty = if is_vec {
-            if let TypeKind::Generic(_, _, _) = &field_ty.kind {
-                if let Some(ref concrete) = concrete_elem_type {
-                    concrete
-                } else {
-                    field_ty
-                }
-            } else {
-                field_ty
-            }
-        } else {
-            field_ty
-        };
+        // Both sides in canonical form: `Option<int>` and `int?` are one type,
+        // and coercing between the two spellings would box the value twice.
+        let op_ty = canonical_declared_type(ctx.type_checker, op.ty(&ctx.body));
+        let target_ty =
+            canonical_declared_type(ctx.type_checker, &apply_generic_sub(field_ty, &field_subs));
 
-        let op = if op_ty.kind != target_ty.kind {
+        let op = if op_ty.kind != target_ty.kind
+            && !super::helpers::spellings_of_one_value(&op_ty, &target_ty)
+        {
             let temp = ctx.push_temp(target_ty.clone(), *span);
-            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, target_ty, *span);
+            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, &target_ty, *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: StatementKind::Assign(Place::new(temp), rvalue),
                 span: *span,
@@ -147,6 +146,25 @@ fn partition_constructor_args<'a>(
         }
     }
     Ok((positional_args, named_args))
+}
+
+/// The substitution from a generic struct's parameters to the type arguments a
+/// constructor names, or an empty one for a struct that declares none.
+fn struct_type_arguments(
+    def: &StructDefinition,
+    type_args: Option<&[Expression]>,
+) -> HashMap<String, Type> {
+    let (Some(generics), Some(args)) = (def.generics.as_ref(), type_args) else {
+        return HashMap::new();
+    };
+    generics
+        .iter()
+        .zip(args)
+        .filter_map(|(generic, arg)| match &arg.node {
+            ExpressionKind::Type(ty, _) => Some((generic.name.clone(), ty.as_ref().clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Extracts concrete element type for vector type instantiation arguments if present.
