@@ -731,13 +731,10 @@ impl<'a> FunctionTranslator<'a> {
         )?;
 
         let dest_ty = &body.local_decls[destination.local.0].ty;
-        let cl_dest_ty = translate_type(dest_ty, ptr_type);
-        let reinterpret_as = Self::element_word_result_type(func_name.as_deref(), cl_dest_ty);
         let mut sig = sig;
         if dest_ty.kind != TypeKind::Void {
-            sig.returns.push(AbiParam::new(
-                reinterpret_as.map_or(cl_dest_ty, |_| ptr_type),
-            ));
+            sig.returns
+                .push(AbiParam::new(translate_type(dest_ty, ptr_type)));
         }
 
         if let Some(func_name) = func_name {
@@ -753,7 +750,6 @@ impl<'a> FunctionTranslator<'a> {
                 locals,
                 type_ctx,
                 ptr_type,
-                reinterpret_as,
             )?;
         } else {
             Self::dispatch_indirect_call(
@@ -955,35 +951,6 @@ impl<'a> FunctionTranslator<'a> {
         })
     }
 
-    /// Reinterpret a value's bit pattern by storing to a stack slot and loading
-    /// with the target type. Both types must be the same byte size.
-    fn bitcast_via_stack(
-        builder: &mut FunctionBuilder,
-        val: cranelift_codegen::ir::Value,
-        from_ty: cranelift_codegen::ir::Type,
-        to_ty: cranelift_codegen::ir::Type,
-        ptr_type: cranelift_codegen::ir::Type,
-    ) -> Result<cranelift_codegen::ir::Value, String> {
-        if from_ty.bytes() != to_ty.bytes() {
-            return Err(format!(
-                "bitcast_via_stack: cannot cast between {} and {} (different sizes)",
-                from_ty, to_ty
-            ));
-        }
-
-        let byte_size = from_ty.bytes();
-        let align_log = byte_size.trailing_zeros() as u8;
-        let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, byte_size, align_log);
-        let slot = builder.create_sized_stack_slot(slot_data);
-
-        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
-
-        builder.ins().store(MemFlags::new(), val, addr, 0);
-        let loaded = builder.ins().load(to_ty, MemFlags::new(), addr, 0);
-        Ok(loaded)
-    }
-
-    /// Direct call to a named symbol: declare-import the callee, emit the
     /// Bind a call's result to the local the call names as its destination.
     fn define_call_destination(
         builder: &mut FunctionBuilder,
@@ -1001,20 +968,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// The type a call's result must be reinterpreted into, when the call hands
-    /// back element bytes in a value word rather than a value of the
-    /// destination's type.
-    ///
-    /// Only a float destination needs this. Every other destination is already
-    /// read out of the register the word arrives in, so the word is the value.
-    fn element_word_result_type(
-        func_name: Option<&str>,
-        cl_dest_ty: cranelift_codegen::ir::Type,
-    ) -> Option<cranelift_codegen::ir::Type> {
-        let hands_back_bytes = func_name.is_some_and(crate::runtime_fns::returns_element_value);
-        (hands_back_bytes && cl_dest_ty.is_float()).then_some(cl_dest_ty)
-    }
-
+    /// Direct call to a named symbol: declare-import the callee, emit the
     /// `call` instruction, store the result into the destination local, and
     /// run any runtime-specific post-call initialization (List drop-fn /
     /// clone-fn registration for `miri_rt_list_new*`).
@@ -1031,7 +985,6 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
         ptr_type: cranelift_codegen::ir::Type,
-        reinterpret_result_as: Option<cranelift_codegen::ir::Type>,
     ) -> Result<(), CodegenError> {
         let func_id = ctx
             .module
@@ -1041,20 +994,7 @@ impl<'a> FunctionTranslator<'a> {
         let call = builder.ins().call(local_func, &arg_values);
 
         let maybe_result = if dest_ty.kind != TypeKind::Void {
-            let raw = builder.inst_results(call)[0];
-            let result = match reinterpret_result_as {
-                Some(dest_cl_ty) => {
-                    let raw_ty = builder.func.dfg.value_type(raw);
-                    Self::bitcast_via_stack(builder, raw, raw_ty, dest_cl_ty, ptr_type).map_err(
-                        |e| {
-                            CodegenError::Internal(format!(
-                                "Reinterpreting {func_name}'s element word as {dest_cl_ty} failed: {e}"
-                            ))
-                        },
-                    )?
-                }
-                None => raw,
-            };
+            let result = builder.inst_results(call)[0];
             Self::define_call_destination(builder, locals, destination, result)?;
             Some(result)
         } else {

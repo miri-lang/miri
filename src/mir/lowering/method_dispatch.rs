@@ -794,29 +794,20 @@ fn call_result_type(
 /// Whether a type argument is laid out differently from the pointer-width
 /// integer that an unmonomorphized generic body falls back to.
 ///
-/// A narrower or wider integer changes the operand width, and a float changes
-/// the register class outright, so either makes the shared body's signature
-/// disagree with the call site. `int` matches the fallback exactly, and every
-/// managed type is passed as a pointer, so both agree on layout — a managed
-/// argument needs its own body for a different reason, spelled out in
+/// The element layout decides it: an element that is not one value word — a
+/// narrower or wider scalar, or an inline vector the collection holds by its
+/// components — changes the operand width, and a float changes the register
+/// class outright, so either makes the shared body's signature disagree with
+/// the call site and hand the runtime a word where the element is something
+/// else. `int` matches the fallback exactly, and every managed type is passed
+/// as a pointer, so both agree on layout — a managed argument needs its own
+/// body for a different reason, spelled out in
 /// [`shared_body_would_borrow_a_managed_element`].
 fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F16
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Boolean
-    )
+    let layout = crate::ast::types::element_layout(kind);
+    layout.is_address
+        || layout.payload != crate::ast::types::VALUE_WORD_BYTES
+        || crate::type_checker::float_literals::is_float_width(kind)
 }
 
 /// Whether a type argument sorts differently from the signed integer an

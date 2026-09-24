@@ -69,6 +69,34 @@ pub unsafe fn write_slot(dest: *mut u8, src: *const u8, payload: usize, slot: us
     ptr::write_bytes(dest.add(copied), 0, slot - copied);
 }
 
+/// Copy the element in the `slot`-byte slot at `src` out to the caller's
+/// `payload`-byte storage at `dest`, zeroing any byte the slot does not cover.
+///
+/// This is how every entry point that hands an element back delivers it: the
+/// caller names where the element goes and how wide it is there, so an element
+/// wider than a value word arrives whole and a narrower one arrives at its own
+/// width. `src` null writes a zero element, which is what an absent element
+/// reads as.
+///
+/// # Safety
+/// - `src` is null or readable for `payload.min(slot)` bytes.
+/// - `dest` must be writable for `payload` bytes and must not overlap `src`.
+pub unsafe fn read_slot(dest: *mut u8, src: *const u8, payload: usize, slot: usize) {
+    if dest.is_null() {
+        return;
+    }
+    let copied = if src.is_null() {
+        0
+    } else {
+        require_fits_slot(payload, slot);
+        payload.min(slot)
+    };
+    if copied > 0 {
+        ptr::copy_nonoverlapping(src, dest, copied);
+    }
+    ptr::write_bytes(dest.add(copied), 0, payload - copied);
+}
+
 /// Run `f` over the element at `src` laid out at the full width of a
 /// `slot`-byte slot.
 ///
@@ -128,6 +156,37 @@ mod tests {
         let mut dest = [0xFFu8; 8];
         unsafe { write_slot(dest.as_mut_ptr(), src.as_ptr(), 4, 8) };
         assert_eq!(dest, [0xAB, 0xAB, 0xAB, 0xAB, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn read_slot_hands_back_a_wide_element_whole() {
+        let slot = 0x0102_0304_0506_0708_1112_1314_1516_1718u128.to_le_bytes();
+        let mut dest = [0u8; 16];
+        unsafe { read_slot(dest.as_mut_ptr(), slot.as_ptr(), 16, 16) };
+        assert_eq!(dest, slot);
+    }
+
+    #[test]
+    fn read_slot_hands_back_a_narrow_element_at_its_own_width() {
+        let slot = 0xC8usize.to_le_bytes();
+        let mut dest = [0xFFu8; 1];
+        unsafe { read_slot(dest.as_mut_ptr(), slot.as_ptr(), 1, VALUE_WORD) };
+        assert_eq!(dest, [0xC8]);
+    }
+
+    #[test]
+    fn read_slot_fills_a_value_word_from_a_narrow_slot_with_zeroes() {
+        let slot = [0xABu8, 0xCD];
+        let mut dest = [0xFFu8; VALUE_WORD];
+        unsafe { read_slot(dest.as_mut_ptr(), slot.as_ptr(), VALUE_WORD, 2) };
+        assert_eq!(usize::from_le_bytes(dest), 0xCDAB);
+    }
+
+    #[test]
+    fn read_slot_of_an_absent_element_writes_zero() {
+        let mut dest = [0xFFu8; 16];
+        unsafe { read_slot(dest.as_mut_ptr(), ptr::null(), 16, 16) };
+        assert_eq!(dest, [0u8; 16]);
     }
 
     #[test]

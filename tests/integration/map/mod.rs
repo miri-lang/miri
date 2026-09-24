@@ -7,6 +7,7 @@ pub mod class_keys;
 pub mod construction;
 pub mod edge_cases;
 pub mod element_identity;
+pub mod element_read_widths;
 pub mod function_integration;
 pub mod functional;
 pub mod index_read;

@@ -573,3 +573,63 @@ fn main()
 ";
     assert_heap_guard_output(source, "5.0 3.0 3");
 }
+
+#[test]
+fn an_array_of_vectors_answers_first_last_contains_and_index_of() {
+    let source = "
+use system.gpu.vector
+
+fn main()
+    let vs = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    let found = vs.contains(Vec3<f32>(1.0, 2.0, 3.0))
+    let missing = vs.contains(Vec3<f32>(1.0, 2.0, 9.0))
+    let at = vs.index_of(Vec3<f32>(4.0, 5.0, 6.0)) ?? -1
+    match vs.first()
+        Some(v): println(f'{v.x} {v.y} {v.z}')
+        None: println('none')
+    match vs.last()
+        Some(v): println(f'{v.x} {v.y} {v.z}')
+        None: println('none')
+    println(f'{found} {missing} {at}')
+";
+    assert_runs_with_output(source, "1.0 2.0 3.0\n4.0 5.0 6.0\ntrue false 1");
+}
+
+#[test]
+fn default_methods_over_a_list_of_vectors_read_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)])
+    let r = vs.reversed()
+    let t = vs.take(1)
+    let s = vs.skip(1)
+    let f = vs.filter(fn(v Vec3<f32>) bool: v.y > 3.0)
+    let any_big = vs.any(fn(v Vec3<f32>) bool: v.z == 6.0)
+    let all_big = vs.all(fn(v Vec3<f32>) bool: v.z == 6.0)
+    println(f'{r[0].x} {r[0].y} {r[0].z} | {t[0].z} {t.length()} | {s[0].x} | {f[0].z} {f.length()}')
+    println(f'{any_big} {all_big}')
+";
+    assert_runs_with_output(source, "4.0 5.0 6.0 | 3.0 1 | 4.0 | 6.0 1\ntrue false");
+}
+
+#[test]
+fn arrays_of_vec2_and_vec4_answer_first_and_contains() {
+    let source = "
+use system.gpu.vector
+
+fn main()
+    let twos = [Vec2<i32>(7, 8), Vec2<i32>(9, 10)]
+    let fours = [Vec4<f64>(1.0, 2.0, 3.0, 4.0), Vec4<f64>(5.0, 6.0, 7.0, 8.0)]
+    match twos.last()
+        Some(v): println(f'{v.x} {v.y}')
+        None: println('none')
+    match fours.first()
+        Some(v): println(f'{v.z} {v.w}')
+        None: println('none')
+    println(f'{twos.contains(Vec2<i32>(9, 10))} {fours.contains(Vec4<f64>(5.0, 6.0, 7.0, 9.0))}')
+";
+    assert_runs_with_output(source, "9 10\n3.0 4.0\ntrue false");
+}

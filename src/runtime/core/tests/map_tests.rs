@@ -2,13 +2,13 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use by_address::{
-    miri_rt_map_contains_key, miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_remove,
-    miri_rt_map_set,
+    miri_rt_map_contains_key, miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_key_at,
+    miri_rt_map_remove, miri_rt_map_set, miri_rt_map_value_at,
 };
 use miri_runtime_core::map::ffi::*;
 
-/// The five map entry points that take a key or a value, called the way
-/// compiled code calls them: by the address of the bytes.
+/// The map entry points that take or hand back a key or a value, called the
+/// way compiled code calls them: by the address of the bytes.
 ///
 /// A test spells a key or a value as a value word, so each wrapper lends out
 /// that word's address. The wrappers shadow the glob-imported entry points of
@@ -31,21 +31,29 @@ mod by_address {
     /// # Safety
     /// `map` is a live map or null.
     pub unsafe fn miri_rt_map_get(map: *const MiriMap, key: usize) -> usize {
+        let mut value = 0usize;
         ffi::miri_rt_map_get(
             map,
             &key as *const usize as *const u8,
             std::mem::size_of::<usize>(),
-        )
+            &mut value as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        value
     }
 
     /// # Safety
     /// `map` is a live map or null, and holds `key`.
     pub unsafe fn miri_rt_map_get_checked(map: *const MiriMap, key: usize) -> usize {
+        let mut value = 0usize;
         ffi::miri_rt_map_get_checked(
             map,
             &key as *const usize as *const u8,
             std::mem::size_of::<usize>(),
-        )
+            &mut value as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        value
     }
 
     /// # Safety
@@ -66,6 +74,32 @@ mod by_address {
             &key as *const usize as *const u8,
             std::mem::size_of::<usize>(),
         )
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_key_at(map: *const MiriMap, nth: usize) -> usize {
+        let mut key = 0usize;
+        ffi::miri_rt_map_key_at(
+            map,
+            nth,
+            &mut key as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        key
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_value_at(map: *const MiriMap, nth: usize) -> usize {
+        let mut value = 0usize;
+        ffi::miri_rt_map_value_at(
+            map,
+            nth,
+            &mut value as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        value
     }
 }
 use miri_runtime_core::string::MiriString;
@@ -949,7 +983,15 @@ mod wide {
     /// # Safety
     /// `map` is a live map whose key size is sixteen bytes.
     pub unsafe fn get(map: *const MiriMap, key: i128) -> usize {
-        ffi::miri_rt_map_get(map, (&key as *const i128).cast(), 16)
+        let mut value = 0usize;
+        ffi::miri_rt_map_get(
+            map,
+            (&key as *const i128).cast(),
+            16,
+            (&mut value as *mut usize).cast(),
+            std::mem::size_of::<usize>(),
+        );
+        value
     }
 
     /// # Safety
@@ -1014,10 +1056,15 @@ fn test_map_entry_points_refuse_a_null_key_or_value_address() {
         miri_runtime_core::map::ffi::miri_rt_map_set(map, word(&2), 8, std::ptr::null(), 8);
         assert_eq!(miri_rt_map_len(map), 1);
 
-        assert_eq!(
-            miri_runtime_core::map::ffi::miri_rt_map_get(map, std::ptr::null(), 8),
-            0
+        let mut value = usize::MAX;
+        miri_runtime_core::map::ffi::miri_rt_map_get(
+            map,
+            std::ptr::null(),
+            8,
+            (&mut value as *mut usize).cast(),
+            8,
         );
+        assert_eq!(value, 0);
         assert_eq!(
             miri_runtime_core::map::ffi::miri_rt_map_contains_key(map, std::ptr::null(), 8),
             0

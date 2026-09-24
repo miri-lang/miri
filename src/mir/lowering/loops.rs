@@ -455,20 +455,68 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
         .filter(|name| ctx.type_checker.class_is_iterable(name))
 }
 
-/// The class whose body a `for` loop over `class_name` calls for `method_name`.
+/// The bodies a `for` loop over a class calls to walk it.
+struct IterableMethods {
+    length: String,
+    element_at: String,
+    /// The body that reads a map's value at the same position, bound to a
+    /// loop's second variable.
+    value_at: String,
+}
+
+/// The bodies a `for` loop over the value `iterable_id` calls, or `None` when
+/// the iterable is indexed directly.
 ///
-/// A class that inherits `length` or `element_at` gets no copy of it: the body
-/// belongs to the nearest ancestor that declares it and is compiled under that
-/// ancestor's name. A class that declares or overrides the method answers for
-/// itself, so the two are resolved separately — an override of one does not
-/// move the other.
-fn iterable_method_owner(ctx: &LoweringContext, class_name: &str, method_name: &str) -> String {
-    crate::type_checker::context::class_method_declaration(
+/// Each is the body a written call to the method reaches: for an
+/// instantiation of a generic class, the one compiled at its type arguments.
+/// The shared body sees its element only as a type parameter, and so hands it
+/// over as one value word whatever its real width.
+fn resolve_iterable_methods(
+    ctx: &mut LoweringContext,
+    iterable_id: usize,
+) -> Option<IterableMethods> {
+    let class_name = resolve_iterable_class(ctx, iterable_id)?;
+    let receiver_ty = ctx.recorded_type(iterable_id)?;
+    Some(IterableMethods {
+        length: iterable_method_symbol(ctx, &receiver_ty, &class_name, "length"),
+        element_at: iterable_method_symbol(ctx, &receiver_ty, &class_name, "element_at"),
+        value_at: iterable_method_symbol(ctx, &receiver_ty, &class_name, "value_at"),
+    })
+}
+
+/// The symbol a `for` loop over a `receiver_ty` value of class `class_name`
+/// calls for `method_name`.
+///
+/// A class that inherits the method gets no copy of it: the body belongs to the
+/// nearest ancestor that declares it, which [`operator_method_callee`] names at
+/// the type arguments the `extends` chain gives it. A class that declares or
+/// overrides the method answers for itself, so each method is resolved
+/// separately — an override of one does not move another.
+fn iterable_method_symbol(
+    ctx: &mut LoweringContext,
+    receiver_ty: &Type,
+    class_name: &str,
+    method_name: &str,
+) -> String {
+    let declared = crate::type_checker::context::class_method_declaration(
         class_name,
         method_name,
         ctx.type_checker.type_definitions(),
     )
-    .map_or_else(|| class_name.to_string(), |(owner, _)| owner.to_string())
+    .map(|(owner, method)| (owner.to_string(), method.clone()));
+    match declared {
+        Some((owner, method)) => {
+            super::method_dispatch::operator_method_callee(
+                ctx,
+                receiver_ty,
+                &owner,
+                method_name,
+                &method,
+            )
+            .0
+        }
+        None => format!("{class_name}_{method_name}"),
+    }
 }
 
 /// Emit length check and loop header condition.
@@ -478,21 +526,17 @@ fn emit_loop_length(
     ctx: &mut LoweringContext,
     len_temp: crate::mir::Local,
     list_local: crate::mir::Local,
-    iterable_class: &Option<String>,
+    iterable: Option<&IterableMethods>,
     span: &Span,
 ) {
-    let Some(class_name) = iterable_class else {
+    let Some(methods) = iterable else {
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
             span: *span,
         });
         return;
     };
-    let owner = iterable_method_owner(ctx, class_name, "length");
-    // Optimization: pre-allocate exact capacity to avoid format! macro parsing overhead and reallocations on loop length symbol mangling hot path.
-    let mut length_symbol = String::with_capacity(owner.len() + 7);
-    length_symbol.push_str(&owner);
-    length_symbol.push_str("_length");
+    let length_symbol = methods.length.clone();
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
@@ -523,7 +567,7 @@ fn emit_loop_length(
 fn emit_loop_header(
     ctx: &mut LoweringContext,
     list_local: crate::mir::Local,
-    iterable_class: &Option<String>,
+    iterable: Option<&IterableMethods>,
     idx_var: crate::mir::Local,
     idx_ty: &Type,
     body_bb: crate::mir::BasicBlock,
@@ -531,7 +575,7 @@ fn emit_loop_header(
     span: &Span,
 ) -> Result<(), LoweringError> {
     let len_temp = ctx.push_temp(idx_ty.clone(), *span);
-    emit_loop_length(ctx, len_temp, list_local, iterable_class, span);
+    emit_loop_length(ctx, len_temp, list_local, iterable, span);
 
     let cond_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.push_statement(crate::mir::Statement {
@@ -565,17 +609,13 @@ fn emit_element_at_call(
     loop_var: crate::mir::Local,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    class_name: &str,
+    element_at_symbol: &str,
     span: &Span,
 ) {
-    let owner = iterable_method_owner(ctx, class_name, "element_at");
-    let mut element_at_symbol = String::with_capacity(owner.len() + 11);
-    element_at_symbol.push_str(&owner);
-    element_at_symbol.push_str("_element_at");
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(element_at_symbol.clone()),
+        literal: crate::ast::literal::Literal::Identifier(element_at_symbol.to_string()),
     }));
     let after_elem_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -609,11 +649,11 @@ fn emit_secondary_loop_var(
     idx_local: crate::mir::Local,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    is_map: bool,
+    value_at: Option<&str>,
     span: &Span,
 ) {
-    if is_map {
-        let value_at_symbol = "Map_value_at".to_string();
+    if let Some(value_at_symbol) = value_at {
+        let value_at_symbol = value_at_symbol.to_string();
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
@@ -658,12 +698,19 @@ fn emit_loop_body_element_load(
     bindings: &LoopBindings,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    iterable_class: &Option<String>,
+    iterable: Option<&IterableMethods>,
     span: &Span,
 ) {
     let loop_var = bindings.element;
-    if let Some(ref class_name) = iterable_class {
-        emit_element_at_call(ctx, loop_var, list_local, idx_var, class_name, span);
+    if let Some(methods) = iterable {
+        emit_element_at_call(
+            ctx,
+            loop_var,
+            list_local,
+            idx_var,
+            &methods.element_at,
+            span,
+        );
     } else {
         let mut indexed_place = Place::new(list_local);
         indexed_place
@@ -679,7 +726,10 @@ fn emit_loop_body_element_load(
     }
 
     if let Some(secondary) = bindings.secondary {
-        emit_secondary_loop_var(ctx, secondary, list_local, idx_var, bindings.is_map, span);
+        let value_at = iterable
+            .filter(|_| bindings.is_map)
+            .map(|methods| methods.value_at.as_str());
+        emit_secondary_loop_var(ctx, secondary, list_local, idx_var, value_at, span);
     }
 }
 
@@ -695,7 +745,7 @@ fn lower_loop_pass(
     bindings: &LoopBindings,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    iterable_class: &Option<String>,
+    iterable: Option<&IterableMethods>,
     body: &Statement,
     span: &Span,
 ) -> Result<(), LoweringError> {
@@ -707,7 +757,7 @@ fn lower_loop_pass(
         });
         ctx.register_scope_temp(local);
     }
-    emit_loop_body_element_load(ctx, bindings, list_local, idx_var, iterable_class, span);
+    emit_loop_body_element_load(ctx, bindings, list_local, idx_var, iterable, span);
     lower_statement(ctx, body)?;
     ctx.pop_scope(*span);
     Ok(())
@@ -782,13 +832,13 @@ fn lower_for_over_iterable(
         *span,
     ));
 
-    let iterable_class = resolve_iterable_class(ctx, iterable.id);
+    let iterable_methods = resolve_iterable_methods(ctx, iterable.id);
 
     ctx.set_current_block(header_bb);
     emit_loop_header(
         ctx,
         list_local,
-        &iterable_class,
+        iterable_methods.as_ref(),
         idx_var,
         &idx_ty,
         body_bb,
@@ -803,7 +853,7 @@ fn lower_for_over_iterable(
         &bindings,
         list_local,
         idx_var,
-        &iterable_class,
+        iterable_methods.as_ref(),
         body,
         span,
     )?;

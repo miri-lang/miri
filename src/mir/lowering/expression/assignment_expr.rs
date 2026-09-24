@@ -838,7 +838,9 @@ fn emit_map_get_checked_call(
     // so the temp holding it is a borrow: releasing it would take a reference
     // away from the entry the map is still holding.
     let temp = ctx.push_temp(value_ty.clone(), expr.span);
-    if ctx.is_perceus_managed(&value_ty.kind) {
+    if ctx.is_perceus_managed(&value_ty.kind)
+        && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED, &value_ty.kind)
+    {
         ctx.mark_borrowed_temp(temp);
     }
 
