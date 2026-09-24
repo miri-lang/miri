@@ -210,6 +210,8 @@ impl TypeChecker {
         if is_error {
             return;
         }
+        let implicit_return_type =
+            &self.width_tail_literals(expected, implicit_return_type, body, context);
 
         if !is_void_expected && is_void_implicit {
             let ends_with_return = self.body_ends_with_return(body);
@@ -235,6 +237,37 @@ impl TypeChecker {
                 body.span,
             );
         }
+    }
+
+    /// Give each literal a function body ends on the declared return type's
+    /// width, and answer the implicit return type that leaves.
+    ///
+    /// A tail expression is the value returned, written into a slot of the
+    /// declared type exactly as an explicit `return` writes it, so its literals
+    /// take that width the same way.
+    pub(crate) fn width_tail_literals(
+        &mut self,
+        expected: &Type,
+        implicit_return_type: &Type,
+        body: &Statement,
+        context: &Context,
+    ) -> Type {
+        let mut tails = Vec::new();
+        crate::type_checker::statements::returns::collect_tail_statements(body, &mut tails);
+        let mut widened = None;
+        for tail in tails {
+            let StatementKind::Expression(expr) = &tail.node else {
+                continue;
+            };
+            let Some(inferred) = self.type_table.types.get(&expr.id).cloned() else {
+                continue;
+            };
+            widened = self
+                .narrow_float_literals(expr, expected, &inferred, context)
+                .or_else(|| self.widen_int_literals(expr, expected, &inferred))
+                .or(widened);
+        }
+        widened.unwrap_or_else(|| implicit_return_type.clone())
     }
 
     fn body_ends_with_return(&self, body: &Statement) -> bool {

@@ -871,6 +871,45 @@ pub(crate) fn lower_set_constructor(
     Ok(result_op)
 }
 
+/// Lowers `Array<T, N>(e1, …, eN)`: the array built from its written
+/// elements, the way an array literal is.
+///
+/// The type checker has already required one argument per element, each
+/// compatible with `T`. Each is converted to the element slot's type here, so a
+/// value written at a narrower width is stored at `T`'s.
+fn lower_array_from_elements(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    array_ty: &Type,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let elem_watermark = ctx.body.local_decls.len();
+    let ops: Vec<Operand> = args
+        .iter()
+        .map(|arg| {
+            super::dispatch::lower_stored_value(ctx, arg, array_ty, super::dispatch::ELEMENT_SLOT)
+                .map(|(op, _)| op)
+        })
+        .collect::<Result<_, _>>()?;
+    let destination = dest.unwrap_or_else(|| Place::new(ctx.push_temp(array_ty.clone(), *span)));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            destination.clone(),
+            Rvalue::Aggregate(AggregateKind::Array, ops.clone()),
+        ),
+        span: *span,
+    });
+    // The aggregate took its own reference to each managed element, so the
+    // temps that built them are released here.
+    for op in &ops {
+        if let Operand::Copy(p) = op {
+            ctx.emit_temp_drop(p.local, elem_watermark, *span);
+        }
+    }
+    Ok(Operand::Copy(destination))
+}
+
 /// Lowers an `Array<T, N>()` constructor call with compile-time sized allocation.
 ///
 /// Supports one form:
@@ -887,14 +926,6 @@ pub(crate) fn lower_array_constructor(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Array<T, N>() constructor requires no arguments
-    if !args.is_empty() {
-        return Err(LoweringError::unsupported_expression(
-            "Array<T, N>() constructor does not accept arguments".to_string(),
-            *span,
-        ));
-    }
-
     // Get the inferred type: Custom("Array", Some([elem_expr, size_expr]))
     let array_ty = if let Some(call_ty) = ctx.recorded_type(call_expr_id) {
         call_ty
@@ -904,6 +935,9 @@ pub(crate) fn lower_array_constructor(
             *span,
         ));
     };
+    if !args.is_empty() {
+        return lower_array_from_elements(ctx, span, &array_ty, args, dest);
+    }
 
     // Extract the size expression from the type generic arguments
     let size_expr = match &array_ty.kind {

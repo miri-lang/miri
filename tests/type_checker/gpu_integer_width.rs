@@ -32,13 +32,19 @@ fn test_gpu_u32_literal_at_the_top_of_the_unsigned_lane_type_checks() {
     ));
 }
 
-/// A literal assigned to an element is not re-typed by the element: it stays
-/// an `int`, whose device lane is signed, so the signed bound applies.
+/// A literal assigned to an element takes the element's width, as it does in a
+/// declaration, so a `u32` element accepts the top of the unsigned lane.
 #[test]
-fn test_gpu_untyped_literal_assigned_to_a_u32_element_keeps_the_signed_lane() {
+fn test_gpu_untyped_literal_assigned_to_a_u32_element_takes_the_unsigned_lane() {
+    type_checker_test(&forall_program("u32", "dst[i] = 4294967295"));
+}
+
+/// The unsigned lane still ends where `u32` does.
+#[test]
+fn test_gpu_literal_assigned_to_a_u32_element_past_the_lane_is_refused() {
     type_checker_error_test(
-        &forall_program("u32", "dst[i] = 4294967295"),
-        "out of range for GPU 32-bit signed integer",
+        &forall_program("u32", "dst[i] = 4294967296"),
+        "Integer literal '4294967296' is out of range for GPU 32-bit unsigned integer",
     );
 }
 

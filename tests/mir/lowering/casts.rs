@@ -27,7 +27,7 @@ fn main()
 }
 
 #[test]
-fn test_implicit_return_cast() {
+fn test_returned_literal_takes_the_return_width() {
     mir_snapshot_test(
         r#"
 fn main() i64
@@ -37,7 +37,7 @@ fn main() i64
             let _0: i64;
 
             bb0: {
-                _0 = const Integer(I8(10)) as i64;
+                _0 = const Integer(I8(10));
                 return;
             }
         "#,
@@ -45,7 +45,7 @@ fn main() i64
 }
 
 #[test]
-fn test_assignment_cast() {
+fn test_assigned_literal_takes_the_binding_width() {
     mir_snapshot_test(
         r#"
 fn main()
@@ -59,7 +59,7 @@ fn main()
             bb0: {
                 StorageLive(_1);
                 _1 = const Integer(I8(0));
-                _1 = const Integer(I8(10)) as i64;
+                _1 = const Integer(I8(10));
                 _0 = const Integer(I8(10));
                 StorageDead(_1);
                 return;

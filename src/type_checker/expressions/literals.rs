@@ -163,6 +163,12 @@ impl TypeChecker {
         // so a value past the default `int` is only *provisionally* out of
         // range. It is held and judged against the type finally recorded for it,
         // once the widening pass has had its say.
+        //
+        // TODO: only a literal past the default `int` is held, so one inside it
+        // that a declaration, argument or assignment then records at a narrower
+        // width (`let y i8 = 300`) is never judged and is truncated silently.
+        // Holding every decimal literal needs the hex/binary/octal bit-pattern
+        // literals exempted, which is why it is not done here.
         let max = if self.negated_int_literals.contains(&expr_id) {
             i64::MAX as i128 + 1
         } else {

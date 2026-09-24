@@ -62,7 +62,7 @@ pub fn assemble(cells: &[&Cell]) -> Program {
     }
     source.push_str(&format!("\nfn main()\n    println(\"{STARTED}\")\n"));
     for id in 0..cells.len() {
-        source.push_str(&format!("    drive{id}()\n"));
+        source.push_str(&format!("    println(drive{id}())\n"));
     }
     Program { source, ranges }
 }
@@ -80,7 +80,13 @@ fn shared_decls(cells: &[&Cell]) -> Vec<Decl> {
     decls
 }
 
-/// A function that builds the cell's values, runs it and prints its line.
+/// A function that builds the cell's values, runs it and returns the line
+/// `main` prints for it.
+///
+/// Returning the line rather than printing it is what lets a crash be charged
+/// by its position: every value the driver made is released when it returns,
+/// before its line is printed, so a violation in that release stops the program
+/// with this cell's line still missing — not with the next cell's.
 fn driver(cell: &Cell, id: usize, call: &str) -> String {
     let ty = cell.ty.spelling;
     let (a, b) = if cell.operation == Operation::Dedup {
@@ -89,7 +95,7 @@ fn driver(cell: &Cell, id: usize, call: &str) -> String {
         (cell.ty.a.expr, cell.ty.b.expr)
     };
     let mut text = format!(
-        "fn drive{id}()\n    let a {ty} = {a}\n    let b {ty} = {b}\n    let ea = a\n    let eb = b\n    let r = {call}\n"
+        "fn drive{id}() String\n    let a {ty} = {a}\n    let b {ty} = {b}\n    let ea = a\n    let eb = b\n    let r = {call}\n"
     );
     let observation = match &cell.outcome {
         Outcome::Runs(Expected::Value(value)) => {
@@ -110,10 +116,7 @@ fn driver(cell: &Cell, id: usize, call: &str) -> String {
             "{o}"
         }
     };
-    text.push_str(&format!(
-        "    println(f\"{}{observation}\")\n",
-        sentinel(id)
-    ));
+    text.push_str(&format!("    return f\"{}{observation}\"\n", sentinel(id)));
     text
 }
 

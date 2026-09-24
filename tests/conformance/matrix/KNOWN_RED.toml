@@ -13,100 +13,8 @@
 # element layout: width, stride and by-address transport
 [A]
 cells = [
-    "array_element/array_string/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/array_string/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/array_string/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/array_string/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
-    "array_element/bool/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/bool/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/bool/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/bool/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/class/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/class/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/class/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/class/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
     "array_element/closure/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/closure/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
     "array_element/closure/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/closure/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
-    "array_element/enum/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/enum/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/enum/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/enum/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
-    "array_element/f32/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/f32/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/f32/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/f32/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/float/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/float/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/float/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/float/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i128/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i128/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i128/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i128/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i128/write_literal/mono", # compile error MER_TYP_068
-    "array_element/i16/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i16/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i16/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i16/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i32/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i32/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i32/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i32/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i64/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i64/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i64/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i64/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i8/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i8/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i8/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/i8/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/int/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/int/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/int/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/int/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/option_int/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/option_int/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/option_int/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/option_int/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/string/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/string/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/string/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/string/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
-    "array_element/struct/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/struct/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/struct/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/struct/construct/mono", # error[MER_TYP_052]: Invalid Builtin Constructor --> <program>:1:1
-    "array_element/u128/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u128/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u128/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u128/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u128/write_literal/mono", # compile error MER_TYP_068
-    "array_element/u16/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u16/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u16/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u16/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u32/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u32/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u32/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u32/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u64/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u64/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u64/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u64/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u64/write_literal/mono", # compile error MER_TYP_068
-    "array_element/u8/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u8/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u8/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/u8/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/vec3_f32/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/vec3_f32/construct/generic_fn", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/vec3_f32/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/vec3_f32/construct/mono", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "class_field/i128/write_literal/mono", # compile error MER_TYP_068
-    "class_field/u128/write_literal/mono", # compile error MER_TYP_068
-    "class_field/u64/write_literal/mono", # compile error MER_TYP_068
     "closure_capture/f32/eq/generic_class", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
     "closure_capture/f32/eq/generic_fn", # compiler panicked at frontend.rs:509: declared type of variable var2 doesn't match type of value v2
     "closure_capture/f32/eq/inherited", # compiler panicked at frontend.rs:509: declared type of variable var3 doesn't match type of value v2
@@ -211,19 +119,6 @@ cells = [
     "generic_field/u128/store_read/inherited", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
     "generic_field/u128/store_read/mono", # wrong value: got `0 false true`, expected `18446744073709551616 true false`
     "generic_field/u128/write_literal/mono", # compile error MER_TYP_068
-    "generic_field/u64/write_literal/mono", # compile error MER_TYP_068
-    "inherited_field/i128/write_literal/mono", # compile error MER_TYP_068
-    "inherited_field/u128/write_literal/mono", # compile error MER_TYP_068
-    "inherited_field/u64/write_literal/mono", # compile error MER_TYP_068
-    "list_element/i128/write_literal/mono", # compile error MER_TYP_068
-    "list_element/u128/write_literal/mono", # compile error MER_TYP_068
-    "list_element/u64/write_literal/mono", # compile error MER_TYP_068
-    "local/i128/write_literal/mono", # compile error MER_TYP_068
-    "local/u128/write_literal/mono", # compile error MER_TYP_068
-    "local/u64/write_literal/mono", # compile error MER_TYP_068
-    "map_value/i128/write_literal/mono", # compile error MER_TYP_068
-    "map_value/u128/write_literal/mono", # compile error MER_TYP_068
-    "map_value/u64/write_literal/mono", # compile error MER_TYP_068
     "map_value/vec3_f32/eq/generic_class", # crashed without a report
     "map_value/vec3_f32/eq/generic_fn", # crashed without a report
     "map_value/vec3_f32/eq/inherited", # crashed without a report
@@ -241,12 +136,6 @@ cells = [
     "map_value/vec3_f32/store_read/inherited", # crashed without a report
     "map_value/vec3_f32/store_read/mono", # crashed without a report
     "map_value/vec3_f32/write_literal/mono", # crashed without a report
-    "return/i128/write_literal/mono", # compile error MER_TYP_068
-    "return/u128/write_literal/mono", # compile error MER_TYP_068
-    "return/u64/write_literal/mono", # compile error MER_TYP_068
-    "struct_field/i128/write_literal/mono", # compile error MER_TYP_068
-    "struct_field/u128/write_literal/mono", # compile error MER_TYP_068
-    "struct_field/u64/write_literal/mono", # compile error MER_TYP_068
 ]
 
 # Set element and Map key identity: equals and hash
@@ -362,15 +251,6 @@ cells = [
     "class_field/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
     "class_field/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _8 (_8): released more references than it owns (double-release)
     "class_field/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "class_field/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "class_field/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _9 (_9): released more references than it owns (double-release)
     "class_field/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _8 (_8): released more references than it owns (double-release)
     "class_field/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _9 (_9): released more references than it owns (double-release)
@@ -394,12 +274,6 @@ cells = [
     "class_field/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _9 (_9): released more references than it owns (double-release)
     "closure_capture/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "closure_capture/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "enum_payload/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "enum_payload/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "enum_payload/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "enum_payload/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -430,15 +304,6 @@ cells = [
     "inherited_field/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
     "inherited_field/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _9 (_9): released more references than it owns (double-release)
     "inherited_field/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _10 (_10): released more references than it owns (double-release)
     "inherited_field/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _9 (_9): released more references than it owns (double-release)
     "inherited_field/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _10 (_10): released more references than it owns (double-release)
@@ -523,14 +388,8 @@ cells = [
     "local/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _7 (_7): released more references than it owns (double-release)
     "local/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _8 (_8): released more references than it owns (double-release)
     "local/array_string/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/array_string/eq/trait_default", # MIRI_HEAP_GUARD: leaked 2 allocations: src/array.rs:114 (array, rc=1); src/array.rs:147 (buffer)
-    "local/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/array_string/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/array_string/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/bool/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/bool/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
@@ -634,14 +493,6 @@ cells = [
     "map_value/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _15 (_15): released more references than it owns (double-release)
     "map_value/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _14 (_14): released more references than it owns (double-release)
     "map_value/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _15 (_15): released more references than it owns (double-release)
-    "map_value/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/get/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/get/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/bool/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'CellN_run__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::
     "map_value/bool/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'cellN__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::I64,
     "map_value/bool/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::
@@ -667,18 +518,8 @@ cells = [
     "map_value/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _15 (_15): released more references than it owns (double-release)
     "map_value/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _14 (_14): released more references than it owns (double-release)
     "map_value/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _15 (_15): released more references than it owns (double-release)
-    "parameter/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "parameter/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "parameter/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "parameter/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "parameter/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "parameter/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/bool/add/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run__bool': Failed to declare function 'passN__bool': Function passN__bool signature Signature { params: [AbiParam { value_type: types::I8, purpose: Normal, ext
     "return/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -702,7 +543,6 @@ cells = [
     "struct_field/class/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/class/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -989,14 +829,11 @@ cells = [
     "generic_field/class/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/class/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/closure/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/closure/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/closure/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/enum/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/enum/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/enum/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -1015,16 +852,11 @@ cells = [
     "generic_field/option_int/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/render/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "generic_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/string/compound_assign/generic_class", # crashed without a report
     "generic_field/string/compound_assign/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "generic_field/string/compound_assign/inherited", # crashed without a report
@@ -1060,51 +892,8 @@ cells = [
     "inherited_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "inherited_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "list_element/array_string/construct/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/construct/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/construct/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/construct/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/contains/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/contains/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/contains/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/contains/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/eq/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/eq/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/first/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/first/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/first/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/first/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/last/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/last/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/last/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/last/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/overwrite/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/pop/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/pop/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/pop/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/pop/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/remove_at/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/remove_at/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/remove_at/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/remove_at/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/reversed/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/reversed/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/reversed/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/reversed/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/store_read/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/array_string/write_literal/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/construct/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/closure/construct/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/construct/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/closure/construct/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/first/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/first/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/first/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -1114,9 +903,7 @@ cells = [
     "list_element/closure/last/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/last/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/remove_at/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/closure/remove_at/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/remove_at/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/closure/remove_at/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/reversed/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/reversed/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/reversed/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -1129,9 +916,6 @@ cells = [
     "struct_field/option_int/eq/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/option_int/eq/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "struct_field/option_int/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "struct_field/option_int/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "struct_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "struct_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "struct_field/option_int/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021

@@ -461,3 +461,93 @@ if a.length() == 0
         "zero elements",
     );
 }
+
+#[test]
+fn test_array_constructor_with_every_element_builds_the_array() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+fn main()
+    let a = Array<int, 3>(1, 2, 3)
+    let f = Array<f32, 2>(1.5, 2.25)
+    let w = Array<i128, 2>(170141183460469231731687303715884105727, -1)
+    let big i128 = 170141183460469231731687303715884105727
+    println(f'{a[1]} {a.length()} {f[1]} {w[0] == big} {w[1] == -1}')
+",
+        "2 3 2.25 true true",
+    );
+}
+
+/// Written elements need no zero fill, so an element type that has no valid
+/// zero — a reference, a struct, an enum — is accepted when every element is
+/// written, and each one is released with the array.
+#[test]
+fn test_array_constructor_with_every_element_takes_managed_elements() {
+    assert_heap_guard_output(
+        "
+use system.collections.array
+
+struct Point
+    x int
+    y int
+
+enum Color
+    Red
+    Green
+
+fn main()
+    let s = Array<String, 2>(\"a\" + \"b\", \"c\")
+    let p = Array<Point, 2>(Point(x: 1, y: 2), Point(x: 3, y: 4))
+    let c = Array<Color, 2>(Color.Green, Color.Red)
+    println(f'{s[0]} {s[1]} {p[1].x} {c.length()}')
+",
+        "ab c 3 2",
+    );
+}
+
+#[test]
+fn test_array_constructor_of_vectors_reads_every_component() {
+    assert_heap_guard_output(
+        "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let v = Array<Vec3<f32>, 2>(Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0))
+    println(f'{v[1].x} {v[1].z} {v[0].y}')
+",
+        "4.0 6.0 2.0",
+    );
+}
+
+#[test]
+fn test_array_constructor_inside_a_generic_body() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+fn pair<T>(a T, b T) Array<T, 2>
+    return Array<T, 2>(a, b)
+
+fn main()
+    let ints = pair(3, 4)
+    let words = pair(\"x\", \"y\")
+    println(f'{ints[1]} {words[0]}')
+",
+        "4 x",
+    );
+}
+
+#[test]
+fn test_array_constructor_refuses_an_element_of_the_wrong_type() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    let a = Array<int, 2>(1, \"two\")
+",
+        "expected int, got String",
+    );
+}

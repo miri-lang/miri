@@ -249,7 +249,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "a float literal inside `List<f32>([...])` builds its array at the literal's default f64 width, so the f32 list is filled from half-read eight-byte elements and reads back zeros; the literal needs the width of the slot it is written into"]
 fn test_list_f32_built_from_a_literal_keeps_its_values() {
     assert_runs_with_output(
         r#"
@@ -260,5 +259,23 @@ fn main()
     println(f"{l[0]} {l[1]}")
 "#,
         "1.5 3.5",
+    );
+}
+
+#[test]
+fn test_lists_built_from_literals_store_every_element_at_the_declared_width() {
+    // Four `f32`s span two value words, so a wrong stride shows at the third.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let f = List<f32>([1.5, -2.25, 3.5, 4.75])
+    let i = List<i16>([-300, 7, 1000])
+    let u = List<u8>([200, 1, 255])
+    let d = List([0.1, 0.2])
+    println(f"{f[2]} {f[3]} {i[0]} {i[2]} {u[0]} {u[2]} {d[1]}")
+"#,
+        "3.5 4.75 -300 1000 200 255 0.2",
     );
 }

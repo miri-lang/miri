@@ -2258,6 +2258,7 @@ impl TypeChecker {
                 // literals written in the argument take it — otherwise each
                 // keeps the default `int` and fills only part of a wider slot.
                 self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type);
+                self.narrow_sequence_argument_elements(arg_expr, arg_type, &elem_type, context);
                 if !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
                     self.report_error(
                         DiagnosticCode::TypBuiltinConstructor,
@@ -3031,16 +3032,19 @@ impl TypeChecker {
                     size_expr.span,
                 );
 
-                if self.refuse_unusable_array_element(&elem_type, args[0].span) {
-                    return Some(make_type(TypeKind::Error));
-                }
-
                 // The constructor takes either nothing, leaving every element at
                 // its default, or one argument per element. Any other count was
                 // accepted here and refused only once MIR lowering was reached,
                 // which reported it as an internal failure of the compiler
                 // rather than as something the source got wrong.
                 let written = positional_args.len();
+                if written == 0 {
+                    if self.refuse_unusable_array_element(&elem_type, args[0].span) {
+                        return Some(make_type(TypeKind::Error));
+                    }
+                } else if self.refuse_unsupported_vector_component(&elem_type, args[0].span) {
+                    return Some(make_type(TypeKind::Error));
+                }
                 if written != 0 && written as i128 != size_value {
                     self.report_error(
                         DiagnosticCode::TypBuiltinConstructor,
@@ -3052,6 +3056,7 @@ impl TypeChecker {
                     );
                     return Some(make_type(TypeKind::Error));
                 }
+                self.check_array_constructor_elements(&elem_type, positional_args, context);
 
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Array.name().to_string(),
@@ -3087,6 +3092,37 @@ impl TypeChecker {
             span,
         );
         Some(make_type(TypeKind::Error))
+    }
+
+    /// Check each element written into `Array<T, N>(e1, …, eN)` against `T`.
+    ///
+    /// Every element is a write into a slot of type `T`, so a literal takes that
+    /// width the way an argument takes its parameter's, and anything else must
+    /// be compatible with `T`.
+    fn check_array_constructor_elements(
+        &mut self,
+        elem_type: &Type,
+        positional_args: &[(&Expression, Type)],
+        context: &Context,
+    ) {
+        for (arg, arg_type) in positional_args {
+            if matches!(arg_type.kind, TypeKind::Error) {
+                continue;
+            }
+            let arg_type = self
+                .narrow_float_literals(arg, elem_type, arg_type, context)
+                .or_else(|| self.widen_int_literals(arg, elem_type, arg_type))
+                .unwrap_or_else(|| arg_type.clone());
+            if !self.are_compatible(elem_type, &arg_type, context) {
+                self.report_error(
+                    DiagnosticCode::TypTypeMismatch,
+                    format!(
+                        "Type mismatch for array element: expected {elem_type}, got {arg_type}"
+                    ),
+                    arg.span,
+                );
+            }
+        }
     }
 
     /// Refuses an element type `Array<T, N>()` cannot hand back, and answers

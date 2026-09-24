@@ -381,6 +381,16 @@ impl TypeChecker {
     ) -> Type {
         let rhs_type = self.infer_expression(rhs, context);
         let lhs_type = self.infer_assignment_target(lhs, span, context);
+        // A plain assignment writes the right-hand side into the target's
+        // slot, so a literal there takes the target's width, as it does in a
+        // declaration. A compound one combines through its operator first.
+        let rhs_type = if matches!(op, AssignmentOp::Assign) {
+            self.narrow_float_literals(rhs, &lhs_type, &rhs_type, context)
+                .or_else(|| self.widen_int_literals(rhs, &lhs_type, &rhs_type))
+                .unwrap_or(rhs_type)
+        } else {
+            rhs_type
+        };
 
         self.check_division_by_zero_assignment(op, rhs);
 

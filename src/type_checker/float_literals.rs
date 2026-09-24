@@ -169,6 +169,30 @@ impl TypeChecker {
         }
     }
 
+    /// Narrow the float literals written in a collection constructor's
+    /// sequence argument (`List<f32>([1.5, 2.0])`) to the declared `element`
+    /// width.
+    ///
+    /// The constructor's type argument is the width each element is stored at;
+    /// left at the default `f64`, the argument's elements are built eight bytes
+    /// wide and read back through a four-byte stride. This is the float twin of
+    /// `widen_sequence_argument_elements`.
+    pub(crate) fn narrow_sequence_argument_elements(
+        &mut self,
+        arg_expr: &Expression,
+        arg_type: &Type,
+        element: &Type,
+        context: &Context,
+    ) {
+        if !is_float_width(&element.kind) {
+            return;
+        }
+        let Some(expected) = self.with_element_type(arg_type, element) else {
+            return;
+        };
+        self.narrow_float_literals(arg_expr, &expected, arg_type, context);
+    }
+
     /// Records `ty` as the type of `expr`, replacing what inference recorded.
     fn record_narrowed_type(&mut self, expr: &Expression, ty: &Type) {
         self.type_table
