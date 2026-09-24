@@ -219,3 +219,76 @@ fn main()
     assert_verifies_clean(&body);
     assert_eq!(readback_calls(&body), 0, "no readback:\n{body}");
 }
+
+/// The calls to runtime entry `symbol` in `body`.
+fn calls_to(body: &miri::mir::Body, symbol: &str) -> usize {
+    body.basic_blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.terminator.as_ref().map(|t| &t.kind),
+                Some(miri::mir::TerminatorKind::Call { func, .. })
+                    if func.called_symbol() == Some(symbol)
+            )
+        })
+        .count()
+}
+
+/// The device handle of the user binding named `name`.
+fn handle_of(body: &miri::mir::Body, name: &str) -> Option<miri::mir::body::DeviceHandleId> {
+    body.local_decls
+        .iter()
+        .find(|decl| decl.name.as_deref() == Some(name))
+        .and_then(|decl| decl.device_handle)
+}
+
+/// `gpu var b = a` hands `a`'s device buffer over to a handle of `b`'s own
+/// rather than sharing `a`'s: `a` may be assigned a new value afterwards, and
+/// that value has to reach a buffer of `a`'s, not the one `b` now holds.
+#[test]
+fn a_gpu_to_gpu_move_hands_the_buffer_to_a_handle_of_its_own() {
+    let body = main_after_readback_pass(
+        "
+use system.collections.array
+
+fn main()
+    gpu var a = [0, 0, 0, 0]
+    gpu var b = a
+    gpu forall i in 0..4
+        b[i] = i * 5
+    a = [9, 9, 9, 9]
+    let z = b
+    let y = a
+",
+    );
+    assert_verifies_clean(&body);
+    assert_ne!(handle_of(&body, "a"), handle_of(&body, "b"), "{body}");
+    assert_eq!(calls_to(&body, "miri_gpu_transfer"), 1, "{body}");
+    assert_eq!(
+        readback_calls(&body),
+        1,
+        "only `b` lags its device:\n{body}"
+    );
+}
+
+/// A readback into an array the body owns gives the binding a host array of its
+/// own only when another value shares it: copy-on-write, not an unconditional
+/// clone that the readback then overwrites in full.
+#[test]
+fn a_readback_detaches_a_shared_host_array_by_copy_on_write() {
+    let body = main_after_readback_pass(
+        "
+use system.collections.array
+
+fn main()
+    gpu var g = [0, 0, 0, 0]
+    forall i in 0..4
+        g[i] = 1
+    let h = g
+",
+    );
+    assert_verifies_clean(&body);
+    assert_eq!(readback_calls(&body), 1, "{body}");
+    assert_eq!(calls_to(&body, "miri_rt_array_clone"), 0, "{body}");
+    assert_eq!(calls_to(&body, "miri_rt_array_cow"), 1, "{body}");
+}

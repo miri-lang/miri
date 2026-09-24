@@ -1267,8 +1267,8 @@ fn gpu_to_gpu_copy(target_handle: u64) -> Body {
     body
 }
 
-/// A binding that takes over the source's device buffer (`gpu var b = a`)
-/// keeps the value on the device, so nothing has to be fenced for it.
+/// A binding that shares the source's device handle (a move out of a borrowed
+/// parameter) keeps the value on the device, so nothing has to be fenced for it.
 #[test]
 fn a_move_into_a_binding_sharing_the_device_buffer_needs_no_readback() {
     assert_fenced(&gpu_to_gpu_copy(7), "a move that keeps the device buffer");
@@ -2133,4 +2133,160 @@ fn the_readback_pass_reads_back_once_for_two_reads_after_a_launch() {
     assert_fenced(&twice, "the pass's output");
     assert_eq!(readback_calls(&twice), 1);
     assert!(twice.device_stale_flags.is_empty(), "no read needs a flag");
+}
+
+/// `dest = source`, replacing the value `dest` held.
+fn reassign_copy(dest: usize, source: usize) -> Statement {
+    stmt(StatementKind::Reassign(
+        place(dest),
+        Rvalue::Use(Operand::Copy(place(source))),
+    ))
+}
+
+/// Locals 1 and 2 are declared gpu arrays carrying handles `first` and `second`,
+/// 3 a call's discarded result, 4 and 5 host arrays.
+fn two_gpu_arrays_body(first: u64, second: u64, blocks: Vec<BasicBlockData>) -> Body {
+    let array = collection_ty("Array", &[TypeKind::Int]);
+    let mut body = body_of(
+        &[
+            void_ty(),
+            array.clone(),
+            array.clone(),
+            void_ty(),
+            array.clone(),
+            array,
+        ],
+        0,
+        blocks,
+    );
+    for (local, handle) in [(1, first), (2, second)] {
+        body.local_decls[local].residency = BindingResidency::Gpu;
+        body.local_decls[local].device_handle = Some(DeviceHandleId(handle));
+    }
+    body
+}
+
+fn assert_one_unfenced_read_of(body: &Body, local: usize) {
+    let violations = verify_cross_residency_readback(body);
+    assert_eq!(
+        violations.len(),
+        1,
+        "expected one finding, got: {}",
+        messages(&violations)
+    );
+    assert_eq!(
+        violations[0].local,
+        Local(local),
+        "{}",
+        messages(&violations)
+    );
+}
+
+/// Two bindings share one device buffer when one took the other's over. An
+/// upload of a new value into it through one of them overwrites what the device
+/// holds for the other, so the other's host array — which lags the launch — has
+/// nothing current to be read back from: the upload fences only the binding it
+/// assigns, never its sharer.
+#[test]
+fn an_upload_into_a_shared_device_buffer_does_not_fence_the_other_binding() {
+    let overwritten = two_gpu_arrays_body(
+        7,
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_upload",
+                    vec![handle_argument(7), Operand::Copy(place(4))],
+                    3,
+                    2,
+                ),
+            ),
+            block(vec![reassign_copy(1, 4), assign_copy(5, 2)], ret()),
+        ],
+    );
+    assert_one_unfenced_read_of(&overwritten, 2);
+}
+
+/// A readback copies the device buffer into the one binding it names. A second
+/// binding sharing the handle keeps its own lagging host array, so its read is
+/// still unfenced.
+#[test]
+fn a_readback_into_one_binding_does_not_fence_another_sharing_its_handle() {
+    let one_read_back = two_gpu_arrays_body(
+        7,
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_readback",
+                    vec![handle_argument(7), Operand::Copy(place(1))],
+                    3,
+                    2,
+                ),
+            ),
+            block(vec![assign_copy(4, 1), assign_copy(5, 2)], ret()),
+        ],
+    );
+    assert_one_unfenced_read_of(&one_read_back, 2);
+}
+
+/// `gpu var b = a` hands `a`'s device buffer to `b`'s handle. The move itself
+/// reads nothing back — `a`'s handle is left with no buffer — but `b`'s host
+/// array lags whatever the device did to the buffer it now owns.
+fn transferred_body(after: Vec<Statement>) -> Body {
+    two_gpu_arrays_body(
+        7,
+        8,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(
+                Vec::new(),
+                runtime_call(
+                    "miri_gpu_transfer",
+                    vec![handle_argument(7), handle_argument(8)],
+                    3,
+                    2,
+                ),
+            ),
+            block(after, ret()),
+        ],
+    )
+}
+
+#[test]
+fn a_transfer_leaves_the_target_lagging_the_buffer_it_took_over() {
+    let transferred = transferred_body(vec![assign_copy(2, 1), assign_copy(5, 2)]);
+    assert_one_unfenced_read_of(&transferred, 2);
+}
+
+#[test]
+fn the_readback_pass_fences_a_binding_that_took_a_buffer_over() {
+    let mut transferred = transferred_body(vec![assign_copy(2, 1), assign_copy(5, 2)]);
+
+    miri::mir::residency::insert_readbacks(&mut transferred);
+
+    assert_fenced(&transferred, "the pass's output");
+    assert_eq!(readback_calls(&transferred), 1, "{transferred}");
+}
+
+/// Each binding sharing a handle reads its own host array back.
+#[test]
+fn the_readback_pass_reads_back_each_binding_sharing_a_handle() {
+    let mut shared = two_gpu_arrays_body(
+        7,
+        7,
+        vec![
+            block(Vec::new(), launch_over_binding(7, 1)),
+            block(vec![assign_copy(4, 1), assign_copy(5, 2)], ret()),
+        ],
+    );
+
+    miri::mir::residency::insert_readbacks(&mut shared);
+
+    assert_fenced(&shared, "the pass's output");
+    assert_eq!(readback_calls(&shared), 2, "{shared}");
 }

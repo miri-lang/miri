@@ -160,6 +160,36 @@ pub fn acquire(handle_id: u64) {
     });
 }
 
+/// Hands the innermost activation of `from` — and the device buffer it owns —
+/// to `to`, then opens a fresh activation of `from` in its place.
+///
+/// A gpu-to-gpu move (`gpu var b = a`) keeps the source's device results where
+/// they are, under the target's handle, and leaves the source with no buffer: a
+/// value assigned to the source afterwards lands in a buffer of its own. Each
+/// handle's stack keeps its depth — the target gains the activation its release
+/// will close, the source keeps one for its own — so releases stay balanced.
+///
+/// A source with no open activation has nothing to hand over; the target is
+/// given an empty activation so its release still has one to close.
+pub fn transfer(from: u64, to: u64) {
+    if to == HOST_HANDLE {
+        return;
+    }
+    let moved = if from == HOST_HANDLE {
+        None
+    } else {
+        close_activation(from)
+    };
+    let Some(key) = moved else {
+        acquire(to);
+        return;
+    };
+    ACTIVATIONS.with(|activations| {
+        activations.borrow_mut().entry(to).or_default().push(key);
+    });
+    acquire(from);
+}
+
 /// Closes the innermost activation of `handle_id` and returns its key, or
 /// `None` when it has no live activation.
 fn close_activation(handle_id: u64) -> Option<u64> {
@@ -235,6 +265,17 @@ pub extern "C" fn miri_gpu_acquire(handle_id: u64) {
     // second reports nothing.
     crate::telemetry::report();
     acquire(handle_id);
+}
+
+/// Hands a `gpu`-resident binding's live activation and device buffer to the
+/// binding it is moved into. The compiler emits this at every `gpu let` /
+/// `gpu var` initialized by moving another gpu binding; see [`transfer`].
+///
+/// # Safety
+/// Safe to call with any values; handle ids are opaque keys.
+#[no_mangle]
+pub extern "C" fn miri_gpu_transfer(from: u64, to: u64) {
+    transfer(from, to);
 }
 
 /// Frees the device buffer of a `gpu`-resident binding's innermost activation
