@@ -218,3 +218,48 @@ fn test_error_on_backslash_in_f_string_expression() {
         &SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
+
+#[test]
+fn test_parse_string_literal_escape_sequences() {
+    // Empty strings
+    literal_test("\"\"", string_literal(""));
+    literal_test("''", string_literal(""));
+
+    // Standard escapes
+    literal_test(
+        r#""line1\nline2\ttab\rreturn\\slash\0null\'single\"double""#,
+        string_literal("line1\nline2\ttab\rreturn\\slash\0null'single\"double"),
+    );
+
+    // Unrecognized escape sequences preserve the backslash
+    literal_test(r#""\z\a\g""#, string_literal(r#"\z\a\g"#));
+}
+
+#[test]
+fn test_parse_string_literal_unicode_and_unusual_whitespace() {
+    // Unicode multi-byte strings, emojis, and whitespace variants
+    literal_test(
+        "\"Hello, 世界! 🌍 🚀\"",
+        string_literal("Hello, 世界! 🌍 🚀"),
+    );
+    literal_test(
+        "\"tab\tspace \u{200B}zero-width\u{00A0}non-breaking\"",
+        string_literal("tab\tspace \u{200B}zero-width\u{00A0}non-breaking"),
+    );
+}
+
+#[test]
+fn test_f_string_empty_and_consecutive_interpolations() {
+    // Empty f-string parses as f_string with no parts
+    parser_test(r#"f"""#, vec![expression_statement(f_string(vec![]))]);
+
+    // Multiple consecutive interpolations without literal text between them
+    parser_test(
+        r#"f"{x}{y}{z}""#,
+        vec![expression_statement(f_string(vec![
+            identifier("x"),
+            identifier("y"),
+            identifier("z"),
+        ]))],
+    );
+}
