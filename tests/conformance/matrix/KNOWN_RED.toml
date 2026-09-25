@@ -95,62 +95,17 @@ cells = [
 # generic instantiation read after substitution
 [C]
 cells = [
-    "array_element/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "array_element/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _8 (_8): released more references than it owns (double-release)
-    "array_element/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "array_element/array_string/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "array_element/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _9 (_9): released more references than it owns (double-release)
-    "array_element/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _8 (_8): released more references than it owns (double-release)
-    "array_element/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _9 (_9): released more references than it owns (double-release)
-    "array_element/class/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "array_element/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _8 (_8): released more references than it owns (double-release)
     "array_element/closure/construct/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/construct/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "array_element/closure/sort/inherited", # accepted; expected refusal MER_TYP_075
     "array_element/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "array_element/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _9 (_9): released more references than it owns (double-release)
-    "array_element/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _8 (_8): released more references than it owns (double-release)
-    "array_element/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _9 (_9): released more references than it owns (double-release)
-    "array_element/enum/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "array_element/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _9 (_9): released more references than it owns (double-release)
-    "array_element/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _8 (_8): released more references than it owns (double-release)
-    "array_element/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _9 (_9): released more references than it owns (double-release)
-    "array_element/option_int/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "array_element/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _9 (_9): released more references than it owns (double-release)
-    "array_element/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _8 (_8): released more references than it owns (double-release)
-    "array_element/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _9 (_9): released more references than it owns (double-release)
-    "array_element/struct/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "array_element/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _9 (_9): released more references than it owns (double-release)
-    "array_element/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _8 (_8): released more references than it owns (double-release)
-    "array_element/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _9 (_9): released more references than it owns (double-release)
-    "array_element/vec3_f32/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "class_field/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "class_field/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _8 (_8): released more references than it owns (double-release)
-    "class_field/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "class_field/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _9 (_9): released more references than it owns (double-release)
-    "class_field/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _8 (_8): released more references than it owns (double-release)
-    "class_field/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _9 (_9): released more references than it owns (double-release)
-    "class_field/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _8 (_8): released more references than it owns (double-release)
     "class_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "class_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "class_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "class_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "class_field/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "class_field/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _9 (_9): released more references than it owns (double-release)
-    "class_field/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _8 (_8): released more references than it owns (double-release)
-    "class_field/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _9 (_9): released more references than it owns (double-release)
-    "class_field/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _9 (_9): released more references than it owns (double-release)
-    "class_field/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _8 (_8): released more references than it owns (double-release)
-    "class_field/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _9 (_9): released more references than it owns (double-release)
-    "class_field/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _9 (_9): released more references than it owns (double-release)
-    "class_field/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _8 (_8): released more references than it owns (double-release)
-    "class_field/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _9 (_9): released more references than it owns (double-release)
-    "class_field/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _9 (_9): released more references than it owns (double-release)
-    "class_field/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _8 (_8): released more references than it owns (double-release)
-    "class_field/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _9 (_9): released more references than it owns (double-release)
     "closure_capture/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "closure_capture/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "enum_payload/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -183,21 +138,11 @@ cells = [
     "generic_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "generic_field/closure/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "generic_field/closure/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _9 (_9): released more references than it owns (double-release)
     "inherited_field/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/closure/overwrite/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "inherited_field/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "inherited_field/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _10 (_10): released more references than it owns (double-release)
     "inherited_field/i128/compound_assign/generic_class", # crashed without a report
     "inherited_field/i128/compound_assign/generic_fn", # crashed without a report
     "inherited_field/i128/compound_assign/inherited", # crashed without a report
@@ -210,12 +155,6 @@ cells = [
     "inherited_field/i128/store_read/generic_class", # crashed without a report
     "inherited_field/i128/store_read/generic_fn", # crashed without a report
     "inherited_field/i128/store_read/inherited", # crashed without a report
-    "inherited_field/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _10 (_10): released more references than it owns (double-release)
     "inherited_field/u128/compound_assign/generic_class", # crashed without a report
     "inherited_field/u128/compound_assign/generic_fn", # crashed without a report
     "inherited_field/u128/compound_assign/inherited", # crashed without a report
@@ -228,73 +167,29 @@ cells = [
     "inherited_field/u128/store_read/generic_class", # crashed without a report
     "inherited_field/u128/store_read/generic_fn", # crashed without a report
     "inherited_field/u128/store_read/inherited", # crashed without a report
-    "inherited_field/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _10 (_10): released more references than it owns (double-release)
-    "inherited_field/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _9 (_9): released more references than it owns (double-release)
-    "inherited_field/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _10 (_10): released more references than it owns (double-release)
-    "list_element/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _14 (_14): released more references than it owns (double-release)
-    "list_element/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _13 (_13): released more references than it owns (double-release)
-    "list_element/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _14 (_14): released more references than it owns (double-release)
-    "list_element/array_string/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "list_element/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _14 (_14): released more references than it owns (double-release)
-    "list_element/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _13 (_13): released more references than it owns (double-release)
-    "list_element/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _14 (_14): released more references than it owns (double-release)
-    "list_element/class/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "list_element/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _13 (_13): released more references than it owns (double-release)
     "list_element/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/pop/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/pop/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/closure/sort/inherited", # accepted; expected refusal MER_TYP_075
     "list_element/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "list_element/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _14 (_14): released more references than it owns (double-release)
-    "list_element/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _13 (_13): released more references than it owns (double-release)
-    "list_element/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _14 (_14): released more references than it owns (double-release)
-    "list_element/enum/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "list_element/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _14 (_14): released more references than it owns (double-release)
-    "list_element/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _13 (_13): released more references than it owns (double-release)
-    "list_element/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _14 (_14): released more references than it owns (double-release)
-    "list_element/option_int/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "list_element/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _14 (_14): released more references than it owns (double-release)
-    "list_element/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _13 (_13): released more references than it owns (double-release)
-    "list_element/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _14 (_14): released more references than it owns (double-release)
-    "list_element/struct/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "list_element/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _13 (_13): released more references than it owns (double-release)
-    "list_element/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _12 (_12): released more references than it owns (double-release)
-    "list_element/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _13 (_13): released more references than it owns (double-release)
     "list_element/vec3_f32/construct/generic_class", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
     "list_element/vec3_f32/construct/generic_fn", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
     "list_element/vec3_f32/construct/inherited", # MIRI_HEAP_GUARD: leaked 2 allocations: src/rc.rs:257 (class) x2
-    "list_element/vec3_f32/sort/inherited", # accepted; expected refusal MER_TYP_075
-    "local/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _8 (_8): released more references than it owns (double-release)
-    "local/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _7 (_7): released more references than it owns (double-release)
-    "local/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _8 (_8): released more references than it owns (double-release)
-    "local/array_string/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/array_string/eq/trait_default", # MIRI_HEAP_GUARD: leaked 2 allocations: src/array.rs:114 (array, rc=1); src/array.rs:147 (buffer)
     "local/array_string/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/array_string/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/bool/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/bool/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/bool/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _8 (_8): released more references than it owns (double-release)
-    "local/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _7 (_7): released more references than it owns (double-release)
-    "local/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _8 (_8): released more references than it owns (double-release)
-    "local/class/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/class/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "local/class/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/class/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _7 (_7): released more references than it owns (double-release)
-    "local/closure/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _8 (_8): released more references than it owns (double-release)
-    "local/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _7 (_7): released more references than it owns (double-release)
-    "local/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _8 (_8): released more references than it owns (double-release)
-    "local/enum/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/enum/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "local/enum/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/enum/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
@@ -329,19 +224,11 @@ cells = [
     "local/int/eq/trait_default", # crashed without a report
     "local/int/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/int/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _8 (_8): released more references than it owns (double-release)
-    "local/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _7 (_7): released more references than it owns (double-release)
-    "local/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _8 (_8): released more references than it owns (double-release)
-    "local/option_int/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/option_int/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "local/option_int/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/string/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/string/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/string/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _8 (_8): released more references than it owns (double-release)
-    "local/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _7 (_7): released more references than it owns (double-release)
-    "local/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _8 (_8): released more references than it owns (double-release)
-    "local/struct/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/struct/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "local/struct/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/struct/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
@@ -365,44 +252,17 @@ cells = [
     "local/u8/eq/trait_default", # crashed without a report
     "local/u8/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/u8/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _8 (_8): released more references than it owns (double-release)
-    "local/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _7 (_7): released more references than it owns (double-release)
-    "local/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _8 (_8): released more references than it owns (double-release)
-    "local/vec3_f32/compound_assign/trait_default", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
     "local/vec3_f32/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "local/vec3_f32/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/vec3_f32/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "map_value/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Array_String_2: _15 (_15): released more references than it owns (double-release)
-    "map_value/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Array_String_2: _14 (_14): released more references than it owns (double-release)
-    "map_value/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Array_String_2: _15 (_15): released more references than it owns (double-release)
-    "map_value/bool/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'CellN_run__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::
-    "map_value/bool/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'cellN__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::I64,
-    "map_value/bool/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run__bool': Failed to declare function 'miri_rt_map_get_checked': Function miri_rt_map_get_checked signature Signature { params: [AbiParam { value_type: types::
-    "map_value/class/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Bx: _15 (_15): released more references than it owns (double-release)
-    "map_value/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Bx: _14 (_14): released more references than it owns (double-release)
-    "map_value/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _15 (_15): released more references than it owns (double-release)
-    "map_value/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _14 (_14): released more references than it owns (double-release)
     "map_value/closure/get/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/get/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "map_value/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Sh: _15 (_15): released more references than it owns (double-release)
-    "map_value/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Sh: _14 (_14): released more references than it owns (double-release)
-    "map_value/enum/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Sh: _15 (_15): released more references than it owns (double-release)
-    "map_value/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__option_int: _15 (_15): released more references than it owns (double-release)
-    "map_value/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__option_int: _14 (_14): released more references than it owns (double-release)
-    "map_value/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__option_int: _15 (_15): released more references than it owns (double-release)
-    "map_value/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Pt: _15 (_15): released more references than it owns (double-release)
-    "map_value/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Pt: _14 (_14): released more references than it owns (double-release)
-    "map_value/struct/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Pt: _15 (_15): released more references than it owns (double-release)
-    "map_value/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn CellN_run__Vec3_f32: _15 (_15): released more references than it owns (double-release)
-    "map_value/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN__Vec3_f32: _14 (_14): released more references than it owns (double-release)
-    "map_value/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Vec3_f32: _15 (_15): released more references than it owns (double-release)
     "parameter/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "parameter/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "return/bool/add/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run__bool': Failed to declare function 'passN__bool': Function passN__bool signature Signature { params: [AbiParam { value_type: types::I8, purpose: Normal, ext
     "return/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/closure/store_read/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "return/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -430,37 +290,22 @@ cells = [
     "class_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "class_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "class_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "closure_capture/array_string/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/array_string/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/array_string/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/array_string/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/array_string/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/array_string/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/array_string/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/bool/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'CellN_run': Failed to declare function '__lambda_75__Cell0': Function __lambda_75__Cell0 signature Signature { params: [AbiParam { value_type: types::I64, purpose: No
-    "closure_capture/bool/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'cellN': Failed to declare function '__lambda_74': Function __lambda_74 signature Signature { params: [AbiParam { value_type: types::I64, purpose: Normal, extension: N
-    "closure_capture/bool/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run': Failed to declare function '__lambda_75__Base0': Function __lambda_75__Base0 signature Signature { params: [AbiParam { value_type: types::I64, purpose: No
     "closure_capture/bool/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/bool/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/bool/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/bool/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/class/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/class/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/class/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/class/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/class/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/class/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/class/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/closure/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'CellN_run': Failed to declare function '__lambda_96__Cell0': Function __lambda_96__Cell0 signature Signature { params: [AbiParam { value_type: types::I64, purpose: No
-    "closure_capture/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/closure/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_CG_008]: Internal Codegen Error = Failed to translate function 'BaseN_run': Failed to declare function '__lambda_96__Base0': Function __lambda_96__Base0 signature Signature { params: [AbiParam { value_type: types::I64, purpose: No
     "closure_capture/closure/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/closure/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/closure/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/closure/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/enum/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/enum/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/enum/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/enum/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/enum/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/enum/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
@@ -529,9 +374,6 @@ cells = [
     "closure_capture/int/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/int/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/int/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/option_int/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/option_int/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/option_int/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/option_int/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/option_int/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/option_int/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
@@ -544,9 +386,6 @@ cells = [
     "closure_capture/string/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/string/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/string/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/struct/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/struct/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/struct/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/struct/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/struct/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/struct/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
@@ -591,9 +430,6 @@ cells = [
     "closure_capture/u8/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/u8/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/u8/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/vec3_f32/compound_assign/generic_class", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/vec3_f32/compound_assign/generic_fn", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "closure_capture/vec3_f32/compound_assign/inherited", # expected refusal MER_TYP_002; error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
     "closure_capture/vec3_f32/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
@@ -637,11 +473,6 @@ cells = [
 # operator-to-trait dispatch
 [E]
 cells = [
-    "array_element/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "array_element/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "array_element/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "array_element/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
     "array_element/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
     "array_element/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
@@ -650,11 +481,6 @@ cells = [
     "array_element/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "array_element/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "array_element/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "class_field/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "class_field/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "class_field/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "class_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "class_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "class_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
@@ -667,48 +493,14 @@ cells = [
     "enum_payload/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "enum_payload/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "enum_payload/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "generic_field/array_string/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/array_string/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/array_string/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/class/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/class/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/class/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "generic_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "generic_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "generic_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "generic_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "generic_field/enum/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/enum/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/enum/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/option_int/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/option_int/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/option_int/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/struct/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/struct/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/struct/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/vec3_f32/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/vec3_f32/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/vec3_f32/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "inherited_field/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "inherited_field/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "inherited_field/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "inherited_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "inherited_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "inherited_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "inherited_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "list_element/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "list_element/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "list_element/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "list_element/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
     "list_element/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
     "list_element/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
@@ -717,18 +509,11 @@ cells = [
     "list_element/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "list_element/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "list_element/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "local/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "local/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "local/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "local/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "local/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "local/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "local/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "local/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "local/closure/eq/mono", # accepted; expected refusal MER_TYP_002
     "local/closure/eq/trait_default", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "map_value/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "map_value/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "map_value/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
@@ -737,45 +522,14 @@ cells = [
     "parameter/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "parameter/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "parameter/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "return/array_string/add/inherited", # accepted; expected refusal MER_TYP_002
-    "return/class/add/inherited", # accepted; expected refusal MER_TYP_002
-    "return/closure/add/inherited", # accepted; expected refusal MER_TYP_002
     "return/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "return/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "return/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "return/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "return/enum/add/inherited", # accepted; expected refusal MER_TYP_002
-    "return/option_int/add/inherited", # accepted; expected refusal MER_TYP_002
-    "return/struct/add/inherited", # accepted; expected refusal MER_TYP_002
-    "return/vec3_f32/add/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/array_string/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/array_string/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/array_string/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/bool/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/bool/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/bool/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/class/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/class/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/class/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
     "struct_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
     "struct_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
     "struct_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
     "struct_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "struct_field/enum/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/enum/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/enum/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/option_int/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/option_int/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/option_int/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/struct/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/struct/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/struct/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/vec3_f32/compound_assign/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/vec3_f32/compound_assign/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/vec3_f32/compound_assign/inherited", # accepted; expected refusal MER_TYP_002
 ]
 
 # outside the five families: each cell is its own defect, described by its comment

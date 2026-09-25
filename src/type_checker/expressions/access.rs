@@ -818,9 +818,9 @@ impl TypeChecker {
             Some(TypeDefinition::Class(def)) => Some(self.infer_member_class(
                 &def, type_name, prop_name, type_args, span, context, call_arity,
             )),
-            Some(TypeDefinition::Trait(trait_def)) => {
-                Some(self.infer_member_trait(type_name, &trait_def, prop_name, span, context))
-            }
+            Some(TypeDefinition::Trait(trait_def)) => Some(
+                self.infer_member_trait(type_name, &trait_def, prop_name, type_args, span, context),
+            ),
             Some(TypeDefinition::Enum(enum_def)) => Some(
                 self.infer_member_enum(&enum_def, type_name, prop_name, obj_type, span, context),
             ),
@@ -1155,10 +1155,12 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
-        if def.generics.is_some() && type_args.is_some() {
-            let pinned = self.build_class_method_mapping(def, name, type_args);
-            self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
-        }
+        let pinned = if def.generics.is_some() && type_args.is_some() {
+            self.build_class_method_mapping(def, name, type_args)
+        } else {
+            HashMap::new()
+        };
+        self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
 
         if let Some(ty) =
             self.search_class_hierarchy(def, name, prop_name, type_args, span, context)
@@ -1704,9 +1706,12 @@ impl TypeChecker {
         name: &str,
         trait_def: &crate::type_checker::context::TraitDefinition,
         prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
         span: Span,
-        _context: &mut Context,
+        context: &mut Context,
     ) -> Type {
+        let pinned = self.build_trait_method_mapping(trait_def, type_args);
+        self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
         let mut to_check: Vec<String> = vec![name.to_string()];
         let mut visited = std::collections::HashSet::new();
         while let Some(t_name) = to_check.pop() {
@@ -1727,8 +1732,7 @@ impl TypeChecker {
                 }
             };
             if let Some(method_info) = method_info {
-                let empty_map = std::collections::HashMap::new();
-                return self.build_method_type(&method_info, &empty_map);
+                return self.build_method_type(&method_info, &pinned);
             }
             to_check.extend(parent_traits);
         }
@@ -1750,6 +1754,26 @@ impl TypeChecker {
             );
         }
         make_type(TypeKind::Error)
+    }
+
+    /// What a trait-typed receiver's type arguments pin the trait's own
+    /// parameters to, e.g. `T` to `Pt` for a receiver of type `Op<Pt>`.
+    fn build_trait_method_mapping(
+        &mut self,
+        trait_def: &crate::type_checker::context::TraitDefinition,
+        type_args: &Option<Vec<Expression>>,
+    ) -> HashMap<String, Type> {
+        let (Some(generics), Some(args)) = (&trait_def.generics, type_args) else {
+            return HashMap::new();
+        };
+        if generics.len() != args.len() {
+            return HashMap::new();
+        }
+        generics
+            .iter()
+            .zip(args)
+            .map(|(param, arg)| (param.name.clone(), self.generic_arg_to_mapping_type(arg)))
+            .collect()
     }
 
     fn collect_trait_methods_for_access(&mut self, name: &str) -> Vec<&str> {
@@ -1777,7 +1801,7 @@ impl TypeChecker {
         prop_name: &str,
         obj_type: &Type,
         span: Span,
-        _context: &mut Context,
+        context: &mut Context,
     ) -> Type {
         let Some(method_info) = enum_def.methods.get(prop_name) else {
             self.report_error(
@@ -1790,6 +1814,7 @@ impl TypeChecker {
 
         let type_args = self.extract_type_args_from_type(obj_type);
         let generic_mapping = self.build_enum_method_generic_mapping(enum_def, &type_args);
+        self.record_method_pinning_sites(name, prop_name, &generic_mapping, span, context);
 
         let params = self.build_enum_method_params(method_info, &generic_mapping);
         let return_type_expr = self.build_enum_method_return_type(method_info, &generic_mapping);

@@ -499,3 +499,53 @@ fn main()
         "'add' applies '+' to its 'T' parameter",
     );
 }
+
+/// `x += b` applies `+` exactly as `x = x + b` does, so it states the same
+/// requirement on `T`. Without it the body is accepted at a struct and the
+/// backend adds two pointers.
+#[test]
+fn compound_addition_on_a_generic_parameter_is_refused_at_a_struct() {
+    assert_compiler_error(
+        r#"
+struct Pt
+    x int
+
+fn accumulate<T>(a T, b T) T
+    var x T = a
+    x += b
+    return x
+
+fn main()
+    let p = accumulate(Pt(x: 1), Pt(x: 2))
+    println(f"{p.x}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
+
+#[test]
+fn compound_addition_on_a_generic_field_is_refused_at_a_class_with_no_operator() {
+    assert_compiler_error(
+        r#"
+class Plain
+    n int
+    fn init(n int)
+        self.n = n
+
+class Holder<T>
+    public v T
+    fn init(v T)
+        self.v = v
+
+fn grow<T>(a T, b T) T
+    var h = Holder<T>(v: a)
+    h.v += b
+    return h.v
+
+fn main()
+    let p = grow(Plain(1), Plain(2))
+    println(f"{p.n}")
+"#,
+        "Invalid types for arithmetic operation",
+    );
+}
