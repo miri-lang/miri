@@ -424,3 +424,29 @@ fn main()
         "42",
     );
 }
+
+#[test]
+fn test_enum_128_bit_payloads_round_trip_in_every_field_position() {
+    // The 128-bit values are checked against the stored value, not printed,
+    // and `i128::MAX` shares its low word with `-1`.
+    assert_heap_guard_output(
+        r#"
+public enum Wide
+    Last(int, i128)
+    Middle(int, u128, int)
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    let top u128 = 18446744073709551621
+    let a = Wide.Last(7, big)
+    let b = Wide.Middle(1, top, 2)
+    match a
+        Wide.Last(x, w): println(f"{x} {w == big} {w == -1}")
+        Wide.Middle(p, q, r): println("wrong")
+    match b
+        Wide.Last(x, w): println("wrong")
+        Wide.Middle(p, q, r): println(f"{p} {q == top} {r}")
+"#,
+        "7 true false\n1 true 2",
+    );
+}
