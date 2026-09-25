@@ -665,12 +665,9 @@ impl TypeChecker {
             }
             ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
                 if let ExpressionKind::Literal(Literal::Integer(_)) = &operand.node {
-                    // TODO: this exempts the operand from the range check but
-                    // never re-types it, so a negated magnitude above i64::MAX
-                    // is still materialized as a 64-bit literal and negated at
-                    // that width. `let n i128 = -9223372036854775809` stores
-                    // +9223372036854775807 — a silent wrong value, where the
-                    // same magnitude written positive is stored correctly.
+                    // Only the range check is relaxed here; the operand takes
+                    // the declared width from the widening pass, which is what
+                    // lets the sign be applied at that width.
                     self.wide_typed_int_literals.insert(operand.id);
                 }
             }

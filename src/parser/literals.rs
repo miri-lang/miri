@@ -111,9 +111,22 @@ impl<'source> Parser<'source> {
         let str_value = strip_underscores(raw);
 
         let value = match token_type {
-            Token::Int => str_value
-                .parse::<i128>()
-                .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidIntegerLiteral, span))?,
+            // A decimal literal may reach `u128::MAX`: the type it is written
+            // into decides its range, and the top half of `u128` — and the
+            // magnitude of `i128::MIN` — lie above what an `i128` holds.
+            Token::Int => {
+                let wide = str_value
+                    .parse::<u128>()
+                    .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidIntegerLiteral, span))?;
+                match i128::try_from(wide) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Ok(Literal::Integer(crate::ast::literal::IntegerLiteral::U128(
+                            wide,
+                        )))
+                    }
+                }
+            }
             Token::BinaryNumber => i128::from_str_radix(&str_value[2..], 2)
                 .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidBinaryLiteral, span))?,
             Token::HexNumber => i128::from_str_radix(&str_value[2..], 16)

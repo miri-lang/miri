@@ -152,7 +152,11 @@ fn written_integer(text: &str) -> Option<i128> {
         Some("0x") | Some("0X") => (&digits[2..], 16),
         _ => (digits.as_str(), 10),
     };
-    i128::from_str_radix(body, radix).ok()
+    // A literal above `i128::MAX` is carried as its bit pattern, which is what
+    // the parsed literal's `to_i128` gives back too.
+    i128::from_str_radix(body, radix)
+        .ok()
+        .or_else(|| u128::from_str_radix(body, radix).ok().map(|v| v as i128))
 }
 
 /// Whether `text` is a float literal denoting exactly `value`.

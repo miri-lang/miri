@@ -80,7 +80,29 @@ pub(crate) struct DeferredIntLiteralRange {
     /// The literal expression, so its finally-recorded type can be looked up.
     pub(crate) expr_id: usize,
     pub(crate) value: i128,
+    /// The value of a literal written above `i128::MAX`, whose `value` is only
+    /// its bit pattern; `None` for every literal an `i128` holds.
+    pub(crate) above_i128: Option<u128>,
     pub(crate) span: Span,
+}
+
+impl DeferredIntLiteralRange {
+    /// The value the source wrote, for the diagnostic.
+    fn written(&self) -> String {
+        self.above_i128
+            .map_or_else(|| self.value.to_string(), |value| value.to_string())
+    }
+}
+
+/// True when an integer type can hold a literal written above `i128::MAX`,
+/// `negated` or not: only a `u128` holds one, and only an `i128` holds the one
+/// such magnitude whose negation is in range, that of `i128::MIN`.
+fn integer_kind_holds_above_i128(kind: &TypeKind, magnitude: u128, negated: bool) -> bool {
+    if negated {
+        matches!(kind, TypeKind::I128) && magnitude == i128::MIN.unsigned_abs()
+    } else {
+        matches!(kind, TypeKind::U128)
+    }
 }
 
 /// True when an integer type can hold `value`.
@@ -146,15 +168,17 @@ impl TypeChecker {
             return;
         };
         let value = int_lit.to_i128();
+        let above_i128 = int_lit.above_i128();
         // Kernel code is bounded by the device's 32-bit lanes, whatever width
         // the source wrote, so this runs before the wide-type exemption below.
         if context.in_gpu_function {
-            self.hold_gpu_int_literal_range(expr_id, value, span);
+            self.hold_gpu_int_literal_range(expr_id, value, above_i128, span);
             return;
         }
         // A literal explicitly declared with a wider integer type keeps its full
-        // i128-representable range (the parser already rejects anything larger).
-        if self.wide_typed_int_literals.contains(&expr_id) {
+        // i128-representable range. One above `i128::MAX` is still judged,
+        // against the type it was written into: only a `u128` holds it.
+        if self.wide_typed_int_literals.contains(&expr_id) && above_i128.is_none() {
             return;
         }
 
@@ -174,11 +198,12 @@ impl TypeChecker {
         } else {
             i64::MAX as i128
         };
-        if value > max {
+        if value > max || above_i128.is_some() {
             self.deferred_int_literal_ranges
                 .push(DeferredIntLiteralRange {
                     expr_id,
                     value,
+                    above_i128,
                     span,
                 });
         }
@@ -198,7 +223,15 @@ impl TypeChecker {
                 .get(&held.expr_id)
                 .map(|ty| ty.kind.clone())
                 .unwrap_or(TypeKind::Int);
-            if integer_kind_holds(&recorded, held.value) {
+            let holds = match held.above_i128 {
+                Some(magnitude) => integer_kind_holds_above_i128(
+                    &recorded,
+                    magnitude,
+                    self.negated_int_literals.contains(&held.expr_id),
+                ),
+                None => integer_kind_holds(&recorded, held.value),
+            };
+            if holds {
                 continue;
             }
             // The type the source asked for is named where there is one, so the
@@ -207,11 +240,13 @@ impl TypeChecker {
             let message = match integer_kind_bound(&recorded) {
                 Some((name, max)) => format!(
                     "Integer literal '{}' is out of range for {} (max {})",
-                    held.value, name, max
+                    held.written(),
+                    name,
+                    max
                 ),
                 None => format!(
                     "Integer literal '{}' is out of range for the default int type (i64, max {})",
-                    held.value,
+                    held.written(),
                     i64::MAX
                 ),
             };

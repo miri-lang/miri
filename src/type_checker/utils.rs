@@ -2776,14 +2776,14 @@ impl TypeChecker {
             return None;
         }
         match &info.value {
-            Some(Literal::Integer(val)) => Some(val.to_i128()),
+            Some(Literal::Integer(val)) => val.as_i128(),
             _ => None,
         }
     }
 
     fn eval_const_int_inner(expr: &Expression, context: Option<&Context>) -> Option<i128> {
         match &expr.node {
-            ExpressionKind::Literal(Literal::Integer(val)) => Some(val.to_i128()),
+            ExpressionKind::Literal(Literal::Integer(val)) => val.as_i128(),
             ExpressionKind::Identifier(name, _) => Self::resolve_const_int(name, context),
             // A value-generic slot parses a bare named const as a type
             // (`Array<T, SIZE>` → `Type(Custom("SIZE"))`); resolve it as a
@@ -2792,9 +2792,13 @@ impl TypeChecker {
                 TypeKind::Custom(name, None) => Self::resolve_const_int(name, context),
                 _ => None,
             },
-            ExpressionKind::Unary(UnaryOp::Negate, inner) => {
-                Self::eval_const_int_inner(inner, context).map(|v| -v)
-            }
+            // A negated literal is folded from the literal itself, which is
+            // what makes `i128::MIN` — whose magnitude only a `u128` holds —
+            // a constant; any other negation must stay in range.
+            ExpressionKind::Unary(UnaryOp::Negate, inner) => match &inner.node {
+                ExpressionKind::Literal(Literal::Integer(val)) => val.negated(),
+                _ => Self::eval_const_int_inner(inner, context)?.checked_neg(),
+            },
             ExpressionKind::Unary(UnaryOp::Plus, inner) => {
                 Self::eval_const_int_inner(inner, context)
             }
@@ -2829,7 +2833,7 @@ impl TypeChecker {
                             if let Some(info) = ctx.resolve_info(name) {
                                 if info.is_constant {
                                     if let Some(Literal::Integer(val)) = &info.value {
-                                        return Some(val.to_i128());
+                                        return val.as_i128();
                                     }
                                 }
                             }

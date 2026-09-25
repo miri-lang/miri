@@ -313,3 +313,62 @@ fn main()
         "out of range for i64",
     );
 }
+
+/// The full ranges of the 128-bit types can be written: `u128::MAX` above
+/// `i128::MAX`, and `i128::MIN`, whose magnitude no `i128` holds.
+#[test]
+fn test_128_bit_extremes_can_be_written() {
+    assert_runs_with_output(
+        "
+fn main()
+    let top u128 = 340282366920938463463374607431768211455
+    let low_twin u128 = 18446744073709551615
+    let bottom i128 = -170141183460469231731687303715884105728
+    let next i128 = -170141183460469231731687303715884105727
+    let zero i128 = 0
+    println(f'{top} {top == low_twin} {top - 1 > low_twin}')
+    println(f'{bottom} {bottom < zero} {bottom + 1 == next}')
+",
+        "340282366920938463463374607431768211455 false true\n-170141183460469231731687303715884105728 true true",
+    );
+}
+
+#[test]
+fn test_literal_above_i128_max_is_refused_for_an_i128() {
+    assert_compiler_error(
+        "
+fn main()
+    let x i128 = 340282366920938463463374607431768211455
+    println(f'{x}')
+",
+        "out of range for i128",
+    );
+}
+
+#[test]
+fn test_literal_past_u128_max_is_refused() {
+    assert_compiler_error(
+        "
+fn main()
+    let x u128 = 340282366920938463463374607431768211456
+    println(f'{x}')
+",
+        "Invalid Integer Literal",
+    );
+}
+
+/// A constant too large for any `i128` is refused where a constant is needed,
+/// rather than folded from its bit pattern.
+#[test]
+fn test_literal_above_i128_max_is_not_a_constant_size() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+fn main()
+    let a = Array<int, 340282366920938463463374607431768211455>()
+    println(f'{a.length()}')
+",
+        "compile-time constant",
+    );
+}
