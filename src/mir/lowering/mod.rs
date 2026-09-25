@@ -17,6 +17,7 @@ pub mod constructors;
 pub mod context;
 pub mod control_flow;
 pub mod dispatch;
+pub mod dispatch_symbols;
 mod drop_hook_call;
 pub mod expression;
 pub mod forall_cpu;
@@ -997,45 +998,35 @@ pub fn lower_class_method_with_compilation_ids(
     )
 }
 
-/// Lower a generic class method for one concrete instantiation.
+/// Lower a class method with `self` typed as `self_type` and every generic
+/// parameter its body names read through `subs`: the return type, parameter
+/// types and `type_params` are rebuilt through it, so a scalar `T` pinned to a
+/// concrete type is no longer an opaque managed placeholder.
 ///
-/// `subs` maps the class's generic parameters (`T`, …) to the instantiation's
-/// concrete types. The return type, parameter types, and `type_params` are
-/// rebuilt through the substitution so the body is monomorphized: a scalar `T`
-/// pinned to a concrete type is no longer an opaque managed placeholder. The
-/// `self` parameter carries the instantiation's concrete type arguments
-/// (`Custom(class, Some([float]))`) so codegen field layout loads a scalar `T`
-/// field at its concrete width. The mangled symbol (e.g. `Box_get__int`) is
-/// chosen by the caller.
-pub fn lower_class_method_instantiation(
+/// A class's copy of a trait default it inherits passes what its `extends`
+/// and `implements` clauses pin the trait's own parameters to: `class Impl
+/// implements Op<int>` leaves no type argument on the receiver, yet fixes
+/// `Op`'s `T`, and a bare `T` would be an opaque managed value released as
+/// one. An instantiation's copy passes that instantiation's arguments as well,
+/// while `self_type` carries the class's own — so a trait parameter sharing a
+/// class parameter's name reads the trait's pin in the body without retyping
+/// `self`.
+pub fn lower_class_method_at_with_compilation_ids(
     ast_method: &Statement,
-    class_name: &str,
+    self_type: Type,
     tc: &TypeChecker,
     is_release: bool,
-    subs: &HashMap<String, Type>,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    lower_class_method_instantiation_with_compilation_ids(
-        ast_method,
-        class_name,
-        tc,
-        is_release,
-        subs,
-        new_shared_compilation_ids(),
-    )
-}
-
-/// [`lower_class_method_instantiation`] that allocates GPU kernel names from the
-/// compilation-wide `compilation_ids` instead of a private per-call one.
-pub fn lower_class_method_instantiation_with_compilation_ids(
-    ast_method: &Statement,
-    class_name: &str,
-    tc: &TypeChecker,
-    is_release: bool,
-    subs: &HashMap<String, Type>,
+    pinned: &HashMap<String, Type>,
     compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    let self_type = monomorphized_self_type(class_name, tc, subs, ast_method.span);
-    lower_class_method_impl(ast_method, self_type, tc, is_release, subs, compilation_ids)
+    lower_class_method_impl(
+        ast_method,
+        self_type,
+        tc,
+        is_release,
+        pinned,
+        compilation_ids,
+    )
 }
 
 /// Build the `self` type for a monomorphized method: `Custom(class, Some(args))`
@@ -1045,7 +1036,7 @@ pub fn lower_class_method_instantiation_with_compilation_ids(
 /// value-generic size) is emitted as a bare identifier placeholder that codegen
 /// leaves untouched. Falls back to the bare class type when the class is
 /// non-generic.
-fn monomorphized_self_type(
+pub fn monomorphized_self_type(
     class_name: &str,
     tc: &TypeChecker,
     subs: &HashMap<String, Type>,

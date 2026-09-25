@@ -149,85 +149,10 @@ cells = [
     "list_element/closure/pop/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/array_string/eq/trait_default", # MIRI_HEAP_GUARD: leaked 2 allocations: src/array.rs:114 (array, rc=1); src/array.rs:147 (buffer)
-    "local/array_string/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/array_string/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/bool/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/bool/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/class/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "local/class/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/class/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/closure/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "local/closure/store_read/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "local/closure/store_read/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/closure/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/enum/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "local/enum/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/enum/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/f32/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/f32/eq/trait_default", # crashed without a report
-    "local/f32/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/f32/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/float/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/float/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/float/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i128/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/i128/eq/trait_default", # crashed without a report
-    "local/i128/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i128/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i16/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/i16/eq/trait_default", # crashed without a report
-    "local/i16/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i16/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i32/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/i32/eq/trait_default", # crashed without a report
-    "local/i32/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i32/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i64/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/i64/eq/trait_default", # crashed without a report
-    "local/i64/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i64/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i8/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/i8/eq/trait_default", # crashed without a report
-    "local/i8/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/i8/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/int/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/int/eq/trait_default", # crashed without a report
-    "local/int/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/int/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/option_int/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "local/option_int/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/string/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/string/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/string/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/struct/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "local/struct/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/struct/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u128/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/u128/eq/trait_default", # wrong value: got `3`, expected `1`
-    "local/u128/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u128/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u16/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/u16/eq/trait_default", # crashed without a report
-    "local/u16/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u16/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u32/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/u32/eq/trait_default", # crashed without a report
-    "local/u32/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u32/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u64/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/u64/eq/trait_default", # crashed without a report
-    "local/u64/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u64/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u8/compound_assign/trait_default", # compile error MER_MIR_014: fn OpN_run: _8 (_8): released more references than it owns (double-release)
-    "local/u8/eq/trait_default", # crashed without a report
-    "local/u8/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/u8/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/vec3_f32/eq/trait_default", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "local/vec3_f32/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
-    "local/vec3_f32/store_read/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "map_value/closure/get/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/get/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "map_value/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
@@ -437,7 +362,6 @@ cells = [
     "list_element/closure/reversed/generic_fn", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/reversed/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "list_element/closure/reversed/mono", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
-    "local/option_int/overwrite/trait_default", # compile error MER_MIR_014: fn OpN_run: _7 (x): released more references than it owns (double-release)
     "return/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "return/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "return/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)

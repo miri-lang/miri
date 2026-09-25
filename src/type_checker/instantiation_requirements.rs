@@ -857,7 +857,16 @@ impl TypeChecker {
     /// Every type a receiver of type `type_name` inherits methods from — base
     /// classes, the traits each implements and their parent traits — each
     /// named once, with `substitution` carried up into its own parameters.
-    fn declaring_types_above(
+    ///
+    /// Each entry's substitution is what the clauses on the path from
+    /// `type_name` to it bind that type's own parameters to, read through
+    /// `substitution` and re-keyed link by link as [`Self::rekeyed_into`]
+    /// states. The pinning sites recorded here, every copy of an inherited
+    /// trait default the pipeline lowers ([`Self::trait_default_substitution`]),
+    /// the return type static dispatch gives a call to one, and the signature
+    /// member access types an inherited trait method at all read the clauses
+    /// through it.
+    pub(crate) fn declaring_types_above(
         &self,
         type_name: &str,
         substitution: &HashMap<String, Type>,
@@ -872,6 +881,28 @@ impl TypeChecker {
             seen.push((name, rekeyed));
         }
         seen
+    }
+
+    /// The substitution a copy of `trait_name`'s default compiled under
+    /// `class_name` reads its body through: `class_substitution` — the class's
+    /// own parameters at one instantiation, or nothing for the class's bare
+    /// copy — with the trait's parameters laid over it at what the clauses
+    /// from `class_name` up to the trait pin them to.
+    ///
+    /// The trait's pins win where a trait parameter shares a class
+    /// parameter's name: the default's body is written in the trait's.
+    pub(crate) fn trait_default_substitution(
+        &self,
+        class_name: &str,
+        trait_name: &str,
+        class_substitution: &HashMap<String, Type>,
+    ) -> HashMap<String, Type> {
+        let supertypes = self.declaring_types_above(class_name, class_substitution);
+        let mut substitution = class_substitution.clone();
+        if let Some(pins) = pins_of(&supertypes, trait_name) {
+            substitution.extend(pins.iter().map(|(param, ty)| (param.clone(), ty.clone())));
+        }
+        substitution
     }
 
     /// The types `type_name` names in its own `extends`, `implements` or
@@ -920,6 +951,18 @@ impl TypeChecker {
             })
             .collect()
     }
+}
+
+/// What `supertypes` — as [`TypeChecker::declaring_types_above`] lists them —
+/// pins `type_name`'s own parameters to, or `None` when `type_name` is not
+/// among them.
+pub(crate) fn pins_of<'s>(
+    supertypes: &'s [(String, HashMap<String, Type>)],
+    type_name: &str,
+) -> Option<&'s HashMap<String, Type>> {
+    supertypes
+        .iter()
+        .find_map(|(declaring, pins)| (declaring == type_name).then_some(pins))
 }
 
 #[cfg(test)]
@@ -1076,5 +1119,47 @@ mod tests {
                 ("Op".to_string(), Some(TypeKind::Int)),
             ]
         );
+    }
+
+    fn prim(kind: TypeKind) -> Type {
+        Type::new(kind, Span::new(0, 0))
+    }
+
+    fn kind_of(substitution: &HashMap<String, Type>, param: &str) -> Option<TypeKind> {
+        substitution.get(param).map(|ty| ty.kind.clone())
+    }
+
+    #[test]
+    fn a_default_a_base_trait_supplies_reads_its_parameter_at_the_instantiation() {
+        let checker = checked(
+            "trait Op<T>\n    fn keep(a T) T\n        return a\n\n\
+             abstract class Base<U> implements Op<U>\n\n\
+             class Box<V> extends Base<V>\n",
+        );
+        let class = HashMap::from([("V".to_string(), prim(TypeKind::Float))]);
+        let substitution = checker.trait_default_substitution("Box", "Op", &class);
+        assert_eq!(kind_of(&substitution, "T"), Some(TypeKind::Float));
+        assert_eq!(kind_of(&substitution, "V"), Some(TypeKind::Float));
+    }
+
+    #[test]
+    fn a_trait_parameter_sharing_a_class_parameter_name_reads_the_trait_pin() {
+        let checker = checked(
+            "trait Op<T>\n    fn keep(a T) T\n        return a\n\n\
+             class Box<T> implements Op<int>\n    v T\n",
+        );
+        let class = HashMap::from([("T".to_string(), prim(TypeKind::Float))]);
+        let substitution = checker.trait_default_substitution("Box", "Op", &class);
+        assert_eq!(kind_of(&substitution, "T"), Some(TypeKind::Int));
+    }
+
+    #[test]
+    fn a_trait_outside_the_chain_leaves_the_class_substitution_alone() {
+        let checker =
+            checked("trait Op<T>\n    fn keep(a T) T\n        return a\n\nclass Box<V>\n    v V\n");
+        let class = HashMap::from([("V".to_string(), prim(TypeKind::Float))]);
+        let substitution = checker.trait_default_substitution("Box", "Op", &class);
+        assert_eq!(substitution.len(), 1);
+        assert_eq!(kind_of(&substitution, "V"), Some(TypeKind::Float));
     }
 }

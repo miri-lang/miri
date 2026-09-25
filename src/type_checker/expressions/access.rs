@@ -55,6 +55,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
@@ -1544,6 +1545,9 @@ impl TypeChecker {
         })))
     }
 
+    /// A class receiver's method found on a trait it inherits — directly, from
+    /// a parent trait, or through a base class — typed at what the clauses
+    /// from the receiver up to the declaring trait pin that trait's parameters.
     fn infer_member_class_trait_fallback(
         &mut self,
         name: &str,
@@ -1551,7 +1555,7 @@ impl TypeChecker {
         type_args: &Option<Vec<Expression>>,
     ) -> Option<Type> {
         let receiver_mapping = self.build_receiver_mapping(name, type_args);
-
+        let supertypes = self.declaring_types_above(name, &receiver_mapping);
         let mut search_class_name = Some(name.to_string());
         while let Some(class_name) = search_class_name.take() {
             let (traits, base_class) =
@@ -1561,42 +1565,14 @@ impl TypeChecker {
                     }
                     _ => break,
                 };
-            // A trait default method is written in the trait's own generic
-            // parameters (`U`), which the class binds through `implements
-            // Trait<...>` in class-param terms (`T`). Extend the receiver
-            // mapping with `trait-param → class-arg → concrete` so a default
-            // returning `U` resolves to the receiver's concrete type.
-            let mapping = self.trait_augmented_mapping(&class_name, &receiver_mapping);
             for trait_name in &traits {
-                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &mapping) {
+                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &supertypes) {
                     return Some(ty);
                 }
             }
-            if let Some(base_name) = base_class {
-                search_class_name = Some(base_name);
-                continue;
-            }
-            break;
+            search_class_name = base_class;
         }
         None
-    }
-
-    /// Extend a class receiver mapping (class-param → concrete) with one entry
-    /// per directly-implemented trait generic parameter, resolving each trait
-    /// binding through the receiver mapping. Shares the binding source with the
-    /// generic-class monomorphization pipeline
-    /// ([`TypeChecker::class_trait_param_bindings`]).
-    fn trait_augmented_mapping(
-        &self,
-        class_name: &str,
-        receiver_mapping: &std::collections::HashMap<String, Type>,
-    ) -> std::collections::HashMap<String, Type> {
-        let mut mapping = receiver_mapping.clone();
-        for (trait_param, class_arg) in self.class_trait_param_bindings(class_name) {
-            let concrete = self.substitute_type(&class_arg, receiver_mapping);
-            mapping.insert(trait_param, concrete);
-        }
-        mapping
     }
 
     fn build_receiver_mapping(
@@ -1629,11 +1605,15 @@ impl TypeChecker {
         m
     }
 
+    /// The first default named `prop_name` on `trait_name` or a trait above
+    /// it, its signature read through the pins `supertypes` — as
+    /// [`TypeChecker::declaring_types_above`] lists them for the receiver —
+    /// gives the trait that declares it.
     fn search_trait_method(
         &mut self,
         trait_name: &str,
         prop_name: &str,
-        receiver_mapping: &std::collections::HashMap<String, Type>,
+        supertypes: &[(String, HashMap<String, Type>)],
     ) -> Option<Type> {
         let mut to_check: Vec<String> = vec![trait_name.to_string()];
         let mut visited = std::collections::HashSet::new();
@@ -1650,12 +1630,29 @@ impl TypeChecker {
             };
             if let Some(method_info) = method_opt {
                 if !method_info.is_abstract {
-                    return Some(self.build_method_type(&method_info, receiver_mapping));
+                    let pins = pins_of(supertypes, &t_name).cloned().unwrap_or_default();
+                    return Some(self.build_method_type(&method_info, &pins));
                 }
             }
             to_check.extend(parents);
         }
         None
+    }
+
+    /// What a method declared on `declaring` reads its signature through when
+    /// called on a `receiver_trait` receiver pinned at `pinned`: the receiver's
+    /// own pins, or those the parent-trait clauses carry up to `declaring`.
+    fn trait_method_pins(
+        &self,
+        receiver_trait: &str,
+        declaring: &str,
+        pinned: HashMap<String, Type>,
+    ) -> HashMap<String, Type> {
+        if declaring == receiver_trait {
+            return pinned;
+        }
+        let supertypes = self.declaring_types_above(receiver_trait, &pinned);
+        pins_of(&supertypes, declaring).cloned().unwrap_or_default()
     }
 
     fn build_method_type(
@@ -1732,7 +1729,8 @@ impl TypeChecker {
                 }
             };
             if let Some(method_info) = method_info {
-                return self.build_method_type(&method_info, &pinned);
+                let pins = self.trait_method_pins(name, &t_name, pinned);
+                return self.build_method_type(&method_info, &pins);
             }
             to_check.extend(parent_traits);
         }

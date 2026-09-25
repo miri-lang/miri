@@ -7,7 +7,6 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::factory::type_expr_non_null;
-use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::layout;
@@ -2172,7 +2171,8 @@ impl<'a> FunctionTranslator<'a> {
     /// The owner is found by the same resolution an inherited method call uses,
     /// so a subclass reaches its base's hook (or its own copy, when the base is
     /// abstract) and the hook this thunk declares is the method body lowered for
-    /// it. A struct is not a class chain and names its own hook.
+    /// it. A struct is not a class chain and names its own hook. The pipeline
+    /// reads the same answer to compile the body this names.
     ///
     /// TODO: a class that declares `fn drop(self)` and no fields never runs the
     /// hook — `let h = Handle()` leaving scope prints nothing, and neither does
@@ -2189,16 +2189,7 @@ impl<'a> FunctionTranslator<'a> {
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<String> {
-        if !crate::type_checker::utils::has_drop_hook(type_name, type_definitions) {
-            return None;
-        }
-        let owner = crate::mir::lowering::dispatch::resolve_inherited_method(
-            type_definitions,
-            type_name,
-            DROP_HOOK_NAME,
-        )
-        .map_or_else(|| type_name.to_string(), |(defining, _)| defining);
-        Some(format!("{owner}_{DROP_HOOK_NAME}"))
+        crate::mir::lowering::dispatch_symbols::drop_hook_symbol(type_name, type_definitions)
     }
 
     /// Resolves the mangled name of the `clone()` method for `type_name`.
@@ -2211,13 +2202,7 @@ impl<'a> FunctionTranslator<'a> {
         type_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> String {
-        crate::mir::lowering::dispatch::resolve_inherited_method(
-            type_definitions,
-            type_name,
-            "clone",
-        )
-        .map(|(defining, _)| format!("{defining}_clone"))
-        .unwrap_or_else(|| format!("{type_name}_clone"))
+        crate::mir::lowering::dispatch_symbols::clone_method_symbol(type_name, type_definitions)
     }
 
     /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,

@@ -466,6 +466,13 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
 ///
 /// When it is an abstract class name, collects all non-constructor methods from
 /// the full abstract ancestor chain, deduplicated, sorted alphabetically.
+///
+/// TODO: this computes the index on its own rather than from the slot list
+/// codegen lays out (`mir::lowering::dispatch_symbols::collect_vtable_methods`).
+/// The two filter static methods differently, and a class whose chain
+/// implements several traits gets one combined vtable while a trait-typed call
+/// indexes into that trait's methods alone, so the index and the layout can
+/// disagree. Deriving both from one slot list settles it.
 pub fn vtable_slot_index(
     abstract_class_or_trait: &str,
     method_name: &str,
