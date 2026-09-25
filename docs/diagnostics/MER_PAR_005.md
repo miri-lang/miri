@@ -1,6 +1,6 @@
 ## Rule
 
-An integer literal could not be parsed. The lexer tokenized the input as an integer, but parsing the token's value as a number failed. This may occur if the integer literal is malformed in a way the regex did not catch, or if there is an internal parsing error.
+An integer literal could not be parsed. The lexer tokenized the input as an integer, but parsing the token's value as a number failed. A decimal literal may be as large as `u128::MAX` (340282366920938463463374607431768211455), the widest integer type; anything larger has no type that can hold it. Whether a literal within that bound fits the type it is written into is a separate check (`MER_TYP_068`).
 
 ## Messages
 
@@ -13,7 +13,7 @@ An integer literal could not be parsed. The lexer tokenized the input as an inte
 ## Before
 
 ```miri
-let x = 170141183460469231731687303715884105728
+let x = 340282366920938463463374607431768211456
 ```
 
 ## After

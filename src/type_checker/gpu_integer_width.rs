@@ -27,7 +27,25 @@ impl TypeChecker {
     ///
     /// Every value up to `i32::MAX` fits either lane, so only a larger one is
     /// held; the lane itself is known only once the literal's type is final.
-    pub(crate) fn hold_gpu_int_literal_range(&mut self, expr_id: usize, value: i128, span: Span) {
+    ///
+    /// A literal above `i128::MAX` fits no lane at all, so it is refused here.
+    pub(crate) fn hold_gpu_int_literal_range(
+        &mut self,
+        expr_id: usize,
+        value: i128,
+        above_i128: Option<u128>,
+        span: Span,
+    ) {
+        if let Some(magnitude) = above_i128 {
+            self.report_error(
+                DiagnosticCode::TarGpuValueOutOfRange,
+                format!(
+                    "Integer literal '{magnitude}' is out of range for every GPU 32-bit integer"
+                ),
+                span,
+            );
+            return;
+        }
         if value <= i128::from(i32::MAX) {
             return;
         }
@@ -35,6 +53,7 @@ impl TypeChecker {
             .push(DeferredIntLiteralRange {
                 expr_id,
                 value,
+                above_i128: None,
                 span,
             });
     }

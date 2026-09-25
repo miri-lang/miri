@@ -96,6 +96,53 @@ impl IntegerLiteral {
         }
     }
 
+    /// The value of a literal written above `i128::MAX`, which only a `u128`
+    /// holds; `None` for every literal an `i128` holds.
+    ///
+    /// [`Self::to_i128`] gives such a literal's bit pattern, which reads as a
+    /// negative number — right for storing it, wrong for judging its range.
+    pub fn above_i128(&self) -> Option<u128> {
+        match self {
+            IntegerLiteral::U128(v) if *v > i128::MAX as u128 => Some(*v),
+            IntegerLiteral::I8(_)
+            | IntegerLiteral::I16(_)
+            | IntegerLiteral::I32(_)
+            | IntegerLiteral::I64(_)
+            | IntegerLiteral::I128(_)
+            | IntegerLiteral::U8(_)
+            | IntegerLiteral::U16(_)
+            | IntegerLiteral::U32(_)
+            | IntegerLiteral::U64(_)
+            | IntegerLiteral::U128(_) => None,
+        }
+    }
+
+    /// The literal's value when an `i128` holds it, `None` for one written above
+    /// `i128::MAX`.
+    ///
+    /// Arithmetic on a literal's value uses this: [`Self::to_i128`] is a bit
+    /// pattern for the widest literals, and computing with it is computing with
+    /// a different number.
+    pub fn as_i128(&self) -> Option<i128> {
+        match self.above_i128() {
+            Some(_) => None,
+            None => Some(self.to_i128()),
+        }
+    }
+
+    /// The value of `-literal`, or `None` when no `i128` holds it.
+    ///
+    /// The magnitude of `i128::MIN` is one past `i128::MAX`, so it is written
+    /// as a literal only a `u128` carries; its negation is the one value above
+    /// `i128::MAX` that still lands in range.
+    pub fn negated(&self) -> Option<i128> {
+        match self.above_i128() {
+            Some(magnitude) if magnitude == i128::MIN.unsigned_abs() => Some(i128::MIN),
+            Some(_) => None,
+            None => self.to_i128().checked_neg(),
+        }
+    }
+
     /// Converts the integer literal to an `i128` value.
     ///
     /// Used by the type checker for compile-time constant evaluation.

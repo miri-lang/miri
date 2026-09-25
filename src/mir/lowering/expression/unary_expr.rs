@@ -113,7 +113,7 @@ fn fold_negated_int_literal(
     {
         return None;
     }
-    let negated = int_lit.to_i128().checked_neg()?;
+    let negated = int_lit.negated()?;
     let literal = IntegerLiteral::from_type_kind(&ty.kind, negated)?;
     Some(Operand::Constant(Box::new(crate::mir::Constant {
         span: expr.span,

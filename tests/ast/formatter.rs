@@ -980,3 +980,20 @@ gpu var outputs = [0.0, 0.0]
 ";
     assert_eq!(assert_render_is_a_fixed_point(source), source);
 }
+
+/// The ends of the 128-bit ranges are written as themselves: `u128::MAX` lies
+/// above anything an `i128` holds, and the magnitude of `i128::MIN` does too.
+#[test]
+fn test_128_bit_extremes_keep_their_spelling() {
+    for (ty, spelling) in [
+        ("u128", "340282366920938463463374607431768211455"),
+        ("i128", "-170141183460469231731687303715884105728"),
+    ] {
+        let source = format!("fn main()\n    let value {ty} = {spelling}\n");
+        let rendered = assert_render_is_a_fixed_point(&source);
+        assert!(
+            rendered.contains(spelling),
+            "the spelling `{spelling}` was replaced, got:\n{rendered}"
+        );
+    }
+}
