@@ -39,7 +39,9 @@ pub(super) fn inline_element(ctx: &LoweringContext, list_ty: &Type) -> Option<In
         return None;
     };
     let ty = ctx.resolved_type(args.as_ref()?.first()?);
-    types::inline_element_layout(&ty.kind)?;
+    if !types::element_layout(&ty.kind).is_address {
+        return None;
+    }
     // Only a vector has an inline layout, and its dimension is its field count.
     let components = types::vec_type_dim(&ty.kind)?.into();
     Some(InlineElement { ty, components })

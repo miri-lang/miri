@@ -98,6 +98,7 @@ impl Drop for MiriArray {
 /// Stable FFI interface for array operations.
 pub mod ffi {
     use super::*;
+    use crate::element_bytes::{require_fits_slot, with_slot_bytes};
     use crate::guard;
     use crate::list::MiriList;
     use std::ptr;
@@ -354,12 +355,12 @@ pub mod ffi {
         1
     }
 
-    /// Sets the element at the given index, passing the value by value (as usize).
+    /// Sets the element at the given index from the `payload` bytes at `elem`,
+    /// the way every element store takes its element.
     ///
-    /// The value is copied from the address of `val` on the caller's stack,
-    /// so this works for any element type that fits in a pointer-sized register.
-    /// This is the value-based variant used by the stdlib `set` method, which
-    /// receives the element as a Miri value (not a raw pointer).
+    /// The element is laid out at the array's full slot width (see
+    /// `element_bytes::with_slot_bytes`), so an element of any width is stored
+    /// whole. This is the entry point the stdlib `set` method calls.
     ///
     /// Returns true (1) if successful, false (0) if the index is out of bounds.
     #[no_mangle]
@@ -367,9 +368,18 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_array_set_val(
         ptr: *mut MiriArray,
         index: usize,
-        val: usize,
+        elem: *const u8,
+        payload: usize,
     ) -> u8 {
-        miri_rt_array_set(ptr, index, &val as *const usize as *const u8)
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() || elem.is_null() {
+            return 0;
+        }
+        let slot = (*ptr).elem_size;
+        require_fits_slot(payload, slot);
+        with_slot_bytes(elem, payload, slot, |bytes| {
+            miri_rt_array_set(ptr, index, bytes)
+        })
     }
 
     /// Fills all elements with the given value.

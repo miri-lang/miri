@@ -216,3 +216,144 @@ fn runtime_fns_constants_exported_from_library() {
         missing.join("\n  ")
     );
 }
+
+/// A runtime declaration read far enough to classify its element arguments.
+struct RuntimeDecl {
+    name: String,
+    /// Each parameter's declared type, in order.
+    params: Vec<String>,
+    /// The declared return type, empty when there is none.
+    returns: String,
+    /// The type parameters of the class or struct declaring it.
+    generics: Vec<String>,
+}
+
+/// The type parameter names of a `class`/`struct` header line — empty for one
+/// that declares none — or `None` when the line is not such a header.
+fn declared_generics(line: &str) -> Option<Vec<String>> {
+    let header = line
+        .trim()
+        .trim_start_matches("public ")
+        .trim_start_matches("abstract ");
+    let header = header
+        .strip_prefix("class ")
+        .or_else(|| header.strip_prefix("struct "))?;
+    let name_end = header.find([' ', '<']).map_or(header.len(), |i| i);
+    let rest = &header[name_end..];
+    let (Some(open), Some(close)) = (rest.find('<'), rest.find('>')) else {
+        return Some(Vec::new());
+    };
+    if !rest[..open].trim().is_empty() {
+        return Some(Vec::new());
+    }
+    Some(
+        rest[open + 1..close]
+            .split(',')
+            .filter_map(|g| g.split_whitespace().next().map(str::to_owned))
+            .collect(),
+    )
+}
+
+/// Split `text` at the commas that are not inside `<…>` or `(…)`.
+fn split_top_level(text: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let (mut depth, mut current) = (0i32, String::new());
+    for c in text.chars() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// Every `runtime "core" fn` a stdlib source declares, with its signature.
+fn runtime_decls(source: &str) -> Vec<RuntimeDecl> {
+    let mut generics = Vec::new();
+    let mut decls = Vec::new();
+    for line in source.lines() {
+        if let Some(found) = declared_generics(line) {
+            generics = found;
+        }
+        let Some(rest) = line.trim().strip_prefix("runtime \"core\" fn ") else {
+            continue;
+        };
+        let (Some(open), Some(close)) = (rest.find('('), rest.rfind(')')) else {
+            continue;
+        };
+        decls.push(RuntimeDecl {
+            name: rest[..open].trim().to_owned(),
+            params: split_top_level(&rest[open + 1..close])
+                .iter()
+                .map(|p| {
+                    p.trim()
+                        .split_once(' ')
+                        .map_or("", |(_, ty)| ty)
+                        .trim()
+                        .to_owned()
+                })
+                .collect(),
+            returns: rest[close + 1..].trim().to_owned(),
+            generics: generics.clone(),
+        });
+    }
+    decls
+}
+
+/// A runtime entry point that takes or hands back an element must be classified
+/// as doing so, or its element crosses as a raw value word and a wide one is
+/// silently cut short.
+///
+/// The stdlib declaration says which arguments are elements: those typed as the
+/// declaring class's own type parameter (`element T`), and a return of that
+/// parameter is an element handed back. Both directions are checked, so a new
+/// entry point cannot be left unclassified and a classification cannot outlive
+/// the declaration it describes.
+#[test]
+fn runtime_element_arguments_are_classified() {
+    use miri::runtime_fns::{element_positions, returns_element_value};
+    let stdlib_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+    let mut wrong = Vec::new();
+    for path in collect_mi_files(&stdlib_dir) {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {path:?}: {e}"));
+        for decl in runtime_decls(&source) {
+            let is_element = |ty: &str| decl.generics.iter().any(|g| g == ty);
+            let declared: Vec<usize> = (0..decl.params.len())
+                .filter(|&i| is_element(&decl.params[i]))
+                .collect();
+            let classified = element_positions(&decl.name).to_vec();
+            if declared != classified {
+                wrong.push(format!(
+                    "{}: element arguments at {declared:?}, classified at {classified:?}",
+                    decl.name
+                ));
+            }
+            if is_element(&decl.returns) != returns_element_value(&decl.name) {
+                wrong.push(format!(
+                    "{}: returns `{}`, but returns_element_value says {}",
+                    decl.name,
+                    decl.returns,
+                    returns_element_value(&decl.name)
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "runtime entry points whose element arguments disagree with \
+         `element_positions` / `returns_element_value` in src/runtime_fns.rs:\n  {}",
+        wrong.join("\n  ")
+    );
+}

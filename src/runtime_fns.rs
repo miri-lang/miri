@@ -580,7 +580,7 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
 pub fn element_positions(name: &str) -> &'static [usize] {
     match name {
         rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
-        rt::LIST_SET | rt::LIST_INSERT => &[2],
+        rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[2],
         rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
         rt::MAP_SET => &[1, 2],
         _ => &[],

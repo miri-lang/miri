@@ -1009,14 +1009,33 @@ fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
 /// Byte width of an element that is not laid out inline: a scalar's own width,
 /// or a value word for anything the element holds by reference or has not
 /// resolved yet.
+///
+/// An `f16` element is the exception to its scalar width: a collection holds
+/// it in a value word, which is what every host path that stores one writes.
 fn scalar_element_bytes(kind: &TypeKind) -> i64 {
-    match kind {
-        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
-        TypeKind::I16 | TypeKind::U16 => 2,
-        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
-        TypeKind::I128 | TypeKind::U128 => WIDE_SCALAR_BYTES,
-        _ => VALUE_WORD_BYTES,
+    if matches!(kind, TypeKind::F16) {
+        return VALUE_WORD_BYTES;
     }
+    scalar_width(kind).unwrap_or(VALUE_WORD_BYTES)
+}
+
+/// The exact byte width of a scalar value, or `None` for a type that is not a
+/// scalar held by value.
+///
+/// Every width in the compiler is read from here or from [`element_layout`],
+/// which is built on it; nowhere else spells a scalar's size.
+pub fn scalar_width(kind: &TypeKind) -> Option<i64> {
+    let bytes = match kind {
+        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
+        TypeKind::I16 | TypeKind::U16 | TypeKind::F16 => 2,
+        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
+        TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => {
+            VALUE_WORD_BYTES
+        }
+        TypeKind::I128 | TypeKind::U128 => WIDE_SCALAR_BYTES,
+        _ => return None,
+    };
+    Some(bytes)
 }
 
 /// std430 inline byte stride between consecutive vector elements stored inline

@@ -116,6 +116,18 @@ audit:
 		| sort -rn \
 		| awk '{print "  "$$1"\t"$$2}' || true
 	@echo
+	@echo "§1.1 — element or scalar width computed outside ast/types.rs, which owns"
+	@echo "        element_layout and scalar_width (fails the audit): their internals"
+	@echo "        called from elsewhere, and hand-written TypeKind → byte-count tables:"
+	@found=$$( { grep -rEn --include='*.rs' --exclude-dir=target \
+		'(inline_element_layout|inline_element_stride|inline_element_payload|scalar_element_bytes|vec_component_bytes)\(' src/ 2>/dev/null; \
+		grep -rEn --include='*.rs' --exclude-dir=target \
+		'TypeKind::(I8|U8|Boolean)\b[^;]*=>[[:space:]]*1\b|TypeKind::(I16|U16|F16)\b[^;]*=>[[:space:]]*2\b|TypeKind::(I32|U32|F32)\b[^;]*=>[[:space:]]*4\b|TypeKind::(I128|U128)\b[^;]*=>[[:space:]]*16\b' src/ 2>/dev/null; } \
+		| grep -v '^src/ast/types.rs:' \
+		| grep -vE ':[0-9]+:[[:space:]]*///?' \
+		| awk -F: '{print "  "$$1":"$$2}' | sort -u ); \
+	if [ -n "$$found" ]; then echo "$$found"; echo "  ✗ width authority violated"; exit 1; fi
+	@echo
 	@echo "§3.5 — broad '_ =>' arms in Miri-defined match sites:"
 	@grep -rn --include='*.rs' --exclude-dir=target '_ =>' \
 		src/mir/ src/type_checker/ src/codegen/ 2>/dev/null \
