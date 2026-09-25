@@ -23,4 +23,5 @@ pub mod super_calls;
 pub mod tensor;
 pub mod traits;
 pub mod value_generics;
+pub mod virtual_dispatch_slots;
 pub mod visibility;

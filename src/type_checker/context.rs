@@ -458,72 +458,6 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
     false
 }
 
-/// Returns the vtable slot index for `method_name` in the vtable of a class
-/// that inherits from `abstract_class_or_trait`.
-///
-/// When `abstract_class_or_trait` is a trait name, collects all non-constructor
-/// methods from the trait hierarchy (sorted alphabetically) and returns the position.
-///
-/// When it is an abstract class name, collects all non-constructor methods from
-/// the full abstract ancestor chain, deduplicated, sorted alphabetically.
-///
-/// TODO: this computes the index on its own rather than from the slot list
-/// codegen lays out (`mir::lowering::dispatch_symbols::collect_vtable_methods`).
-/// The two filter static methods differently, and a class whose chain
-/// implements several traits gets one combined vtable while a trait-typed call
-/// indexes into that trait's methods alone, so the index and the layout can
-/// disagree. Deriving both from one slot list settles it.
-pub fn vtable_slot_index(
-    abstract_class_or_trait: &str,
-    method_name: &str,
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> Option<usize> {
-    // Handle trait-typed receivers.
-    if matches!(
-        type_defs.get(abstract_class_or_trait),
-        Some(TypeDefinition::Trait(_))
-    ) {
-        let mut methods = collect_trait_vtable_methods(type_defs, abstract_class_or_trait);
-        methods.sort();
-        return methods.iter().position(|n| *n == method_name);
-    }
-
-    // Collect all abstract ancestors starting from abstract_class (inclusive),
-    // walking up the chain.
-    let mut abstract_chain: Vec<&str> = Vec::new();
-    let mut current: &str = abstract_class_or_trait;
-    loop {
-        match type_defs.get(current) {
-            Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
-                abstract_chain.push(current);
-                match &cd.base_class {
-                    Some(base) => current = base,
-                    None => break,
-                }
-            }
-            _ => break,
-        }
-    }
-
-    // Collect methods from all abstract ancestors (topmost last in chain,
-    // so we reverse to process topmost first), deduplicated, alphabetically sorted.
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    let mut all_methods: Vec<&str> = Vec::new();
-    for ancestor in abstract_chain.iter().rev() {
-        if let Some(TypeDefinition::Class(cd)) = type_defs.get(*ancestor) {
-            for (name, m) in &cd.methods {
-                if !m.is_constructor && !seen.contains(name.as_str()) {
-                    seen.insert(name.as_str());
-                    all_methods.push(name.as_str());
-                }
-            }
-        }
-    }
-    all_methods.sort();
-
-    all_methods.iter().position(|&n| n == method_name)
-}
-
 /// Finds the default (non-abstract) `method_name` a trait or one of its parent
 /// traits supplies, returning the trait that declares it with its signature.
 pub fn find_trait_default_method<'a>(
@@ -547,30 +481,6 @@ pub fn find_trait_default_method<'a>(
         }
     }
     None
-}
-
-/// Collect all non-constructor method names from a trait and its parent traits.
-pub fn collect_trait_vtable_methods<'a>(
-    type_defs: &'a HashMap<String, TypeDefinition>,
-    trait_name: &str,
-) -> Vec<&'a str> {
-    let mut methods = Vec::new();
-    let mut to_check = vec![trait_name];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            for (m_name, m_info) in &td.methods {
-                if !m_info.is_constructor {
-                    methods.push(m_name.as_str());
-                }
-            }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-        }
-    }
-    methods
 }
 
 /// Context holds the current state of the type checking process, including

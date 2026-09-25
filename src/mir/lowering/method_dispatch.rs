@@ -10,13 +10,11 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
-use crate::type_checker::context::{
-    class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
-};
+use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
 use super::class_instantiations::is_registered_instantiation;
-use super::dispatch_symbols::{instantiation_substitution, trait_default_among};
+use super::dispatch_symbols::{instantiation_substitution, trait_default_among, vtable_slot_index};
 use super::{
     apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
 };
@@ -722,6 +720,7 @@ fn emit_resolved_method_call(
 
     if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
         if let Some(slot) = vtable_slot_index(
+            &ctx.vtable_layout(),
             m.class_name,
             m.method_name,
             ctx.type_checker.type_definitions(),
