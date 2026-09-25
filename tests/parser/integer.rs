@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{parser_error_test, parser_test, run_int_tests};
+use super::utils::{literal_test, parser_error_test, parser_test, run_int_tests};
 use miri::ast::factory::{
     binary, call, expression_statement, identifier, int, int_literal_expression, let_variable,
     member, unary, variable_statement,
@@ -135,4 +135,27 @@ fn test_error_on_non_decimal_integer_overflow() {
     // Octal overflow (> i128::MAX)
     let oct_overflow = "0o4000000000000000000000000000000000000000000"; // 2^128
     parser_error_test(oct_overflow, &SyntaxErrorKind::InvalidOctalLiteral);
+}
+
+#[test]
+fn test_parse_u128_integer_literal_above_i128_max() {
+    // Values in range (i128::MAX, u128::MAX] parse into IntegerLiteral::U128.
+    literal_test(
+        "170141183460469231731687303715884105728",
+        miri::ast::Literal::Integer(miri::ast::IntegerLiteral::U128(
+            170141183460469231731687303715884105728,
+        )),
+    );
+    literal_test(
+        "340282366920938463463374607431768211455",
+        miri::ast::Literal::Integer(miri::ast::IntegerLiteral::U128(u128::MAX)),
+    );
+}
+
+#[test]
+fn test_error_on_invalid_non_decimal_digits() {
+    // Invalid digits in binary, octal, or hex literals
+    parser_error_test("0b102", &SyntaxErrorKind::InvalidBinaryLiteral);
+    parser_error_test("0o89", &SyntaxErrorKind::InvalidOctalLiteral);
+    parser_error_test("0x12GH", &SyntaxErrorKind::InvalidHexLiteral);
 }
