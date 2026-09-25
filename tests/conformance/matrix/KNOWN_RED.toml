@@ -13,25 +13,6 @@
 # element layout: width, stride and by-address transport
 [A]
 cells = [
-    "array_element/closure/construct/generic_class", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for CellN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "array_element/closure/construct/inherited", # error[MER_CG_008]: Internal Codegen Error = MIR lowering failed for BaseN_run: Unsupported expression: Array<T, N>() constructor does not accept arguments
-    "map_value/vec3_f32/eq/generic_class", # crashed without a report
-    "map_value/vec3_f32/eq/generic_fn", # crashed without a report
-    "map_value/vec3_f32/eq/inherited", # crashed without a report
-    "map_value/vec3_f32/eq/mono", # crashed without a report
-    "map_value/vec3_f32/get/generic_class", # crashed without a report
-    "map_value/vec3_f32/get/generic_fn", # crashed without a report
-    "map_value/vec3_f32/get/inherited", # crashed without a report
-    "map_value/vec3_f32/get/mono", # crashed without a report
-    "map_value/vec3_f32/overwrite/generic_class", # crashed without a report
-    "map_value/vec3_f32/overwrite/generic_fn", # crashed without a report
-    "map_value/vec3_f32/overwrite/inherited", # crashed without a report
-    "map_value/vec3_f32/overwrite/mono", # crashed without a report
-    "map_value/vec3_f32/store_read/generic_class", # crashed without a report
-    "map_value/vec3_f32/store_read/generic_fn", # crashed without a report
-    "map_value/vec3_f32/store_read/inherited", # crashed without a report
-    "map_value/vec3_f32/store_read/mono", # crashed without a report
-    "map_value/vec3_f32/write_literal/mono", # crashed without a report
 ]
 
 # Set element and Map key identity: equals and hash
@@ -123,6 +104,8 @@ cells = [
     "array_element/class/compound_assign/inherited", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn BaseN_run__Bx: _9 (_9): released more references than it owns (double-release)
     "array_element/class/sort/inherited", # accepted; expected refusal MER_TYP_075
     "array_element/closure/compound_assign/generic_fn", # expected refusal MER_TYP_002; compile error MER_MIR_014: fn cellN____unspellable: _8 (_8): released more references than it owns (double-release)
+    "array_element/closure/construct/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
+    "array_element/closure/construct/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/overwrite/generic_class", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/overwrite/inherited", # MIRI_HEAP_GUARD: double-free detected: allocated at src/rc.rs:257, first freed at src/rc.rs:271, freed again at src/guard.rs:1021
     "array_element/closure/sort/inherited", # accepted; expected refusal MER_TYP_075

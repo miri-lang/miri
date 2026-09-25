@@ -249,3 +249,24 @@ fn main()
         "1 second",
     );
 }
+
+#[test]
+fn test_map_index_assignment_of_a_vector_releases_it_once() {
+    // The map copies a vector value's components, so neither `m[k] = v` nor
+    // `m[k] += v` may hand it a reference it never releases.
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+use system.gpu.vector
+
+fn main()
+    let a = Vec3<f32>(1.0, 2.0, 3.0)
+    var m = Map<int, Vec3<f32>>()
+    m[1] = a
+    m[2] = Vec3<f32>(4.0, 5.0, 6.0)
+    let r = m[1]
+    println(f"{r.y} {m[2].z} {m.length()}")
+"#,
+        "2.0 6.0 2",
+    );
+}

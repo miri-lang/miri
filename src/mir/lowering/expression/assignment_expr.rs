@@ -560,8 +560,14 @@ fn assign_to_member_compound(
     Ok(())
 }
 
+/// Retain a managed value a map is about to store, so the map owns a reference
+/// of its own.
+///
+/// A value the map lays out inline — an inline vector — is copied as bytes and
+/// never referenced, so it is not retained: the rule `donate_operand_to_container`
+/// applies to every other store.
 fn inc_ref_if_managed(ctx: &mut LoweringContext, op: &Operand, ty: &Type, expr: &Expression) {
-    if ctx.is_perceus_managed(&ty.kind) {
+    if ctx.is_perceus_managed(&ty.kind) && !crate::ast::types::element_layout(&ty.kind).is_address {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::IncRef(place.clone()),
