@@ -20,11 +20,18 @@ use std::sync::Arc;
 
 impl<'a> FunctionTranslator<'a> {
     /// Generate `__vtable_ClassName` static data for each concrete class that
-    /// participates in virtual dispatch (has an abstract class in its hierarchy).
+    /// participates in virtual dispatch (has an abstract class or a trait in
+    /// its hierarchy).
     ///
-    /// The vtable is an array of function pointers in alphabetical order of the
-    /// abstract interface class's non-constructor methods. Each slot points to the
-    /// concrete implementation resolved from the class's inheritance chain.
+    /// Every vtable is an array of function pointers laid out by the one
+    /// program-wide [`dispatch_symbols::VtableLayout`] the lowered
+    /// `VirtualCall`s index by. A slot the class gives a body points to the
+    /// implementation resolved from its inheritance chain; every other slot
+    /// is null, and no well-typed call reads it.
+    ///
+    /// A class whose traits require no method still gets its symbol: its
+    /// constructor stores the vtable pointer all the same, by the one
+    /// `class_needs_vtable` rule both sides read.
     ///
     /// Must be called AFTER all user function bodies are compiled, so the function
     /// symbols are registered in the module.
@@ -33,73 +40,68 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), CodegenError> {
-        let ptr_type = isa.pointer_type();
-        let ptr_size = ptr_type.bytes();
-        let call_conv = isa.default_call_conv();
-
+        let layout = dispatch_symbols::VtableLayout::of(type_definitions);
         let classes = dispatch_symbols::collect_classes_needing_vtable(type_definitions);
         for (class_name, _) in &classes {
             let vtable_methods =
                 dispatch_symbols::collect_vtable_methods(class_name, type_definitions);
-            if vtable_methods.is_empty() {
-                continue;
-            }
             Self::emit_vtable_for_class(
                 module,
+                isa,
+                &layout,
                 class_name,
                 &vtable_methods,
                 type_definitions,
-                ptr_type,
-                ptr_size,
-                call_conv,
             )?;
         }
         Ok(())
     }
 
-    /// Declare-and-define one `__vtable_{class_name}` data symbol with one
-    /// pointer slot per method (resolved through the class's inheritance chain
-    /// via `dispatch_symbols::resolve_vtable_method`). Method symbols that are not yet declared
-    /// in the module are imported with a placeholder signature.
-    #[allow(clippy::too_many_arguments)]
+    /// Declare-and-define one `__vtable_{class_name}` data symbol with a
+    /// pointer slot for every name in `layout`, filling the slot of each of
+    /// `vtable_methods` with the body `dispatch_symbols::resolve_vtable_method`
+    /// resolves. Method symbols that are not yet declared in the module are
+    /// imported with a placeholder signature.
     fn emit_vtable_for_class(
         module: &mut ObjectModule,
+        isa: &Arc<dyn TargetIsa>,
+        layout: &dispatch_symbols::VtableLayout,
         class_name: &str,
         vtable_methods: &[&str],
         type_definitions: &HashMap<String, TypeDefinition>,
-        ptr_type: cranelift_codegen::ir::Type,
-        ptr_size: u32,
-        call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
         use cranelift_module::Linkage;
-        let vtable_size = (vtable_methods.len() * ptr_size as usize) as u32;
-
-        let mut vtable_sym = String::with_capacity(9 + class_name.len());
-        vtable_sym.push_str("__vtable_");
-        vtable_sym.push_str(class_name);
+        let ptr_type = isa.pointer_type();
+        let ptr_size = ptr_type.bytes() as usize;
+        let vtable_sym = format!("__vtable_{class_name}");
         let vtable_data_id = module
             .declare_data(&vtable_sym, Linkage::Export, false, false)
             .map_err(|e| CodegenError::declare_function(vtable_sym.clone(), e.to_string()))?;
 
         let mut desc = cranelift_module::DataDescription::new();
         desc.set_align(ptr_size as u64);
-        desc.define(vec![0u8; vtable_size as usize].into_boxed_slice());
+        desc.define(vec![0u8; layout.slot_count() * ptr_size].into_boxed_slice());
 
-        for (slot_idx, method_name) in vtable_methods.iter().enumerate() {
+        for method_name in vtable_methods {
             let Some(func_name) =
                 dispatch_symbols::resolve_vtable_method(class_name, method_name, type_definitions)
             else {
                 continue;
             };
-            let func_id = Self::vtable_slot_func_id(module, &func_name, ptr_type, call_conv)?;
+            let slot = layout.slot(method_name).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "vtable of `{class_name}`: method `{method_name}` has no slot in the layout"
+                ))
+            })?;
+            let func_id =
+                Self::vtable_slot_func_id(module, &func_name, ptr_type, isa.default_call_conv())?;
             let func_ref = module.declare_func_in_data(func_id, &mut desc);
-            let slot_offset = (slot_idx * ptr_size as usize) as u32;
-            desc.write_function_addr(slot_offset, func_ref);
+            desc.write_function_addr((slot * ptr_size) as u32, func_ref);
         }
 
         module
             .define_data(vtable_data_id, &desc)
-            .map_err(|e| CodegenError::define_function(vtable_sym.clone(), e.to_string()))
+            .map_err(|e| CodegenError::define_function(vtable_sym, e.to_string()))
     }
 
     /// Look up `func_name` in the module; declare it as `Linkage::Import` with

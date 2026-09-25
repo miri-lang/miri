@@ -6,7 +6,8 @@
 
 use miri::mir::lowering::dispatch_symbols::{
     collect_vtable_methods, inherited_trait_default, instantiation_substitution, method_symbol,
-    resolve_vtable_method, synthesized_references, vtable_slot_symbols, ELEMENT_METHOD_NAMES,
+    resolve_vtable_method, synthesized_references, vtable_slot_index, vtable_slot_symbols,
+    VtableLayout, ELEMENT_METHOD_NAMES,
 };
 use miri::type_checker::context::TypeDefinition;
 use std::collections::HashMap;
@@ -276,6 +277,123 @@ fn collect_vtable_methods_merges_trait_required_methods() {
         methods.contains(&"greet"),
         "expected 'greet' from trait, got {methods:?}",
     );
+}
+
+fn static_method() -> MethodInfo {
+    MethodInfo {
+        is_static: true,
+        ..method(false, false)
+    }
+}
+
+/// The slot a call through `receiver` reads under the layout `defs` gives.
+fn slot_of(receiver: &str, method: &str, defs: &HashMap<String, TypeDefinition>) -> Option<usize> {
+    vtable_slot_index(&VtableLayout::of(defs), receiver, method, defs)
+}
+
+/// `trait A` requires `zeta`, `trait B` requires `alpha`, and `class C`
+/// implements both.
+fn two_traits_one_class() -> HashMap<String, TypeDefinition> {
+    make_defs([
+        (
+            "A".to_string(),
+            TypeDefinition::Trait(trait_def("A", &[], &[("zeta", method(true, false))])),
+        ),
+        (
+            "B".to_string(),
+            TypeDefinition::Trait(trait_def("B", &[], &[("alpha", method(true, false))])),
+        ),
+        (
+            "C".to_string(),
+            TypeDefinition::Class(class(
+                "C",
+                None,
+                &["A", "B"],
+                &[
+                    ("alpha", method(false, false)),
+                    ("zeta", method(false, false)),
+                ],
+                false,
+            )),
+        ),
+    ])
+}
+
+#[test]
+fn vtable_slot_index_numbers_a_trait_method_across_every_trait() {
+    let defs = two_traits_one_class();
+    assert_eq!(slot_of("A", "zeta", &defs), Some(1));
+    assert_eq!(slot_of("B", "alpha", &defs), Some(0));
+}
+
+#[test]
+fn vtable_slot_index_agrees_with_the_slot_the_layout_fills() {
+    let defs = two_traits_one_class();
+    let layout = VtableLayout::of(&defs);
+    assert_eq!(layout.slot_count(), 2);
+    for method in collect_vtable_methods("C", &defs) {
+        let receiver = if method == "zeta" { "A" } else { "B" };
+        assert_eq!(
+            vtable_slot_index(&layout, receiver, method, &defs),
+            layout.slot(method)
+        );
+    }
+}
+
+#[test]
+fn vtable_slot_index_is_none_for_a_method_the_receiver_does_not_declare() {
+    let defs = two_traits_one_class();
+    assert_eq!(slot_of("A", "alpha", &defs), None);
+    assert_eq!(slot_of("C", "zeta", &defs), None);
+}
+
+#[test]
+fn vtable_layout_gives_statics_and_constructors_no_slot() {
+    let base = class(
+        "Base",
+        None,
+        &[],
+        &[
+            ("apex", static_method()),
+            ("init", method(false, true)),
+            ("area", method(true, false)),
+        ],
+        true,
+    );
+    let defs = make_defs([("Base".to_string(), TypeDefinition::Class(base))]);
+    let layout = VtableLayout::of(&defs);
+    assert_eq!(layout.slot_count(), 1);
+    assert_eq!(layout.slot("apex"), None);
+    assert_eq!(slot_of("Base", "area", &defs), Some(0));
+    assert_eq!(slot_of("Base", "apex", &defs), None);
+}
+
+#[test]
+fn vtable_layout_counts_an_abstract_receivers_inherited_trait_methods() {
+    let named = trait_def(
+        "Named",
+        &[],
+        &[
+            ("greet", method(false, false)),
+            ("name", method(true, false)),
+        ],
+    );
+    let base = class(
+        "Base",
+        None,
+        &["Named"],
+        &[("shout", method(false, false))],
+        true,
+    );
+    let plain = class("Plain", None, &[], &[("aaa", method(false, false))], false);
+    let defs = make_defs([
+        ("Named".to_string(), TypeDefinition::Trait(named)),
+        ("Base".to_string(), TypeDefinition::Class(base)),
+        ("Plain".to_string(), TypeDefinition::Class(plain)),
+    ]);
+    assert_eq!(VtableLayout::of(&defs).slot_count(), 3);
+    assert_eq!(slot_of("Base", "greet", &defs), Some(0));
+    assert_eq!(slot_of("Base", "shout", &defs), Some(2));
 }
 
 fn generic(mut class_def: ClassDefinition, param: &str) -> ClassDefinition {

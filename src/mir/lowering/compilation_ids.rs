@@ -21,7 +21,13 @@
 //! method reached by two instantiations sharing one device kernel) always maps
 //! to the same index. Device handles have no such node to key on and are handed
 //! out sequentially in allocation order.
+//!
+//! The vtable slot numbering rides along for the same reason: every virtual
+//! call lowered in a compilation indexes by it, so it is derived from the
+//! type table once, on the first call that needs it, and shared from then on.
 
+use super::dispatch_symbols::VtableLayout;
+use crate::type_checker::context::TypeDefinition;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -50,6 +56,9 @@ pub struct CompilationIds {
     /// Next device handle to hand out. The runtime reserves `0` as the
     /// host-resident sentinel, so allocation starts at `1`.
     next_device_handle: u64,
+    /// The slot numbering every vtable of this compilation shares, derived on
+    /// first use.
+    vtable_layout: Option<Rc<VtableLayout>>,
 }
 
 impl Default for CompilationIds {
@@ -58,6 +67,7 @@ impl Default for CompilationIds {
             assigned: HashMap::new(),
             next: 0,
             next_device_handle: 1,
+            vtable_layout: None,
         }
     }
 }
@@ -74,6 +84,18 @@ impl CompilationIds {
         self.next += 1;
         self.assigned.insert(ast_id, index);
         index
+    }
+
+    /// The vtable slot numbering of this compilation, derived from
+    /// `type_defs` the first time it is asked for.
+    pub fn vtable_layout(
+        &mut self,
+        type_defs: &HashMap<String, TypeDefinition>,
+    ) -> Rc<VtableLayout> {
+        Rc::clone(
+            self.vtable_layout
+                .get_or_insert_with(|| Rc::new(VtableLayout::of(type_defs))),
+        )
     }
 
     /// Hands out the next device handle for this compilation.

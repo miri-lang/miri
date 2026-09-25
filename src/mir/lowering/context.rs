@@ -273,6 +273,13 @@ impl<'a> LoweringContext<'a> {
         self.compilation_ids = namer;
     }
 
+    /// The vtable slot numbering this compilation's virtual calls index by.
+    pub fn vtable_layout(&self) -> Rc<super::dispatch_symbols::VtableLayout> {
+        self.compilation_ids
+            .borrow_mut()
+            .vtable_layout(self.type_checker.type_definitions())
+    }
+
     /// Allocate (or reuse) the deterministic, compilation-local kernel-name
     /// index for the kernel-bearing AST node `ast_id`.
     pub fn kernel_index(&self, ast_id: usize) -> usize {

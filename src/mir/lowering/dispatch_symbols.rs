@@ -18,13 +18,13 @@ use super::method_dispatch::resolve_inherited_method;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
 use crate::type_checker::context::{
-    class_needs_vtable, collect_trait_vtable_methods, find_trait_default_method, ClassDefinition,
-    MethodInfo, TypeDefinition,
+    class_needs_vtable, find_trait_default_method, ClassDefinition, MethodInfo, TraitDefinition,
+    TypeDefinition,
 };
 use crate::type_checker::utils::has_drop_hook;
 use crate::type_checker::TypeChecker;
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The methods a container's runtime thunk asks of two class elements: the
 /// ordering it sorts by and the equality it matches by.
@@ -142,26 +142,35 @@ fn defaulted_method_names<'td>(
     type_defs: &'td HashMap<String, TypeDefinition>,
     traits: impl Iterator<Item = &'td String>,
 ) -> BTreeSet<&'td str> {
-    let mut pending: Vec<&str> = traits.map(String::as_str).collect();
+    trait_hierarchy(type_defs, traits.map(String::as_str))
+        .flat_map(|trait_def| trait_def.methods.iter())
+        .filter(|(_, method)| !method.is_abstract)
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
+/// Every trait `roots` name and every parent trait they extend, each once.
+/// A name that registers no trait is passed over.
+fn trait_hierarchy<'td, 'n>(
+    type_defs: &'td HashMap<String, TypeDefinition>,
+    roots: impl Iterator<Item = &'n str>,
+) -> impl Iterator<Item = &'td TraitDefinition> {
+    let mut pending: Vec<&'td str> = roots
+        .filter_map(|name| type_defs.get_key_value(name))
+        .map(|(name, _)| name.as_str())
+        .collect();
     let mut visited = HashSet::new();
-    let mut names = BTreeSet::new();
-    while let Some(trait_name) = pending.pop() {
+    std::iter::from_fn(move || loop {
+        let trait_name = pending.pop()?;
         if !visited.insert(trait_name) {
             continue;
         }
         let Some(TypeDefinition::Trait(trait_def)) = type_defs.get(trait_name) else {
             continue;
         };
-        names.extend(
-            trait_def
-                .methods
-                .iter()
-                .filter(|(_, method)| !method.is_abstract)
-                .map(|(name, _)| name.as_str()),
-        );
         pending.extend(trait_def.parent_traits.iter().map(String::as_str));
-    }
-    names
+        return Some(trait_def);
+    })
 }
 
 /// `class_name` and every class it extends, nearest first, each with its name.
@@ -215,9 +224,11 @@ pub fn collect_classes_needing_vtable(
     classes
 }
 
-/// The method names of `class_name`'s vtable slots: every method its abstract
-/// ancestors declare (constructors and statics aside) and every method a trait
-/// in its chain requires, sorted so slot indices are deterministic.
+/// The method names of `class_name`'s filled vtable slots: every method its
+/// abstract ancestors declare and every method a trait in its chain requires,
+/// constructors and statics aside, sorted by name.
+///
+/// Where each lands in the vtable is [`VtableLayout::slot`]'s to say.
 pub fn collect_vtable_methods<'td>(
     class_name: &str,
     type_defs: &'td HashMap<String, TypeDefinition>,
@@ -225,17 +236,149 @@ pub fn collect_vtable_methods<'td>(
     let chain: Vec<&ClassDefinition> = class_chain(type_defs, class_name)
         .map(|(_, class)| class)
         .collect();
-    let mut methods: BTreeSet<&str> = chain
+    let abstract_methods = chain
         .iter()
         .filter(|class| class.is_abstract)
-        .flat_map(|class| class.methods.iter())
-        .filter(|(_, info)| !info.is_constructor && !info.is_static)
-        .map(|(name, _)| name.as_str())
-        .collect();
-    for trait_name in chain.iter().flat_map(|class| class.traits.iter()) {
-        methods.extend(collect_trait_vtable_methods(type_defs, trait_name));
-    }
+        .flat_map(|class| dispatched_method_names(&class.methods));
+    let traits = chain
+        .iter()
+        .flat_map(|class| class.traits.iter().map(String::as_str));
+    let trait_methods = trait_hierarchy(type_defs, traits)
+        .flat_map(|trait_def| dispatched_method_names(&trait_def.methods));
+    let methods: BTreeSet<&str> = abstract_methods.chain(trait_methods).collect();
     methods.into_iter().collect()
+}
+
+/// The slot numbering every vtable in the program shares.
+///
+/// A slot stands for one method name: the sorted set of every instance method
+/// a trait or an abstract class declares, constructors and statics aside.
+/// Every vtable has one slot per name, filled where the class gives that
+/// method a body and null elsewhere; a class has one method per name, so a
+/// call through any trait or abstract base it is reached by finds its own
+/// body at the one index the method's name takes.
+///
+/// The numbering depends on method names alone, which registering a generic
+/// instantiation never adds to, so one layout serves a whole compilation.
+#[derive(Debug)]
+pub struct VtableLayout {
+    selectors: Vec<Box<str>>,
+}
+
+impl VtableLayout {
+    /// The numbering the traits and abstract classes of `type_defs` give.
+    pub fn of(type_defs: &HashMap<String, TypeDefinition>) -> Self {
+        let selectors: BTreeSet<&str> = type_defs
+            .values()
+            .filter_map(dispatching_methods)
+            .flat_map(dispatched_method_names)
+            .collect();
+        Self {
+            selectors: selectors.into_iter().map(Box::from).collect(),
+        }
+    }
+
+    /// The number of slots in every vtable.
+    pub fn slot_count(&self) -> usize {
+        self.selectors.len()
+    }
+
+    /// The slot `method_name` takes, or `None` when no trait or abstract class
+    /// declares it.
+    pub fn slot(&self, method_name: &str) -> Option<usize> {
+        self.selectors
+            .binary_search_by(|selector| (**selector).cmp(method_name))
+            .ok()
+    }
+}
+
+/// The slot of `layout` a call to `method_name` through a `receiver` — a
+/// trait or an abstract class — reads, or `None` when the receiver dispatches
+/// no such method and the call is static.
+pub fn vtable_slot_index(
+    layout: &VtableLayout,
+    receiver: &str,
+    method_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<usize> {
+    dispatches_through_vtable(receiver, method_name, type_defs)
+        .then(|| layout.slot(method_name))
+        .flatten()
+}
+
+/// Whether `receiver` reaches `method_name` through its vtable: a trait whose
+/// hierarchy declares it, or an abstract class whose abstract ancestors or
+/// whose chain's traits do.
+fn dispatches_through_vtable(
+    receiver: &str,
+    method_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    match type_defs.get(receiver) {
+        Some(TypeDefinition::Trait(_)) => {
+            traits_dispatch(type_defs, std::iter::once(receiver), method_name)
+        }
+        Some(TypeDefinition::Class(class)) if class.is_abstract => class_chain(type_defs, receiver)
+            .any(|(_, class)| {
+                (class.is_abstract && declares_dispatched(&class.methods, method_name))
+                    || traits_dispatch(
+                        type_defs,
+                        class.traits.iter().map(String::as_str),
+                        method_name,
+                    )
+            }),
+        Some(
+            TypeDefinition::Class(_)
+            | TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => false,
+    }
+}
+
+/// Whether a trait `roots` names, or a parent trait of one, declares
+/// `method_name` as one a vtable slot stands for.
+fn traits_dispatch<'n>(
+    type_defs: &HashMap<String, TypeDefinition>,
+    roots: impl Iterator<Item = &'n str>,
+    method_name: &str,
+) -> bool {
+    trait_hierarchy(type_defs, roots)
+        .any(|trait_def| declares_dispatched(&trait_def.methods, method_name))
+}
+
+/// The methods of a definition whose instance methods take vtable slots: a
+/// trait's, or an abstract class's.
+fn dispatching_methods(definition: &TypeDefinition) -> Option<&BTreeMap<String, MethodInfo>> {
+    match definition {
+        TypeDefinition::Trait(trait_def) => Some(&trait_def.methods),
+        TypeDefinition::Class(class) => class.is_abstract.then_some(&class.methods),
+        TypeDefinition::Struct(_)
+        | TypeDefinition::Enum(_)
+        | TypeDefinition::Generic(_)
+        | TypeDefinition::Alias(_) => None,
+    }
+}
+
+/// The names among `methods` a vtable slot can stand for.
+fn dispatched_method_names(methods: &BTreeMap<String, MethodInfo>) -> impl Iterator<Item = &str> {
+    methods
+        .iter()
+        .filter(|(_, info)| takes_vtable_slot(info))
+        .map(|(name, _)| name.as_str())
+}
+
+/// Whether `methods` declares `method_name` as one a vtable slot stands for.
+fn declares_dispatched(methods: &BTreeMap<String, MethodInfo>, method_name: &str) -> bool {
+    methods.get(method_name).is_some_and(takes_vtable_slot)
+}
+
+/// Whether a method takes a vtable slot: every one but the constructors and
+/// statics.
+fn takes_vtable_slot(info: &MethodInfo) -> bool {
+    !info.is_constructor && !info.is_static
 }
 
 /// The symbol `class_name`'s vtable slot for `method_name` names: the nearest
