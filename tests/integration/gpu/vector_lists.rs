@@ -633,3 +633,26 @@ fn main()
 ";
     assert_runs_with_output(source, "9 10\n3.0 4.0\ntrue false");
 }
+
+/// The transform, fold and sequence defaults compile per element type, so each
+/// reads every component of a vector element — including an eight-byte one —
+/// and releases what it builds.
+#[test]
+fn more_default_methods_over_lists_of_vectors_read_every_component() {
+    let source = "
+use system.gpu.vector
+use system.collections.list
+
+fn main()
+    let vs = List([Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(1.0, 2.0, 3.0)])
+    let m = vs.map(fn(v Vec3<f32>) Vec3<f32>: Vec3<f32>(v.z, v.y, v.x))
+    let u = vs.unique()
+    let e = vs.enumerate()
+    let wide = List([Vec3<f64>(1.0, 2.0, 3.0), Vec3<f64>(7.0, 8.0, 9.0)])
+    let w = wide.reversed()
+    let twos = List([Vec2<i32>(1, 2), Vec2<i32>(3, 4)]).skip(1)
+    let fours = List([Vec4<f32>(1.0, 2.0, 3.0, 4.0)]).take(1)
+    println(f'{m[0].x} {u.length()} {e.length()} {w[0].z} {twos[0].y} {fours[0].w}')
+";
+    assert_heap_guard_output(source, "3.0 2 3 9.0 4 4.0");
+}
