@@ -867,11 +867,15 @@ fn lower_instantiation_core(
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
 
-    // Lower parameters with generic substitution and record out-param flags.
+    // Lower parameters and record out-param flags. `push_param` reads each
+    // declared type at the instantiation.
     ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
-        let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
-        ctx.push_param(param.name.clone(), param_ty, param.typ.span);
+        ctx.push_param(
+            param.name.clone(),
+            resolve_type(tc, &param.typ),
+            param.typ.span,
+        );
     }
     stamp_residency_param_handles(&mut ctx, param_handles);
     ctx.residency_handles = param_handles
@@ -1165,10 +1169,7 @@ fn lower_class_method_impl(
         out_params.push(false); // self is never `out`
     }
     for param in params.iter() {
-        let param_ty = substitute_self_type(
-            &apply_generic_sub(&resolve_type(tc, &param.typ), subs),
-            &self_type,
-        );
+        let param_ty = substitute_self_type(&resolve_type(tc, &param.typ), &self_type);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }

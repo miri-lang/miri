@@ -559,7 +559,7 @@ impl<'a> LoweringContext<'a> {
     /// Emits no name-dependent MIR beyond `StorageLive`, so the instruction
     /// stream is identical to the combined [`push_local`].
     pub fn alloc_local(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = LocalDecl::new(ty, span);
+        let mut decl = self.instantiated_local_decl(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
@@ -605,7 +605,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Register a function parameter (similar to push_local but no StorageLive)
     pub fn push_param(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = LocalDecl::new(ty, span);
+        let mut decl = self.instantiated_local_decl(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
@@ -638,8 +638,22 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_temp(&mut self, ty: Type, span: Span) -> Local {
-        let decl = LocalDecl::new(ty, span);
+        let decl = self.instantiated_local_decl(ty, span);
         self.body.new_local(decl)
+    }
+
+    /// A declaration for a local of type `ty`, read at the body's
+    /// instantiation.
+    ///
+    /// Every local a body declares passes through here, so a monomorphized
+    /// body declares none at a bare generic parameter, however its caller
+    /// derived the type. A local left at `T` is a pointer-width integer slot
+    /// to code generation: a `float` stored in it is read back as its bits,
+    /// and a call passing it is declared with a signature the instantiation's
+    /// own declaration contradicts. Outside a monomorphized body the
+    /// substitution is empty and `ty` is kept as written.
+    fn instantiated_local_decl(&self, ty: Type, span: Span) -> LocalDecl {
+        LocalDecl::new(super::apply_generic_sub(&ty, &self.generic_subs), span)
     }
 
     /// Returns `true` if `kind` requires reference-count management.
