@@ -134,7 +134,9 @@ fn test_array_ffi_abi() {
         let p_mut = miri_rt_array_get_mut(arr, 1);
         assert!(!p_mut.is_null());
 
-        assert_eq!(miri_rt_array_set_val(arr, 2, 99), 1);
+        let value: usize = 99;
+        let at = |v: &usize| v as *const usize as *const u8;
+        assert_eq!(miri_rt_array_set_val(arr, 2, at(&value), 8), 1);
 
         let data = miri_rt_array_data(arr);
         assert!(!data.is_null());

@@ -649,7 +649,7 @@ pub(crate) fn lower_list_constructor(
             // An inline element is copied as its component bytes; there is no
             // reference in its slot for the list to take.
             let elems_are_managed = elem_kind.is_some_and(|kind| {
-                ctx.is_perceus_managed(&kind) && types::inline_element_layout(&kind).is_none()
+                ctx.is_perceus_managed(&kind) && !types::element_layout(&kind).is_address
             });
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
@@ -1010,8 +1010,7 @@ pub(crate) fn lower_array_constructor(
     // storage the runtime hands back is already a valid value of its type and no
     // managed-element handling applies. Every other managed element is a
     // reference the type checker refuses; reaching here with one is a compiler bug.
-    if ctx.is_perceus_managed(&elem_type.kind)
-        && types::inline_element_layout(&elem_type.kind).is_none()
+    if ctx.is_perceus_managed(&elem_type.kind) && !types::element_layout(&elem_type.kind).is_address
     {
         return Err(LoweringError::unsupported_expression(
             format!(

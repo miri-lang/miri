@@ -2112,12 +2112,10 @@ impl<'a> FunctionTranslator<'a> {
 /// in a value word; the runtime lays each element it is handed out at this
 /// width (see `crate::ast::types::element_layout` for the element's own width).
 pub(crate) fn declared_element_bytes(kind: &TypeKind, ptr_type: cl_types::Type) -> u32 {
-    let declared = inline_vec_element_layout(kind, ptr_type)
-        .and_then(|(stride, _, _)| u32::try_from(stride).ok())
-        .unwrap_or_else(|| {
-            crate::codegen::cranelift::types::translate_type_kind(kind, ptr_type).bytes()
-        });
-    declared.max(ptr_type.bytes())
+    let stride = crate::ast::types::element_layout(kind).stride;
+    u32::try_from(stride)
+        .unwrap_or(u32::MAX)
+        .max(ptr_type.bytes())
 }
 
 /// The type a collection's type argument names, or `None` when the argument is
@@ -2144,7 +2142,11 @@ pub(crate) fn inline_vec_element_layout(
     let crate::ast::expression::ExpressionKind::Type(scalar, _) = &args.first()?.node else {
         return None;
     };
-    let stride = crate::ast::types::inline_element_stride(name, &scalar.kind)?;
+    let layout = crate::ast::types::element_layout(kind);
+    if !layout.is_address {
+        return None;
+    }
+    let stride = layout.stride;
     let component = crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, ptr_type);
     Some((stride, dim, component))
 }

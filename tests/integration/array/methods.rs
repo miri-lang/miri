@@ -238,3 +238,25 @@ println(f"{a[0]} {a[1]} {a[2]} {a[3]} {a[4]}")
         "-5 -1 0 5 5",
     );
 }
+
+#[test]
+fn test_array_set_stores_the_whole_element_at_every_width() {
+    assert_heap_guard_output(
+        "
+use system.collections.array
+use system.gpu.vector
+
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    var wide = Array<i128, 2>()
+    wide.set(1, big)
+    var small = Array<u8, 2>()
+    small.set(0, 200)
+    var vs = Array<Vec3<f32>, 2>()
+    vs.set(1, Vec3<f32>(1.0, 2.0, 3.0))
+    let v = vs[1]
+    println(f'{wide[1] == big} {wide[1] == -1} {small[0]} {v.z}')
+",
+        "true false 200 3.0",
+    );
+}

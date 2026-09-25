@@ -17,7 +17,7 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::types::{
-    inline_element_layout, is_vector_component, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
+    element_layout, is_vector_component, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
     TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
     GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
     LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
@@ -230,7 +230,7 @@ pub fn is_zero_fillable_element(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
-    if inline_element_layout(kind).is_some() {
+    if element_layout(kind).is_address {
         return true;
     }
     if let TypeKind::Custom(name, _) = kind {
@@ -1399,17 +1399,11 @@ fn estimated_type_size<'a>(
     type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> usize {
+    if let Some(width) = crate::ast::types::scalar_width(kind) {
+        return usize::try_from(width).unwrap_or(usize::MAX);
+    }
     match kind {
-        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
-        TypeKind::I16 | TypeKind::U16 | TypeKind::F16 => 2,
-        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
-        TypeKind::Int
-        | TypeKind::I64
-        | TypeKind::U64
-        | TypeKind::Float
-        | TypeKind::F64
-        | TypeKind::RawPtr => 8,
-        TypeKind::I128 | TypeKind::U128 => 16,
+        TypeKind::RawPtr => 8,
         TypeKind::Custom(name, _) => {
             // Detect cycles: if we're already visiting this type, return default size
             if !visited.insert(name.as_str()) {
@@ -2586,7 +2580,7 @@ impl TypeChecker {
         let TypeKind::Custom(name, args) = &ty.kind else {
             return false;
         };
-        if vec_type_dim(&ty.kind).is_none() || inline_element_layout(&ty.kind).is_some() {
+        if vec_type_dim(&ty.kind).is_none() || element_layout(&ty.kind).is_address {
             return false;
         }
         self.validate_vector_component(name, args.as_deref(), span);
