@@ -123,6 +123,9 @@ pub const REGEX_FROM_VALIDATED_PATTERN_METHOD: &str = "from_validated_pattern";
 /// if they disagreed, a type could be judged comparable and then not dispatch.
 pub const EQUALS_METHOD_NAME: &str = "equals";
 
+/// The method a container's copy of a class element calls.
+pub const CLONE_METHOD_NAME: &str = "clone";
+
 /// Canonical spelling of the `Self` type keyword.
 ///
 /// `Self` names the enclosing class or trait inside its own body. It is a

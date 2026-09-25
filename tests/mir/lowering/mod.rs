@@ -10,6 +10,7 @@ pub mod collections;
 pub mod compilation_ids;
 pub mod constant;
 pub mod device_handles;
+pub mod dispatch_symbols;
 pub mod enums;
 pub mod forall_gpu;
 pub mod function;

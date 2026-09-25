@@ -12,13 +12,12 @@
 //! it. A List or Array sorts through `__compare_T`, and a Set or Map matches
 //! elements and keys through `__equals_T`.
 
-use crate::ast::types::{
-    Type, TypeKind, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME, SELF_TYPE_NAME,
-};
+use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
 use crate::codegen::cranelift::translator::{
     FunctionTranslator, COMPARE_THUNK_PREFIX, EQUALS_THUNK_PREFIX,
 };
 use crate::error::CodegenError;
+use crate::mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
 use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
 use cranelift_codegen::ir::condcodes::IntCC;
@@ -43,7 +42,8 @@ pub(crate) enum ElementMethod {
 }
 
 impl ElementMethod {
-    /// Every question, in the order their thunks are emitted.
+    /// Every question, in the order their thunks are emitted — the order of
+    /// [`ELEMENT_METHOD_NAMES`], whose names [`Self::method_name`] reads.
     pub(crate) const ALL: [ElementMethod; 2] = [ElementMethod::Compare, ElementMethod::Equals];
 
     fn thunk_prefix(self) -> &'static str {
@@ -53,10 +53,12 @@ impl ElementMethod {
         }
     }
 
-    fn method_name(self) -> &'static str {
+    /// The method this question calls, as [`ELEMENT_METHOD_NAMES`] spells it.
+    pub(crate) fn method_name(self) -> &'static str {
+        let [ordering, equals] = ELEMENT_METHOD_NAMES;
         match self {
-            ElementMethod::Compare => ORDERING_METHOD_NAME,
-            ElementMethod::Equals => EQUALS_METHOD_NAME,
+            ElementMethod::Compare => ordering,
+            ElementMethod::Equals => equals,
         }
     }
 
@@ -97,12 +99,17 @@ impl ElementMethod {
                 ) && crate::mir::lowering::dispatch::resolve_inherited_method(
                     type_definitions,
                     type_name,
-                    ORDERING_METHOD_NAME,
+                    self.method_name(),
                 )
                 .is_some_and(|(_, method)| !method.is_abstract)
             }
+            // TODO: `equals` is looked up along the class chain only, so a set or
+            // map holding a class whose `equals` is a trait default it inherits
+            // matches those elements by their bytes, not by the default.
+            // Resolving it needs the rule `dispatch_symbols::trait_default_among`
+            // states, and the per-class copy of the default the pipeline lowers.
             ElementMethod::Equals => {
-                class_method_declaration(type_name, EQUALS_METHOD_NAME, type_definitions)
+                class_method_declaration(type_name, self.method_name(), type_definitions)
                     .is_some_and(|(declaring, method)| is_element_equality(declaring, method))
             }
         }
@@ -144,13 +151,11 @@ impl ElementMethod {
         // compiled — a non-generic ancestor declares the method, or the element
         // is not a generic instantiation at all — and the shared symbol is what
         // the call sites name too.
-        let owner = crate::mir::lowering::dispatch::resolve_inherited_method(
+        crate::mir::lowering::dispatch_symbols::method_symbol(
             type_definitions,
             type_name,
             method_name,
         )
-        .map_or_else(|| type_name.to_string(), |(defining, _)| defining);
-        format!("{owner}_{method_name}")
     }
 }
 

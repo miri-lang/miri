@@ -34,8 +34,7 @@ pub(super) struct CollectionIntrinsicCall<'a> {
 
 // Re-export method dispatch functions from the specialized module.
 pub(crate) use super::method_dispatch::{
-    extend_subs_with_trait_params, mangle_generic_name, mangle_instantiation_name,
-    resolve_inherited_method,
+    mangle_generic_name, mangle_instantiation_name, resolve_inherited_method,
 };
 
 // Re-export kernel launch functions from the specialized module.

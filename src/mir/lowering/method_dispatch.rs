@@ -11,11 +11,12 @@ use crate::error::syntax::Span;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{
-    class_needs_vtable, find_trait_default_method, vtable_slot_index, MethodInfo, TypeDefinition,
+    class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
 };
 use crate::type_checker::TypeChecker;
 
 use super::class_instantiations::is_registered_instantiation;
+use super::dispatch_symbols::{instantiation_substitution, trait_default_among};
 use super::{
     apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
 };
@@ -421,8 +422,9 @@ fn resolve_via_class_chain(
     }
 }
 
-/// Scan a class's directly-implemented traits for a default `method_name`. The
-/// concrete-caller / abstract-definer rule mirrors the class-chain case.
+/// The default `method_name` a class's directly-implemented traits supply, by
+/// [`trait_default_among`]. The concrete-caller / abstract-definer rule mirrors
+/// the class-chain case.
 fn resolve_via_class_traits(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     traits: &[String],
@@ -430,19 +432,13 @@ fn resolve_via_class_traits(
     class_name: &str,
     caller_is_abstract: bool,
 ) -> Option<(String, MethodInfo)> {
-    for trait_name in traits {
-        if let Some((defining_trait, info)) =
-            find_trait_default_method(type_defs, trait_name, method_name)
-        {
-            let defining = if caller_is_abstract {
-                defining_trait.to_string()
-            } else {
-                class_name.to_string()
-            };
-            return Some((defining, info.clone()));
-        }
-    }
-    None
+    let (defining_trait, info) = trait_default_among(type_defs, traits, method_name)?;
+    let defining = if caller_is_abstract {
+        defining_trait
+    } else {
+        class_name
+    };
+    Some((defining.to_string(), info.clone()))
 }
 
 /// Walk the trait hierarchy to find `method_name`. Returns the defining trait
@@ -1078,31 +1074,15 @@ fn monomorph_for_instantiation(
     {
         return None;
     }
-    let mut subs: HashMap<String, Type> = owner_gens
+    let owner_subs: HashMap<String, Type> = owner_gens
         .iter()
         .zip(&owner_args)
         .map(|(g, t)| (g.name.clone(), t.clone()))
         .collect();
     let mangled = mangle_instantiation_name(&format!("{owner}_{method_name}"), &owner_args);
-    extend_subs_with_trait_params(ctx.type_checker, &owner, &mut subs);
+    let subs = instantiation_substitution(ctx.type_checker, &owner, method_name, &owner_subs);
     let return_ty = apply_generic_sub(&method_info.return_type, &subs);
     Some((mangled, return_ty))
-}
-
-/// Add `trait-param → concrete` entries to a class-instantiation substitution,
-/// resolving each directly-implemented trait's `implements Trait<args>` binding
-/// through the existing class-param map. See
-/// [`TypeChecker::class_trait_param_bindings`] for the binding source.
-pub(crate) fn extend_subs_with_trait_params(
-    tc: &TypeChecker,
-    class_name: &str,
-    subs: &mut HashMap<String, Type>,
-) {
-    let bindings = tc.class_trait_param_bindings(class_name);
-    for (trait_param, class_arg) in bindings {
-        let concrete = apply_generic_sub(&class_arg, subs);
-        subs.insert(trait_param, concrete);
-    }
 }
 
 /// Lower the receiver, apply a CoW check for mutating collection methods, and

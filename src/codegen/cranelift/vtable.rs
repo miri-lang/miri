@@ -3,13 +3,14 @@
 
 //! Vtable layout and resolution for abstract-class / trait dispatch.
 //!
-//! Generates per-class `__vtable_{ClassName}` data symbols and resolves
-//! virtual method names to vtable slot indices for use by
-//! `TerminatorKind::VirtualCall`.
+//! Generates per-class `__vtable_{ClassName}` data symbols for use by
+//! `TerminatorKind::VirtualCall`. Which classes get one, their slots and the
+//! symbol each slot names come from `mir::lowering::dispatch_symbols`.
 
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
-use crate::type_checker::context::{ClassDefinition, TypeDefinition};
+use crate::mir::lowering::dispatch_symbols;
+use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_module::Module;
@@ -36,9 +37,10 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes();
         let call_conv = isa.default_call_conv();
 
-        let classes = Self::collect_classes_needing_vtable(type_definitions);
+        let classes = dispatch_symbols::collect_classes_needing_vtable(type_definitions);
         for (class_name, _) in &classes {
-            let vtable_methods = Self::collect_vtable_methods(class_name, type_definitions);
+            let vtable_methods =
+                dispatch_symbols::collect_vtable_methods(class_name, type_definitions);
             if vtable_methods.is_empty() {
                 continue;
             }
@@ -55,107 +57,9 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Return the concrete (non-abstract) classes that participate in virtual
-    /// dispatch, sorted by class name for deterministic codegen output.
-    /// Generic classes are included — their methods are compiled once with
-    /// `T` treated as a pointer-sized opaque slot.
-    fn collect_classes_needing_vtable(
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> Vec<(&str, &ClassDefinition)> {
-        use crate::type_checker::context::class_needs_vtable;
-        let mut classes: Vec<(&str, &ClassDefinition)> = type_definitions
-            .iter()
-            .filter_map(|(name, def)| {
-                let TypeDefinition::Class(cd) = def else {
-                    return None;
-                };
-                if !cd.is_abstract && class_needs_vtable(name, type_definitions) {
-                    Some((name.as_str(), cd))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        classes.sort_unstable_by_key(|(name, _)| *name);
-        classes
-    }
-
-    /// Collect the vtable's method-name slots for `class_name`. Walks the
-    /// abstract-ancestor chain (root → leaf order so base methods come first)
-    /// and merges in trait-required methods from every implemented trait.
-    /// Results are sorted alphabetically for deterministic slot indices.
-    pub fn collect_vtable_methods<'td>(
-        class_name: &str,
-        type_definitions: &'td HashMap<String, TypeDefinition>,
-    ) -> Vec<&'td str> {
-        use crate::type_checker::context::collect_trait_vtable_methods;
-
-        // 1. Walk inheritance chain, recording every abstract ancestor.
-        let mut abstract_chain: Vec<&str> = Vec::new();
-        let mut current: &str = class_name;
-        loop {
-            match type_definitions.get(current) {
-                Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
-                    abstract_chain.push(current);
-                    match &cd.base_class {
-                        Some(base) => current = base,
-                        None => break,
-                    }
-                }
-                Some(TypeDefinition::Class(cd)) => match &cd.base_class {
-                    Some(base) => current = base,
-                    None => break,
-                },
-                None
-                | Some(TypeDefinition::Struct(_))
-                | Some(TypeDefinition::Enum(_))
-                | Some(TypeDefinition::Generic(_))
-                | Some(TypeDefinition::Alias(_))
-                | Some(TypeDefinition::Trait(_)) => break,
-            }
-        }
-
-        // 2. Collect methods from abstract ancestors (base-first ordering).
-        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        let mut vtable_methods: Vec<&str> = Vec::new();
-        for ancestor in abstract_chain.iter().rev() {
-            if let Some(TypeDefinition::Class(cd)) = type_definitions.get(*ancestor) {
-                for (method_name, method_info) in &cd.methods {
-                    if !method_info.is_constructor
-                        && !method_info.is_static
-                        && !seen.contains(method_name.as_str())
-                    {
-                        seen.insert(method_name.as_str());
-                        vtable_methods.push(method_name.as_str());
-                    }
-                }
-            }
-        }
-
-        // 3. Merge in trait-required methods from the class and every ancestor.
-        let mut walk: &str = class_name;
-        while let Some(TypeDefinition::Class(cd)) = type_definitions.get(walk) {
-            for trait_name in &cd.traits {
-                for m in collect_trait_vtable_methods(type_definitions, trait_name) {
-                    if !seen.contains(m) {
-                        seen.insert(m);
-                        vtable_methods.push(m);
-                    }
-                }
-            }
-            match &cd.base_class {
-                Some(b) => walk = b,
-                None => break,
-            }
-        }
-
-        vtable_methods.sort();
-        vtable_methods
-    }
-
     /// Declare-and-define one `__vtable_{class_name}` data symbol with one
     /// pointer slot per method (resolved through the class's inheritance chain
-    /// via `resolve_vtable_method`). Method symbols that are not yet declared
+    /// via `dispatch_symbols::resolve_vtable_method`). Method symbols that are not yet declared
     /// in the module are imported with a placeholder signature.
     #[allow(clippy::too_many_arguments)]
     fn emit_vtable_for_class(
@@ -183,7 +87,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for (slot_idx, method_name) in vtable_methods.iter().enumerate() {
             let Some(func_name) =
-                Self::resolve_vtable_method(class_name, method_name, type_definitions)
+                dispatch_symbols::resolve_vtable_method(class_name, method_name, type_definitions)
             else {
                 continue;
             };
@@ -217,56 +121,5 @@ impl<'a> FunctionTranslator<'a> {
         module
             .declare_function(func_name, Linkage::Import, &sig)
             .map_err(|e| CodegenError::declare_function(func_name.to_string(), e.to_string()))
-    }
-
-    /// Resolve which function implements `method_name` for `class_name` via inheritance.
-    /// Returns `"ClassName_methodName"` for the first class in the chain that defines it,
-    /// or `"TraitName_methodName"` if the method is a default trait implementation.
-    pub fn resolve_vtable_method(
-        class_name: &str,
-        method_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> Option<String> {
-        let mut current: &str = class_name;
-        let mut all_traits: Vec<&str> = Vec::new();
-        while let Some(TypeDefinition::Class(cd)) = type_definitions.get(current) {
-            if let Some(method) = cd.methods.get(method_name) {
-                // Only use this implementation if it has a body (not abstract).
-                if !method.is_abstract {
-                    let mut mangled = String::with_capacity(current.len() + 1 + method_name.len());
-                    mangled.push_str(current);
-                    mangled.push('_');
-                    mangled.push_str(method_name);
-                    return Some(mangled);
-                }
-            }
-            all_traits.extend(cd.traits.iter().map(|s| s.as_str()));
-            match &cd.base_class {
-                Some(base) => current = base,
-                None => break,
-            }
-        }
-        // Fall back to a default trait method implementation.
-        let mut visited = std::collections::HashSet::new();
-        let mut trait_stack = all_traits;
-        while let Some(t_name) = trait_stack.pop() {
-            if !visited.insert(t_name) {
-                continue;
-            }
-            if let Some(TypeDefinition::Trait(td)) = type_definitions.get(t_name) {
-                if let Some(method) = td.methods.get(method_name) {
-                    if !method.is_abstract {
-                        let mut mangled =
-                            String::with_capacity(t_name.len() + 1 + method_name.len());
-                        mangled.push_str(t_name);
-                        mangled.push('_');
-                        mangled.push_str(method_name);
-                        return Some(mangled);
-                    }
-                }
-                trait_stack.extend(td.parent_traits.iter().map(|s| s.as_str()));
-            }
-        }
-        None
     }
 }

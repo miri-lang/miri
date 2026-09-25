@@ -24,6 +24,7 @@ use std::process::Command;
 
 use crate::ast::BuiltinCollectionKind;
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::TypeChecker;
 
 /// One generic-class instantiation's substitution: the generic-name→concrete-type
@@ -526,14 +527,6 @@ impl Default for Pipeline {
     }
 }
 
-/// Record the instantiations a program needs but never names.
-///
-/// A `Queue<float>` keeps its elements in a `List<T>` field, so the source only
-/// ever mentions `Queue<float>` while lowering needs that inner collection's
-/// methods at the concrete element width. Substitute each recorded instantiation
-/// into its class's field types and record every nested generic-class type the
-/// substitution makes concrete, repeating until a pass discovers nothing new so
-/// a chain of nested containers is covered.
 /// Every function name a lowered body calls.
 fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::HashSet<String> {
     let mut called = std::collections::HashSet::new();
@@ -554,6 +547,183 @@ fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::Ha
         }
     }
     called
+}
+
+/// The names the lowered bodies call, gathered as they grow: each refresh
+/// scans only the bodies lowered since the one before.
+#[derive(Default)]
+struct CalledNames {
+    names: std::collections::HashSet<String>,
+    scanned: usize,
+}
+
+impl CalledNames {
+    fn refresh(&mut self, bodies: &[(String, mir::Body)]) {
+        let unscanned = bodies.get(self.scanned..).unwrap_or_default();
+        self.names.extend(called_function_names(unscanned));
+        self.scanned = bodies.len();
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+}
+
+/// Where a top-level statement sits: in the program's own body or among the
+/// imported statements. Held in place of a reference so a table built from
+/// the statements outlives the registry updates between lowering rounds,
+/// which borrow the type checker mutably.
+#[derive(Clone, Copy)]
+enum StatementSite {
+    Program(usize),
+    Imported(usize),
+}
+
+impl StatementSite {
+    fn statement(self, result: &PipelineResult) -> Option<&Statement> {
+        match self {
+            StatementSite::Program(index) => result.ast.body.get(index),
+            StatementSite::Imported(index) => result.type_checker.imported_statements.get(index),
+        }
+    }
+}
+
+/// Every top-level statement with its site, the program's own before the
+/// imported ones.
+fn statements_with_sites(
+    result: &PipelineResult,
+) -> impl Iterator<Item = (StatementSite, &Statement)> {
+    let program = result.ast.body.iter().enumerate();
+    let imported = result.type_checker.imported_statements.iter().enumerate();
+    program
+        .map(|(index, stmt)| (StatementSite::Program(index), stmt))
+        .chain(imported.map(|(index, stmt)| (StatementSite::Imported(index), stmt)))
+}
+
+/// One default body a trait declares: the trait, the method, its shared
+/// `{Trait}_{method}` symbol and where the declaring trait sits.
+struct TraitDefaultBody {
+    trait_name: String,
+    symbol: String,
+    trait_site: StatementSite,
+    member: usize,
+}
+
+impl TraitDefaultBody {
+    /// The declaring trait statement and the method statement within it.
+    fn statements<'r>(&self, result: &'r PipelineResult) -> Option<(&'r Statement, &'r Statement)> {
+        let trait_stmt = self.trait_site.statement(result)?;
+        let StatementKind::Trait(_, _, _, methods, _) = &trait_stmt.node else {
+            return None;
+        };
+        Some((trait_stmt, methods.get(self.member)?))
+    }
+}
+
+/// Every default body the program's traits and the imported ones declare,
+/// found by one scan. The first declaration of a trait's method wins, so a
+/// program trait shadows an imported trait of the same name.
+struct TraitDefaultBodies {
+    bodies: Vec<TraitDefaultBody>,
+    by_trait: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
+}
+
+impl TraitDefaultBodies {
+    fn collect(result: &PipelineResult) -> Self {
+        let mut table = TraitDefaultBodies {
+            bodies: Vec::new(),
+            by_trait: std::collections::HashMap::new(),
+        };
+        for (trait_site, stmt) in statements_with_sites(result) {
+            let StatementKind::Trait(name_expr, _, _, methods, _) = &stmt.node else {
+                continue;
+            };
+            let Some(trait_name) = Pipeline::identifier_name(name_expr) else {
+                continue;
+            };
+            for (member, method_stmt) in methods.iter().enumerate() {
+                let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                    continue;
+                };
+                if decl.body.is_some() {
+                    table.insert(trait_name, &decl.name, trait_site, member);
+                }
+            }
+        }
+        table
+    }
+
+    fn insert(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        trait_site: StatementSite,
+        member: usize,
+    ) {
+        let methods = self.by_trait.entry(trait_name.to_string()).or_default();
+        if methods.contains_key(method_name) {
+            return;
+        }
+        methods.insert(method_name.to_string(), self.bodies.len());
+        self.bodies.push(TraitDefaultBody {
+            trait_name: trait_name.to_string(),
+            symbol: Pipeline::mangle_method_name(trait_name, method_name),
+            trait_site,
+            member,
+        });
+    }
+
+    /// The method statement of `trait_name`'s default `method_name`.
+    fn method<'r>(
+        &self,
+        result: &'r PipelineResult,
+        trait_name: &str,
+        method_name: &str,
+    ) -> Option<&'r Statement> {
+        let index = *self.by_trait.get(trait_name)?.get(method_name)?;
+        let (_, method_stmt) = self.bodies.get(index)?.statements(result)?;
+        Some(method_stmt)
+    }
+}
+
+/// What every lowering round reads and no round changes: the generic function
+/// declarations, the trait default bodies, and the symbols codegen names
+/// outside any call. Built once, before the first body is lowered.
+struct ReachTables {
+    /// Every generic function declaration by name, the program's own
+    /// shadowing an imported one of the same name.
+    generic_functions: std::collections::HashMap<String, StatementSite>,
+    trait_defaults: TraitDefaultBodies,
+    synthesized: std::collections::HashSet<String>,
+}
+
+impl ReachTables {
+    fn collect(result: &PipelineResult) -> Self {
+        let mut generic_functions = std::collections::HashMap::new();
+        for (site, stmt) in statements_with_sites(result) {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                if decl.generics.is_some() {
+                    generic_functions.entry(decl.name.clone()).or_insert(site);
+                }
+            }
+        }
+        ReachTables {
+            generic_functions,
+            trait_defaults: TraitDefaultBodies::collect(result),
+            synthesized: mir::lowering::dispatch_symbols::synthesized_references(
+                result.type_checker.type_definitions(),
+            ),
+        }
+    }
+}
+
+/// A concrete class whose inherited trait defaults are being lowered: its
+/// name, the `self` type its copies take, and every type above it with what
+/// its clauses pin that type's parameters to.
+struct InheritingClass<'a> {
+    name: &'a str,
+    self_type: Type,
+    supertypes: Vec<(String, std::collections::HashMap<String, Type>)>,
 }
 
 /// Fill the generic-class instantiation registry with everything the program
@@ -710,6 +880,14 @@ fn recorded_instantiation_count(type_checker: &TypeChecker) -> usize {
         .sum()
 }
 
+/// Record the instantiations a program needs but never names.
+///
+/// A `Queue<float>` keeps its elements in a `List<T>` field, so the source only
+/// ever mentions `Queue<float>` while lowering needs that inner collection's
+/// methods at the concrete element width. Substitute each recorded instantiation
+/// into its class's field types and record every nested generic-class type the
+/// substitution makes concrete, repeating until a pass discovers nothing new so
+/// a chain of nested containers is covered.
 fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
     loop {
         let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
@@ -1337,6 +1515,12 @@ impl Pipeline {
     /// inherited trait-default path ([`lower_trait_default_instantiations`]): both
     /// need the same mangle-name / re-lower / push sequence, differing only in
     /// where the method statement comes from.
+    ///
+    /// `self` is typed at `class_subs`, the class's own arguments; the body
+    /// reads what [`mir::lowering::dispatch_symbols::instantiation_substitution`]
+    /// makes of them, so a trait default reads the trait's parameters at what
+    /// the chain pins them to without a same-named class parameter retyping
+    /// `self`.
     #[allow(clippy::too_many_arguments)]
     fn lower_one_instantiation_method(
         result: &PipelineResult,
@@ -1344,7 +1528,7 @@ impl Pipeline {
         method_stmt: &Statement,
         method_name: &str,
         is_release: bool,
-        subs: &std::collections::HashMap<String, Type>,
+        class_subs: &std::collections::HashMap<String, Type>,
         mangle_args: &[(String, Type)],
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
@@ -1355,18 +1539,29 @@ impl Pipeline {
         if lowered_names.contains(&mangled) {
             return Ok(());
         }
-        let (mir_body, lambdas) =
-            mir::lowering::lower_class_method_instantiation_with_compilation_ids(
-                method_stmt,
-                class_name,
-                &result.type_checker,
-                is_release,
-                subs,
-                compilation_ids.clone(),
-            )
-            .map_err(|e| {
-                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
-            })?;
+        let self_type = mir::lowering::monomorphized_self_type(
+            class_name,
+            &result.type_checker,
+            class_subs,
+            method_stmt.span,
+        );
+        let subs = mir::lowering::dispatch_symbols::instantiation_substitution(
+            &result.type_checker,
+            class_name,
+            method_name,
+            class_subs,
+        );
+        let (mir_body, lambdas) = mir::lowering::lower_class_method_at_with_compilation_ids(
+            method_stmt,
+            self_type,
+            &result.type_checker,
+            is_release,
+            &subs,
+            compilation_ids.clone(),
+        )
+        .map_err(|e| {
+            CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
+        })?;
         Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
         Ok(())
     }
@@ -1399,25 +1594,14 @@ impl Pipeline {
         if BuiltinCollectionKind::from_name(class_name).is_some() {
             return Ok(());
         }
-        for (mut subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
-            // The trait-default body is written in the trait's own generic
-            // parameters (`U`), which the class binds through
-            // `implements Trait<...>` in class-param terms (`T`). Extend the
-            // class-param substitution with `trait-param → class-arg → concrete`
-            // so a default over `U` monomorphizes at the concrete scalar width
-            // (matching the return type the type checker resolves for the call).
-            mir::lowering::dispatch::extend_subs_with_trait_params(
-                &result.type_checker,
-                class_name,
-                &mut subs,
-            );
+        for (class_subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
             Self::lower_one_instantiation_method(
                 result,
                 class_name,
                 method_stmt,
                 method_name,
                 is_release,
-                &subs,
+                &class_subs,
                 &mangle_args,
                 bodies,
                 lowered_names,
@@ -1439,88 +1623,129 @@ impl Pipeline {
     /// compile. Scan the lowered bodies for mangled symbols, emit just those, and
     /// repeat until a pass finds nothing new, since a freshly emitted body can
     /// call another.
+    #[allow(clippy::too_many_arguments)]
     fn lower_called_generic_class_methods(
-        &self,
         result: &PipelineResult,
+        reach: &ReachTables,
+        called: &mut CalledNames,
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let generic_decls = Self::generic_function_declarations(result);
         loop {
-            let called = called_function_names(bodies);
+            called.refresh(bodies);
             let mut emitted = false;
-
-            for stmt in result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter())
-            {
+            for (_, stmt) in statements_with_sites(result) {
                 let StatementKind::Class(class_data) = &stmt.node else {
                     continue;
                 };
-                let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                    continue;
-                };
-                for (mut subs, mangle_args) in
-                    Self::monomorphizable_instantiation_subs(result, class_name)
-                {
-                    mir::lowering::dispatch::extend_subs_with_trait_params(
-                        &result.type_checker,
-                        class_name,
-                        &mut subs,
-                    );
-
-                    let own = class_data.body.iter();
-                    let defaults = Self::trait_default_methods_for_class(result, class_name);
-                    for method_stmt in own.chain(defaults.iter().copied()) {
-                        let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
-                            continue;
-                        };
-                        if decl.body.is_none() {
-                            continue;
-                        }
-                        let base = Self::mangle_method_name(class_name, &decl.name);
-                        let mangled =
-                            mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
-                        let reached = called.contains(&mangled)
-                            || Self::is_element_method_body(result, class_name, &decl.name);
-                        if lowered_names.contains(&mangled) || !reached {
-                            continue;
-                        }
-                        let first_new = bodies.len();
-                        Self::lower_one_instantiation_method(
-                            result,
-                            class_name,
-                            method_stmt,
-                            &decl.name,
-                            is_release,
-                            &subs,
-                            &mangle_args,
-                            bodies,
-                            lowered_names,
-                            compilation_ids,
-                        )?;
-                        Self::lower_generic_functions_reached_from(
-                            result,
-                            is_release,
-                            first_new,
-                            &generic_decls,
-                            bodies,
-                            lowered_names,
-                            compilation_ids,
-                        )?;
-                        emitted = true;
-                    }
-                }
+                emitted |= Self::lower_called_methods_of_class(
+                    result,
+                    reach,
+                    called,
+                    class_data,
+                    is_release,
+                    bodies,
+                    lowered_names,
+                    compilation_ids,
+                )?;
             }
-
             if !emitted {
                 return Ok(());
             }
         }
+    }
+
+    /// Lower, at each of `class_data`'s instantiations, every method it
+    /// compiles under its own name — its own and the trait defaults its clauses
+    /// supply — that a lowered body calls or a container's thunk reaches, with
+    /// the generic functions each reaches. Returns whether anything was lowered.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_called_methods_of_class(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        called: &CalledNames,
+        class_data: &ClassData,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<bool, CompilerError> {
+        let Some(class_name) = Self::identifier_name(&class_data.name) else {
+            return Ok(false);
+        };
+        let methods = Self::methods_compiled_under_class_name(
+            result,
+            &reach.trait_defaults,
+            class_data,
+            class_name,
+        );
+        let mut emitted = false;
+        for (class_subs, mangle_args) in
+            Self::monomorphizable_instantiation_subs(result, class_name)
+        {
+            for &(method_stmt, method_name) in &methods {
+                let base = Self::mangle_method_name(class_name, method_name);
+                let mangled = mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
+                let reached = called.contains(&mangled)
+                    || Self::is_element_method_body(result, class_name, method_name);
+                if lowered_names.contains(&mangled) || !reached {
+                    continue;
+                }
+                let first_new = bodies.len();
+                Self::lower_one_instantiation_method(
+                    result,
+                    class_name,
+                    method_stmt,
+                    method_name,
+                    is_release,
+                    &class_subs,
+                    &mangle_args,
+                    bodies,
+                    lowered_names,
+                    compilation_ids,
+                )?;
+                Self::lower_generic_functions_reached_from(
+                    result,
+                    is_release,
+                    first_new,
+                    &reach.generic_functions,
+                    bodies,
+                    lowered_names,
+                    compilation_ids,
+                )?;
+                emitted = true;
+            }
+        }
+        Ok(emitted)
+    }
+
+    /// Every method with a body `class_data` compiles under its own name: the
+    /// ones it declares, then the trait defaults its own clauses supply.
+    fn methods_compiled_under_class_name<'r>(
+        result: &'r PipelineResult,
+        trait_defaults: &TraitDefaultBodies,
+        class_data: &'r ClassData,
+        class_name: &str,
+    ) -> Vec<(&'r Statement, &'r str)> {
+        let definitions = result.type_checker.type_definitions();
+        let defaults = mir::lowering::dispatch_symbols::own_trait_defaults(definitions, class_name)
+            .into_iter()
+            .filter_map(|(method, owner)| trait_defaults.method(result, owner, method));
+        class_data
+            .body
+            .iter()
+            .chain(defaults)
+            .filter_map(|method_stmt| {
+                let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                    return None;
+                };
+                decl.body
+                    .is_some()
+                    .then_some((method_stmt, decl.name.as_str()))
+            })
+            .collect()
     }
 
     /// Whether this method is what a container calls on its elements.
@@ -1536,23 +1761,17 @@ impl Pipeline {
         class_name: &str,
         method_name: &str,
     ) -> bool {
-        use crate::ast::types::{EQUALS_METHOD_NAME, ORDERING_METHOD_NAME, ORDERING_TRAIT_NAME};
-        use crate::type_checker::context::{
-            class_implements_trait, class_method_declaration, TypeDefinition,
-        };
+        use crate::ast::types::ORDERING_TRAIT_NAME;
+        use crate::type_checker::context::{class_implements_trait, class_method_declaration};
         let definitions = result.type_checker.type_definitions();
         if !matches!(definitions.get(class_name), Some(TypeDefinition::Class(_))) {
             return false;
         }
-        match method_name {
-            ORDERING_METHOD_NAME => {
-                class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions)
-            }
-            EQUALS_METHOD_NAME => {
-                class_method_declaration(class_name, EQUALS_METHOD_NAME, definitions).is_some()
-            }
-            _ => false,
+        let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
+        if method_name == ordering {
+            return class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions);
         }
+        method_name == equals && class_method_declaration(class_name, equals, definitions).is_some()
     }
 
     /// The `{Collection}_{method}` symbols a built-in collection declares itself
@@ -1588,59 +1807,6 @@ impl Pipeline {
         symbols
     }
 
-    /// Default-method statements of every trait a class implements, including
-    /// inherited traits, excluding those the class defines itself.
-    fn trait_default_methods_for_class<'a>(
-        result: &'a PipelineResult,
-        class_name: &str,
-    ) -> Vec<&'a Statement> {
-        use crate::type_checker::context::TypeDefinition;
-        let Some(TypeDefinition::Class(def)) =
-            result.type_checker.type_definitions().get(class_name)
-        else {
-            return Vec::new();
-        };
-        let mut wanted: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut pending: Vec<&str> = def.traits.iter().map(String::as_str).collect();
-        while let Some(trait_name) = pending.pop() {
-            if !wanted.insert(trait_name) {
-                continue;
-            }
-            if let Some(TypeDefinition::Trait(trait_def)) =
-                result.type_checker.type_definitions().get(trait_name)
-            {
-                pending.extend(trait_def.parent_traits.iter().map(String::as_str));
-            }
-        }
-
-        let mut methods = Vec::new();
-        for stmt in result
-            .ast
-            .body
-            .iter()
-            .chain(result.type_checker.imported_statements.iter())
-        {
-            let StatementKind::Trait(name_expr, _, _, body, _) = &stmt.node else {
-                continue;
-            };
-            let Some(trait_name) = Self::identifier_name(name_expr) else {
-                continue;
-            };
-            if !wanted.contains(trait_name) {
-                continue;
-            }
-            for method_stmt in body {
-                let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
-                    continue;
-                };
-                if decl.body.is_some() && !def.methods.contains_key(decl.name.as_str()) {
-                    methods.push(method_stmt);
-                }
-            }
-        }
-        methods
-    }
-
     /// Lower every body the program needs.
     ///
     /// Takes the result mutably because lowering an instantiation can reach a
@@ -1659,6 +1825,7 @@ impl Pipeline {
         // on any later build of the same source (a long-lived host would otherwise
         // drift because the raw AST-id counter never resets).
         let compilation_ids = mir::lowering::new_shared_compilation_ids();
+        let reach = ReachTables::collect(result);
 
         self.lower_program_bodies(
             result,
@@ -1681,8 +1848,9 @@ impl Pipeline {
             &mut lowered_names,
             &compilation_ids,
         )?;
-        self.lower_trait_default_methods(
+        Self::lower_trait_default_methods(
             result,
+            &reach.trait_defaults,
             is_release,
             &mut bodies,
             &mut lowered_names,
@@ -1697,14 +1865,16 @@ impl Pipeline {
 
         self.lower_monomorphized_generics(
             result,
+            &reach.generic_functions,
             is_release,
             &mut bodies,
             &mut lowered_names,
             &compilation_ids,
         )?;
 
-        self.lower_reached_generic_class_methods(
+        Self::lower_reached_methods(
             result,
+            &reach,
             is_release,
             &mut bodies,
             &mut lowered_names,
@@ -1758,30 +1928,104 @@ impl Pipeline {
         Ok(bodies)
     }
 
-    /// Emit the generic-class methods the lowered bodies call, registering each
+    /// Emit the generic-class methods and trait defaults the lowered bodies
+    /// reach, and the generic functions those reach in turn, registering each
     /// instantiation those bodies reached only through a substitution, until a
     /// round reaches nothing new.
-    fn lower_reached_generic_class_methods(
-        &self,
+    fn lower_reached_methods(
         result: &mut PipelineResult,
+        reach: &ReachTables,
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
+        let mut called = CalledNames::default();
         loop {
             register_base_class_instantiations(&mut result.type_checker);
-            self.lower_called_generic_class_methods(
+            Self::lower_called_generic_class_methods(
                 result,
+                reach,
+                &mut called,
                 is_release,
                 bodies,
                 lowered_names,
                 compilation_ids,
             )?;
-            if !register_lowered_class_instantiations(&mut result.type_checker, bodies) {
+            let first_default = bodies.len();
+            called.refresh(bodies);
+            Self::lower_called_trait_defaults(
+                result,
+                reach,
+                &called,
+                is_release,
+                bodies,
+                lowered_names,
+                compilation_ids,
+            )?;
+            Self::lower_generic_functions_reached_from(
+                result,
+                is_release,
+                first_default,
+                &reach.generic_functions,
+                bodies,
+                lowered_names,
+                compilation_ids,
+            )?;
+            let registered =
+                register_lowered_class_instantiations(&mut result.type_checker, bodies);
+            if !registered && bodies.len() == first_default {
                 return Ok(());
             }
         }
+    }
+
+    /// Emit the shared `{Trait}_{method}` body of each trait default a lowered
+    /// body calls or codegen names outside any call.
+    ///
+    /// The shared body is written in the trait's own parameters and leaves them
+    /// bare, so a local at `T` is a value of no known type. A concrete
+    /// implementor has its own copy typed at what its clauses pin, which its
+    /// static calls name, and so does its vtable slot unless the class is
+    /// generic. What still names the shared body — a generic implementor's
+    /// slot, a caller whose `self` is abstract, an abstract class's drop hook —
+    /// is found here; one nothing names is never compiled.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_called_trait_defaults(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        called: &CalledNames,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        for default in &reach.trait_defaults.bodies {
+            let symbol = &default.symbol;
+            let is_named = called.contains(symbol) || reach.synthesized.contains(symbol);
+            if lowered_names.contains(symbol) || !is_named {
+                continue;
+            }
+            let Some((trait_stmt, method_stmt)) = default.statements(result) else {
+                continue;
+            };
+            let self_type = Type::new(
+                TypeKind::Custom(default.trait_name.clone(), None),
+                trait_stmt.span,
+            );
+            let (body, lambdas) = mir::lowering::lower_class_method_with_compilation_ids(
+                method_stmt,
+                self_type,
+                &result.type_checker,
+                is_release,
+                compilation_ids.clone(),
+            )
+            .map_err(|e| {
+                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", symbol, e))
+            })?;
+            Self::push_lowered_body(bodies, lowered_names, symbol.clone(), body, lambdas);
+        }
+        Ok(())
     }
 
     /// Run every verification pass over every body and turn what they find
@@ -1824,8 +2068,9 @@ impl Pipeline {
         Err(CompilerError::MirVerification(message))
     }
 
-    /// Lower top-level functions and the methods of every class/trait/struct/enum
-    /// declared in the user's program AST.
+    /// Lower top-level functions and the methods of every class/struct/enum
+    /// declared in the user's program AST. A trait's default bodies are emitted
+    /// only where something calls them, by `lower_called_trait_defaults`.
     fn lower_program_bodies(
         &self,
         result: &PipelineResult,
@@ -1927,51 +2172,6 @@ impl Pipeline {
                         lowered_names,
                         compilation_ids,
                     )?;
-                }
-                StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
-                    // Compile default (non-abstract) trait methods as `TraitName_methodName`.
-                    let Some(trait_name) = Self::identifier_name(name_expr) else {
-                        continue;
-                    };
-
-                    let self_type =
-                        Type::new(TypeKind::Custom(trait_name.to_string(), None), stmt.span);
-
-                    for method_stmt in body {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            // Only compile methods with a body (default implementations).
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
-
-                            let mangled = Self::mangle_method_name(trait_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
-                                continue;
-                            }
-
-                            let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_compilation_ids(
-                                    method_stmt,
-                                    self_type.clone(),
-                                    &result.type_checker,
-                                    is_release,
-                                    compilation_ids.clone(),
-                                )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
-                        }
-                    }
                 }
                 StatementKind::Struct(name_expr, _generics, _fields, methods, _vis, _) => {
                     // Compile struct methods with bodies as `StructName_methodName`.
@@ -2233,51 +2433,6 @@ impl Pipeline {
                         }
                     }
                 }
-                StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
-                    // Compile default (non-abstract) trait methods imported from stdlib
-                    // as `TraitName_methodName`, mirroring the in-program AST trait pass.
-                    let Some(trait_name) = Self::identifier_name(name_expr) else {
-                        continue;
-                    };
-
-                    let self_type =
-                        Type::new(TypeKind::Custom(trait_name.to_string(), None), stmt.span);
-
-                    for method_stmt in body {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
-
-                            let mangled = Self::mangle_method_name(trait_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
-                                continue;
-                            }
-
-                            let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_compilation_ids(
-                                    method_stmt,
-                                    self_type.clone(),
-                                    &result.type_checker,
-                                    is_release,
-                                    compilation_ids.clone(),
-                                )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -2435,201 +2590,114 @@ impl Pipeline {
     /// Re-lower trait default methods per concrete class.
     ///
     /// Mirrors `lower_inherited_methods` for traits. When a concrete class C
-    /// implements a trait T with a non-abstract default method M, we synthesize
-    /// `C_M` by re-lowering T.M's body with self_type = C. This lets
-    /// `resolve_inherited_method` return C as the defining class (concrete-caller
-    /// rule), so calls dispatch statically to `C_M`. Inside C_M, self-calls like
-    /// `self.length()` also dispatch statically because self_type is concrete —
-    /// avoiding the slot-mismatch issue between per-trait and combined-vtable
-    /// method layouts.
+    /// inherits a default method M, we synthesize `C_M` by re-lowering the
+    /// default's body with self_type = C. This lets `resolve_inherited_method`
+    /// return C as the defining class (concrete-caller rule), so calls dispatch
+    /// statically to `C_M`. Inside C_M, self-calls like `self.length()` also
+    /// dispatch statically because self_type is concrete — avoiding the
+    /// slot-mismatch issue between per-trait and combined-vtable method layouts.
     /// Every re-lowering emits the default body's closures again; they are kept
     /// apart because `LoweringContext::closure_symbol` spells the implementing
     /// class after the closure's own base name.
     fn lower_trait_default_methods(
-        &self,
         result: &PipelineResult,
+        trait_defaults: &TraitDefaultBodies,
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
+        let definitions = result.type_checker.type_definitions();
+        for (_, stmt) in statements_with_sites(result) {
+            let StatementKind::Class(class_data) = &stmt.node else {
+                continue;
+            };
+            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                continue;
+            };
+            let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
+                continue;
+            };
+            if class_def.is_abstract {
+                continue;
+            }
+            let class = InheritingClass {
+                name: class_name,
+                self_type: Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span),
+                supertypes: result
+                    .type_checker
+                    .declaring_types_above(class_name, &std::collections::HashMap::new()),
+            };
+            Self::lower_class_trait_defaults(
+                result,
+                &class,
+                trait_defaults,
+                is_release,
+                bodies,
+                lowered_names,
+                compilation_ids,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Lower `class`'s copy of every trait default it inherits, typed at what
+    /// its `extends` and `implements` clauses pin the trait's own parameters
+    /// to, together with each concrete-scalar instantiation's copy.
+    ///
+    /// A parameter only the class's own type arguments would pin is absent
+    /// from the pins: the class's bare copy leaves it generic, and each
+    /// instantiation's copy reads it from that instantiation.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_class_trait_defaults(
+        result: &PipelineResult,
+        class: &InheritingClass,
+        trait_defaults: &TraitDefaultBodies,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        let definitions = result.type_checker.type_definitions();
+        let unpinned = std::collections::HashMap::new();
+        for (method_name, trait_name) in
+            mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class.name)
         {
-            use crate::type_checker::context::TypeDefinition;
-
-            // Step 1: collect default-method statements per trait name from both
-            // user code and stdlib imports.
-            let mut trait_default_methods: std::collections::HashMap<String, Vec<&Statement>> =
-                std::collections::HashMap::new();
-
-            let all_stmts = result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter());
-
-            for stmt in all_stmts {
-                if let StatementKind::Trait(name_expr, _gens, _parents, body, _vis) = &stmt.node {
-                    let Some(trait_name) = Self::identifier_name(name_expr) else {
-                        continue;
-                    };
-                    let entry = trait_default_methods
-                        .entry(trait_name.to_string())
-                        .or_default();
-                    for method_stmt in body {
-                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
-                            if md.body.is_some() {
-                                entry.push(method_stmt);
-                            }
-                        }
-                    }
-                }
+            let mangled = Self::mangle_method_name(class.name, method_name);
+            if lowered_names.contains(&mangled) {
+                continue;
             }
+            let Some(method_stmt) = trait_defaults.method(result, trait_name, method_name) else {
+                continue;
+            };
+            let pinned = pins_of(&class.supertypes, trait_name).unwrap_or(&unpinned);
+            let (mir_body, lambdas) = mir::lowering::lower_class_method_at_with_compilation_ids(
+                method_stmt,
+                class.self_type.clone(),
+                &result.type_checker,
+                is_release,
+                pinned,
+                compilation_ids.clone(),
+            )
+            .map_err(|e| {
+                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
+            })?;
+            Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
 
-            // Step 2: for each concrete class, walk the trait hierarchy of every
-            // trait it (or any ancestor class) implements, and emit a `C_M` copy.
-            let all_stmts2 = result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter());
-
-            for stmt in all_stmts2 {
-                let class_data = match &stmt.node {
-                    StatementKind::Class(cd) => cd,
-                    _ => continue,
-                };
-                let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                    continue;
-                };
-                let cd = match result
-                    .type_checker
-                    .type_table
-                    .global_type_definitions
-                    .get(class_name)
-                {
-                    Some(TypeDefinition::Class(cd)) => cd,
-                    _ => continue,
-                };
-                if cd.is_abstract {
-                    continue;
-                }
-
-                let self_type =
-                    Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
-
-                // Walk all traits implemented by this class and its ancestors, plus
-                // the transitive parent-trait closure, collecting unique trait names.
-                let mut trait_names_to_process: Vec<String> = Vec::new();
-                let mut visited_traits: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                let mut walk_class = class_name.to_string();
-                while let Some(TypeDefinition::Class(walk_cd)) = result
-                    .type_checker
-                    .type_table
-                    .global_type_definitions
-                    .get(&walk_class)
-                {
-                    for t_name in &walk_cd.traits {
-                        let mut to_check = vec![t_name.clone()];
-                        while let Some(t) = to_check.pop() {
-                            if !visited_traits.insert(t.clone()) {
-                                continue;
-                            }
-                            if let Some(TypeDefinition::Trait(td)) = result
-                                .type_checker
-                                .type_table
-                                .global_type_definitions
-                                .get(&t)
-                            {
-                                to_check.extend(td.parent_traits.iter().cloned());
-                            }
-                            trait_names_to_process.push(t);
-                        }
-                    }
-                    match &walk_cd.base_class {
-                        Some(b) => walk_class = b.clone(),
-                        None => break,
-                    }
-                }
-
-                for t_name in &trait_names_to_process {
-                    let method_stmts = match trait_default_methods.get(t_name.as_str()) {
-                        Some(ms) => ms,
-                        None => continue,
-                    };
-                    for method_stmt in method_stmts {
-                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
-                            // Skip if the concrete class (or an ancestor) overrides.
-                            let overridden = {
-                                let mut current = class_name.to_string();
-                                let mut found = false;
-                                while let Some(TypeDefinition::Class(c)) = result
-                                    .type_checker
-                                    .type_table
-                                    .global_type_definitions
-                                    .get(&current)
-                                {
-                                    if c.methods.contains_key(md.name.as_str()) {
-                                        found = true;
-                                        break;
-                                    }
-                                    match &c.base_class {
-                                        Some(b) => current = b.clone(),
-                                        None => break,
-                                    }
-                                }
-                                found
-                            };
-                            if overridden {
-                                continue;
-                            }
-                            let mut mangled =
-                                String::with_capacity(class_name.len() + 1 + md.name.len());
-                            mangled.push_str(class_name);
-                            mangled.push('_');
-                            mangled.push_str(&md.name);
-                            if lowered_names.contains(&mangled) {
-                                continue;
-                            }
-                            let (mir_body, lambdas) =
-                                mir::lowering::lower_class_method_with_compilation_ids(
-                                    method_stmt,
-                                    self_type.clone(),
-                                    &result.type_checker,
-                                    is_release,
-                                    compilation_ids.clone(),
-                                )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
-
-                            // A generic class inheriting this default also needs a
-                            // mangled copy per concrete-scalar instantiation so a
-                            // `Box<float>` receiver links against a body typed at
-                            // the concrete `float`, not the bare pointer-width one.
-                            Self::lower_trait_default_instantiations(
-                                result,
-                                class_name,
-                                method_stmt,
-                                &md.name,
-                                is_release,
-                                bodies,
-                                lowered_names,
-                                compilation_ids,
-                            )?;
-                        }
-                    }
-                }
-            }
+            // A generic class inheriting this default also needs a mangled
+            // copy per concrete-scalar instantiation so a `Box<float>` receiver
+            // links against a body typed at the concrete `float`, not the bare
+            // pointer-width one.
+            Self::lower_trait_default_instantiations(
+                result,
+                class.name,
+                method_stmt,
+                method_name,
+                is_release,
+                bodies,
+                lowered_names,
+                compilation_ids,
+            )?;
         }
         Ok(())
     }
@@ -2645,6 +2713,7 @@ impl Pipeline {
     fn lower_monomorphized_generics(
         &self,
         result: &PipelineResult,
+        generic_functions: &std::collections::HashMap<String, StatementSite>,
         is_release: bool,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
@@ -2656,12 +2725,11 @@ impl Pipeline {
         // buffer-touching and the type checker rejects it.
         let needed_residency = Self::residency_specializations_called(bodies, lowered_names);
 
-        let generic_decls = Self::generic_function_declarations(result);
         Self::lower_generic_functions_reached_from(
             result,
             is_release,
             0,
-            &generic_decls,
+            generic_functions,
             bodies,
             lowered_names,
             compilation_ids,
@@ -2684,7 +2752,7 @@ impl Pipeline {
         result: &PipelineResult,
         is_release: bool,
         first_new: usize,
-        generic_decls: &std::collections::HashMap<&str, &Statement>,
+        generic_functions: &std::collections::HashMap<String, StatementSite>,
         bodies: &mut Vec<(String, mir::Body)>,
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
@@ -2695,7 +2763,10 @@ impl Pipeline {
             if lowered_names.contains(&call.symbol) {
                 continue;
             }
-            let Some(&ast_stmt) = generic_decls.get(call.function.as_str()) else {
+            let Some(ast_stmt) = generic_functions
+                .get(call.function.as_str())
+                .and_then(|site| site.statement(result))
+            else {
                 continue;
             };
             let subs = call.type_args.into_iter().collect();
@@ -2715,27 +2786,6 @@ impl Pipeline {
             Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
         }
         Ok(())
-    }
-
-    /// Every generic function declaration by name, the program's own shadowing
-    /// an imported one of the same name.
-    fn generic_function_declarations(
-        result: &PipelineResult,
-    ) -> std::collections::HashMap<&str, &Statement> {
-        let mut decls = std::collections::HashMap::new();
-        for stmt in result
-            .ast
-            .body
-            .iter()
-            .chain(result.type_checker.imported_statements.iter())
-        {
-            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                if decl.generics.is_some() {
-                    decls.entry(decl.name.as_str()).or_insert(stmt);
-                }
-            }
-        }
-        decls
     }
 
     /// Record a lowered body and the lambdas lowered with it.
