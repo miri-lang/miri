@@ -28,7 +28,7 @@
 //! exactly where the written operation is, through every way arithmetic is
 //! admitted rather than through a second opinion about which types have it.
 
-use super::context::{Context, TypeDefinition};
+use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::operators::missing_ordering_at_instantiation_message;
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -597,10 +597,12 @@ impl TypeChecker {
     /// Record the sites a call to `method`, reached through a receiver of type
     /// `class_name` whose generic parameters `substitution` pins, stands for.
     ///
-    /// A method's requirement is recorded against whichever type declares it,
-    /// which for an inherited default method is a trait rather than the
-    /// receiver's own class. The receiver's substitution is therefore re-keyed
-    /// into each declaring type's parameter names, one site per declaring type.
+    /// A method's requirement is recorded against whichever type declares it:
+    /// the receiver's own class, a base class it `extends`, or a trait whose
+    /// default it inherits. The receiver's substitution is therefore carried
+    /// up every edge into each type's own parameter names, one site per type.
+    /// A receiver with no parameters of its own still pins what it inherits —
+    /// `class Sub extends Base<int>` pins `Base`'s `T` to `int`.
     pub(crate) fn record_method_pinning_sites(
         &mut self,
         class_name: &str,
@@ -609,18 +611,13 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        if substitution.is_empty() {
-            return;
-        }
         self.record_pinning_site(
             (class_name.to_string(), method.to_string()),
             substitution,
             span,
             context,
         );
-        let bindings = self.class_trait_param_bindings(class_name);
-        for declaring in self.declaring_types_above(class_name) {
-            let rekeyed = self.rekeyed_into(&declaring, substitution, &bindings);
+        for (declaring, rekeyed) in self.declaring_types_above(class_name, substitution) {
             self.record_pinning_site((declaring, method.to_string()), &rekeyed, span, context);
         }
     }
@@ -801,62 +798,283 @@ impl TypeChecker {
         );
     }
 
-    /// Re-key a receiver's substitution into `declaring`'s own parameter names.
+    /// Re-key a substitution into `declaring`'s own parameter names.
     ///
-    /// `bindings` maps each directly-implemented trait's parameter to the
-    /// argument the class binds it to, written in the class's parameter terms;
-    /// resolving that argument through the receiver's substitution yields the
-    /// concrete type. A parameter with no binding keeps its own name, which is
-    /// how a trait whose parameter the class names identically still resolves.
+    /// `written` holds the arguments an `extends`, `implements` or parent-trait
+    /// clause passes `declaring`, spelled in the terms of the type that wrote
+    /// the clause; resolving each through that type's `substitution` yields
+    /// what `declaring`'s parameter is pinned to. A parameter the clause passes
+    /// nothing keeps its own name, which is how a trait whose parameter the
+    /// class names identically still resolves. A parameter whose argument names
+    /// a parameter the substitution does not pin is left out: it is pinned by
+    /// nothing here, and naming it would read as the caller's own parameter.
     fn rekeyed_into(
         &self,
         declaring: &str,
+        written: &[Type],
+        writer_parameters: &[GenericDefinition],
         substitution: &HashMap<String, Type>,
-        bindings: &HashMap<String, Type>,
     ) -> HashMap<String, Type> {
-        let Some(TypeDefinition::Trait(trait_def)) =
-            self.type_table.global_type_definitions.get(declaring)
-        else {
-            return substitution.clone();
-        };
-        let Some(generics) = trait_def.generics.as_ref() else {
-            return HashMap::new();
+        let names_an_unpinned_parameter = |kind: &TypeKind| {
+            generic_parameter_name(kind).is_some_and(|name| {
+                !substitution.contains_key(name)
+                    && (matches!(kind, TypeKind::Generic(..))
+                        || writer_parameters.iter().any(|p| p.name == name))
+            })
         };
         let mut rekeyed = HashMap::new();
-        for generic in generics {
-            let class_side = bindings.get(&generic.name).cloned().unwrap_or_else(|| {
+        for (position, generic) in self.generics_of(declaring).iter().enumerate() {
+            let argument = written.get(position).cloned().unwrap_or_else(|| {
                 Type::new(
                     TypeKind::Generic(generic.name.clone(), None, TypeDeclarationKind::None),
                     Span::new(0, 0),
                 )
             });
-            let resolved = self.substitute_type(&class_side, substitution);
-            rekeyed.insert(generic.name.clone(), resolved);
+            if !spells_a_type(&argument.kind, &names_an_unpinned_parameter) {
+                let resolved = self.substitute_type(&argument, substitution);
+                rekeyed.insert(generic.name.clone(), resolved);
+            }
         }
         rekeyed
     }
 
-    /// The traits a receiver of type `class_name` inherits methods from,
-    /// each named once.
-    fn declaring_types_above(&self, class_name: &str) -> Vec<String> {
-        let Some(TypeDefinition::Class(class_def)) =
-            self.type_table.global_type_definitions.get(class_name)
-        else {
-            return Vec::new();
+    /// The generic parameters a class or trait declares, in order.
+    fn generics_of(&self, type_name: &str) -> &[GenericDefinition] {
+        let generics = match self.type_table.global_type_definitions.get(type_name) {
+            Some(TypeDefinition::Class(def)) => def.generics.as_deref(),
+            Some(TypeDefinition::Trait(def)) => def.generics.as_deref(),
+            Some(
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => None,
         };
-        let mut pending: Vec<String> = class_def.traits.clone();
-        let mut seen: Vec<String> = Vec::new();
-        while let Some(name) = pending.pop() {
-            if seen.contains(&name) {
+        generics.unwrap_or_default()
+    }
+
+    /// Every type a receiver of type `type_name` inherits methods from — base
+    /// classes, the traits each implements and their parent traits — each
+    /// named once, with `substitution` carried up into its own parameters.
+    fn declaring_types_above(
+        &self,
+        type_name: &str,
+        substitution: &HashMap<String, Type>,
+    ) -> Vec<(String, HashMap<String, Type>)> {
+        let mut pending = self.direct_supertypes(type_name, substitution);
+        let mut seen: Vec<(String, HashMap<String, Type>)> = Vec::new();
+        while let Some((name, rekeyed)) = pending.pop() {
+            if seen.iter().any(|(known, _)| *known == name) {
                 continue;
             }
-            if let Some(TypeDefinition::Trait(trait_def)) =
-                self.type_table.global_type_definitions.get(&name)
-            {
-                pending.extend(trait_def.parent_traits.iter().cloned());
-            }
-            seen.push(name);
+            pending.extend(self.direct_supertypes(&name, &rekeyed));
+            seen.push((name, rekeyed));
         }
         seen
+    }
+
+    /// The types `type_name` names in its own `extends`, `implements` or
+    /// parent-trait clauses, each with `substitution` re-keyed into it.
+    fn direct_supertypes(
+        &self,
+        type_name: &str,
+        substitution: &HashMap<String, Type>,
+    ) -> Vec<(String, HashMap<String, Type>)> {
+        let edges: Vec<(&String, &[Type])> =
+            match self.type_table.global_type_definitions.get(type_name) {
+                Some(TypeDefinition::Class(def)) => def
+                    .base_class
+                    .iter()
+                    .map(|base| (base, def.base_class_args.as_deref().unwrap_or_default()))
+                    .chain(def.traits.iter().map(|name| {
+                        let written = def.trait_args.get(name).map_or(&[][..], Vec::as_slice);
+                        (name, written)
+                    }))
+                    .collect(),
+                Some(TypeDefinition::Trait(def)) => def
+                    .parent_traits
+                    .iter()
+                    .map(|name| {
+                        let written = def
+                            .parent_trait_args
+                            .get(name)
+                            .map_or(&[][..], Vec::as_slice);
+                        (name, written)
+                    })
+                    .collect(),
+                Some(
+                    TypeDefinition::Struct(_)
+                    | TypeDefinition::Enum(_)
+                    | TypeDefinition::Generic(_)
+                    | TypeDefinition::Alias(_),
+                )
+                | None => Vec::new(),
+            };
+        let writer_parameters = self.generics_of(type_name);
+        edges
+            .into_iter()
+            .map(|(name, written)| {
+                let rekeyed = self.rekeyed_into(name, written, writer_parameters, substitution);
+                (name.clone(), rekeyed)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+
+    fn body(owner: &str, function: &str) -> GenericBodyId {
+        (owner.to_string(), function.to_string())
+    }
+
+    fn named(name: &str) -> Type {
+        Type::new(TypeKind::Custom(name.to_string(), None), Span::new(0, 0))
+    }
+
+    fn ordering(parameter: &str) -> Obligation {
+        Obligation::Ordering {
+            parameter: parameter.to_string(),
+        }
+    }
+
+    fn site(
+        caller: Option<GenericBodyId>,
+        callee: GenericBodyId,
+        pins: Vec<(&str, Pin)>,
+    ) -> PinningSite {
+        PinningSite {
+            caller,
+            callee,
+            pins: pins
+                .into_iter()
+                .map(|(parameter, pin)| (parameter.to_string(), pin))
+                .collect(),
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// A checker that has checked `source`, so its type table holds every
+    /// declaration the source makes.
+    fn checked(source: &str) -> TypeChecker {
+        let mut lexer = Lexer::new(source);
+        let mut parser = Parser::new(&mut lexer, source);
+        let program = parser.parse().expect("the test source parses");
+        let mut checker = TypeChecker::new();
+        checker
+            .check(&program)
+            .expect("the test source type-checks");
+        checker
+    }
+
+    #[test]
+    fn a_body_pinning_a_required_parameter_to_its_own_inherits_the_requirement() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("", "inner"), vec![ordering("T")]);
+        let sites = [site(
+            Some(body("", "outer")),
+            body("", "inner"),
+            vec![("T", Pin::CallerParameter("U".into()))],
+        )];
+        settle_requirements(&mut requirements, &sites);
+        assert_eq!(
+            requirements.get(&body("", "outer")),
+            Some(&vec![ordering("U")])
+        );
+    }
+
+    #[test]
+    fn a_body_pinning_a_required_parameter_to_a_concrete_type_inherits_nothing() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("", "inner"), vec![ordering("T")]);
+        let sites = [site(
+            Some(body("", "outer")),
+            body("", "inner"),
+            vec![("T", Pin::Concrete(named("Pt")))],
+        )];
+        settle_requirements(&mut requirements, &sites);
+        assert_eq!(requirements.get(&body("", "outer")), None);
+    }
+
+    #[test]
+    fn requirements_settle_across_a_delegation_cycle() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("", "a"), vec![ordering("T")]);
+        let sites = [
+            site(
+                Some(body("", "b")),
+                body("", "a"),
+                vec![("T", Pin::CallerParameter("U".into()))],
+            ),
+            site(
+                Some(body("", "a")),
+                body("", "b"),
+                vec![("U", Pin::CallerParameter("T".into()))],
+            ),
+        ];
+        settle_requirements(&mut requirements, &sites);
+        assert_eq!(requirements.get(&body("", "a")), Some(&vec![ordering("T")]));
+        assert_eq!(requirements.get(&body("", "b")), Some(&vec![ordering("U")]));
+    }
+
+    #[test]
+    fn a_written_clause_argument_is_resolved_through_the_writers_substitution() {
+        let checker = checked("class Base<T>\n    fn get(a T) T\n        return a\n");
+        let substitution = HashMap::from([("U".to_string(), named("Pt"))]);
+        let written = [named("U")];
+        let writer = [GenericDefinition {
+            name: "U".into(),
+            constraint: None,
+            kind: TypeDeclarationKind::None,
+        }];
+        let rekeyed = checker.rekeyed_into("Base", &written, &writer, &substitution);
+        assert_eq!(
+            rekeyed.get("T").map(|t| t.kind.clone()),
+            Some(named("Pt").kind)
+        );
+    }
+
+    #[test]
+    fn a_clause_argument_naming_an_unpinned_parameter_pins_nothing() {
+        let checker = checked("class Base<T>\n    fn get(a T) T\n        return a\n");
+        let written = [named("U")];
+        let writer = [GenericDefinition {
+            name: "U".into(),
+            constraint: None,
+            kind: TypeDeclarationKind::None,
+        }];
+        let rekeyed = checker.rekeyed_into("Base", &written, &writer, &HashMap::new());
+        assert!(rekeyed.is_empty(), "{rekeyed:?}");
+    }
+
+    #[test]
+    fn the_types_above_a_class_include_its_base_classes_and_their_traits() {
+        let checker = checked(
+            "trait Op<V>\n    fn run(a V) V\n        return a\n\n\
+             class Base<T> implements Op<T>\n\n\
+             class Mid<U> extends Base<U>\n\n\
+             class Sub extends Mid<int>\n",
+        );
+        let mut above: Vec<(String, Option<TypeKind>)> = checker
+            .declaring_types_above("Sub", &HashMap::new())
+            .into_iter()
+            .map(|(name, rekeyed)| {
+                let pinned = rekeyed.into_values().next().map(|ty| ty.kind);
+                (name, pinned)
+            })
+            .collect();
+        above.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            above,
+            vec![
+                ("Base".to_string(), Some(TypeKind::Int)),
+                ("Mid".to_string(), Some(TypeKind::Int)),
+                ("Op".to_string(), Some(TypeKind::Int)),
+            ]
+        );
     }
 }

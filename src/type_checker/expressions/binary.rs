@@ -443,7 +443,14 @@ impl TypeChecker {
             return Some(rhs_type.clone());
         }
         match self.check_binary_op_types(lhs_type, &binary_op, rhs_type, context) {
-            Ok(result) => Some(result),
+            Ok(result) => {
+                // `x op= y` applies `op` as `x = x op y` does, so a generic
+                // body states the same requirement on its parameters.
+                if is_arithmetic_op(&binary_op) {
+                    self.record_arithmetic_requirement(lhs_type, &binary_op, rhs_type, context);
+                }
+                Some(result)
+            }
             Err(message) => {
                 self.report_error(DiagnosticCode::TypTypeMismatch, message, span);
                 None
