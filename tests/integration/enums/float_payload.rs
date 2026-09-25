@@ -450,3 +450,32 @@ fn main()
         "7 true false\n1 true 2",
     );
 }
+
+/// A payload bound inside a generic function is read at the type the function
+/// was instantiated at. Read at the bare parameter it is an integer slot, so
+/// the float's bits come back converted as a whole number.
+#[test]
+fn test_float_payload_bound_in_a_generic_function_keeps_its_value() {
+    assert_runs_with_output(
+        r#"
+enum H<T>
+    Has(T, int)
+    Nothing
+
+fn pick<T>(v T, d T, intact bool) T
+    if intact
+        return v
+    return d
+
+fn get<T>(e H<T>, d T) T
+    match e
+        H.Has(v, n): pick(v, d, n == 42)
+        H.Nothing: d
+
+fn main()
+    let e H<float> = H.Has(1.5, 42)
+    println(f"{get(e, 2.5)}")
+"#,
+        "1.5",
+    );
+}
