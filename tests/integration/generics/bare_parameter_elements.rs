@@ -128,3 +128,38 @@ fn main()
         "q",
     );
 }
+
+const LIST_PARAMETER_SEARCHES: &str = r#"
+use system.collections.list
+
+class Tag
+    public name String
+    fn init(name String)
+        self.name = name
+    public fn equals(other Tag) bool
+        return self.name == other.name
+
+fn seek<T>(xs List<T>, item T) bool
+    return xs.contains(item)
+
+fn place<T>(xs List<T>, item T) int
+    return xs.index_of(item) ?? -1
+"#;
+
+/// A generic function handed a `List<T>` reaches the list's search methods at
+/// the caller's element type: the strings and the class instances it compares
+/// are borrowed, not released, and every one is freed exactly once at exit.
+#[test]
+fn a_generic_function_searches_a_list_it_is_handed_at_the_callers_element_type() {
+    let code = format!(
+        "{LIST_PARAMETER_SEARCHES}
+fn main()
+    let ss = List([\"a\" + \"\", \"b\" + \"\"])
+    let probe = \"b\"
+    let tags = List([Tag(\"x\" + \"\"), Tag(\"y\" + \"\")])
+    let wanted = Tag(\"y\")
+    println(f\"{{seek(ss, probe)}} {{place(ss, probe)}} {{seek(tags, wanted)}} {{place(tags, wanted)}}\")
+"
+    );
+    assert_heap_guard_output(&code, "true 1 true 1");
+}
