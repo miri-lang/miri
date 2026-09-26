@@ -766,6 +766,9 @@ impl TypeChecker {
         return_type_expr: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
+        self.fn_analysis
+            .runtime_functions
+            .insert(rt_name.to_string());
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params: params.to_vec(),

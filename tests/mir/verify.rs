@@ -1724,6 +1724,11 @@ fn collection_ty(class_name: &str, args: &[TypeKind]) -> Type {
     Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span())
 }
 
+/// The set of symbols `names` spells.
+fn symbols(names: &[&str]) -> HashSet<String> {
+    names.iter().map(|name| name.to_string()).collect()
+}
+
 /// Locals: 0 the return slot, 1 a receiver typed `receiver`, 2 the call's result.
 /// The body's one call hands the receiver to `symbol`.
 fn collection_call_body(receiver: Type, symbol: &str) -> Body {
@@ -1747,7 +1752,8 @@ fn collection_call_body(receiver: Type, symbol: &str) -> Body {
 fn a_shared_set_transform_over_reference_counted_elements_is_reported() {
     let body = collection_call_body(collection_ty("Set", &[TypeKind::String]), "Set_map");
 
-    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    let violations =
+        verify_collection_element_ownership(&body, &symbols(&["Set_map"]), &HashSet::new());
     assert_eq!(
         violations.len(),
         1,
@@ -1765,7 +1771,8 @@ fn a_shared_set_transform_over_reference_counted_elements_is_reported() {
 fn a_per_instantiation_set_transform_verifies_clean() {
     let body = collection_call_body(collection_ty("Set", &[TypeKind::String]), "Set_map__String");
 
-    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    let violations =
+        verify_collection_element_ownership(&body, &symbols(&["Set_map"]), &HashSet::new());
     assert!(
         violations.is_empty(),
         "a per-instantiation body must verify clean, got: {}",
@@ -1782,7 +1789,8 @@ fn a_shared_map_transform_over_reference_counted_values_is_reported() {
         "Map_filter",
     );
 
-    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    let violations =
+        verify_collection_element_ownership(&body, &symbols(&["Map_filter"]), &HashSet::new());
     assert_eq!(
         violations.len(),
         1,
@@ -1795,7 +1803,8 @@ fn a_shared_map_transform_over_reference_counted_values_is_reported() {
 fn a_shared_set_transform_over_plain_integers_verifies_clean() {
     let body = collection_call_body(collection_ty("Set", &[TypeKind::Int]), "Set_map");
 
-    let violations = verify_collection_element_ownership(&body, &HashSet::new());
+    let violations =
+        verify_collection_element_ownership(&body, &symbols(&["Set_map"]), &HashSet::new());
     assert!(
         violations.is_empty(),
         "nothing reference-counted is handed over, got: {}",
@@ -1811,9 +1820,9 @@ fn a_runtime_backed_map_method_verifies_clean() {
         collection_ty("Map", &[TypeKind::String, TypeKind::Int]),
         "Map_get",
     );
-    let exempt = HashSet::from(["Map_get".to_string()]);
+    let exempt = symbols(&["Map_get"]);
 
-    let violations = verify_collection_element_ownership(&body, &exempt);
+    let violations = verify_collection_element_ownership(&body, &exempt, &exempt);
     assert!(
         violations.is_empty(),
         "an exempt symbol must verify clean, got: {}",

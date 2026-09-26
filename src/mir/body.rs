@@ -105,6 +105,11 @@ pub struct Body {
     /// substitution already applied, so the pipeline can lower each callee
     /// without recovering its type arguments from the mangled symbol.
     pub generic_function_calls: Vec<GenericFunctionCall>,
+    /// Every call this body retargets to a residency-specialized body, in call
+    /// order. Recorded when the call is lowered, so the pipeline lowers each
+    /// specialization from the function it specializes without recovering that
+    /// function from the specialized symbol.
+    pub residency_function_calls: Vec<ResidencyFunctionCall>,
     /// Every generic class instantiation this body names only through its own
     /// instantiation substitution, in the order it was met.
     ///
@@ -146,6 +151,18 @@ pub struct GenericFunctionCall {
     pub type_args: Vec<(String, Type)>,
 }
 
+/// One call to a function specialized for the gpu-resident buffers it passes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResidencyFunctionCall {
+    /// The residency-specialized symbol the call targets.
+    pub symbol: String,
+    /// The declared name of the function the specialization is lowered from.
+    pub function: String,
+    /// The device handle each positional argument carries, `None` for an
+    /// argument that is not a gpu-resident buffer.
+    pub arg_handles: Vec<Option<DeviceHandleId>>,
+}
+
 impl Body {
     pub fn new(arg_count: usize, span: Span, execution_model: ExecutionModel) -> Self {
         Self {
@@ -170,6 +187,7 @@ impl Body {
             kernel_workgroups: Vec::new(),
             kernel_grids: Vec::new(),
             generic_function_calls: Vec::new(),
+            residency_function_calls: Vec::new(),
             generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
         }

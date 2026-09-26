@@ -5,11 +5,19 @@
 //!
 //! A [`Symbol`] records *what* a name stands for — a function at some type
 //! arguments, a method of some owner, a closure lowered out of a body, a GPU
-//! kernel — and [`Symbol::link_name`] is the one place that spells it. Two
-//! symbols are equal when they stand for the same thing, which is a finer
-//! question than whether they spell the same link name: a class `A_b` with a
-//! method `c` and a class `A` with a method `b_c` are different symbols that
-//! today spell one name.
+//! kernel, a per-type function codegen emits for the runtime to call through,
+//! a datum beside a kernel or a string literal — and [`Symbol::link_name`] is
+//! the one place that spells it. MIR lowering and codegen both compose names
+//! through it.
+//!
+//! Two symbols are equal when they stand for the same thing, which is a finer
+//! question than whether they spell the same link name. The spelling joins
+//! user identifiers with `_` and `__`, which a user identifier may itself
+//! contain, so different symbols can spell one name: a class `A_b` with a
+//! method `c` and a class `A` with a method `b_c`, a generic `pick` at `int`
+//! and a function written `pick__int`, the drop function of a type and that of
+//! a type whose name continues it. Comparing symbols, never link names, is
+//! what keeps those apart.
 //!
 //! Type arguments are held as the tokens
 //! [`type_kind_to_mangle_str`] gives them, so a symbol is hashable and
@@ -53,6 +61,40 @@ pub enum GpuKernelKind {
     Reduce,
 }
 
+/// A function codegen emits for one type, which a release site or the runtime
+/// library calls through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThunkKind {
+    /// Runs the type's drop hook, releases its managed fields and frees it.
+    Drop,
+    /// Releases one reference to a value, dropping it when that was the last.
+    Decref,
+    /// Copies a value through the type's `clone`.
+    Clone,
+    /// Orders two elements through the type's `compare`.
+    Compare,
+    /// Matches two elements through the type's `equals`.
+    Equals,
+}
+
+/// A datum emitted beside a GPU kernel for the host to launch it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KernelDatum {
+    /// The kernel's WGSL source.
+    Wgsl,
+    /// The kernel's entry-point name.
+    Name,
+}
+
+/// One of the two data a string literal is emitted as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StringLiteralPart {
+    /// The literal's bytes.
+    Bytes,
+    /// The immortal string object pointing at those bytes.
+    Object,
+}
+
 /// A compiled body or datum, identified by what it stands for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Symbol {
@@ -87,6 +129,29 @@ enum SymbolKind {
     },
     Runtime(String),
     Entry,
+    TypeThunk {
+        kind: ThunkKind,
+        subject: ThunkSubject,
+    },
+    ClosureDestructor(String),
+    KernelDatum {
+        kernel: String,
+        datum: KernelDatum,
+    },
+    StringLiteral {
+        index: usize,
+        part: StringLiteralPart,
+    },
+}
+
+/// The type a [`ThunkKind`] function is emitted for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ThunkSubject {
+    /// A declared type, at its type arguments when it is generic.
+    Named { name: String, args: Vec<Token> },
+    /// A tuple, option or function value, which has no declaration to name and
+    /// is identified by the encoding of its structure codegen gives it.
+    Structural(String),
 }
 
 impl Symbol {
@@ -150,6 +215,52 @@ impl Symbol {
     /// The program's entry point.
     pub fn entry() -> Self {
         Self::of(SymbolKind::Entry)
+    }
+
+    /// The `kind` function emitted for the declared type `type_name`,
+    /// instantiated at `args` when it is generic.
+    pub fn type_thunk<'t>(
+        kind: ThunkKind,
+        type_name: &str,
+        args: impl IntoIterator<Item = &'t Type>,
+    ) -> Self {
+        Self::of(SymbolKind::TypeThunk {
+            kind,
+            subject: ThunkSubject::Named {
+                name: type_name.to_string(),
+                args: tokens(args),
+            },
+        })
+    }
+
+    /// The `kind` function emitted for a structural type — a tuple, an option
+    /// or a function value — identified by `encoding`, the spelling codegen
+    /// gives its structure.
+    pub fn structural_thunk(kind: ThunkKind, encoding: &str) -> Self {
+        Self::of(SymbolKind::TypeThunk {
+            kind,
+            subject: ThunkSubject::Structural(encoding.to_string()),
+        })
+    }
+
+    /// The destructor releasing the captures of a closure value whose body is
+    /// linked as `closure`.
+    pub fn closure_destructor(closure: &str) -> Self {
+        Self::of(SymbolKind::ClosureDestructor(closure.to_string()))
+    }
+
+    /// The `datum` emitted for the GPU kernel whose WGSL entry point is
+    /// `kernel`.
+    pub fn kernel_datum(kernel: &str, datum: KernelDatum) -> Self {
+        Self::of(SymbolKind::KernelDatum {
+            kernel: kernel.to_string(),
+            datum,
+        })
+    }
+
+    /// The `part` of the `index`-th distinct string literal of a module.
+    pub fn string_literal(index: usize, part: StringLiteralPart) -> Self {
+        Self::of(SymbolKind::StringLiteral { index, part })
     }
 
     /// This symbol specialized for the gpu-resident buffers `handles` passes:
@@ -221,6 +332,51 @@ fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
         SymbolKind::GpuKernel { kind, index } => write_gpu_kernel(f, *kind, *index),
         SymbolKind::Runtime(c_name) => f.write_str(c_name),
         SymbolKind::Entry => f.write_str(ENTRY_NAME),
+        SymbolKind::TypeThunk { kind, subject } => {
+            f.write_str(thunk_prefix(*kind))?;
+            write_thunk_subject(f, subject)
+        }
+        SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
+        SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
+        SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
+    }
+}
+
+fn thunk_prefix(kind: ThunkKind) -> &'static str {
+    match kind {
+        ThunkKind::Drop => "__drop_",
+        ThunkKind::Decref => "__decref_",
+        ThunkKind::Clone => "__clone_",
+        ThunkKind::Compare => "__compare_",
+        ThunkKind::Equals => "__equals_",
+    }
+}
+
+fn write_thunk_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> fmt::Result {
+    match subject {
+        ThunkSubject::Named { name, args } => {
+            f.write_str(name)?;
+            write_arguments(f, args)
+        }
+        ThunkSubject::Structural(encoding) => f.write_str(encoding),
+    }
+}
+
+fn write_kernel_datum(f: &mut fmt::Formatter<'_>, kernel: &str, datum: KernelDatum) -> fmt::Result {
+    match datum {
+        KernelDatum::Wgsl => write!(f, "__miri_kernel_{kernel}_wgsl"),
+        KernelDatum::Name => write!(f, "__miri_kernel_{kernel}_name"),
+    }
+}
+
+fn write_string_literal(
+    f: &mut fmt::Formatter<'_>,
+    index: usize,
+    part: StringLiteralPart,
+) -> fmt::Result {
+    match part {
+        StringLiteralPart::Bytes => write!(f, ".miri_str_{index}_bytes"),
+        StringLiteralPart::Object => write!(f, ".miri_str_{index}_struct"),
     }
 }
 
@@ -248,10 +404,14 @@ fn write_arguments(f: &mut fmt::Formatter<'_>, args: &[Token]) -> fmt::Result {
 
 /// Each gpu-resident argument contributes its position and device handle, so
 /// distinct buffers specialize to distinct bodies and one buffer reused across
-/// calls maps to one. The `__gpu` segment can never appear in a user
-/// identifier, so a residency-specialized name cannot collide with a user
-/// function or a generic instantiation, and the specialized function's own
-/// name is recoverable as the text before the first `__`.
+/// calls maps to one.
+///
+/// The suffix is joined with `__gpu_p…h…`, a spelling a user identifier may
+/// also contain: a function named `f__gpu_p0h1` spells the same name as `f`
+/// specialized for handle 1 at position 0, and nothing here tells the two
+/// apart. Nothing reads the specialized function back out of this name — the
+/// lowering records which function each specialized call targets — so the
+/// only exposure is that collision.
 fn write_residency(
     f: &mut fmt::Formatter<'_>,
     residency: &[(usize, DeviceHandleId)],

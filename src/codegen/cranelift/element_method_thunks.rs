@@ -13,11 +13,10 @@
 //! elements and keys through `__equals_T`.
 
 use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
-use crate::codegen::cranelift::translator::{
-    FunctionTranslator, COMPARE_THUNK_PREFIX, EQUALS_THUNK_PREFIX,
-};
+use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
 use crate::mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
+use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
 use cranelift_codegen::ir::condcodes::IntCC;
@@ -46,10 +45,11 @@ impl ElementMethod {
     /// [`ELEMENT_METHOD_NAMES`], whose names [`Self::method_name`] reads.
     pub(crate) const ALL: [ElementMethod; 2] = [ElementMethod::Compare, ElementMethod::Equals];
 
-    fn thunk_prefix(self) -> &'static str {
+    /// The kind of thunk a container calls to ask this question.
+    pub(crate) fn thunk_kind(self) -> ThunkKind {
         match self {
-            ElementMethod::Compare => COMPARE_THUNK_PREFIX,
-            ElementMethod::Equals => EQUALS_THUNK_PREFIX,
+            ElementMethod::Compare => ThunkKind::Compare,
+            ElementMethod::Equals => ThunkKind::Equals,
         }
     }
 
@@ -176,7 +176,8 @@ fn is_element_equality(type_name: &str, method: &MethodInfo) -> bool {
 }
 
 impl<'a> FunctionTranslator<'a> {
-    /// Generates `{prefix}{type_name}(a, b)` for a type that answers `method`.
+    /// Generates the `method` thunk `(a, b)` of `type_name` for a type that
+    /// answers `method`.
     ///
     /// The two element values are borrowed for the call: a callee owns none of
     /// its parameters, so the container's references survive the question.
@@ -197,11 +198,12 @@ impl<'a> FunctionTranslator<'a> {
         }
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
-        let thunk_name = format!(
-            "{}{}",
-            method.thunk_prefix(),
-            instantiated_symbol(type_name, inst_args)
-        );
+        let thunk_name = Symbol::type_thunk(
+            method.thunk_kind(),
+            type_name,
+            inst_args.unwrap_or_default(),
+        )
+        .link_name();
 
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
@@ -240,15 +242,6 @@ struct MethodCallee {
     symbol: String,
     ptr_type: cl_types::Type,
     call_conv: CallConv,
-}
-
-/// `base` mangled with an instantiation's type arguments, or `base` itself when
-/// there is no instantiation to mangle.
-fn instantiated_symbol(base: &str, inst_args: Option<&[Type]>) -> String {
-    match inst_args {
-        Some(args) => crate::codegen::cranelift::rc::mangle_class_instantiation(base, args),
-        None => base.to_string(),
-    }
 }
 
 /// Emit a thunk body: answer for a null element without calling the user's

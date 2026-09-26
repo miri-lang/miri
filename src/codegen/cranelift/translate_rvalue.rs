@@ -13,6 +13,7 @@ use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, Module
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
 use crate::mir::lowering::dispatch_symbols::VtableInstance;
+use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue, UnOp,
 };
@@ -1728,19 +1729,16 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
         let ptr_size = ptr_type.bytes() as i32;
-        let symbol_name = match ctx.string_literals.get(s) {
-            Some(name) => name.clone(),
+        let index = match ctx.string_literals.get(s) {
+            Some(&index) => index,
             None => {
-                let next_idx = ctx.string_literals.len();
-                let name = format!(".miri_str_{}", next_idx);
-                ctx.string_literals.insert(s.to_string(), name.clone());
-                name
+                let index = ctx.string_literals.len();
+                ctx.string_literals.insert(s.to_string(), index);
+                index
             }
         };
 
-        let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
-        struct_symbol.push_str(&symbol_name);
-        struct_symbol.push_str("_struct");
+        let struct_symbol = Symbol::string_literal(index, StringLiteralPart::Object).link_name();
         let struct_id = ctx
             .module
             .declare_data(&struct_symbol, Linkage::Export, false, false)
@@ -1935,7 +1933,7 @@ impl<'a> FunctionTranslator<'a> {
         if !has_managed {
             return Ok(builder.ins().iconst(ptr_type, 0));
         }
-        let dtor_name = format!("__dtor_{}", lambda_name);
+        let dtor_name = Symbol::closure_destructor(lambda_name).link_name();
         let mut dtor_sig = cranelift_codegen::ir::Signature::new(builder.func.signature.call_conv);
         dtor_sig
             .params

@@ -62,3 +62,36 @@ fn main()
         "25",
     );
 }
+
+#[test]
+fn test_user_function_named_like_a_runtime_symbol() {
+    assert_runs_with_output(
+        r#"
+
+fn miri_add(a int, b int) int
+    return a + b
+
+fn main()
+    println(f"{miri_add(2, 3)}")
+    "#,
+        "5",
+    );
+}
+
+#[test]
+fn test_user_function_named_like_a_runtime_symbol_as_a_value() {
+    assert_runs_with_output(
+        r#"
+
+fn miri_twice(x int) int
+    return x * 2
+
+fn apply(f fn(x int) int, x int) int
+    return f(x)
+
+fn main()
+    println(f"{apply(miri_twice, 21)}")
+    "#,
+        "42",
+    );
+}
