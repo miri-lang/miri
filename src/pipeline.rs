@@ -1468,11 +1468,18 @@ impl Pipeline {
     }
 
     fn mangle_method_name(class_name: &str, method_name: &str) -> String {
-        let mut mangled = String::with_capacity(class_name.len() + 1 + method_name.len());
-        mangled.push_str(class_name);
-        mangled.push('_');
-        mangled.push_str(method_name);
-        mangled
+        mir::symbol::Symbol::method(class_name, &[], method_name, &[]).link_name()
+    }
+
+    /// The symbol of `method_name` of the generic class `class_name` at the
+    /// instantiation `class_args` spells.
+    fn instantiated_method_name(
+        class_name: &str,
+        method_name: &str,
+        class_args: &[(String, Type)],
+    ) -> String {
+        let class_args = class_args.iter().map(|(_, ty)| ty);
+        mir::symbol::Symbol::method(class_name, class_args, method_name, &[]).link_name()
     }
 
     /// Emit a monomorphized method body for each recorded instantiation of a
@@ -1651,8 +1658,7 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let base = Self::mangle_method_name(class_name, method_name);
-        let mangled = mir::lowering::dispatch::mangle_generic_name(&base, mangle_args);
+        let mangled = Self::instantiated_method_name(class_name, method_name, mangle_args);
         if lowered_names.contains(&mangled) {
             return Ok(());
         }
@@ -1801,8 +1807,7 @@ impl Pipeline {
             Self::monomorphizable_instantiation_subs(result, class_name)
         {
             for &(method_stmt, method_name) in &methods {
-                let base = Self::mangle_method_name(class_name, method_name);
-                let mangled = mir::lowering::dispatch::mangle_generic_name(&base, &mangle_args);
+                let mangled = Self::instantiated_method_name(class_name, method_name, &mangle_args);
                 let reached = called.contains(&mangled)
                     || Self::is_element_method_body(result, class_name, method_name);
                 if lowered_names.contains(&mangled) || !reached {

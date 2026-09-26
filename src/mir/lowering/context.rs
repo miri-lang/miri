@@ -9,6 +9,7 @@ use crate::mir::declaration::Declaration;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
+use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -229,29 +230,22 @@ impl<'a> LoweringContext<'a> {
     /// and those copies differ — in the types they are instantiated at, or in
     /// the class `self` names — so they must not claim one symbol.
     ///
-    /// The receiver leads the suffix, then the substitution ordered by
-    /// parameter name, so the symbol stays stable across builds.
-    pub fn closure_symbol(&self, base: String) -> Rc<str> {
-        let mut type_args: Vec<(String, Type)> = self
-            .generic_subs
+    /// The closure written as `kind` at the AST node `id` is named by the
+    /// receiver, then the substitution ordered by parameter name, so the
+    /// symbol stays stable across builds; then by the residency this body is
+    /// specialized for, the same suffix the specialized function itself
+    /// carries.
+    pub fn closure_symbol(&self, kind: ClosureKind, id: usize) -> Rc<str> {
+        let mut substitution: Vec<(&String, &Type)> = self.generic_subs.iter().collect();
+        substitution.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let context_args = self
+            .self_type
             .iter()
-            .map(|(name, ty)| (name.clone(), ty.clone()))
-            .collect();
-        type_args.sort_by(|a, b| a.0.cmp(&b.0));
-        if let Some(self_type) = &self.self_type {
-            type_args.insert(0, (String::new(), self_type.clone()));
-        }
-        let base = if type_args.is_empty() {
-            base
-        } else {
-            super::method_dispatch::mangle_generic_name(&base, &type_args)
-        };
-        if self.residency_handles.is_empty() {
-            return base.into();
-        }
-        // The same suffix the specialized function itself carries, so a reader
-        // following a symbol back to its body sees one spelling for one axis.
-        super::method_dispatch::residency_mangled_name(&base, &self.residency_handles).into()
+            .chain(substitution.into_iter().map(|(_, ty)| ty));
+        Symbol::closure(kind, id, context_args)
+            .with_residency(&self.residency_handles)
+            .link_name()
+            .into()
     }
 
     /// Resolve the `Self` keyword in `ty` against the enclosing class.

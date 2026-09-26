@@ -28,6 +28,7 @@ use crate::error::syntax::Span;
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::place::PlaceContext;
 use crate::mir::rvalue::AggregateKind;
+use crate::mir::symbol::ClosureKind;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, Body, Local, LocalDecl, Operand, Place, Rvalue, StatementKind as MirStatementKind,
@@ -109,7 +110,7 @@ pub(crate) fn lower_lambda_expr(
         unreachable!()
     };
     let closure = ClosureSource {
-        name: ctx.closure_symbol(format!("__lambda_{}", expr.id)),
+        name: ctx.closure_symbol(ClosureKind::Lambda, expr.id),
         self_name: None,
         params: &lambda.params,
         return_type: lambda.return_type.as_deref(),

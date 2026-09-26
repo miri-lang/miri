@@ -9,6 +9,7 @@ use crate::ast::types::{FunctionTypeData, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
@@ -24,45 +25,18 @@ use std::collections::HashMap;
 /// Produce a mangled function name for a generic instantiation.
 ///
 /// Example: `identity` with `[("T", int)]` → `identity__int`
-pub(crate) fn mangle_generic_name(
-    base: &str,
-    type_args: &[(String, crate::ast::types::Type)],
-) -> String {
-    mangle_arguments(base, type_args.iter().map(|(_, ty)| ty))
-}
-
-/// `base` followed by the token of each of `type_args`, each after a `__`.
-fn mangle_arguments<'t>(
-    base: &str,
-    type_args: impl ExactSizeIterator<Item = &'t crate::ast::types::Type>,
-) -> String {
-    if type_args.len() == 0 {
-        return base.to_string();
-    }
-
-    let mut total_len = base.len();
-    let mangled_types: Vec<Cow<'static, str>> = type_args
-        .map(|ty| {
-            let s = type_kind_to_mangle_str(&ty.kind);
-            total_len += 2 + s.len();
-            s
-        })
-        .collect();
-
-    let mut path = String::with_capacity(total_len);
-    path.push_str(base);
-    for s in &mangled_types {
-        path.push_str("__");
-        path.push_str(s);
-    }
-    path
+///
+/// A caller that knows what it names — a method, a vtable, a closure — builds
+/// the [`Symbol`] itself, so the name records what it stands for.
+pub(crate) fn mangle_generic_name(base: &str, type_args: &[(String, Type)]) -> String {
+    Symbol::function(base, type_args.iter().map(|(_, ty)| ty)).link_name()
 }
 
 /// The mangled name of one instantiation of a generic class, e.g. `Box` at
 /// `[String]` → `Box__String`. The parameter names play no part in the symbol,
 /// so only the arguments are needed.
 pub(crate) fn mangle_instantiation_name(class_name: &str, type_args: &[Type]) -> String {
-    mangle_arguments(class_name, type_args.iter())
+    Symbol::function(class_name, type_args).link_name()
 }
 
 /// The token [`type_kind_to_mangle_str`] yields for a type it cannot name.
@@ -346,25 +320,6 @@ pub(crate) fn argument_has_a_mangled_token(arg: &Expression) -> bool {
     expression_mangle_token(arg) != UNSPELLABLE_TYPE_TOKEN
 }
 
-/// Residency-mangled name for a call that passes gpu-resident buffers into a
-/// `GpuLaunchSafe` callee. Each gpu-resident argument contributes its argument
-/// position and device handle, so distinct buffers monomorphize to distinct
-/// bodies (and the same buffer reused across calls maps to one). The `__gpu`
-/// segment can never appear in a user identifier, so the name cannot collide
-/// with a user function or a generic instantiation. The original name is
-/// recoverable as the substring before the first `__`.
-pub(crate) fn residency_mangled_name(
-    base: &str,
-    handles: &[(usize, crate::mir::body::DeviceHandleId)],
-) -> String {
-    let mut name = String::from(base);
-    name.push_str("__gpu");
-    for (idx, handle) in handles {
-        name.push_str(&format!("_p{}h{}", idx, handle.0));
-    }
-    name
-}
-
 /// Positional arguments that are gpu-resident bindings carrying a device handle.
 /// Only bare identifier arguments bound to a `Gpu`-residency local qualify — the
 /// buffer must reach the callee as the persistent device buffer, not a temp.
@@ -421,7 +376,9 @@ pub(crate) fn residency_specialize_call(
 
     if let Operand::Constant(constant) = &*func_op {
         if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
-            let mangled = residency_mangled_name(base, &gpu_args);
+            let mangled = Symbol::function(base, &[])
+                .with_residency(&gpu_args)
+                .link_name();
             *func_op = super::dispatch::runtime_fn_operand(&mangled, func.span);
         }
     }
@@ -1106,7 +1063,7 @@ pub(crate) fn instantiated_callee(
     if !super::is_monomorphized_instantiation(&owner_args, owner_gens.len(), defs) {
         return None;
     }
-    let symbol = mangle_instantiation_name(&format!("{owner}_{method_name}"), &owner_args);
+    let symbol = Symbol::method(&owner, &owner_args, method_name, &[]).link_name();
     let owner_subs = owner_gens
         .iter()
         .zip(owner_args)
