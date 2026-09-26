@@ -16,6 +16,7 @@ use miri::mir::symbol::Symbol;
 use miri::mir::terminator::TerminatorKind;
 use miri::mir::{Local, LocalDecl, Operand, Place, Statement};
 use miri::pipeline::Pipeline;
+use miri::type_checker::ModuleId;
 use std::collections::HashSet;
 
 /// Lower `source` to MIR, run Perceus, run RC elision, and return all bodies.
@@ -40,7 +41,10 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
             let (mut body, lambdas) = lower_function(stmt, &result.type_checker, false, false)
                 .expect("Lowering should succeed");
             insert_rc(&mut body);
-            bodies.push((Symbol::declared_function(&decl.name).link_name(), body));
+            bodies.push((
+                Symbol::declared_function(&ModuleId::Program, &decl.name).link_name(),
+                body,
+            ));
             for lambda in lambdas {
                 bodies.push((lambda.symbol.link_name(), lambda.body));
             }
@@ -68,7 +72,9 @@ fn benchmark(items [int]) int:
     let bodies = get_elided_bodies(source);
     let (_, body) = bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("benchmark", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "benchmark", &[]).link_name()
+        })
         .expect("benchmark function not found");
 
     let (incref, decref) = count_all_rc_ops(body);
@@ -96,7 +102,9 @@ fn benchmark(items [int]) int:
     let bodies = get_pre_elision_bodies(source);
     let (_, body) = bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("benchmark", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "benchmark", &[]).link_name()
+        })
         .expect("benchmark function not found");
 
     let (incref, decref) = count_all_rc_ops(body);
@@ -125,7 +133,9 @@ fn sum_first_two(items [int]) int:
     let bodies = get_elided_bodies(source);
     let (_, body) = bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("sum_first_two", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "sum_first_two", &[]).link_name()
+        })
         .expect("sum_first_two function not found");
 
     let (incref, decref) = count_all_rc_ops(body);
@@ -158,11 +168,15 @@ fn benchmark(items [int]) int:
 
     let (_, pre) = pre_bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("benchmark", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "benchmark", &[]).link_name()
+        })
         .expect("benchmark function not found (pre)");
     let (_, post) = post_bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("benchmark", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "benchmark", &[]).link_name()
+        })
         .expect("benchmark function not found (post)");
 
     let (pre_i, pre_d) = count_all_rc_ops(pre);
@@ -228,7 +242,9 @@ fn use_conn(conn Conn) int:
     let bodies = get_elided_bodies(source);
     let (_, body) = bodies
         .iter()
-        .find(|(name, _)| *name == Symbol::function("use_conn", &[]).link_name())
+        .find(|(name, _)| {
+            *name == Symbol::function(&ModuleId::Program, "use_conn", &[]).link_name()
+        })
         .expect("use_conn function not found");
 
     // Conn has a destructor — the pair must NOT be elided.

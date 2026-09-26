@@ -48,6 +48,7 @@ use crate::type_checker::context::{
     Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
 use crate::type_checker::statements::declarations::drop_hook::is_struct_drop_method;
+use crate::type_checker::statements::declarations::func::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -92,12 +93,6 @@ impl TypeChecker {
         // letting it reach codegen as an internal compiler error.
         self.reject_non_drop_struct_methods(&name, methods);
 
-        // TODO: the body of a struct's `fn drop(self)` is never type-checked, so
-        // no type is recorded for its expressions and a hook that reads a field
-        // (`println(f"{self.id}")`) fails in MIR lowering with MER_CG_008
-        // "Could not determine the type of this expression". A hook that reads
-        // nothing of `self` compiles. The body needs checking with `self` bound
-        // to the struct type, as a class method's body is.
         // TODO: a struct that implements a trait supplying a default `drop`
         // compiles and never runs that default; only a hook the struct declares
         // itself counts.
@@ -115,6 +110,48 @@ impl TypeChecker {
         };
 
         self.register_struct_definition(&name, struct_def, visibility, context);
+        self.check_struct_drop_body(&name, generics, methods, context);
+    }
+
+    /// Checks the body of the struct `name`'s drop hook with `self` bound to
+    /// the struct, as a class method's body is checked, so everything the
+    /// hook calls and reads is resolved where it is written.
+    fn check_struct_drop_body(
+        &mut self,
+        name: &str,
+        generics: &Option<Vec<Expression>>,
+        methods: &[Statement],
+        context: &mut Context,
+    ) {
+        let Some((hook, decl)) = methods.iter().find_map(|method| {
+            let StatementKind::FunctionDeclaration(decl) = &method.node else {
+                return None;
+            };
+            decl.is_struct_drop_hook().then_some((method, decl))
+        }) else {
+            return;
+        };
+        context.enter_scope();
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+        let struct_type = self.type_at_own_parameters(name, generics.as_deref(), context);
+        context.enter_class(name.to_string(), None, struct_type);
+        self.check_function_declaration(
+            FunctionDeclarationInfo {
+                name: &decl.name,
+                generics: &decl.generics,
+                params: decl.explicit_params(),
+                return_type: &decl.return_type,
+                body: decl.body.as_deref(),
+                properties: &decl.properties,
+                span: hook.span,
+                is_member: true,
+            },
+            context,
+        );
+        context.exit_class();
+        context.exit_scope();
     }
 
     /// Reports an error for every struct method other than `drop`. Structs are

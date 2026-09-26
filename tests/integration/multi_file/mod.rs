@@ -11,4 +11,5 @@ pub mod errors;
 pub mod import_validation;
 pub mod imports_through_signatures;
 pub mod intrinsic_declarations;
+pub mod module_functions;
 pub mod project_root;

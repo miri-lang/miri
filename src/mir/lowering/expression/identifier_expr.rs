@@ -39,7 +39,7 @@ pub(crate) fn lower_identifier_expr(
         expr,
         name.as_str(),
         dest.clone(),
-    ) {
+    )? {
         return Ok(value);
     }
     lower_identifier_symbol(ctx, expr, dest)
@@ -159,13 +159,13 @@ pub(crate) fn build_global_identifier_operand(
         }))
     };
     let Some(info) = ctx.type_checker.global_scope().get(name) else {
-        return Ok(identifier_const(unscoped_identifier_name(ctx, name, expr)));
+        return Ok(identifier_const(unscoped_identifier_name(ctx, name, expr)?));
     };
     if matches!(info.ty.kind, TypeKind::Function(_)) {
         let declared = declared_name(info, name);
         return Ok(identifier_const(global_function_link_name(
             ctx, expr, declared,
-        )));
+        )?));
     }
     let has_fixed_value = info.is_constant || !info.mutable;
     match &info.value {
@@ -188,7 +188,11 @@ pub(crate) fn declared_name<'n>(info: &'n SymbolInfo, written: &'n str) -> &'n s
 /// The name an identifier the program's global scope does not hold stands
 /// for: a function private to the module whose body the reference sits in,
 /// which is linked like any other declared function, or else the name itself.
-fn unscoped_identifier_name(ctx: &LoweringContext, name: &str, expr: &Expression) -> String {
+fn unscoped_identifier_name(
+    ctx: &LoweringContext,
+    name: &str,
+    expr: &Expression,
+) -> Result<String, LoweringError> {
     let names_function = ctx.callee_kind(expr) == CalleeKind::Runtime
         || ctx
             .type_checker
@@ -197,23 +201,24 @@ fn unscoped_identifier_name(ctx: &LoweringContext, name: &str, expr: &Expression
     if names_function {
         global_function_link_name(ctx, expr, name)
     } else {
-        name.to_string()
+        Ok(name.to_string())
     }
 }
 
 /// The link name a reference `expr` to the global function declared as
 /// `declared` is called through: the C name the runtime library exports when
 /// the reference resolved to a `runtime` declaration, otherwise the symbol of
-/// the function the program declares.
+/// the function the reference resolved to, in the module that declares it.
 pub(crate) fn global_function_link_name(
     ctx: &LoweringContext,
     expr: &Expression,
     declared: &str,
-) -> String {
+) -> Result<String, LoweringError> {
     if ctx.callee_kind(expr) == CalleeKind::Runtime {
-        return Symbol::runtime(declared).link_name();
+        return Ok(Symbol::runtime(declared).link_name());
     }
-    Symbol::declared_function(declared).link_name()
+    let callee = ctx.declared_callee(expr, declared)?;
+    Ok(Symbol::declared_function(&callee.module, &callee.name).link_name())
 }
 
 /// The refusal for reading a module-level binding that has no compile-time

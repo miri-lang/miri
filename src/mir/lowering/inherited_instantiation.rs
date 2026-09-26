@@ -423,7 +423,12 @@ mod tests {
         assert_eq!(found.0, "Base");
         assert!(matches!(found.1[0].kind, TypeKind::List(_)));
         assert_eq!(
-            crate::mir::symbol::Symbol::function("Base", &found.1).link_name(),
+            crate::mir::symbol::Symbol::function(
+                &crate::type_checker::ModuleId::Program,
+                "Base",
+                &found.1
+            )
+            .link_name(),
             "miri.Base$List_String"
         );
     }

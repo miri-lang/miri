@@ -15,7 +15,6 @@ use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinitio
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, trait_default_among, vtable_slot_index};
-use super::expression::identifier_expr::declared_name;
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::collections::HashMap;
@@ -60,19 +59,19 @@ pub(crate) fn residency_specialize_call(
     args: &[Expression],
     func_op: &mut Operand,
     arg_ops: &[Operand],
-) -> Vec<Option<crate::mir::body::DeviceHandleId>> {
+) -> Result<Vec<Option<crate::mir::body::DeviceHandleId>>, LoweringError> {
     let ExpressionKind::Identifier(func_name, _) = &func.node else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !matches!(
         ctx.type_checker.fn_residencies().get(func_name.as_str()),
         Some(crate::type_checker::FnResidency::GpuLaunchSafe)
     ) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let gpu_args = gpu_resident_call_args(ctx, args);
     if gpu_args.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut handles = vec![None; arg_ops.len()];
@@ -84,23 +83,20 @@ pub(crate) fn residency_specialize_call(
 
     if let Operand::Constant(constant) = &*func_op {
         if let crate::ast::literal::Literal::Identifier(_) = &constant.literal {
-            let declared = ctx
-                .type_checker
-                .global_scope()
-                .get(func_name.as_str())
-                .map_or(func_name.as_str(), |info| declared_name(info, func_name));
-            let symbol = Symbol::function(declared, &[]).with_residency(&gpu_args);
+            let function = ctx.declared_callee(func, func_name)?.clone();
+            let symbol =
+                Symbol::function(&function.module, &function.name, &[]).with_residency(&gpu_args);
             *func_op = super::dispatch::runtime_fn_operand(&symbol.link_name(), func.span);
             ctx.body
                 .residency_function_calls
                 .push(crate::mir::body::ResidencyFunctionCall {
                     symbol,
-                    function: func_name.clone(),
+                    function,
                     arg_handles: handles.clone(),
                 });
         }
     }
-    handles
+    Ok(handles)
 }
 
 /// Walk the inheritance chain starting at `class_name` to find the first class

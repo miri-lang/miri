@@ -32,6 +32,7 @@ use crate::mir::{
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 
+use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::helpers::resolve_type;
 
@@ -46,18 +47,20 @@ pub(crate) fn try_lower_function_reference(
     expr: &Expression,
     name: &str,
     dest: Option<Place>,
-) -> Option<Operand> {
-    let info = ctx.type_checker.global_scope().get(name)?;
+) -> Result<Option<Operand>, LoweringError> {
+    let Some(info) = ctx.type_checker.global_scope().get(name) else {
+        return Ok(None);
+    };
     let TypeKind::Function(func_data) = &info.ty.kind else {
-        return None;
+        return Ok(None);
     };
     let func_data = func_data.clone();
     let fn_ty = info.ty.clone();
     let declared = super::identifier_expr::declared_name(info, name);
-    let target = super::identifier_expr::global_function_link_name(ctx, expr, declared);
-    Some(lower_function_reference(
+    let target = super::identifier_expr::global_function_link_name(ctx, expr, declared)?;
+    Ok(Some(lower_function_reference(
         ctx, expr, &target, &fn_ty, &func_data, dest,
-    ))
+    )))
 }
 
 /// Build the closure value and register the thunk body it points at.

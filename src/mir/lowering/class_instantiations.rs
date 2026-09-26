@@ -29,7 +29,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::body::GenericClassInstantiation;
-use crate::mir::symbol::Symbol;
+use crate::mir::symbol::{Symbol, TypeInstance};
 use crate::mir::{Body, StatementKind};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::generics::{
@@ -138,7 +138,7 @@ pub fn unregistered_instantiations(
     for (index, (_, body)) in bodies.iter().enumerate() {
         for named in &body.generic_class_instantiations {
             if is_registered_instantiation(type_checker, &named.class, &named.type_args)
-                || !seen.insert(Symbol::function(&named.class, &named.type_args))
+                || !seen.insert(TypeInstance::new(&named.class, &named.type_args))
             {
                 continue;
             }

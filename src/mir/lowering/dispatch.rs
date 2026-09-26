@@ -51,12 +51,10 @@ pub fn lower_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    if let ExpressionKind::Member(obj, method) = &func.node {
-        if let Some(op) =
-            try_lower_module_alias_call(ctx, span, call_expr_id, obj, method, args, dest.as_ref())?
-        {
-            return Ok(op);
-        }
+    if let Some(op) =
+        try_lower_module_alias_call(ctx, span, call_expr_id, func, args, dest.as_ref())?
+    {
+        return Ok(op);
     }
 
     if let ExpressionKind::Member(obj, method) = &func.node {
@@ -106,36 +104,44 @@ pub fn lower_call(
     lower_direct_call(ctx, span, call_expr_id, func, args, dest)
 }
 
+/// The name `func` calls a function of another module by, when it calls one
+/// through that module's alias: `foo` in `M.foo`.
+pub(crate) fn aliased_function<'e>(
+    ctx: &LoweringContext,
+    func: &'e Expression,
+) -> Option<&'e Expression> {
+    let ExpressionKind::Member(obj_expr, method_expr) = &func.node else {
+        return None;
+    };
+    let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node else {
+        return None;
+    };
+    let is_aliased_function = matches!(method_expr.node, ExpressionKind::Identifier(..))
+        && ctx
+            .type_checker
+            .modules
+            .module_aliases
+            .contains_key(alias_name.as_str());
+    is_aliased_function.then_some(method_expr.as_ref())
+}
+
 /// Lower a call to a function in another module via its alias: `M.foo(args)`.
 fn try_lower_module_alias_call(
     ctx: &mut LoweringContext,
     span: &Span,
     call_expr_id: usize,
-    obj_expr: &Expression,
-    method_expr: &Expression,
+    func: &Expression,
     args: &[Expression],
     dest: Option<&Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node else {
+    let Some(method_expr) = aliased_function(ctx, func) else {
         return Ok(None);
     };
-    let ExpressionKind::Identifier(func_name, _) = &method_expr.node else {
-        return Ok(None);
-    };
-    if !ctx
-        .type_checker
-        .modules
-        .module_aliases
-        .contains_key(alias_name.as_str())
-    {
-        return Ok(None);
-    }
-
     if let Some(intrinsic) = math_intrinsic_callee(ctx, method_expr) {
         return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest.cloned())
             .map(Some);
     }
-    lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest.cloned())
+    lower_aliased_function_call(ctx, span, call_expr_id, method_expr, args, dest.cloned())
 }
 
 /// Lower a call to a static method on a class or enum: `Duration.from_millis(ms)` or `MyEnum.create()`.
@@ -297,21 +303,30 @@ fn lower_math_intrinsic_call(
     Ok(ret_op)
 }
 
-/// Lower a direct call to a function reached through a module alias.
+/// Lower a direct call to the function `callee` names through a module alias.
 fn lower_aliased_function_call(
     ctx: &mut LoweringContext,
     span: &Span,
     call_expr_id: usize,
-    func_name: &str,
+    callee: &Expression,
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mangled = generic_function_symbol(ctx, func_name, call_expr_id, *span)?
-        .unwrap_or_else(|| Symbol::declared_function(func_name).link_name());
+    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+        return Ok(None);
+    };
+    let mangled = match generic_function_symbol(ctx, callee, call_expr_id, *span)? {
+        Some(mangled) => mangled,
+        None => {
+            super::expression::identifier_expr::global_function_link_name(ctx, callee, func_name)?
+        }
+    };
     let func_op = runtime_fn_operand(&mangled, *span);
 
     let mut arg_ops = lower_plain_args(ctx, args)?;
-    push_allocator_arg(ctx, &mut arg_ops);
+    if callee_takes_allocator(ctx, callee) {
+        push_allocator_arg(ctx, &mut arg_ops);
+    }
 
     let return_ty = ctx
         .recorded_type(call_expr_id)
@@ -546,7 +561,13 @@ pub(super) fn resolve_kernel_operand(
 
     let type_args = ctx.instantiated_call_mapping(callee.id).unwrap_or_default();
     refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
-    let kernel_name = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty)).wgsl_name();
+    let kernel = ctx.declared_callee(callee, func_name)?;
+    let kernel_name = Symbol::function(
+        &kernel.module,
+        &kernel.name,
+        type_args.iter().map(|(_, ty)| ty),
+    )
+    .wgsl_name();
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -1327,7 +1348,7 @@ fn lower_direct_call(
     let callee = callee_name_expression(func);
     let mut func_op = lower_callee(ctx, callee)?;
 
-    apply_generic_mangling(ctx, &callee.node, call_expr_id, &mut func_op, callee.span)?;
+    apply_generic_mangling(ctx, callee, call_expr_id, &mut func_op)?;
 
     let is_generic_call = ctx
         .type_checker
@@ -1346,7 +1367,7 @@ fn lower_direct_call(
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
     // body (lowered by the pipeline monomorph driver) and record each argument's
     // device handle so that body's kernel launches on the same persistent buffer.
-    let arg_handles = residency_specialize_call(ctx, func, args, &mut func_op, &arg_ops);
+    let arg_handles = residency_specialize_call(ctx, func, args, &mut func_op, &arg_ops)?;
 
     // Read through the active instantiation substitution: a call inside an
     // instantiated generic body is recorded once against that body's own
@@ -1457,15 +1478,12 @@ fn emit_direct_call_drops(
 
 fn apply_generic_mangling(
     ctx: &mut LoweringContext,
-    func_node: &ExpressionKind,
+    callee: &Expression,
     call_expr_id: usize,
     func_op: &mut Operand,
-    func_span: Span,
 ) -> Result<(), LoweringError> {
-    let ExpressionKind::Identifier(func_name, _) = func_node else {
-        return Ok(());
-    };
-    if let Some(mangled) = generic_function_symbol(ctx, func_name, call_expr_id, func_span)? {
+    let func_span = callee.span;
+    if let Some(mangled) = generic_function_symbol(ctx, callee, call_expr_id, func_span)? {
         *func_op = Operand::Constant(Box::new(crate::mir::Constant {
             span: func_span,
             ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
@@ -1475,28 +1493,38 @@ fn apply_generic_mangling(
     Ok(())
 }
 
-/// The symbol of the generic function instantiation a call targets, recorded
-/// on the body so the pipeline lowers that instantiation.
+/// The symbol of the generic function instantiation a call through the
+/// identifier `callee` targets, recorded on the body so the pipeline lowers
+/// that instantiation.
 ///
-/// `None` when the call pins no generic parameter. A call pinning one to a
-/// type with no name to compile a body at is refused.
+/// `None` when the callee is no identifier or the call pins no generic
+/// parameter. A call pinning one to a type with no name to compile a body at
+/// is refused.
 fn generic_function_symbol(
     ctx: &mut LoweringContext,
-    func_name: &str,
+    callee: &Expression,
     call_expr_id: usize,
     span: Span,
 ) -> Result<Option<String>, LoweringError> {
+    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+        return Ok(None);
+    };
     let Some(type_args) = ctx.instantiated_call_mapping(call_expr_id) else {
         return Ok(None);
     };
     refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
-    let symbol = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty));
+    let function = ctx.declared_callee(callee, func_name)?.clone();
+    let symbol = Symbol::function(
+        &function.module,
+        &function.name,
+        type_args.iter().map(|(_, ty)| ty),
+    );
     let link_name = symbol.link_name();
     ctx.body
         .generic_function_calls
         .push(crate::mir::body::GenericFunctionCall {
             symbol,
-            function: func_name.to_string(),
+            function,
             type_args,
         });
     Ok(Some(link_name))

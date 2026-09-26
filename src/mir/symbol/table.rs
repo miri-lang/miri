@@ -131,6 +131,9 @@ pub struct SymbolTable {
     namespace: Namespace,
     by_name: HashMap<String, Symbol>,
     claimed: HashSet<Symbol>,
+    /// The declaration, by statement id, each symbol claimed through
+    /// [`SymbolTable::claim_definition`] holds the body of.
+    definitions: HashMap<Symbol, usize>,
 }
 
 impl SymbolTable {
@@ -176,6 +179,32 @@ impl SymbolTable {
             Ok(Claim::New) => Ok(true),
             Ok(Claim::AlreadyLowered) => Ok(false),
             Err(refusal) => Err(refusal.refusal(span)),
+        }
+    }
+
+    /// Claim `symbol` for the body of the declaration statement `definition`
+    /// at `span`: whether that body is still to be lowered. The same
+    /// declaration claiming again finds its body lowered. A different
+    /// declaration reaching a symbol one already holds means two definitions
+    /// were taken for one; keeping either would run its body wherever the
+    /// other is called, so that is refused rather than one silently dropped.
+    pub fn claim_definition(
+        &mut self,
+        symbol: &Symbol,
+        definition: usize,
+        span: Span,
+    ) -> Result<bool, LoweringError> {
+        if self.claim_at(symbol, span)? {
+            self.definitions.insert(symbol.clone(), definition);
+            return Ok(true);
+        }
+        match self.definitions.get(symbol) {
+            Some(&holder) if holder != definition => Err(LoweringError::internal(
+                DiagnosticCode::MirSymbolCollision,
+                format!("two declarations were both taken for {}", symbol.written()),
+                span,
+            )),
+            Some(_) | None => Ok(false),
         }
     }
 

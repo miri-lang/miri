@@ -4,6 +4,7 @@
 use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
 use crate::ast::types::Type;
+use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::declaration::Declaration;
 use crate::mir::lambda::LambdaInfo;
@@ -11,7 +12,7 @@ use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
 use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
-use crate::type_checker::CalleeKind;
+use crate::type_checker::{CalleeKind, DeclaredFunction};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -196,6 +197,28 @@ impl<'a> LoweringContext<'a> {
     /// checker resolved it to where it was written says.
     pub fn callee_kind(&self, callee: &Expression) -> CalleeKind {
         self.type_checker.callee_kind(callee.id)
+    }
+
+    /// The function a call through `callee`, written as `written`, reaches:
+    /// the declaration the type checker resolved it to where it was written,
+    /// in whichever module declares it.
+    ///
+    /// Every reference to a function this compilation lowers is resolved
+    /// where it is written, so a reference with no recorded declaration was
+    /// never checked; guessing a module for it would link some other function
+    /// of that name, so it is refused as an internal error instead.
+    pub fn declared_callee(
+        &self,
+        callee: &Expression,
+        written: &str,
+    ) -> Result<&'a DeclaredFunction, LoweringError> {
+        self.type_checker.declared_callee(callee.id).ok_or_else(|| {
+            LoweringError::internal(
+                crate::diagnostics::DiagnosticCode::MirUndefinedVariable,
+                format!("no declaration was resolved for the function `{written}` where it is referenced"),
+                callee.span,
+            )
+        })
     }
 
     pub fn instantiated_call_mapping(&self, call_id: usize) -> Option<Vec<(String, Type)>> {

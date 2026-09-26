@@ -8,6 +8,7 @@ use crate::mir::block::BasicBlockData;
 use crate::mir::place::Local;
 use crate::mir::symbol::Symbol;
 use crate::mir::types::MirType;
+use crate::type_checker::DeclaredFunction;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
@@ -145,8 +146,8 @@ pub struct GenericClassInstantiation {
 pub struct GenericFunctionCall {
     /// The instantiation the call targets, e.g. `smaller` at `String`.
     pub symbol: Symbol,
-    /// The generic function's declared name.
-    pub function: String,
+    /// The generic function the instantiation is lowered from.
+    pub function: DeclaredFunction,
     /// Each of the callee's generic parameters, paired with the type it is
     /// instantiated at.
     pub type_args: Vec<(String, Type)>,
@@ -157,8 +158,8 @@ pub struct GenericFunctionCall {
 pub struct ResidencyFunctionCall {
     /// The residency-specialized symbol the call targets.
     pub symbol: Symbol,
-    /// The declared name of the function the specialization is lowered from.
-    pub function: String,
+    /// The function the specialization is lowered from.
+    pub function: DeclaredFunction,
     /// The device handle each positional argument carries, `None` for an
     /// argument that is not a gpu-resident buffer.
     pub arg_handles: Vec<Option<DeviceHandleId>>,

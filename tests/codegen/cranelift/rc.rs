@@ -26,6 +26,7 @@ use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, MethodInfo,
     StructDefinition, TraitDefinition, TypeDefinition,
 };
+use miri::type_checker::ModuleId;
 use std::collections::{BTreeMap, HashMap};
 
 fn span() -> Span {
@@ -135,13 +136,16 @@ fn minimal_type_ctx<'a>(
 
 #[test]
 fn test_instantiation_without_type_arguments_mangles_to_the_bare_name() {
-    assert_eq!(Symbol::function("Box", &[]).link_name(), "miri.Box");
+    assert_eq!(
+        Symbol::function(&ModuleId::Program, "Box", &[]).link_name(),
+        "miri.Box"
+    );
 }
 
 #[test]
 fn test_string_type_argument_mangles_to_the_canonical_string_name() {
     assert_eq!(
-        Symbol::function("Box", &[ty(TypeKind::String)]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(TypeKind::String)]).link_name(),
         format!("miri.Box${STRING_TYPE_NAME}")
     );
 }
@@ -149,15 +153,15 @@ fn test_string_type_argument_mangles_to_the_canonical_string_name() {
 #[test]
 fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
     assert_eq!(
-        Symbol::function("Box", &[ty(TypeKind::Int)]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(TypeKind::Int)]).link_name(),
         "miri.Box$int"
     );
     assert_eq!(
-        Symbol::function("Box", &[ty(TypeKind::F32)]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(TypeKind::F32)]).link_name(),
         "miri.Box$f32"
     );
     assert_eq!(
-        Symbol::function("Box", &[ty(TypeKind::Boolean)]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(TypeKind::Boolean)]).link_name(),
         "miri.Box$bool"
     );
 }
@@ -165,12 +169,27 @@ fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
 #[test]
 fn test_multiple_type_arguments_mangle_in_declaration_order() {
     assert_eq!(
-        Symbol::function("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]).link_name(),
+        Symbol::function(
+            &ModuleId::Program,
+            "Pair",
+            &[ty(TypeKind::Int), ty(TypeKind::String)]
+        )
+        .link_name(),
         format!("miri.Pair$int${STRING_TYPE_NAME}")
     );
     assert_ne!(
-        Symbol::function("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]).link_name(),
-        Symbol::function("Pair", &[ty(TypeKind::String), ty(TypeKind::Int)]).link_name(),
+        Symbol::function(
+            &ModuleId::Program,
+            "Pair",
+            &[ty(TypeKind::Int), ty(TypeKind::String)]
+        )
+        .link_name(),
+        Symbol::function(
+            &ModuleId::Program,
+            "Pair",
+            &[ty(TypeKind::String), ty(TypeKind::Int)]
+        )
+        .link_name(),
         "argument order must change the thunk symbol"
     );
 }
@@ -180,12 +199,12 @@ fn test_multiple_type_arguments_mangle_in_declaration_order() {
 #[test]
 fn test_class_type_arguments_mangle_to_their_own_names() {
     assert_eq!(
-        Symbol::function("Box", &[ty(custom("Widget"))]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(custom("Widget"))]).link_name(),
         "miri.Box$Widget"
     );
     assert_ne!(
-        Symbol::function("Box", &[ty(custom("Gadget"))]).link_name(),
-        Symbol::function("Box", &[ty(custom("Widget"))]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(custom("Gadget"))]).link_name(),
+        Symbol::function(&ModuleId::Program, "Box", &[ty(custom("Widget"))]).link_name(),
         "two instantiations sharing a symbol would run one body against the other's layout"
     );
 }

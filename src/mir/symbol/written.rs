@@ -12,7 +12,8 @@ use super::{
 };
 
 /// A [`Symbol`] displayed as the definition it names: `pick<int>`,
-/// `Point.norm`, the drop function of `Box<String>`.
+/// `local.shapes.area`, `Point.norm`, the drop function of `Box<String>`. A
+/// function an imported module declares is shown under that module's path.
 pub struct Written<'s>(&'s Symbol);
 
 impl Symbol {
@@ -34,8 +35,13 @@ impl fmt::Display for Written<'_> {
 
 fn write_written_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
     match kind {
-        SymbolKind::Function { name, args } => {
-            write!(f, "`{name}")?;
+        SymbolKind::Function { module, name, args } => {
+            f.write_str("`")?;
+            module
+                .path()
+                .iter()
+                .try_for_each(|segment| write!(f, "{segment}."))?;
+            f.write_str(name)?;
             write_type_arguments(f, args)?;
             f.write_str("`")
         }

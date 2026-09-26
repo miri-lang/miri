@@ -3,18 +3,19 @@
 
 //! The names compiled bodies and data are emitted under.
 //!
-//! A [`Symbol`] records *what* a name stands for — a function at some type
-//! arguments, a method of some owner, a closure lowered out of a body, a GPU
-//! kernel, a per-type function codegen emits for the runtime to call through,
-//! a datum beside a kernel or a string literal — and [`Symbol::link_name`] is
-//! the one place that spells it. MIR lowering and codegen both compose names
-//! through it.
+//! A [`Symbol`] records *what* a name stands for — a function of some module
+//! at some type arguments, a method of some owner, a closure lowered out of a
+//! body, a GPU kernel, a per-type function codegen emits for the runtime to
+//! call through, a datum beside a kernel or a string literal — and
+//! [`Symbol::link_name`] is the one place that spells it. MIR lowering and
+//! codegen both compose names through it.
 //!
 //! # The link-name grammar
 //!
 //! ```text
 //! link name   := "main" | c-name | compiler-datum | miri-symbol
-//! miri-symbol := "miri" [ "." residency ] "." definition
+//! miri-symbol := root [ "." residency ] "." definition
+//! root        := "miri" ( "$" identifier )*             the module declaring a function
 //! residency   := "$gpu" ( "$p" position "h" handle )+
 //! definition  := item                                  a function
 //!              | item "." item                         a method of an owner
@@ -34,6 +35,17 @@
 //! `miri.A_b.c` and `miri.A.b_c` are the methods of `A_b` and `A`;
 //! `miri.W$int.$drop` and `miri.W__int.$drop` drop a `W<int>` and a `W__int`.
 //!
+//! The root names the module a top-level function is declared in, one `$`
+//! segment per identifier of the path a `use` names that module by: the
+//! program's own file adds none, so its `helper` is `miri.helper`, while the
+//! `helper` of `local.shapes.circle` is `miri$local$shapes$circle.helper` and
+//! the `lattice_unit` of `system.math` is `miri$system$math.lattice_unit`. Two
+//! modules may each declare a function of one name, and a call runs the one
+//! its name resolved to where the call is written. Every other definition —
+//! a type, its methods and thunks, a closure — is linked under the bare
+//! `miri` root: type names are one namespace across modules, and a closure is
+//! named by the AST node it is written at, which no other node shares.
+//!
 //! The program's entry point is `main` and a `runtime` function is its C name,
 //! verbatim, because code outside this compilation calls them by those names.
 //! GPU kernels, the data emitted beside them and string literals keep the
@@ -51,15 +63,21 @@
 //! within a Miri symbol every `.` ends a segment and every `$` starts an
 //! argument token or a marker the compiler synthesizes — and a marker can never
 //! be mistaken for an identifier, which never starts with `$`. Reading a
-//! Miri symbol left to right therefore recovers the symbol: the root, an
-//! optional residency segment (the only segment after the root that starts
-//! with `$gpu`), then a definition whose first segment says which kind it is —
-//! an identifier for a function, a method, a vtable or a declared type's thunk,
-//! told apart by what follows its first `.`; a `$` marker for the rest, each of
-//! which either ends there or takes the whole remainder as the one name it
-//! carries. Every Miri symbol contains a `.`, and neither `main` nor a C name
-//! does, so no definition can be linked under the name of the entry point or
-//! of a function the runtime library or the C library exports.
+//! Miri symbol left to right therefore recovers the symbol: the root, which
+//! ends at the first `.` and whose `$` segments, each an identifier of a module
+//! path, name the module declaring a function; an optional residency segment
+//! (the only segment after the root that starts with `$gpu`); then a
+//! definition whose first segment says which kind it is — an identifier for a
+//! function, a method, a vtable or a declared type's thunk, told apart by what
+//! follows its first `.`; a `$` marker for the rest, each of which either ends
+//! there or takes the whole remainder as the one name it carries. Only a
+//! function's root carries module segments, so a function of module `a`
+//! (`miri$a.b`) is never the method `b` of a type `a` (`miri.a.b`), a function
+//! of the program is never one of a module (`miri.b`), and a module path is
+//! never read as a function named after one of its segments (`miri$a$b.c`
+//! against `miri$a.b`). Every Miri symbol contains a `.`, and neither `main`
+//! nor a C name does, so no definition can be linked under the name of the
+//! entry point or of a function the runtime library or the C library exports.
 //!
 //! Two symbols are still compared as values, never through their link names:
 //! [`SymbolTable`] refuses a second symbol that spells a name already claimed,
@@ -89,6 +107,7 @@ use std::fmt::{self, Write};
 
 use crate::ast::types::Type;
 use crate::mir::body::DeviceHandleId;
+use crate::type_checker::ModuleId;
 use token::type_kind_to_mangle_str;
 
 /// One type argument's token, as [`type_kind_to_mangle_str`] spells it.
@@ -193,6 +212,7 @@ pub struct Symbol {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum SymbolKind {
     Function {
+        module: ModuleId,
         name: String,
         args: Vec<Token>,
     },
@@ -232,6 +252,26 @@ enum SymbolKind {
     },
 }
 
+/// A generic type at some type arguments, as two of its instantiations are
+/// told apart: by its name and the token each argument is spelled by in the
+/// symbols of the bodies instantiated for it. Ordered, so instantiations
+/// discovered in no fixed order can be put in one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TypeInstance {
+    name: String,
+    args: Vec<Token>,
+}
+
+impl TypeInstance {
+    /// The type `name` instantiated at `args`.
+    pub fn new<'t>(name: &str, args: impl IntoIterator<Item = &'t Type>) -> Self {
+        Self {
+            name: name.to_string(),
+            args: tokens(args),
+        }
+    }
+}
+
 /// The type a [`ThunkKind`] function is emitted for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ThunkSubject {
@@ -243,21 +283,27 @@ enum ThunkSubject {
 }
 
 impl Symbol {
-    /// The function `name`, instantiated at `args` when it is generic.
-    pub fn function<'t>(name: &str, args: impl IntoIterator<Item = &'t Type>) -> Self {
+    /// The function `name` declared at the top level of `module`,
+    /// instantiated at `args` when it is generic.
+    pub fn function<'t>(
+        module: &ModuleId,
+        name: &str,
+        args: impl IntoIterator<Item = &'t Type>,
+    ) -> Self {
         Self::of(SymbolKind::Function {
+            module: module.clone(),
             name: name.to_string(),
             args: tokens(args),
         })
     }
 
-    /// The non-generic function a program declares at the top level as
-    /// `name`: the entry point when that is `main`.
-    pub fn declared_function(name: &str) -> Self {
-        if name == ENTRY_NAME {
+    /// The non-generic function `module` declares at the top level as
+    /// `name`: the entry point when that is the program's own `main`.
+    pub fn declared_function(module: &ModuleId, name: &str) -> Self {
+        if *module == ModuleId::Program && name == ENTRY_NAME {
             Self::entry()
         } else {
-            Self::function(name, &[])
+            Self::function(module, name, &[])
         }
     }
 
@@ -438,6 +484,24 @@ impl Symbol {
         wgsl::Wgsl(self).to_string()
     }
 
+    /// The module a top-level function is declared in; empty for every
+    /// other symbol.
+    fn module(&self) -> &[String] {
+        match &self.kind {
+            SymbolKind::Function { module, .. } => module.path(),
+            SymbolKind::Method { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Runtime(_)
+            | SymbolKind::Entry
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => &[],
+        }
+    }
+
     fn of(kind: SymbolKind) -> Self {
         Self {
             kind,
@@ -460,7 +524,7 @@ impl fmt::Display for Symbol {
             | SymbolKind::Closure { .. }
             | SymbolKind::TypeThunk { .. }
             | SymbolKind::ClosureDestructor(_) => {
-                f.write_str(ROOT)?;
+                write_root(f, self.module())?;
                 write_residency(f, &self.residency)?;
                 f.write_char(SEGMENT_SEPARATOR)?;
                 write_definition(f, &self.kind)
@@ -469,11 +533,18 @@ impl fmt::Display for Symbol {
     }
 }
 
+/// The first segment of a Miri symbol: `miri`, then each identifier of the
+/// module a function is declared in: `miri$local$shapes`.
+fn write_root(f: &mut fmt::Formatter<'_>, module: &[String]) -> fmt::Result {
+    f.write_str(ROOT)?;
+    write_arguments(f, module)
+}
+
 /// The segments after the root of a symbol for something the program defines
 /// or the compiler synthesizes from one.
 fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
     match kind {
-        SymbolKind::Function { name, args } => write_item(f, name, args),
+        SymbolKind::Function { name, args, .. } => write_item(f, name, args),
         SymbolKind::Method {
             owner,
             owner_args,
@@ -561,10 +632,12 @@ fn thunk_marker(kind: ThunkKind) -> &'static str {
     }
 }
 
-fn write_arguments(f: &mut fmt::Formatter<'_>, args: &[Token]) -> fmt::Result {
-    args.iter().try_for_each(|token| {
+/// Each of `segments` after a `$`: a definition's argument tokens, or the
+/// identifiers of the module a function is declared in.
+fn write_arguments(f: &mut fmt::Formatter<'_>, segments: &[impl AsRef<str>]) -> fmt::Result {
+    segments.iter().try_for_each(|segment| {
         f.write_char(MARKER)?;
-        f.write_str(token)
+        f.write_str(segment.as_ref())
     })
 }
 
