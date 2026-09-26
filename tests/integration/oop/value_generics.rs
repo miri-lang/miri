@@ -215,6 +215,60 @@ fn main()
     );
 }
 
+/// Two sizes of one value-generic class are two types. The signature says the
+/// argument is the receiver's own type, so a smaller one is refused rather
+/// than read at an index only the receiver's size admits.
+#[test]
+fn a_value_generic_class_of_another_size_is_refused_as_its_own_type() {
+    assert_compiler_error(
+        r#"
+use system.collections.array
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Wrap<T, Size>) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, 3>([1, 2, 3])
+    let v = Wrap<int, 2>([5, 6])
+    println(f"{w.first_of(v)}")
+"#,
+        "expected Wrap<int, 3>, got Wrap<int, 2>",
+    );
+}
+
+/// A size written as a named constant is the value it denotes.
+#[test]
+fn a_value_generic_size_named_by_a_constant_matches_its_literal() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+const N = 3
+
+class Wrap<T, Size>
+    data Array<T, Size>
+
+    fn init(data Array<T, Size>)
+        self.data = data
+
+    public fn first_of(other Wrap<T, Size>) T
+        return other.data[0]
+
+fn main()
+    let w = Wrap<int, N>([1, 2, 3])
+    let v = Wrap<int, 3>([5, 6, 7])
+    println(f"{w.first_of(v)}")
+"#,
+        "5",
+    );
+}
+
 #[test]
 fn a_value_generic_class_names_its_own_type_as_self() {
     assert_runs_with_output(

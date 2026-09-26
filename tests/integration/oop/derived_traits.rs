@@ -332,3 +332,75 @@ fn main()
         "has no ordering",
     );
 }
+
+const NAMED_CHAIN: &str = r#"
+trait Named
+    public fn name() String
+
+trait Titled extends Named
+    public fn title() String
+
+trait Ranked extends Titled
+    public fn rank() int
+
+class Card implements Titled
+    public fn name() String
+        return "card"
+    public fn title() String
+        return "the card"
+
+class Ace implements Ranked
+    public fn name() String
+        return "ace"
+    public fn title() String
+        return "the ace"
+    public fn rank() int
+        return 1
+
+class Joker extends Card
+
+fn shown(n Named) String
+    return n.name()
+
+fn as_named(c Card) Named
+    return c
+"#;
+
+/// A class implementing a trait is the trait that trait extends, however many
+/// `extends` up, and so is a class inheriting that implementation: each one
+/// can be bound, passed and returned as the base trait, and the call through
+/// it runs the class's own method.
+#[test]
+fn a_class_is_assignable_to_every_trait_its_trait_extends() {
+    let code = format!(
+        "{NAMED_CHAIN}
+fn main()
+    let b Named = Card()
+    let a Named = Ace()
+    let j Named = Joker()
+    let t Titled = Ace()
+    println(f\"{{b.name()}} {{a.name()}} {{j.name()}} {{t.title()}}\")
+    println(f\"{{shown(Ace())}} {{shown(Joker())}} {{as_named(Card()).name()}}\")
+"
+    );
+    assert_heap_guard_output(&code, "card ace card the ace\nace card card");
+}
+
+#[test]
+fn a_class_implementing_an_unrelated_trait_is_not_the_base_trait() {
+    let code = format!(
+        "{NAMED_CHAIN}
+trait Other
+    public fn name() String
+
+class Stranger implements Other
+    public fn name() String
+        return \"stranger\"
+
+fn main()
+    let s Named = Stranger()
+    println(s.name())
+"
+    );
+    assert_compiler_error(&code, "expected Named, got Stranger");
+}

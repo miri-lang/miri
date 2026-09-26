@@ -13,6 +13,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::expression::ExpressionKind;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind, STRING_TYPE_NAME,
 };
@@ -223,6 +224,12 @@ impl TypeChecker {
                     return false;
                 }
                 for (arg1, arg2) in a1.iter().zip(a2.iter()) {
+                    if let Some(agree) = Self::value_arguments_agree(arg1, arg2, context) {
+                        if !agree {
+                            return false;
+                        }
+                        continue;
+                    }
                     let t1 = self
                         .extract_type_from_expression(arg1)
                         .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
@@ -238,6 +245,40 @@ impl TypeChecker {
             (None, None) => true,
             _ => false, // Mismatch in generic args presence
         }
+    }
+
+    /// Whether two generic arguments that stand for values denote the same
+    /// value, or `None` when both are types and compare as types.
+    ///
+    /// A value argument is what a value-generic class is laid out from, so
+    /// `Wrap<int, 3>` and `Wrap<int, 2>` are different types. Each side folds to
+    /// the constant it denotes, a named `const` included. Two sides that do not
+    /// fold agree only when they name the same value parameter; a value against
+    /// a type, or a value that cannot be compared, is a mismatch.
+    fn value_arguments_agree(
+        arg1: &crate::ast::Expression,
+        arg2: &crate::ast::Expression,
+        context: &Context,
+    ) -> Option<bool> {
+        let (v1, v2) = (value_argument(arg1), value_argument(arg2));
+        if v1.is_none() && v2.is_none() {
+            return None;
+        }
+        let (Some(v1), Some(v2)) = (v1, v2) else {
+            return Some(false);
+        };
+        let folded = (
+            Self::try_eval_const_int_with_context(v1, context),
+            Self::try_eval_const_int_with_context(v2, context),
+        );
+        Some(match folded {
+            (Some(n1), Some(n2)) => n1 == n2,
+            _ => matches!(
+                (&v1.node, &v2.node),
+                (ExpressionKind::Identifier(n1, None), ExpressionKind::Identifier(n2, None))
+                    if n1 == n2
+            ),
+        })
     }
 
     /// Checks collection type compatibility (List, Set, Map, Array).
@@ -596,6 +637,12 @@ impl TypeChecker {
             if name1 == name2 {
                 return true;
             }
+            // TODO: two distinct unconstrained parameters are accepted as one
+            // another here, so `fn cast<T, U>(a T) U: return a` type-checks and
+            // reinterprets whatever it is handed, and a `super.init` passing an
+            // `X` where the `extends` clause binds a `Z` builds an instance
+            // that crashes. Refusing the pair needs the inherited-call argument
+            // check to substitute through the clause first.
             if constraint.is_none()
                 && !matches!(
                     context.resolve_type_definition(name2),
@@ -661,7 +708,10 @@ impl TypeChecker {
                 }
             }
         }
-        false
+        // A trait is every trait it extends. The class hierarchy does not
+        // record that, so a class implementing `Titled` reaches `Named` through
+        // `trait Titled extends Named` here.
+        super::context::trait_is_or_extends(sub, sup, self.type_definitions())
     }
 
     /// Checks if a type satisfies a constraint.
@@ -865,5 +915,15 @@ impl TypeChecker {
             TypeKind::Custom(name, _) => name == STRING_TYPE_NAME,
             _ => false,
         }
+    }
+}
+
+/// The value a generic argument stands for: the expression a value-generic
+/// marker wraps, or the argument itself when it is written as a value rather
+/// than a type. `None` for a type argument.
+fn value_argument(arg: &crate::ast::Expression) -> Option<&crate::ast::Expression> {
+    match &arg.node {
+        ExpressionKind::Type(ty, _) => super::generics::extract_value_generic(ty),
+        _ => Some(arg),
     }
 }
