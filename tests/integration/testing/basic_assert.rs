@@ -123,3 +123,31 @@ fn main()
         "checked false\ndone",
     );
 }
+
+#[test]
+fn test_assert_through_a_module_alias_passes() {
+    assert_runs_with_output(
+        r#"
+use system.testing as T
+
+fn main()
+    T.assert(1 + 1 == 2)
+    T.assert_eq(3, 3)
+    println("done")
+"#,
+        "done",
+    );
+}
+
+#[test]
+fn test_assert_through_a_module_alias_reports_its_failure() {
+    assert_runtime_error(
+        r#"
+use system.testing as T
+
+fn main()
+    T.assert(1 == 2, "aliased check")
+"#,
+        "aliased check",
+    );
+}

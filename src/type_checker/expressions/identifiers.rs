@@ -238,7 +238,7 @@ impl TypeChecker {
             .or_else(|| self.type_table.global_scope.get(name).cloned());
 
         if let Some(info) = info_opt {
-            self.record_callee_kind(expr_id, &info);
+            self.record_callee(expr_id, name, &info);
             if !self.check_visibility(&info.visibility, &info.module) {
                 let kind = if self.type_table.global_type_definitions.contains_key(name) {
                     "Type"

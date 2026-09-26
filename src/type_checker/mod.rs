@@ -41,7 +41,7 @@ pub mod escape_analysis;
 pub mod expressions;
 pub(crate) mod float_literals;
 mod function_analysis;
-pub use function_analysis::CalleeKind;
+pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
 pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
@@ -307,11 +307,33 @@ impl TypeChecker {
             .unwrap_or(CalleeKind::Program)
     }
 
-    /// Record the kind of callee the identifier expression `expr_id` names,
-    /// having resolved to the declaration `info`.
-    pub(crate) fn record_callee_kind(&mut self, expr_id: usize, info: &SymbolInfo) {
+    /// The function the identifier expression `expr_id` resolved to where it
+    /// was written, when that is a function this compilation lowers.
+    pub fn declared_callee(&self, expr_id: usize) -> Option<&DeclaredFunction> {
+        self.fn_analysis.declared_callees.get(&expr_id)
+    }
+
+    /// The module the top-level declaration `statement_id` is written in:
+    /// the module a `use` loaded it from, or the program's own file.
+    pub fn declaring_module(&self, statement_id: usize) -> &ModuleId {
+        const PROGRAM: &ModuleId = &ModuleId::Program;
+        self.fn_analysis
+            .declaring_modules
+            .get(&statement_id)
+            .unwrap_or(PROGRAM)
+    }
+
+    /// Record the callee the identifier expression `expr_id`, written as
+    /// `written`, names, having resolved to the declaration `info`.
+    pub(crate) fn record_callee(&mut self, expr_id: usize, written: &str, info: &SymbolInfo) {
         match CalleeKind::of(info) {
-            CalleeKind::Program => {}
+            CalleeKind::Program => {
+                if matches!(info.ty.kind, TypeKind::Function(_)) {
+                    self.fn_analysis
+                        .declared_callees
+                        .insert(expr_id, DeclaredFunction::resolved(written, info));
+                }
+            }
             kind @ (CalleeKind::Runtime | CalleeKind::Intrinsic) => {
                 self.fn_analysis.callee_kinds.insert(expr_id, kind);
             }

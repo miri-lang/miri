@@ -6,17 +6,20 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
-use crate::ast::statement::{AcceleratorTarget, ClassData, Statement, StatementKind};
+use crate::ast::statement::{
+    AcceleratorTarget, ClassData, FunctionDeclarationData, Statement, StatementKind,
+};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::codegen::Backend;
 use crate::codegen::{BuildTarget, CpuBackend};
 use crate::diagnostics::codes::DiagnosticCode;
 use crate::error::compiler::CompilerError;
+use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
-use crate::mir::symbol::{Symbol, SymbolTable};
+use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,7 +29,7 @@ use std::process::Command;
 use crate::ast::BuiltinCollectionKind;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::pins_of;
-use crate::type_checker::TypeChecker;
+use crate::type_checker::{DeclaredFunction, TypeChecker};
 
 /// One generic-class instantiation's substitution: the generic-name→concrete-type
 /// map used to substitute a method body, paired with the ordered name/type pairs
@@ -640,6 +643,53 @@ impl CalledNames {
     }
 }
 
+/// The function the top-level declaration `decl`, made by `stmt`, declares, as
+/// a call that resolved to it identifies it.
+fn declared_function(
+    result: &PipelineResult,
+    stmt: &Statement,
+    decl: &FunctionDeclarationData,
+) -> DeclaredFunction {
+    DeclaredFunction {
+        module: result.type_checker.declaring_module(stmt.id).clone(),
+        name: decl.name.clone(),
+    }
+}
+
+/// Every top-level function declaration `keep` selects, by the function it
+/// declares, with where its statement sits.
+///
+/// Two statements declaring one function mean the module that declares one
+/// of them was lost on the way; keeping either would run its body wherever
+/// the other is called, so that is refused instead.
+fn function_declarations(
+    result: &PipelineResult,
+    keep: impl Fn(&FunctionDeclarationData) -> bool,
+) -> Result<std::collections::HashMap<DeclaredFunction, StatementSite>, CompilerError> {
+    let mut declarations = std::collections::HashMap::new();
+    for (site, stmt) in statements_with_sites(result) {
+        let StatementKind::FunctionDeclaration(decl) = &stmt.node else {
+            continue;
+        };
+        if !keep(decl) {
+            continue;
+        }
+        match declarations.entry(declared_function(result, stmt, decl)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(site);
+            }
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                return Err(CompilerError::Lowering(LoweringError::internal(
+                    DiagnosticCode::MirSymbolCollision,
+                    format!("two declarations were both taken for `{}`", slot.key().name),
+                    stmt.span,
+                )));
+            }
+        }
+    }
+    Ok(declarations)
+}
+
 /// Where a top-level statement sits: in the program's own body or among the
 /// imported statements. Held in place of a reference so a table built from
 /// the statements outlives the registry updates between lowering rounds,
@@ -761,9 +811,9 @@ impl TraitDefaultBodies {
 /// declarations, the trait default bodies, and the symbols codegen names
 /// outside any call. Built once, before the first body is lowered.
 struct ReachTables {
-    /// Every generic function declaration by name, the program's own
-    /// shadowing an imported one of the same name.
-    generic_functions: std::collections::HashMap<String, StatementSite>,
+    /// Every generic function declaration, by the module that declares it
+    /// and its name.
+    generic_functions: std::collections::HashMap<DeclaredFunction, StatementSite>,
     trait_defaults: TraitDefaultBodies,
     synthesized: std::collections::HashSet<String>,
     /// The slot numbering the lowered virtual calls index by.
@@ -771,17 +821,9 @@ struct ReachTables {
 }
 
 impl ReachTables {
-    fn collect(result: &PipelineResult) -> Self {
-        let mut generic_functions = std::collections::HashMap::new();
-        for (site, stmt) in statements_with_sites(result) {
-            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                if decl.generics.is_some() {
-                    generic_functions.entry(decl.name.clone()).or_insert(site);
-                }
-            }
-        }
-        ReachTables {
-            generic_functions,
+    fn collect(result: &PipelineResult) -> Result<Self, CompilerError> {
+        Ok(ReachTables {
+            generic_functions: function_declarations(result, |decl| decl.generics.is_some())?,
             trait_defaults: TraitDefaultBodies::collect(result),
             synthesized: mir::lowering::dispatch_symbols::synthesized_references(
                 result.type_checker.type_definitions(),
@@ -789,7 +831,7 @@ impl ReachTables {
             vtable_layout: mir::lowering::dispatch_symbols::VtableLayout::of(
                 result.type_checker.type_definitions(),
             ),
-        }
+        })
     }
 }
 
@@ -846,7 +888,7 @@ fn record_pinned_base_class_instantiations(type_checker: &mut TypeChecker) {
                 .all(|arg| mir::lowering::has_a_monomorphized_spelling(&arg.kind))
         })
         .collect();
-    discovered.sort_by_cached_key(|(name, args)| Symbol::function(name, args).link_name());
+    discovered.sort_by_cached_key(|(name, args)| TypeInstance::new(name, args));
     for (name, args) in discovered {
         type_checker.record_generic_class_instantiation(&name, args);
     }
@@ -874,7 +916,7 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
             &mut discovered,
         );
     }
-    discovered.sort_by_cached_key(|(name, args)| Symbol::function(name, args).link_name());
+    discovered.sort_by_cached_key(|(name, args)| TypeInstance::new(name, args));
     for (name, args) in discovered {
         type_checker.record_generic_class_instantiation(&name, args);
     }
@@ -892,7 +934,7 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
 /// otherwise as an argument with no name.
 fn refuse_unnameable_generic_calls(
     result: &PipelineResult,
-    generic_functions: &std::collections::HashMap<String, StatementSite>,
+    generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
     bodies: &[(Symbol, mir::Body)],
     symbols: &SymbolTable,
 ) -> Result<(), CompilerError> {
@@ -905,7 +947,7 @@ fn refuse_unnameable_generic_calls(
         return Ok(());
     };
     let span = generic_functions
-        .get(call.function.as_str())
+        .get(&call.function)
         .and_then(|site| site.statement(result))
         .map_or_else(Span::default, |stmt| stmt.span);
     let args: Vec<Type> = call.type_args.iter().map(|(_, ty)| ty.clone()).collect();
@@ -921,7 +963,7 @@ fn refuse_unnameable_generic_calls(
     };
     let limit = limits::ExceededLimit::TypeDepth(depth);
     Err(CompilerError::Lowering(limits::polymorphic_recursion(
-        &call.function,
+        &call.function.name,
         &args,
         &limit,
         &growth,
@@ -2036,7 +2078,7 @@ impl Pipeline {
         // on any later build of the same source (a long-lived host would otherwise
         // drift because the raw AST-id counter never resets).
         let compilation_ids = mir::lowering::new_shared_compilation_ids();
-        let reach = ReachTables::collect(result);
+        let reach = ReachTables::collect(result)?;
 
         self.lower_program_bodies(
             result,
@@ -2908,7 +2950,7 @@ impl Pipeline {
     fn lower_monomorphized_generics(
         &self,
         result: &PipelineResult,
-        generic_functions: &std::collections::HashMap<String, StatementSite>,
+        generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
@@ -2947,7 +2989,7 @@ impl Pipeline {
         result: &PipelineResult,
         is_release: bool,
         first_new: usize,
-        generic_functions: &std::collections::HashMap<String, StatementSite>,
+        generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
@@ -2959,7 +3001,7 @@ impl Pipeline {
                 continue;
             }
             let Some(ast_stmt) = generic_functions
-                .get(call.function.as_str())
+                .get(&call.function)
                 .and_then(|site| site.statement(result))
             else {
                 continue;
@@ -2987,9 +3029,9 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Lower the top-level function `name`, declared by `stmt`, unless a body
-    /// already holds its symbol: a program function shadows an imported one
-    /// of the same name.
+    /// Lower the top-level function `name`, declared by `stmt`, under the
+    /// symbol of the module that declares it, unless `stmt`'s body already
+    /// holds that symbol. Another declaration holding it is refused.
     #[allow(clippy::too_many_arguments)]
     fn lower_top_level_function(
         result: &PipelineResult,
@@ -3000,9 +3042,10 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let symbol = Symbol::declared_function(name);
+        let module = result.type_checker.declaring_module(stmt.id);
+        let symbol = Symbol::declared_function(module, name);
         if !symbols
-            .claim_at(&symbol, stmt.span)
+            .claim_definition(&symbol, stmt.id, stmt.span)
             .map_err(CompilerError::Lowering)?
         {
             return Ok(());
@@ -3093,22 +3136,13 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Residency specialization applies to any function (generic or not),
-        // so it needs every function declaration by name, not only generic
-        // ones.
-        let mut decls: std::collections::HashMap<&str, &Statement> =
-            std::collections::HashMap::new();
-        for stmt in result
-            .ast
-            .body
-            .iter()
-            .chain(result.type_checker.imported_statements.iter())
-        {
-            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                decls.entry(decl.name.as_str()).or_insert(stmt);
-            }
-        }
+        // so it needs every function declaration, not only generic ones.
+        let decls = function_declarations(result, |_| true)?;
         for call in needed {
-            let Some(&ast_stmt) = decls.get(call.function.as_str()) else {
+            let Some(ast_stmt) = decls
+                .get(&call.function)
+                .and_then(|site| site.statement(result))
+            else {
                 continue;
             };
             if !symbols

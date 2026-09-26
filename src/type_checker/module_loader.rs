@@ -10,6 +10,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// The module name the program's own file is checked under. Every module a
+/// `use` loads is named by the path that `use` wrote, whose segments are
+/// identifiers, so no loaded module can be named this.
+pub(crate) const PROGRAM_MODULE: &str = "<program>";
+
 /// Tracks module loading state, visibility, and metadata.
 ///
 /// This struct encapsulates all module-related fields and operations that were
@@ -70,7 +75,7 @@ impl ModuleLoader {
     /// Creates a new module loader with default state.
     pub fn new() -> Self {
         Self {
-            current_module: "Main".to_string(),
+            current_module: PROGRAM_MODULE.to_string(),
             loaded_modules: HashSet::new(),
             module_visibility: HashMap::new(),
             implicitly_preloaded_modules: HashSet::new(),

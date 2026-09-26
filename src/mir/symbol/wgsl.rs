@@ -8,7 +8,9 @@
 //! WGSL identifiers admit neither `.` nor `$`, so this spelling joins the
 //! parts of a symbol with `_` and `__`. A user identifier may contain those
 //! too, so two symbols can share this spelling; the link name, not this one,
-//! is what keeps every compiled body apart.
+//! is what keeps every compiled body apart. A function's module is left out of
+//! it, so the functions of one name two modules declare share it too, and
+//! reaching both from GPU code is refused where these names are claimed.
 
 use std::fmt;
 
@@ -33,7 +35,7 @@ impl fmt::Display for Wgsl<'_> {
 /// The identifier-only spelling of `kind`, without its residency.
 pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
     match kind {
-        SymbolKind::Function { name, args } => {
+        SymbolKind::Function { name, args, .. } => {
             f.write_str(name)?;
             write_arguments(f, args)
         }

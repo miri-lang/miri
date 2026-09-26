@@ -9,9 +9,15 @@ use miri::mir::symbol::{
     Claim, ClaimRefusal, ClosureKind, GpuKernelKind, KernelDatum, Namespace, StringLiteralPart,
     Symbol, SymbolCollision, SymbolTable, ThunkKind,
 };
+use miri::type_checker::ModuleId;
 
 fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
+}
+
+/// The module a `use` loads as `path`.
+fn module(path: &str) -> ModuleId {
+    ModuleId::Imported(path.split('.').map(str::to_string).collect())
 }
 
 fn list_of(element: TypeKind) -> Type {
@@ -22,12 +28,19 @@ fn list_of(element: TypeKind) -> Type {
 
 #[test]
 fn a_function_without_arguments_is_its_name_under_the_root() {
-    assert_eq!(Symbol::function("pick", &[]).link_name(), "miri.pick");
+    assert_eq!(
+        Symbol::function(&ModuleId::Program, "pick", &[]).link_name(),
+        "miri.pick"
+    );
 }
 
 #[test]
 fn a_generic_function_appends_each_argument_token() {
-    let symbol = Symbol::function("pick", &[ty(TypeKind::Int), ty(TypeKind::String)]);
+    let symbol = Symbol::function(
+        &ModuleId::Program,
+        "pick",
+        &[ty(TypeKind::Int), ty(TypeKind::String)],
+    );
     assert_eq!(symbol.link_name(), "miri.pick$int$String");
 }
 
@@ -94,7 +107,7 @@ fn a_nested_function_names_its_declaration() {
 
 #[test]
 fn a_residency_segment_lists_each_position_and_handle() {
-    let symbol = Symbol::function("scale", &[])
+    let symbol = Symbol::function(&ModuleId::Program, "scale", &[])
         .with_residency(&[(0, DeviceHandleId(1)), (2, DeviceHandleId(5))]);
     assert_eq!(symbol.link_name(), "miri.$gpu$p0h1$p2h5.scale");
 }
@@ -129,10 +142,13 @@ fn a_gpu_kernel_entry_point_is_spelled_as_it_is_linked() {
 #[test]
 fn a_wgsl_name_joins_the_parts_of_a_symbol_with_underscores() {
     assert_eq!(
-        Symbol::function("pick", &[ty(TypeKind::Int)]).wgsl_name(),
+        Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]).wgsl_name(),
         "pick__int"
     );
-    assert_eq!(Symbol::function("soup", &[]).wgsl_name(), "soup");
+    assert_eq!(
+        Symbol::function(&ModuleId::Program, "soup", &[]).wgsl_name(),
+        "soup"
+    );
     assert_eq!(
         Symbol::method(
             "Base",
@@ -144,7 +160,7 @@ fn a_wgsl_name_joins_the_parts_of_a_symbol_with_underscores() {
         "Base_map__List_String__int"
     );
     assert_eq!(
-        Symbol::function("scale", &[])
+        Symbol::function(&ModuleId::Program, "scale", &[])
             .with_residency(&[(0, DeviceHandleId(1)), (2, DeviceHandleId(5))])
             .wgsl_name(),
         "scale__gpu_p0h1_p2h5"
@@ -153,11 +169,92 @@ fn a_wgsl_name_joins_the_parts_of_a_symbol_with_underscores() {
 
 #[test]
 fn a_declared_function_named_main_is_the_entry_point() {
-    assert_eq!(Symbol::declared_function("main"), Symbol::entry());
     assert_eq!(
-        Symbol::declared_function("pick"),
-        Symbol::function("pick", &[])
+        Symbol::declared_function(&ModuleId::Program, "main"),
+        Symbol::entry()
     );
+    assert_eq!(
+        Symbol::declared_function(&ModuleId::Program, "pick"),
+        Symbol::function(&ModuleId::Program, "pick", &[])
+    );
+}
+
+#[test]
+fn a_module_function_names_its_module_in_the_root() {
+    assert_eq!(
+        Symbol::function(&module("local.m.a"), "helper", &[]).link_name(),
+        "miri$local$m$a.helper"
+    );
+    assert_eq!(
+        Symbol::function(&module("system.math"), "pick", &[ty(TypeKind::Int)]).link_name(),
+        "miri$system$math.pick$int"
+    );
+}
+
+#[test]
+fn a_residency_segment_follows_a_module_root() {
+    let symbol = Symbol::function(&module("local.gpu"), "scale", &[])
+        .with_residency(&[(0, DeviceHandleId(1))]);
+    assert_eq!(symbol.link_name(), "miri$local$gpu.$gpu$p0h1.scale");
+}
+
+#[test]
+fn only_the_program_s_own_main_is_the_entry_point() {
+    let module_main = Symbol::declared_function(&module("local.tool"), "main");
+    assert_ne!(module_main, Symbol::entry());
+    assert_eq!(module_main.link_name(), "miri$local$tool.main");
+}
+
+#[test]
+fn a_module_function_keeps_the_wgsl_name_of_its_declared_name() {
+    assert_eq!(
+        Symbol::function(&module("local.m.a"), "pick", &[ty(TypeKind::Int)]).wgsl_name(),
+        "pick__int"
+    );
+    assert_eq!(
+        Symbol::function(&module("local.m.a"), "scale", &[])
+            .with_residency(&[(0, DeviceHandleId(1))])
+            .wgsl_name(),
+        "scale__gpu_p0h1"
+    );
+}
+
+#[test]
+fn a_module_function_is_written_under_its_module_path() {
+    let symbol = Symbol::function(&module("local.m.a"), "pick", &[ty(TypeKind::Int)]);
+    assert_eq!(symbol.written().to_string(), "`local.m.a.pick<int>`");
+    assert_eq!(
+        Symbol::function(&ModuleId::Program, "pick", &[])
+            .written()
+            .to_string(),
+        "`pick`"
+    );
+}
+
+#[test]
+fn functions_of_one_name_in_different_modules_are_distinct() {
+    let pairs = [
+        (
+            Symbol::function(&ModuleId::Program, "helper", &[]),
+            Symbol::function(&module("local.a"), "helper", &[]),
+        ),
+        (
+            Symbol::function(&module("local.a"), "helper", &[]),
+            Symbol::function(&module("local.b"), "helper", &[]),
+        ),
+        (
+            Symbol::function(&module("a"), "b", &[]),
+            Symbol::method("a", &[], "b", &[]),
+        ),
+        (
+            Symbol::function(&module("a.b"), "c", &[]),
+            Symbol::function(&module("a"), "b", &[]),
+        ),
+    ];
+    for (first, second) in pairs {
+        assert_ne!(first, second);
+        assert_ne!(first.link_name(), second.link_name());
+    }
 }
 
 #[test]
@@ -167,7 +264,7 @@ fn runtime_symbols_and_the_entry_point_are_verbatim() {
     assert!(runtime.is_runtime());
     assert_eq!(Symbol::entry().link_name(), "main");
     assert!(!Symbol::entry().is_runtime());
-    assert!(!Symbol::function("miri_rt_list_new", &[]).is_runtime());
+    assert!(!Symbol::function(&ModuleId::Program, "miri_rt_list_new", &[]).is_runtime());
 }
 
 #[test]
@@ -178,12 +275,12 @@ fn symbols_whose_identifiers_run_together_spell_distinct_names() {
             Symbol::method("A", &[], "b_c", &[]),
         ),
         (
-            Symbol::function("pick", &[ty(TypeKind::Int)]),
-            Symbol::function("pick__int", &[]),
+            Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]),
+            Symbol::function(&ModuleId::Program, "pick__int", &[]),
         ),
         (
             Symbol::method("Pick", &[], "_int", &[]),
-            Symbol::function("Pick", &[ty(TypeKind::Int)]),
+            Symbol::function(&ModuleId::Program, "Pick", &[ty(TypeKind::Int)]),
         ),
         (
             Symbol::type_thunk(ThunkKind::Drop, "W", &[ty(TypeKind::Int)]),
@@ -191,7 +288,7 @@ fn symbols_whose_identifiers_run_together_spell_distinct_names() {
         ),
         (
             Symbol::type_thunk(ThunkKind::Drop, "Point", &[]),
-            Symbol::function("__drop_Point", &[]),
+            Symbol::function(&ModuleId::Program, "__drop_Point", &[]),
         ),
     ];
     for (first, second) in pairs {
@@ -202,7 +299,7 @@ fn symbols_whose_identifiers_run_together_spell_distinct_names() {
 
 #[test]
 fn symbols_display_as_their_link_name() {
-    let symbol = Symbol::function("pick", &[ty(TypeKind::Int)]);
+    let symbol = Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]);
     assert_eq!(symbol.to_string(), symbol.link_name());
 }
 
@@ -305,7 +402,7 @@ fn claiming_a_symbol_for_the_first_time_is_new() {
 #[test]
 fn claiming_a_symbol_again_finds_it_already_lowered() {
     let mut table = SymbolTable::default();
-    let symbol = Symbol::function("pick", &[ty(TypeKind::Int)]);
+    let symbol = Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]);
     assert_eq!(table.claim(&symbol), Ok(Claim::New));
     assert_eq!(table.claim(&symbol), Ok(Claim::AlreadyLowered));
     assert!(table.is_claimed(&symbol));
@@ -317,7 +414,7 @@ fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
     // No identifier contains `.`, so only a name built outside the grammar
     // can spell another symbol's name; the table refuses it all the same.
     let existing = Symbol::method("A", &[], "b", &[]);
-    let incoming = Symbol::function("A.b", &[]);
+    let incoming = Symbol::function(&ModuleId::Program, "A.b", &[]);
     assert_eq!(table.claim(&existing), Ok(Claim::New));
     assert_eq!(
         table.claim(&incoming),
@@ -336,10 +433,14 @@ fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
 fn a_collision_names_both_definitions_as_the_source_writes_them() {
     let mut table = SymbolTable::default();
     table
-        .claim(&Symbol::function("pick$int", &[]))
+        .claim(&Symbol::function(&ModuleId::Program, "pick$int", &[]))
         .expect("first claim is new");
     let refusal = table
-        .claim(&Symbol::function("pick", &[ty(TypeKind::Int)]))
+        .claim(&Symbol::function(
+            &ModuleId::Program,
+            "pick",
+            &[ty(TypeKind::Int)],
+        ))
         .expect_err("a second definition of `miri.pick$int` collides");
     let ClaimRefusal::Collision(collision) = *refusal else {
         panic!("expected a collision, got {refusal:?}");
@@ -406,8 +507,16 @@ fn nested_options(depth: usize, leaf: TypeKind) -> Type {
 /// claim, never found already lowered.
 #[test]
 fn a_symbol_with_an_unnameable_argument_is_never_claimed() {
-    let strings = Symbol::function("keep", &[nested_options(70, TypeKind::String)]);
-    let ints = Symbol::function("keep", &[nested_options(70, TypeKind::Int)]);
+    let strings = Symbol::function(
+        &ModuleId::Program,
+        "keep",
+        &[nested_options(70, TypeKind::String)],
+    );
+    let ints = Symbol::function(
+        &ModuleId::Program,
+        "keep",
+        &[nested_options(70, TypeKind::Int)],
+    );
     assert_eq!(strings, ints);
     assert!(strings.has_an_unnameable_argument());
     let mut table = SymbolTable::default();
@@ -439,9 +548,12 @@ fn an_unnameable_symbol_is_refused_with_the_instantiation_code() {
 
 #[test]
 fn a_nameable_symbol_has_no_unnameable_argument() {
-    assert!(
-        !Symbol::function("keep", &[nested_options(3, TypeKind::Int)]).has_an_unnameable_argument()
-    );
+    assert!(!Symbol::function(
+        &ModuleId::Program,
+        "keep",
+        &[nested_options(3, TypeKind::Int)]
+    )
+    .has_an_unnameable_argument());
     assert!(!Symbol::entry().has_an_unnameable_argument());
 }
 
@@ -453,7 +565,7 @@ fn a_method_symbol_answers_which_method_of_its_owner_it_is() {
     assert_eq!(symbol.method_of("Box", &[]), None);
     assert_eq!(symbol.method_of("Bo", &at_int), None);
     assert_eq!(
-        Symbol::function("Box_get", &at_int).method_of("Box", &at_int),
+        Symbol::function(&ModuleId::Program, "Box_get", &at_int).method_of("Box", &at_int),
         None
     );
 }
@@ -479,23 +591,61 @@ fn identifiers(alphabet: &[char], max_len: usize) -> Vec<String> {
     all
 }
 
+/// Every module a `use` can load by a path of one or two segments drawn
+/// from `names`.
+fn module_paths(names: &[String]) -> Vec<ModuleId> {
+    let short: Vec<&String> = names.iter().filter(|name| name.len() <= 2).collect();
+    let single = short.iter().map(|name| vec![(*name).clone()]);
+    let double = short
+        .iter()
+        .filter(|name| name.len() == 1)
+        .flat_map(|first| {
+            short
+                .iter()
+                .filter(|name| name.len() == 1)
+                .map(|second| vec![(*first).clone(), (*second).clone()])
+        });
+    single.chain(double).map(ModuleId::Imported).collect()
+}
+
+/// Every function `modules` can declare under `names`, at each of
+/// `argument_lists`, with and without gpu residency — including a module
+/// whose path ends in the name of a function or of a type with methods.
+fn module_functions_named_from(
+    modules: &[ModuleId],
+    names: &[String],
+    argument_lists: &[Vec<Type>],
+) -> Vec<Symbol> {
+    let functions = modules.iter().flat_map(|module| {
+        names.iter().flat_map(move |name| {
+            argument_lists
+                .iter()
+                .map(move |args| Symbol::function(module, name, args))
+        })
+    });
+    let entries = modules
+        .iter()
+        .map(|module| Symbol::declared_function(module, "main"));
+    with_and_without_residency(functions.chain(entries))
+}
+
 /// Every symbol a program can name from `names` and `argument_lists`.
 fn symbols_named_from(names: &[String], argument_lists: &[Vec<Type>]) -> Vec<Symbol> {
     let mut symbols = vec![Symbol::entry()];
     for name in names {
         symbols.push(Symbol::runtime(name));
         for args in argument_lists {
-            symbols.push(Symbol::function(name, args));
+            symbols.push(Symbol::function(&ModuleId::Program, name, args));
             symbols.push(Symbol::vtable(name, args));
             symbols.push(Symbol::type_thunk(ThunkKind::Drop, name, args));
             symbols.push(Symbol::type_thunk(ThunkKind::Decref, name, args));
-            let target = Symbol::function(name, args).link_name();
+            let target = Symbol::function(&ModuleId::Program, name, args).link_name();
             let closures = [
                 Symbol::closure(ClosureKind::NestedFunction(name.clone()), 1, args),
                 Symbol::closure(ClosureKind::FunctionReference(target), 1, &[]),
             ];
             symbols.extend(with_and_without_residency(
-                std::iter::once(Symbol::function(name, args)).chain(closures),
+                std::iter::once(Symbol::function(&ModuleId::Program, name, args)).chain(closures),
             ));
         }
     }
@@ -541,8 +691,8 @@ fn with_and_without_residency(symbols: impl IntoIterator<Item = Symbol>) -> Vec<
 /// A bounded regression sweep backing the injectivity argument in the
 /// module documentation of `miri::mir::symbol`: every symbol built from short
 /// identifiers over an alphabet of letters, digits and underscores — alone,
-/// as methods and closures, with and without gpu residency — spells a link
-/// name no other one does. It cannot prove the grammar injective; it keeps a
+/// as methods and closures, as functions of the program or of a module, with
+/// and without gpu residency — spells a link name no other one does. It cannot prove the grammar injective; it keeps a
 /// change that breaks it from going unnoticed.
 #[test]
 fn distinct_symbols_never_spell_one_link_name() {
@@ -554,7 +704,12 @@ fn distinct_symbols_never_spell_one_link_name() {
         vec![list_of(TypeKind::String)],
         vec![ty(TypeKind::Custom("a_A".to_string(), None))],
     ];
-    let symbols = symbols_named_from(&names, &argument_lists);
+    let mut symbols = symbols_named_from(&names, &argument_lists);
+    symbols.extend(module_functions_named_from(
+        &module_paths(&names),
+        &names,
+        &argument_lists,
+    ));
     let mut seen: std::collections::HashMap<String, Symbol> = std::collections::HashMap::new();
     for symbol in symbols {
         let link_name = symbol.link_name();

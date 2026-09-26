@@ -113,7 +113,8 @@ fn try_lower_testing_intrinsic(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let Some(intrinsic) = testing_intrinsic::testing_intrinsic_callee(ctx, func) else {
+    let callee = crate::mir::lowering::dispatch::aliased_function(ctx, func).unwrap_or(func);
+    let Some(intrinsic) = testing_intrinsic::testing_intrinsic_callee(ctx, callee) else {
         return Ok(None);
     };
     testing_intrinsic::lower_testing_intrinsic(ctx, expr, intrinsic, args, dest).map(Some)

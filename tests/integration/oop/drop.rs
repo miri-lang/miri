@@ -252,6 +252,40 @@ fn main()
 }
 
 #[test]
+fn test_struct_drop_hook_reads_its_fields() {
+    assert_runs_with_output(
+        r#"
+
+struct Token
+    id int
+    fn drop(self)
+        println(f"token {self.id} gone")
+
+fn main()
+    let t = Token(id: 7)
+"#,
+        "token 7 gone",
+    );
+}
+
+#[test]
+fn test_struct_drop_hook_body_is_type_checked() {
+    assert_compiler_error(
+        r#"
+
+struct Token
+    id int
+    fn drop(self)
+        let label String = self.id
+
+fn main()
+    let t = Token(id: 7)
+"#,
+        "Type mismatch",
+    );
+}
+
+#[test]
 fn test_user_drop_hook_multiple_fields_access() {
     // Drop hook can use self fields (via self.x pattern if supported),
     // but here we just verify the hook is called even when struct has multiple fields.
