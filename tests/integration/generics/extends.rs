@@ -668,3 +668,83 @@ fn main()
         "2.5\n2.5",
     );
 }
+
+const WIDE_BASE: &str = r#"
+class Base<T>
+    public v T
+    public n int
+    public s String
+
+    fn init(v T, n int, s String)
+        self.v = v
+        self.n = n
+        self.s = s
+"#;
+
+/// An inherited field bound to a 128-bit argument is laid out at that width,
+/// so construction, reads and the release of the managed field after it all
+/// agree on where each field sits.
+#[test]
+fn an_inherited_field_at_i128_is_read_and_released_at_its_width() {
+    let code = format!(
+        "{WIDE_BASE}
+class Child<T> extends Base<T>
+    fn init(v T, n int, s String)
+        super.init(v, n, s)
+
+fn main()
+    let a i128 = 170141183460469231731687303715884105727
+    let c = Child<i128>(v: a, n: 7, s: \"x\" + \"y\")
+    println(f\"{{c.v == a}} {{c.n}} {{c.s}}\")
+"
+    );
+    assert_heap_guard_output(&code, "true 7 xy");
+}
+
+/// The child names the parameter differently from the base; the base's field
+/// is bound through the `extends` clause, not by matching names.
+#[test]
+fn an_inherited_field_bound_through_a_renamed_parameter_keeps_its_width() {
+    let code = format!(
+        "{WIDE_BASE}
+class Child<U> extends Base<U>
+    fn init(v U, n int, s String)
+        super.init(v, n, s)
+
+fn main()
+    let a u128 = 340282366920938463463374607431768211455
+    let c = Child<u128>(v: a, n: 7, s: \"x\" + \"y\")
+    println(f\"{{c.v == a}} {{c.n}} {{c.s}}\")
+"
+    );
+    assert_heap_guard_output(&code, "true 7 xy");
+}
+
+/// Three inherited fields, each bound through a parameter the child names
+/// differently, at three different widths with a managed one between them.
+#[test]
+fn three_inherited_fields_bound_through_renamed_parameters_read_back_intact() {
+    assert_heap_guard_output(
+        r#"
+class Base<A, B, C>
+    public first A
+    public second B
+    public third C
+
+    fn init(first A, second B, third C)
+        self.first = first
+        self.second = second
+        self.third = third
+
+class Child<X, Y, Z> extends Base<X, Y, Z>
+    fn init(first X, second Y, third Z)
+        super.init(first, second, third)
+
+fn main()
+    let c = Child<i128, String, u8>(5, "x" + "y", 7)
+    let d = Child<float, int, String>(1.5, 7, "p" + "q")
+    println(f"{c.first} {c.second} {c.third} {d.first} {d.second} {d.third}")
+"#,
+        "5 xy 7 1.5 7 pq",
+    );
+}

@@ -9,6 +9,8 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
+use crate::mir::lowering::inherited_instantiation::instantiated_field_types;
+use crate::mir::lowering::type_arguments;
 use crate::type_checker::context::{
     class_needs_vtable, collect_class_fields_all, ClassDefinition, EnumDefinition,
     StructDefinition, TypeDefinition,
@@ -351,24 +353,17 @@ pub fn class_payload_layout(
     // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
     // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
     // User-declared fields start after the vtable pointer.
-    let all_fields = collect_class_fields_all(class_def, type_definitions);
+    let field_kinds = class_field_kinds(name, class_def, type_args, type_definitions);
     let vtable_offset = if class_needs_vtable(name, type_definitions) {
         ptr_size
     } else {
         0
     };
-    let mut fields = Vec::with_capacity(all_fields.len());
+    let mut fields = Vec::with_capacity(field_kinds.len());
     let mut offset: i32 = vtable_offset;
     let mut max_align = ptr_size;
-    for (_field_name, field_info) in all_fields.iter() {
-        // A generic-parameter field is monomorphized to its concrete type
-        // argument so it lays out at the instantiation's scalar width.
-        let field_kind = substitute_generic_field_kind(
-            &field_info.ty.kind,
-            type_args,
-            class_def.generics.as_ref(),
-        );
-        let cl_ty = translate_type_kind(&field_kind, ptr_ty);
+    for field_kind in &field_kinds {
+        let cl_ty = translate_type_kind(field_kind, ptr_ty);
         let alignment = type_alignment(cl_ty);
         max_align = max_align.max(alignment);
         offset = align_to(offset, alignment);
@@ -379,6 +374,40 @@ pub fn class_payload_layout(
         fields,
         size: align_to(offset, max_align) as u32,
     }
+}
+
+/// The kind each field of an instance of `name` at `type_args` stores, in the
+/// order [`collect_class_fields_all`] lists them.
+///
+/// An inherited field is written in the parameters of the ancestor that
+/// declares it, and bound to the child's arguments by the `extends` clause, so
+/// it is resolved through that clause: matching the ancestor's parameter names
+/// against the child's finds nothing when the child renames them, and a 128-bit
+/// argument then lays out at pointer width. A value argument is a literal
+/// rather than a type, so the chain cannot be walked in types alone; such a
+/// class binds its own parameters directly.
+fn class_field_kinds(
+    name: &str,
+    class_def: &ClassDefinition,
+    type_args: Option<&[Expression]>,
+    type_definitions: &HashMap<String, TypeDefinition>,
+) -> Vec<TypeKind> {
+    if let Some(args) = type_args.and_then(type_arguments) {
+        return instantiated_field_types(type_definitions, name, &args)
+            .into_iter()
+            .map(|ty| ty.kind)
+            .collect();
+    }
+    collect_class_fields_all(class_def, type_definitions)
+        .iter()
+        .map(|(_, field_info)| {
+            substitute_generic_field_kind(
+                &field_info.ty.kind,
+                type_args,
+                class_def.generics.as_ref(),
+            )
+        })
+        .collect()
 }
 
 fn class_field_layout(

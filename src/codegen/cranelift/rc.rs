@@ -912,7 +912,7 @@ impl<'a> FunctionTranslator<'a> {
         // Extract Type arguments from Expression arguments for generic enums.
         // This enables resolution of generic variant fields to their concrete
         // kinds so managed fields are correctly identified.
-        let concrete_args = Self::extract_type_args_from_exprs(type_args);
+        let concrete_args = type_args.and_then(crate::mir::lowering::type_arguments);
 
         // A generic class instantiated at a recorded set of type arguments
         // dispatches to its per-instantiation drop thunk (`miri.Box$String.$drop`)
@@ -979,7 +979,7 @@ impl<'a> FunctionTranslator<'a> {
         // the shared one.
         let written = match type_args {
             None => Vec::new(),
-            Some(args) => Self::extract_type_args_from_exprs(Some(args))?,
+            Some(args) => crate::mir::lowering::type_arguments(args)?,
         };
         let monomorphized = written.iter().all(|arg| {
             crate::mir::lowering::is_monomorphizable_type_argument(
@@ -991,22 +991,6 @@ impl<'a> FunctionTranslator<'a> {
             return None;
         }
         Self::recorded_instantiation(class_name, type_args, type_ctx)
-    }
-
-    /// Extract Type arguments from Expression type arguments.
-    /// Returns `None` if no args or extraction fails; `Some(Vec)` otherwise.
-    pub(crate) fn extract_type_args_from_exprs(
-        type_args: Option<&[Expression]>,
-    ) -> Option<Vec<Type>> {
-        let args = type_args?;
-        let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
-        for arg in args {
-            let ExpressionKind::Type(ty, _) = &arg.node else {
-                return None;
-            };
-            concrete.push((**ty).clone());
-        }
-        Some(concrete)
     }
 
     /// The type arguments of the per-instantiation drop thunk to call for a
@@ -1136,6 +1120,7 @@ impl<'a> FunctionTranslator<'a> {
                     builder,
                     ctx,
                     type_name,
+                    inst_args,
                     &managed_fields,
                     payload_ptr,
                     type_ctx,
@@ -1181,6 +1166,7 @@ impl<'a> FunctionTranslator<'a> {
                     builder,
                     ctx,
                     type_name,
+                    inst_args,
                     &managed_fields,
                     payload_ptr,
                     type_ctx,
@@ -1257,18 +1243,23 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Emit `DecRef` for every managed field of a struct- or class-shaped
     /// type. `managed_fields` carries the (full-field-list) index and field
-    /// type kind; offsets are resolved through `layout::field_layout` so
-    /// inherited fields land at the right slot.
+    /// type kind; offsets are resolved through `layout::field_layout` at the
+    /// instance's own arguments, so inherited fields land at the right slot
+    /// and a field after one a wide argument binds is found where construction
+    /// wrote it.
     fn emit_struct_like_field_decrefs(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         type_name: &str,
+        inst_args: Option<&[Type]>,
         managed_fields: &[(usize, TypeKind)],
         payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let custom_kind = TypeKind::Custom(type_name.to_string(), None);
+        let arg_exprs =
+            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
+        let custom_kind = TypeKind::Custom(type_name.to_string(), arg_exprs);
         for (field_idx, field_kind) in managed_fields {
             let (offset, _cl_ty) = layout::field_layout(
                 &custom_kind,
