@@ -28,12 +28,13 @@
 use super::instantiation_argument;
 use super::method_dispatch::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::ast::expression::Expression;
+use crate::ast::formatter::expression_text;
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::type_checker::context::TypeDefinition;
-use crate::type_checker::generics::extract_value_generic_kind;
+use crate::type_checker::generics::{extract_value_generic_kind, UnfoldableValue};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -69,6 +70,12 @@ pub const DEPTH_HELP: &str = "the type argument grows on every call; bound the r
 
 /// The help for a value argument that changes on every call.
 pub const VALUE_HELP: &str = "the value argument changes on every call; bound the recursion, or keep one value (e.g. store the size in a field instead of in the type)";
+
+/// The help for a value argument that has no value at its instantiation.
+pub const VALUE_ARGUMENT_HELP: &str = "a value argument must fold to an integer within the signed 128-bit range; bound the value, or keep it in a field instead of in the type";
+
+/// The help for a type argument the compiler has no name for.
+pub const TYPE_ARGUMENT_HELP: &str = "instantiate the class at a type the compiler can name; wrap the value in a class or struct and instantiate at that";
 
 /// The bound an instance passes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +213,99 @@ pub fn polymorphic_recursion(
     }
 }
 
+/// The refusal of an instance of `class` at `args`, built at `span`, whose
+/// value argument `argument` has no value once each of `bindings` — a
+/// parameter it names and the value that parameter is bound to — is
+/// substituted, for the reason `cause`.
+pub(crate) fn invalid_value_argument(
+    class: &str,
+    args: &[Type],
+    argument: &Expression,
+    bindings: &[(&str, &Expression)],
+    cause: UnfoldableValue,
+    span: Span,
+) -> LoweringError {
+    let instance = spelled_instance(class, args, SPELLED_LEVELS);
+    let bound: Vec<String> = bindings
+        .iter()
+        .map(|(name, value)| format!("{name} = {}", expression_text(value)))
+        .collect();
+    let why = match cause {
+        UnfoldableValue::NotConstant => "is not a compile-time constant",
+        UnfoldableValue::OutOfRange => "does not fit in a 128-bit integer",
+        UnfoldableValue::DivisionByZero => "divides by zero",
+        UnfoldableValue::UnsupportedOperator => "uses an operator a value argument cannot fold",
+    };
+    LoweringError::coded(
+        DiagnosticCode::MirInvalidInstantiationArgument,
+        format!(
+            "instantiating `{instance}` at `{}`: `{}` {why}",
+            bound.join(", "),
+            expression_text(argument)
+        ),
+        span,
+        Some(VALUE_ARGUMENT_HELP.to_string()),
+    )
+}
+
+/// The refusal of an instance of `class` at `args`, built at `span`, whose
+/// type argument `argument` has no name the compiler can compile a body at.
+pub fn unnameable_type_argument(
+    class: &str,
+    args: &[Type],
+    argument: &Type,
+    span: Span,
+) -> LoweringError {
+    let instance = spelled_instance(class, args, SPELLED_LEVELS);
+    LoweringError::coded(
+        DiagnosticCode::MirInvalidInstantiationArgument,
+        format!(
+            "instantiating `{instance}`: `{}` has no name the compiler can compile a body at",
+            spelled_type(argument, CHAIN_LEVELS)
+        ),
+        span,
+        Some(TYPE_ARGUMENT_HELP.to_string()),
+    )
+}
+
+/// The note on a value argument of `class` that outgrew the integer range
+/// inside a method of `class` itself: each instance builds the next at a new
+/// value of `parameter`, and the chain ran out of integers before it reached
+/// [`MAX_VALUE_INSTANCES_PER_CLASS`] instantiations.
+pub(crate) fn value_growth_note(class: &str, parameter: &str) -> String {
+    format!(
+        "each instance of `{class}` builds the next at a new value of `{parameter}`, \
+         which outgrew a 128-bit integer before `{class}` reached \
+         {MAX_VALUE_INSTANCES_PER_CLASS} instantiations; bound the recursion"
+    )
+}
+
+/// Whether `ty` names a type parameter no substitution has bound, anywhere
+/// inside it: a type still open is not yet an instantiation at all.
+pub fn mentions_open_parameter(ty: &Type, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    mentions_open_parameter_within(ty, type_defs, MAX_TOKEN_DEPTH)
+}
+
+fn mentions_open_parameter_within(
+    ty: &Type,
+    type_defs: &HashMap<String, TypeDefinition>,
+    budget: usize,
+) -> bool {
+    let is_open = if let TypeKind::Custom(name, None) = &ty.kind {
+        matches!(type_defs.get(name), None | Some(TypeDefinition::Generic(_)))
+    } else {
+        matches!(ty.kind, TypeKind::Generic(..))
+    };
+    let Some(rest) = budget.checked_sub(1) else {
+        return is_open;
+    };
+    is_open
+        || constructor_parts(ty)
+            .1
+            .iter()
+            .any(|part| mentions_open_parameter_within(part, type_defs, rest))
+}
+
 /// The note naming the steps `growth` took to the instance of `class` at
 /// `args`; none when no earlier instance of the class led to it.
 fn growth_note(
@@ -218,11 +318,19 @@ fn growth_note(
         return None;
     }
     let steps: Vec<&[Type]> = growth.chain.iter().copied().chain([args]).collect();
-    let mut shown: Vec<String> = steps
-        .iter()
-        .take(CHAIN_STEPS)
-        .map(|step| spelled_instance(class, step, CHAIN_LEVELS))
-        .collect();
+    let spelled_steps = |levels: usize| -> Vec<String> {
+        steps
+            .iter()
+            .take(CHAIN_STEPS)
+            .map(|step| spelled_instance(class, step, levels))
+            .collect()
+    };
+    // Steps nested past the levels shown elide to one spelling; shown in full
+    // they differ, since each is a step of growth.
+    let mut shown = spelled_steps(CHAIN_LEVELS);
+    if shown.windows(2).any(|pair| pair[0] == pair[1]) {
+        shown = spelled_steps(MAX_INSTANCE_TYPE_DEPTH + 1);
+    }
     if steps.len() > CHAIN_STEPS {
         shown.push("…".to_string());
     }
@@ -262,7 +370,7 @@ pub fn spelled_type(ty: &Type, levels: usize) -> String {
 /// Append `kind` as Miri spells it, `levels` constructors deep.
 fn push_type(out: &mut String, kind: &TypeKind, levels: usize) {
     if let Some(value) = extract_value_generic_kind(kind) {
-        out.push_str(&crate::ast::formatter::expression_text(value));
+        out.push_str(&expression_text(value));
         return;
     }
     match kind {
@@ -394,7 +502,9 @@ fn argument_type(arg: &Expression) -> Cow<'static, Type> {
 
 /// `ty` as its outermost constructor and the types it is built from, in
 /// order. A value generic's size and every type built from nothing are
-/// leaves, their constructor the token the mangler spells them with.
+/// leaves, their constructor the token the mangler spells them with. A
+/// built-in constructor is spelled with a leading digit, which no declared
+/// type's name can start with, so a class named `tuple` is never read as one.
 pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
     let leaf = || (type_kind_to_mangle_str(&ty.kind), Vec::new());
     if extract_value_generic_kind(&ty.kind).is_some() {
@@ -412,24 +522,24 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
             (Cow::Borrowed(name.as_str()), arguments(&args))
         }
         TypeKind::Generic(name, _, _) => (Cow::Borrowed(name.as_str()), Vec::new()),
-        TypeKind::Option(inner) => (Cow::Borrowed("option"), vec![(**inner).clone()]),
-        TypeKind::Linear(inner) => (Cow::Borrowed("linear"), vec![(**inner).clone()]),
-        TypeKind::Meta(inner) => (Cow::Borrowed("meta"), vec![(**inner).clone()]),
+        TypeKind::Option(inner) => (Cow::Borrowed("0option"), vec![(**inner).clone()]),
+        TypeKind::Linear(inner) => (Cow::Borrowed("0linear"), vec![(**inner).clone()]),
+        TypeKind::Meta(inner) => (Cow::Borrowed("0meta"), vec![(**inner).clone()]),
         TypeKind::Tuple(elements) => {
             let elements: Vec<&Expression> = elements.iter().collect();
-            (Cow::Borrowed("tuple"), arguments(&elements))
+            (Cow::Borrowed("0tuple"), arguments(&elements))
         }
-        TypeKind::List(element) => (Cow::Borrowed("list"), arguments(&[element])),
-        TypeKind::Set(element) => (Cow::Borrowed("set"), arguments(&[element])),
-        TypeKind::Future(element) => (Cow::Borrowed("future"), arguments(&[element])),
-        TypeKind::Array(element, size) => (Cow::Borrowed("array"), arguments(&[element, size])),
-        TypeKind::Map(key, value) => (Cow::Borrowed("map"), arguments(&[key, value])),
-        TypeKind::Result(ok, err) => (Cow::Borrowed("result"), arguments(&[ok, err])),
+        TypeKind::List(element) => (Cow::Borrowed("0list"), arguments(&[element])),
+        TypeKind::Set(element) => (Cow::Borrowed("0set"), arguments(&[element])),
+        TypeKind::Future(element) => (Cow::Borrowed("0future"), arguments(&[element])),
+        TypeKind::Array(element, size) => (Cow::Borrowed("0array"), arguments(&[element, size])),
+        TypeKind::Map(key, value) => (Cow::Borrowed("0map"), arguments(&[key, value])),
+        TypeKind::Result(ok, err) => (Cow::Borrowed("0result"), arguments(&[ok, err])),
         TypeKind::Function(function) => {
             let mut parts: Vec<&Expression> =
                 function.params.iter().map(|param| &*param.typ).collect();
             parts.extend(function.return_type.as_deref());
-            (Cow::Borrowed("fn"), arguments(&parts))
+            (Cow::Borrowed("0fn"), arguments(&parts))
         }
         TypeKind::Int
         | TypeKind::I8

@@ -4,7 +4,8 @@
 //! Method dispatch lowering — name mangling, inheritance resolution, virtual/static dispatch.
 
 use crate::ast::expression::Expression;
-use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
+use crate::ast::statement::BindingResidency;
+use crate::ast::types::{FunctionTypeData, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -16,6 +17,7 @@ use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, trait_default_among, vtable_slot_index};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
+use crate::ast::BuiltinCollectionKind as Collection;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -98,6 +100,22 @@ pub(crate) const MAX_TOKEN_DEPTH: usize = 64;
 /// body, and the one holding strings would then be filled without taking a
 /// reference to any of them.
 ///
+/// Two different types never share a token. The token is a run of segments
+/// joined by `_`, and each segment says what it is by its first character:
+///
+/// - A segment that starts with a letter is a leaf or the head of a declared
+///   generic: a primitive's spelling, or a declared type's name when that name
+///   is a letter followed by letters and digits (see [`is_plain_type_name`]). A
+///   declared head takes the fixed number of arguments its declaration gives it.
+/// - A segment made only of digits (after an optional `-`) is a value generic's
+///   constant.
+/// - A segment of digits followed by letters is structure no identifier can
+///   spell, since an identifier never starts with a digit. The digits count
+///   what follows. `<n>tuple`, `<n>fn`, `1option`, `2result`, `1future` and
+///   `1out` are built-in heads taking `n` component tokens (a closure's `n`
+///   counts its parameters; its return follows them); `<n>x` is the declared
+///   name of the next `n` characters, spelled that way when it is not plain.
+///
 /// A component that has no token of its own makes the whole type unspellable:
 /// a name built from [`UNSPELLABLE_TYPE_TOKEN`] would be the same name for
 /// every type that contains one.
@@ -122,43 +140,34 @@ fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
         TypeKind::Boolean => "bool",
         TypeKind::String => STRING_TYPE_NAME,
         TypeKind::Void => "void",
-        TypeKind::Custom(name, None) => return Cow::Owned(name.clone()),
-        TypeKind::Custom(name, Some(args)) => return compound_token(name, args.iter(), depth),
-        TypeKind::List(inner) => {
-            return compound_token(
-                BuiltinCollectionKind::List.name(),
-                std::iter::once(&**inner),
-                depth,
-            )
+        TypeKind::Custom(name, None) => return declared_name_token(name),
+        TypeKind::Custom(name, Some(args)) => {
+            return compound_token(declared_name_token(name), args, depth)
         }
-        TypeKind::Set(inner) => {
-            return compound_token(
-                BuiltinCollectionKind::Set.name(),
-                std::iter::once(&**inner),
-                depth,
-            )
-        }
+        TypeKind::List(inner) => return collection_token(Collection::List, [&**inner], depth),
+        TypeKind::Set(inner) => return collection_token(Collection::Set, [&**inner], depth),
         TypeKind::Array(inner, size) => {
-            return compound_token(
-                BuiltinCollectionKind::Array.name(),
-                [&**inner, &**size].into_iter(),
-                depth,
-            )
+            return collection_token(Collection::Array, [&**inner, &**size], depth)
         }
         TypeKind::Map(key, value) => {
-            return compound_token(
-                BuiltinCollectionKind::Map.name(),
-                [&**key, &**value].into_iter(),
-                depth,
-            )
+            return collection_token(Collection::Map, [&**key, &**value], depth)
         }
         TypeKind::Option(inner) => {
             return join_tokens(
-                "option",
-                std::iter::once(type_kind_token(&inner.kind, depth + 1)),
+                built_in_head(OPTION_HEAD, 1),
+                [type_kind_token(&inner.kind, depth + 1)].into_iter(),
             )
         }
-        TypeKind::Tuple(elements) => return compound_token("tuple", elements.iter(), depth),
+        TypeKind::Tuple(elements) => {
+            return compound_token(built_in_head(TUPLE_HEAD, elements.len()), elements, depth)
+        }
+        TypeKind::Result(ok, err) => {
+            return compound_token(built_in_head(RESULT_HEAD, 2), [&**ok, &**err], depth)
+        }
+        TypeKind::Future(inner) => {
+            return compound_token(built_in_head(FUTURE_HEAD, 1), [&**inner], depth)
+        }
+        TypeKind::Function(function) => return closure_token(function, depth),
         TypeKind::I8 => "i8",
         TypeKind::I16 => "i16",
         TypeKind::I32 => "i32",
@@ -169,33 +178,107 @@ fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
         TypeKind::U32 => "u32",
         TypeKind::U64 => "u64",
         TypeKind::U128 => "u128",
+        TypeKind::RawPtr => "RawPtr",
         TypeKind::Generic(_, _, _)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Identifier
-        | TypeKind::RawPtr
         | TypeKind::Error => UNSPELLABLE_TYPE_TOKEN,
     };
     Cow::Borrowed(token)
 }
 
+/// The segment heading a built-in type of `arity` components: the arity, then
+/// `tag`. Starting with a digit is what keeps it out of reach of any declared
+/// name, and the arity is what tells a decoder where the components end.
+fn built_in_head(tag: &str, arity: usize) -> Cow<'static, str> {
+    Cow::Owned(format!("{arity}{tag}"))
+}
+
+/// Whether a declared type's `name` can spell itself as is: a letter followed
+/// by letters and digits, and not a built-in leaf's spelling. Such a name is one
+/// segment on its own and cannot be mistaken for anything a built-in spells.
+fn is_plain_type_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric())
+        && name != VOID_TOKEN
+}
+
+/// The token of a declared type's name: the name itself when it is plain (see
+/// [`is_plain_type_name`]), otherwise its length, [`ESCAPED_NAME_TAG`] and the
+/// name — `My_Box` is `6xMy_Box` — so an underscore inside it can never be read
+/// as the boundary between two components.
+fn declared_name_token(name: &str) -> Cow<'static, str> {
+    if is_plain_type_name(name) {
+        return Cow::Owned(name.to_string());
+    }
+    Cow::Owned(format!("{}{ESCAPED_NAME_TAG}{name}", name.len()))
+}
+
+/// The token for a built-in collection: its class's name followed by its
+/// components, the same token a reference to that class spells.
+fn collection_token<'a>(
+    collection: Collection,
+    args: impl IntoIterator<Item = &'a Expression>,
+    depth: usize,
+) -> Cow<'static, str> {
+    compound_token(declared_name_token(collection.name()), args, depth)
+}
+
+/// The token for a closure type: a head carrying its arity, each parameter's
+/// token — wrapped in a `1out` head for one the closure writes through — and
+/// the return's (`void` when it returns nothing): `fn(x int) String` is
+/// `1fn_int_String`.
+///
+/// A closure type declaring type parameters of its own, or taking a parameter
+/// resident anywhere but the host, has no token: it crosses a call in a way no
+/// instantiation of a class can hold.
+fn closure_token(function: &FunctionTypeData, depth: usize) -> Cow<'static, str> {
+    let on_host = |param: &crate::ast::common::Parameter| match param.residency {
+        None | Some(BindingResidency::Host) => true,
+        Some(BindingResidency::Gpu) => false,
+    };
+    if function.generics.is_some() || !function.params.iter().all(on_host) {
+        return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+    }
+    let params = function.params.iter().flat_map(|param| {
+        let written = expression_token(&param.typ, depth + 1);
+        let marker = param.is_out.then(|| built_in_head(OUT_PARAMETER_HEAD, 1));
+        marker.into_iter().chain(std::iter::once(written))
+    });
+    let ret = match function.return_type.as_deref() {
+        Some(ret) => expression_token(ret, depth + 1),
+        None => Cow::Borrowed(VOID_TOKEN),
+    };
+    join_tokens(
+        built_in_head(CLOSURE_HEAD, function.params.len()),
+        params.chain(std::iter::once(ret)),
+    )
+}
+
 /// The token for a type written as `head` applied to `args`, e.g. `Map<String,
 /// int>` → `Map_String_int`.
 fn compound_token<'a>(
-    head: &str,
-    args: impl Iterator<Item = &'a Expression>,
+    head: Cow<'static, str>,
+    args: impl IntoIterator<Item = &'a Expression>,
     depth: usize,
 ) -> Cow<'static, str> {
-    join_tokens(head, args.map(|arg| expression_token(arg, depth + 1)))
+    join_tokens(
+        head,
+        args.into_iter().map(|arg| expression_token(arg, depth + 1)),
+    )
 }
 
 /// Join `head` and each component token with `_`, collapsing to
 /// [`UNSPELLABLE_TYPE_TOKEN`] as soon as a component has no token of its own.
-fn join_tokens(head: &str, parts: impl Iterator<Item = Cow<'static, str>>) -> Cow<'static, str> {
-    let mut out = String::from(head);
+fn join_tokens(
+    head: Cow<'static, str>,
+    parts: impl Iterator<Item = Cow<'static, str>>,
+) -> Cow<'static, str> {
+    let mut out = head.into_owned();
     for part in parts {
         if part == UNSPELLABLE_TYPE_TOKEN {
             return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
@@ -205,6 +288,25 @@ fn join_tokens(head: &str, parts: impl Iterator<Item = Cow<'static, str>>) -> Co
     }
     Cow::Owned(out)
 }
+
+/// The tag of the built-in head spelling a tuple of its components.
+const TUPLE_HEAD: &str = "tuple";
+/// The tag of the built-in head spelling a closure type.
+const CLOSURE_HEAD: &str = "fn";
+/// The tag of the built-in head spelling an optional of its payload.
+const OPTION_HEAD: &str = "option";
+/// The tag of the built-in head spelling a result of its two payloads.
+const RESULT_HEAD: &str = "result";
+/// The tag of the built-in head spelling a future of its payload.
+const FUTURE_HEAD: &str = "future";
+/// The tag of the built-in head wrapping a closure parameter written through.
+const OUT_PARAMETER_HEAD: &str = "out";
+/// The tag spelling a declared name that is not plain, after its length.
+const ESCAPED_NAME_TAG: &str = "x";
+/// The spelling of the empty type, the one built-in leaf spelling a declared
+/// type can take for its own name — every other one is a primitive's name,
+/// which resolves to the primitive before any declaration is consulted.
+const VOID_TOKEN: &str = "void";
 
 /// The token a generic argument expression contributes to a mangled name.
 ///
@@ -226,7 +328,7 @@ fn expression_token(arg: &Expression, depth: usize) -> Cow<'static, str> {
     match &arg.node {
         ExpressionKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(value)) => {
-            Cow::Owned(value.to_i128().to_string())
+            Cow::Owned(value.to_string())
         }
         _ => Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN),
     }
@@ -1206,7 +1308,6 @@ pub(super) fn emit_cow_check(
 mod mangled_token_tests {
     use super::*;
     use crate::ast::literal::{IntegerLiteral, Literal};
-    use crate::ast::types::FunctionTypeData;
     use crate::ast::IdNode;
     use crate::error::syntax::Span;
 
@@ -1271,30 +1372,258 @@ mod mangled_token_tests {
     fn an_optional_spells_its_payload() {
         let strings = TypeKind::Option(Box::new(ty(TypeKind::String)));
         let ints = TypeKind::Option(Box::new(ty(TypeKind::Int)));
-        assert_eq!(token(strings.clone()), "option_String");
+        assert_eq!(token(strings.clone()), "1option_String");
         assert_ne!(token(strings), token(ints));
     }
 
     #[test]
     fn a_tuple_spells_every_component() {
         let pair = TypeKind::Tuple(vec![type_arg(TypeKind::Int), type_arg(TypeKind::String)]);
-        assert_eq!(token(pair), "tuple_int_String");
+        assert_eq!(token(pair), "2tuple_int_String");
     }
 
-    /// A closure type has no token, and neither has anything built around one:
-    /// a name assembled from the unspellable token would be one name for every
-    /// such type.
+    fn closure(params: Vec<TypeKind>, ret: Option<TypeKind>) -> TypeKind {
+        let params = params
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| crate::ast::common::Parameter {
+                name: format!("p{index}"),
+                name_span: span(),
+                typ: Box::new(type_arg(kind)),
+                guard: None,
+                default_value: None,
+                is_out: false,
+                residency: None,
+            })
+            .collect();
+        TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params,
+            return_type: ret.map(|kind| Box::new(type_arg(kind))),
+        }))
+    }
+
+    /// A closure type spells its arity, each parameter and its return, so two
+    /// closure shapes never share a body.
+    #[test]
+    fn a_closure_type_spells_its_arity_parameters_and_return() {
+        let thunk = closure(Vec::new(), Some(TypeKind::String));
+        let step = closure(vec![TypeKind::Int], Some(TypeKind::Int));
+        let action = closure(vec![TypeKind::Int], None);
+        assert_eq!(token(thunk), "0fn_String");
+        assert_eq!(token(step.clone()), "1fn_int_int");
+        assert_eq!(token(action.clone()), "1fn_int_void");
+        assert_ne!(token(step), token(action));
+    }
+
+    /// A closure taking an `out` parameter crosses the call by address, so it
+    /// never shares a token with one taking the same type by value.
+    #[test]
+    fn a_closure_with_an_out_parameter_spells_it() {
+        let reads = closure(vec![TypeKind::Int], None);
+        let mut writes = reads.clone();
+        if let TypeKind::Function(function) = &mut writes {
+            function.params[0].is_out = true;
+        }
+        assert_eq!(token(writes.clone()), "1fn_1out_int_void");
+        assert_ne!(token(writes), token(reads));
+    }
+
+    /// A closure declaring type parameters of its own names no single
+    /// instantiation.
+    #[test]
+    fn a_closure_with_type_parameters_has_no_token() {
+        let mut generic = closure(vec![TypeKind::Int], None);
+        if let TypeKind::Function(function) = &mut generic {
+            function.generics = Some(Vec::new());
+        }
+        assert!(!kind_has_a_mangled_token(&generic));
+    }
+
+    #[test]
+    fn a_result_spells_both_payloads() {
+        let result = TypeKind::Result(
+            Box::new(type_arg(TypeKind::String)),
+            Box::new(type_arg(TypeKind::Int)),
+        );
+        assert_eq!(token(result), "2result_String_int");
+    }
+
+    #[test]
+    fn a_future_spells_its_payload() {
+        let future = TypeKind::Future(Box::new(type_arg(TypeKind::String)));
+        assert_eq!(token(future), "1future_String");
+    }
+
+    fn named(name: &str) -> TypeKind {
+        TypeKind::Custom(name.to_string(), None)
+    }
+
+    fn tuple(elements: Vec<TypeKind>) -> TypeKind {
+        TypeKind::Tuple(elements.into_iter().map(type_arg).collect())
+    }
+
+    fn with_out_parameter(mut closure_type: TypeKind) -> TypeKind {
+        if let TypeKind::Function(function) = &mut closure_type {
+            function.params[0].is_out = true;
+        }
+        closure_type
+    }
+
+    fn int_pair() -> TypeKind {
+        tuple(vec![TypeKind::Int, TypeKind::Int])
+    }
+
+    fn step() -> TypeKind {
+        closure(vec![TypeKind::Int], Some(TypeKind::Int))
+    }
+
+    /// Pairs of a declared type and a built-in one a token writer spelling
+    /// built-in heads the way an identifier can would spell alike.
+    fn declared_name_pairs() -> Vec<(&'static str, TypeKind, TypeKind)> {
+        vec![
+            (
+                "a declared generic named like a closure head",
+                class_ref(
+                    "fn1",
+                    vec![type_arg(TypeKind::Int), type_arg(TypeKind::Int)],
+                ),
+                step(),
+            ),
+            (
+                "a declared generic named like a tuple head",
+                class_ref(
+                    "tuple",
+                    vec![type_arg(TypeKind::Int), type_arg(TypeKind::Int)],
+                ),
+                int_pair(),
+            ),
+            (
+                "a declared generic named like an optional head",
+                class_ref("option", vec![type_arg(TypeKind::Int)]),
+                TypeKind::Option(Box::new(ty(TypeKind::Int))),
+            ),
+            (
+                "a declared generic named like a result head",
+                class_ref(
+                    "result",
+                    vec![type_arg(TypeKind::Int), type_arg(TypeKind::Int)],
+                ),
+                TypeKind::Result(
+                    Box::new(type_arg(TypeKind::Int)),
+                    Box::new(type_arg(TypeKind::Int)),
+                ),
+            ),
+            (
+                "a declared generic named like a future head",
+                class_ref("future", vec![type_arg(TypeKind::Int)]),
+                TypeKind::Future(Box::new(type_arg(TypeKind::Int))),
+            ),
+            (
+                "a declared type named like the empty type",
+                named("void"),
+                TypeKind::Void,
+            ),
+            (
+                "a declared type named like the unspellable token",
+                named(UNSPELLABLE_TYPE_TOKEN),
+                TypeKind::Generic(
+                    "T".to_string(),
+                    None,
+                    crate::ast::types::TypeDeclarationKind::None,
+                ),
+            ),
+            (
+                "a declared name holding an underscore",
+                named("Box_int"),
+                class_ref("Box", vec![type_arg(TypeKind::Int)]),
+            ),
+        ]
+    }
+
+    /// Pairs of built-in types a token writer leaving an arity implicit would
+    /// spell alike.
+    fn structural_pairs() -> Vec<(&'static str, TypeKind, TypeKind)> {
+        vec![
+            (
+                "nested tuples of equal flattened leaves",
+                tuple(vec![int_pair(), TypeKind::String, TypeKind::Int]),
+                tuple(vec![
+                    tuple(vec![TypeKind::Int, TypeKind::Int, TypeKind::String]),
+                    TypeKind::Int,
+                ]),
+            ),
+            (
+                "a tuple nested first or last",
+                tuple(vec![int_pair(), TypeKind::Int]),
+                tuple(vec![TypeKind::Int, int_pair()]),
+            ),
+            (
+                "closures of one arity that return a tuple or take one",
+                closure(vec![int_pair()], Some(TypeKind::Int)),
+                closure(vec![TypeKind::Int], Some(int_pair())),
+            ),
+            (
+                "a closure taking an out parameter or not",
+                with_out_parameter(step()),
+                step(),
+            ),
+            (
+                "an out parameter or a declared type named like its head",
+                with_out_parameter(step()),
+                closure(vec![named("out"), TypeKind::Int], Some(TypeKind::Int)),
+            ),
+        ]
+    }
+
+    /// Two different types never share a token, whatever a declaration names
+    /// itself and however the types nest.
+    #[test]
+    fn distinct_types_spell_distinct_tokens() {
+        for (case, left, right) in declared_name_pairs().into_iter().chain(structural_pairs()) {
+            let (left, right) = (token(left), token(right));
+            assert_ne!(left, right, "{case}: both spell `{left}`");
+        }
+    }
+
+    /// A plain declared name spells itself; one an identifier-shaped built-in
+    /// could collide with carries its length.
+    #[test]
+    fn a_declared_name_that_is_not_plain_carries_its_length() {
+        assert_eq!(token(named("Point")), "Point");
+        assert_eq!(token(named("Box_int")), "7xBox_int");
+        assert_eq!(token(named("void")), "4xvoid");
+    }
+
+    /// A value argument past `i128` spells the value written, not the one it
+    /// wraps to.
+    #[test]
+    fn a_value_past_i128_spells_the_value_written() {
+        let big = IdNode::new(
+            0,
+            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::U128(1 << 127))),
+            span(),
+        );
+        assert_eq!(
+            expression_mangle_token(&big),
+            "170141183460469231731687303715884105728"
+        );
+    }
+
+    /// A component with no token makes the whole type unspellable: a name
+    /// assembled from the unspellable token would be one name for every such
+    /// type.
     #[test]
     fn a_component_without_a_token_makes_the_whole_type_unspellable() {
-        let closure = TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
-            params: Vec::new(),
-            return_type: None,
-        }));
-        assert!(!kind_has_a_mangled_token(&closure));
+        let open = TypeKind::Generic(
+            "T".to_string(),
+            None,
+            crate::ast::types::TypeDeclarationKind::None,
+        );
+        assert!(!kind_has_a_mangled_token(&open));
         assert!(!kind_has_a_mangled_token(&class_ref(
             "List",
-            vec![type_arg(closure)]
+            vec![type_arg(open)]
         )));
     }
 

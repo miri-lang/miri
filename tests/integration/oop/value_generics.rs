@@ -343,3 +343,235 @@ fn main()
         "expected Wrap<int, 3>, got int",
     );
 }
+
+/// A value-generic class's own `init` is compiled per instantiation: the
+/// argument crosses into a body typed at the instance's `T`, so a string is
+/// stored as a string rather than through the body shared by every
+/// instantiation.
+#[test]
+fn a_value_generic_class_init_stores_a_managed_argument_at_its_instantiation() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let b = Buf<String, 2>("hi" + "x")
+    println(b.get())
+"#,
+        "hix",
+    );
+}
+
+/// A float handed to a value-generic class's `init` crosses the call at a
+/// float's width, statically and behind a trait receiver alike.
+#[test]
+fn a_value_generic_class_init_stores_a_float_at_its_width() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+trait Op<T>
+    fn get() T
+
+class W<T, Size> implements Op<T>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let w = W<float, 2>(3.5)
+    println(f"{w.get()}")
+    let o Op<float> = W<float, 2>(2.5)
+    println(f"{o.get()}")
+"#,
+        "3.5\n2.5",
+    );
+}
+
+/// An instance a value-generic class builds of itself at a fixed value inside
+/// a method reached through a trait runs its own `init`. The instances are
+/// held at their class types: a trait-typed binding releases none of its
+/// instance's fields yet.
+#[test]
+fn a_value_generic_instance_built_inside_a_dispatched_method_runs_its_own_init() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+trait Op
+    fn depth(n int) int
+
+class Wrap<T>
+    v T
+    fn init(v T)
+        self.v = v
+
+class Buf<T, Size> implements Op
+    v T
+    fn init(v T)
+        self.v = v
+    fn depth(n int) int
+        if n == 0
+            return 0
+        let w = Wrap<T>(self.v)
+        let a = Buf<T, 2>(w.v)
+        return 1 + a.depth(n - 1)
+
+fn run(o Op) int
+    return o.depth(4)
+
+fn main()
+    let b = Buf<String, 1>("hi" + "x")
+    println(f"{run(b)}")
+"#,
+        "4",
+    );
+}
+
+/// A value argument built from a value known only while the program runs names
+/// no instantiation, inside a generic body as at the top level: it is refused
+/// where it is written.
+#[test]
+fn a_value_argument_over_a_runtime_value_inside_a_generic_body_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+fn seven() int
+    return 7
+
+trait Op<T>
+    fn depth(n int) T
+
+class Buf<T, Size> implements Op<T>
+    v T
+    fn init(v T)
+        self.v = v
+    fn depth(n int) T
+        if n == 0
+            return self.v
+        let m = seven()
+        let a Op<T> = Buf<T, Size + m>(self.v)
+        return a.depth(n - 1)
+
+fn main()
+    let o Op<float> = Buf<float, 2>(3.25)
+    println(f"{o.depth(1)}")
+"#,
+        "MER_TYP_076",
+    );
+}
+
+/// The refusal names the runtime value, whatever the element type.
+#[test]
+fn a_value_argument_over_a_runtime_value_names_the_value() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+fn seven() int
+    return 7
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let m = seven()
+    let p = Buf<String, 2 + m>("a" + "b")
+    println(p.get())
+"#,
+        "`m` is not a compile-time constant",
+    );
+}
+
+/// A top-level value argument over a runtime value is refused rather than
+/// reaching code generation with no size.
+#[test]
+fn a_top_level_value_argument_over_a_runtime_value_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+fn seven() int
+    return 7
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let m = seven()
+    let p = Buf<float, 2 + m>(4.5)
+    println(f"{p.get()}")
+"#,
+        "MER_TYP_076",
+    );
+}
+
+/// A call is no more a compile-time constant than the binding holding its
+/// result.
+#[test]
+fn a_value_argument_calling_a_function_is_refused() {
+    assert_compiler_error(
+        r#"
+fn seven() int
+    return 7
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let p = Buf<float, 1 + seven()>(4.5)
+"#,
+        "MER_TYP_076",
+    );
+}
+
+/// A named `const`, an immutable binding of a literal and a value parameter of
+/// the enclosing class are all compile-time constants.
+#[test]
+fn a_value_argument_over_constants_and_value_parameters_runs() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+const K = 3
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+    fn grown() T
+        let b = Buf<T, Size + K>(self.v)
+        return b.get()
+
+fn main()
+    let n = 2
+    let b = Buf<String, K + n>("a" + "b")
+    println(b.grown())
+    let f = Buf<float, 1 + K>(1.5)
+    println(f"{f.grown()}")
+"#,
+        "ab\n1.5",
+    );
+}

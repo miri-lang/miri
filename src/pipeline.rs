@@ -531,6 +531,25 @@ impl Default for Pipeline {
 }
 
 /// Every function name a lowered body calls.
+/// A failure lowering the per-instantiation body `symbol`.
+///
+/// A refusal of the program — an instantiation its arguments do not name, or
+/// one it needs past a bound — is reported as the diagnostic it is; anything
+/// else is a failure of the compiler's own, reported against the body.
+fn monomorphized_lowering_failure(
+    symbol: &str,
+    error: crate::error::lowering::LoweringError,
+) -> CompilerError {
+    let refuses_the_program = matches!(
+        error.kind.properties().code,
+        DiagnosticCode::MirInvalidInstantiationArgument | DiagnosticCode::MirPolymorphicRecursion
+    );
+    if refuses_the_program {
+        return CompilerError::Lowering(error);
+    }
+    CompilerError::Codegen(format!("MIR lowering failed for {}: {}", symbol, error))
+}
+
 fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::HashSet<String> {
     let mut called = std::collections::HashSet::new();
     for (_, body) in bodies {
@@ -1657,9 +1676,7 @@ impl Pipeline {
             &subs,
             compilation_ids.clone(),
         )
-        .map_err(|e| {
-            CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
-        })?;
+        .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
         Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
         Ok(())
     }
@@ -2124,9 +2141,7 @@ impl Pipeline {
                 is_release,
                 compilation_ids.clone(),
             )
-            .map_err(|e| {
-                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", symbol, e))
-            })?;
+            .map_err(|e| monomorphized_lowering_failure(symbol, e))?;
             Self::push_lowered_body(bodies, lowered_names, symbol.clone(), body, lambdas);
         }
         Ok(())
@@ -2251,12 +2266,7 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
+                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -2304,12 +2314,7 @@ impl Pipeline {
                                 is_release,
                                 true,
                             )
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!(
-                                    "MIR lowering failed for {}: {}",
-                                    mangled, e
-                                ))
-                            })?;
+                            .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -2358,12 +2363,7 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
+                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -2461,12 +2461,7 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
+                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -2521,12 +2516,7 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| {
-                                    CompilerError::Codegen(format!(
-                                        "MIR lowering failed for {}: {}",
-                                        mangled, e
-                                    ))
-                                })?;
+                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
@@ -2667,12 +2657,7 @@ impl Pipeline {
                                             is_release,
                                             compilation_ids.clone(),
                                         )
-                                        .map_err(|e| {
-                                            CompilerError::Codegen(format!(
-                                                "MIR lowering failed for {}: {}",
-                                                mangled, e
-                                            ))
-                                        })?;
+                                        .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
                                     lowered_names.insert(mangled.clone());
                                     bodies.push((mangled, mir_body));
                                     for lambda in lambdas {
@@ -2787,9 +2772,7 @@ impl Pipeline {
                 pinned,
                 compilation_ids.clone(),
             )
-            .map_err(|e| {
-                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", mangled, e))
-            })?;
+            .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
             Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
 
             // A generic class inheriting this default also needs a mangled
@@ -2886,9 +2869,7 @@ impl Pipeline {
                 &subs,
                 compilation_ids.clone(),
             )
-            .map_err(|e| {
-                CompilerError::Codegen(format!("MIR lowering failed for {}: {}", call.symbol, e))
-            })?;
+            .map_err(|e| monomorphized_lowering_failure(&call.symbol, e))?;
             let first_new = bodies.len();
             Self::push_lowered_body(bodies, lowered_names, call.symbol, body, lambdas);
             Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
@@ -3009,12 +2990,7 @@ impl Pipeline {
                     &param_handles,
                     compilation_ids.clone(),
                 )
-                .map_err(|e| {
-                    CompilerError::Codegen(format!(
-                        "MIR lowering failed for {}: {}",
-                        mangled_name, e
-                    ))
-                })?;
+                .map_err(|e| monomorphized_lowering_failure(&mangled_name, e))?;
             Self::push_lowered_body(bodies, lowered_names, mangled_name, body, lambdas);
         }
         Ok(())

@@ -6,6 +6,7 @@ pub use crate::integration::utils;
 pub mod abstract_methods;
 pub mod arg_count;
 pub mod basic;
+pub mod concrete_instantiation_arguments;
 pub mod constructor;
 pub mod custom_iterable;
 pub mod derived_traits;

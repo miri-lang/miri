@@ -8,6 +8,7 @@ The type checker validates that all types in the program are well-formed and con
 - Undefined variables, types, or functions
 - Mismatched function arity or argument types
 - Invalid generic arguments or type bounds
+- A value argument (the `3` in `Buf<T, 3>`) with an operand that is not a compile-time constant: each operand must be an integer literal, a constant, or a generic parameter of the enclosing declaration
 - Non-exhaustive match expressions
 - Immutable variable assignments
 - Field or method access on incompatible types

@@ -101,6 +101,7 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_073",
     "MER_TYP_074",
     "MER_TYP_075",
+    "MER_TYP_076",
 ];
 
 /// Codes whose example cannot be verified this way, each with the reason.
@@ -158,6 +159,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_MIR_013", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_MIR_014", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_MIR_016", "raised while lowering the method bodies a build reaches, which a check does not perform"),
+    ("MER_MIR_017", "raised while lowering the method bodies a build reaches, which a check does not perform"),
     ("MER_NAM_003", "shadowed: MER_PAR_001 is reported first"),
     ("MER_OWN_002", "shadowed: MER_PAR_001 is reported first"),
     ("MER_PAR_006", "shadowed: MER_PAR_001 is reported first"),

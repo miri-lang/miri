@@ -1,0 +1,18 @@
+// expect: MER_TYP_076
+// summary: Triggers MER_TYP_076: a value argument is computed from a binding known only while the program runs.
+use system.io
+
+fn seven() int
+    return 7
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let m = seven()
+    let b = Buf<String, 2 + m>("a" + "b")
+    println(b.get())

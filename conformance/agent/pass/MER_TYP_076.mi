@@ -1,0 +1,16 @@
+// summary: Accepted counterpart of MER_TYP_076: the value argument is computed from a `const`.
+// expect-stdout: ab
+use system.io
+
+const M = 7
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let b = Buf<String, 2 + M>("a" + "b")
+    println(b.get())
