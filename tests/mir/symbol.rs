@@ -206,17 +206,91 @@ fn only_the_program_s_own_main_is_the_entry_point() {
 }
 
 #[test]
-fn a_module_function_keeps_the_wgsl_name_of_its_declared_name() {
+fn a_module_function_s_wgsl_name_carries_its_module_path() {
     assert_eq!(
         Symbol::function(&module("local.m.a"), "pick", &[ty(TypeKind::Int)]).wgsl_name(),
-        "pick__int"
+        "m__5local1m1a_pick__int"
+    );
+    assert_eq!(
+        Symbol::function(&module("system.math"), "lattice_unit", &[]).wgsl_name(),
+        "m__6system4math_lattice_unit"
     );
     assert_eq!(
         Symbol::function(&module("local.m.a"), "scale", &[])
             .with_residency(&[(0, DeviceHandleId(1))])
             .wgsl_name(),
-        "scale__gpu_p0h1"
+        "m__5local1m1a_scale__gpu_p0h1"
     );
+}
+
+#[test]
+fn a_program_function_keeps_its_name_as_its_wgsl_name() {
+    for name in ["helper", "m_helper", "m_", "main2", "_m__x", "mm__x"] {
+        assert_eq!(
+            Symbol::function(&ModuleId::Program, name, &[]).wgsl_name(),
+            name
+        );
+    }
+}
+
+#[test]
+fn a_program_function_named_like_a_module_function_s_wgsl_name_is_escaped() {
+    let module_function = Symbol::function(&module("system.math"), "lattice_unit", &[]);
+    let program_function = Symbol::function(&ModuleId::Program, &module_function.wgsl_name(), &[]);
+    assert_eq!(
+        program_function.wgsl_name(),
+        "m__0_m__6system4math_lattice_unit"
+    );
+    assert_ne!(program_function.wgsl_name(), module_function.wgsl_name());
+}
+
+/// Every pairing of a declaring module and a name spells its own WGSL name:
+/// the program's functions against every module's, names beginning `m__`
+/// (escaped or not), and module paths whose identifiers could be regrouped
+/// across the boundary with the name if they were not length-prefixed.
+#[test]
+fn distinct_functions_without_arguments_have_distinct_wgsl_names() {
+    let modules = [
+        ModuleId::Program,
+        module("local.a"),
+        module("local.b"),
+        module("local.ab"),
+        module("local.a.b"),
+        module("local.a_b"),
+        module("local.a1"),
+        module("local.a.b_c"),
+        module("local.a.b.c"),
+        module("system.math"),
+        module("m__0"),
+    ];
+    let names = [
+        "helper",
+        "b_helper",
+        "c_helper",
+        "b_c_helper",
+        "1a_helper",
+        "m__",
+        "m__0_helper",
+        "m__5local1a_helper",
+        "m__5local1a1b_helper",
+        "m__6system4math_lattice_unit",
+        "lattice_unit",
+    ];
+    let mut owners: std::collections::HashMap<String, (usize, &str)> =
+        std::collections::HashMap::new();
+    for (index, module) in modules.iter().enumerate() {
+        for name in names {
+            let spelling = Symbol::function(module, name, &[]).wgsl_name();
+            assert!(!spelling.starts_with("__"), "{spelling} begins with `__`");
+            if let Some(previous) = owners.insert(spelling.clone(), (index, name)) {
+                panic!(
+                    "{spelling} spells both {previous:?} and {:?}",
+                    (index, name)
+                );
+            }
+        }
+    }
+    assert_eq!(owners.len(), modules.len() * names.len());
 }
 
 #[test]
