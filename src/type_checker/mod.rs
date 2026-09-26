@@ -305,10 +305,17 @@ impl TypeChecker {
             .unwrap_or(false)
     }
 
-    /// Whether `name` is a function the runtime library exports, declared with
-    /// the `runtime` keyword, rather than one this compilation lowers.
-    pub fn is_runtime_function(&self, name: &str) -> bool {
-        self.fn_analysis.runtime_functions.contains(name)
+    /// Whether the identifier expression `expr_id` names a function the
+    /// runtime library exports, declared with the `runtime` keyword where the
+    /// reference resolved, rather than one this compilation lowers.
+    pub fn is_runtime_reference(&self, expr_id: usize) -> bool {
+        self.fn_analysis.runtime_references.contains(&expr_id)
+    }
+
+    /// Whether the identifier expression `expr_id` resolved, where it was
+    /// written, to a function declared with the `intrinsic` keyword.
+    pub fn is_intrinsic_reference(&self, expr_id: usize) -> bool {
+        self.fn_analysis.intrinsic_references.contains(&expr_id)
     }
 
     /// Returns the global type definitions.

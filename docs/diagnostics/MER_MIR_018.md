@@ -1,6 +1,6 @@
 ## Rule
 
-Every function, method and generic instantiation is compiled to a body linked under one name. That name joins the identifiers the source writes with `_` and `__` — a method `norm` of `Point` is `Point_norm`, the generic `pick` at `int` is `pick__int` — and an identifier may itself contain those spellings, so two different definitions can come out under the same name. The program is refused rather than linked with one body standing in for both: a call to either would otherwise run whichever definition was compiled first. The message names both definitions as the source writes them and the name they share.
+Every function, method, generic instantiation and synthesized helper is compiled to a body linked under a name built from what it stands for. That spelling separates its parts with `.` and `$`, which no identifier or type argument can contain, so two different definitions never share a name — `Point.norm` and a free function `Point_norm`, or the generic `pick<int>` and a function named `pick__int`, each keep their own body. This error is the guard behind that rule: if two different definitions were ever to reach one compiled name, the build is refused rather than linked with one body standing in for both, and the message names both definitions as the source writes them. No program is expected to raise it; one that does has found a compiler bug.
 
 ## Messages
 

@@ -3,7 +3,7 @@
 
 //! Tests for closure-destructor emission.
 //!
-//! A closure that captures managed values carries a `__dtor_{lambda}` pointer
+//! A closure that captures managed values carries a `miri.$dtor.{lambda}` pointer
 //! in its env so the runtime can DecRef the captures when the closure's RC
 //! reaches zero, without static knowledge of the capture types at the drop
 //! site. The decision of *whether* to emit that destructor is what a wrong diff
@@ -20,6 +20,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions};
 use miri::codegen::Backend;
 use miri::error::syntax::Span;
+use miri::mir::symbol::Symbol;
 use miri::mir::{BasicBlockData, Body, ExecutionModel, LocalDecl, Terminator, TerminatorKind};
 
 fn span() -> Span {
@@ -60,14 +61,15 @@ fn lambda_capturing(captures: &[TypeKind]) -> Body {
     body
 }
 
-/// Compile `body` under `name` and report whether `__dtor_{name}` was emitted.
+/// Compile `body` under `name` and report whether its capture destructor was
+/// emitted.
 fn emits_destructor_for(name: &str, body: &Body) -> bool {
     let backend = CraneliftBackend::new().expect("host backend");
     let artifact = backend
         .compile(&[(name, body)], &CraneliftOptions::default())
         .unwrap_or_else(|e| panic!("compiling {name} failed: {e:?}"));
 
-    let symbol = format!("__dtor_{name}").into_bytes();
+    let symbol = Symbol::closure_destructor(name).link_name().into_bytes();
     artifact
         .bytes
         .windows(symbol.len())
@@ -116,7 +118,7 @@ fn test_one_managed_capture_among_scalars_still_gets_a_destructor() {
 
 #[test]
 fn test_the_destructor_is_named_after_its_lambda() {
-    // The call site resolves the destructor by name (`__dtor_{lambda}`), so a
+    // The call site resolves the destructor by name (`miri.$dtor.{lambda}`), so a
     // rename on either side is a link error rather than a silent miss.
     let body = lambda_capturing(&[TypeKind::String]);
     assert!(emits_destructor_for("lambda_named_target", &body));

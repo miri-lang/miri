@@ -32,11 +32,15 @@ pub(crate) struct FunctionAnalysis {
     /// Populated during function declaration checking; used at call sites to
     /// determine if gpu-resident args are allowed.
     pub(crate) fn_residencies: HashMap<String, FnResidency>,
-    /// Every function declared with the `runtime` keyword, by the C name the
-    /// runtime library exports it under — in any module, visible to the
-    /// program or not, since a stdlib body calls its own private runtime
-    /// functions.
-    pub(crate) runtime_functions: HashSet<String>,
+    /// Every identifier expression, by id, that resolved in its scope to a
+    /// function declared with the `runtime` keyword. A program function may
+    /// share a runtime function's name, so the declaration a reference reached
+    /// — never the name — is what says whether its callee is the C export.
+    pub(crate) runtime_references: HashSet<usize>,
+    /// Every identifier expression, by id, that resolved in its scope to a
+    /// function declared with the `intrinsic` keyword — including one a module
+    /// body reaches that the program's own imports leave out of its scope.
+    pub(crate) intrinsic_references: HashSet<usize>,
 }
 
 impl FunctionAnalysis {
@@ -46,7 +50,8 @@ impl FunctionAnalysis {
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
             fn_residencies: HashMap::new(),
-            runtime_functions: HashSet::new(),
+            runtime_references: HashSet::new(),
+            intrinsic_references: HashSet::new(),
         }
     }
 }

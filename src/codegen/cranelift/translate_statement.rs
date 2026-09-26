@@ -1092,7 +1092,7 @@ impl<'a> FunctionTranslator<'a> {
         if needs_decref_override {
             // Route through `elem_decref_addr_for_kind` (not the shape-only
             // helper): a generic-class element (`Box<String>`) resolves to its
-            // per-instantiation `__decref_Box__String` thunk so `clear`/`remove_at`
+            // per-instantiation `miri.Box$String.$decref` thunk so `clear`/`remove_at`
             // release the concrete managed field. The array-argument type — unlike
             // the element operand temps — preserves the concrete type arguments.
             if let Some(addr) = FunctionTranslator::elem_decref_addr_for_kind(

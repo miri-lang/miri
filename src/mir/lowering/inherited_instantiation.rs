@@ -424,7 +424,7 @@ mod tests {
         assert!(matches!(found.1[0].kind, TypeKind::List(_)));
         assert_eq!(
             crate::mir::lowering::dispatch::mangle_instantiation_name("Base_equals", &found.1),
-            "Base_equals__List_String"
+            "miri.Base_equals$List_String"
         );
     }
 

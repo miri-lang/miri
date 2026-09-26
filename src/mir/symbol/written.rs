@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! How the source writes the definition a symbol names, for a diagnostic
-//! that has to tell two definitions apart when their link names cannot.
+//! that names a definition to the reader rather than by its link name.
 
 use std::fmt;
 

@@ -60,7 +60,7 @@ pub struct FunctionTranslator<'a> {
     /// Recorded generic-class instantiations, borrowed from the backend. A
     /// function body inline-drops generic-class locals (`let b = Box<String>()`),
     /// so the drop path needs the registry to route to the per-instantiation
-    /// `__drop_Box__String` thunk that releases the concrete managed field.
+    /// `miri.Box$String.$drop` thunk that releases the concrete managed field.
     pub(crate) generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
 }
 
@@ -134,8 +134,8 @@ pub enum ElementShape<'a> {
     /// Built-in collection element (List/Array/Set/Map) — uses the matching
     /// `miri_rt_{kind}_decref_element` helper.
     Builtin(BuiltinCollectionKind),
-    /// User-defined class — uses the `__decref_TypeName` thunk; clone via
-    /// `__clone_TypeName` only when the class implements `Cloneable`.
+    /// User-defined class — uses the `miri.TypeName.$decref` thunk; clone via
+    /// `miri.TypeName.$clone` only when the class implements `Cloneable`.
     UserClass(&'a str),
     /// Anything else (primitives, void, errors) — no decref needed.
     Other,

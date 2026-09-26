@@ -479,38 +479,20 @@ impl TypeChecker {
         return_type_expr: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
-        self.fn_analysis.runtime_functions.insert(name.to_string());
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params: params.to_vec(),
             return_type: return_type_expr.clone(),
         })));
+        let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
 
         if context.scopes.len() == 1 {
-            self.type_table.global_scope.insert(
-                name.to_string(),
-                SymbolInfo::new(
-                    func_type.clone(),
-                    false,
-                    false,
-                    MemberVisibility::Private,
-                    self.modules.current_module.clone(),
-                    None,
-                ),
-            );
+            self.type_table
+                .global_scope
+                .insert(name.to_string(), info.clone());
         }
 
-        context.define(
-            name.to_string(),
-            SymbolInfo::new(
-                func_type,
-                false,
-                false,
-                MemberVisibility::Private,
-                self.modules.current_module.clone(),
-                None,
-            ),
-        );
+        context.define(name.to_string(), info);
 
         for param in params {
             self.resolve_type_expression(&param.typ, context);

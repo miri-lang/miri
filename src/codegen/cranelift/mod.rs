@@ -385,7 +385,7 @@ impl CraneliftBackend {
         Ok((ObjectModule::new(object_builder), Context::new()))
     }
 
-    /// Generate `__dtor_{lambda_name}` destructors for closure bodies that
+    /// Generate `miri.$dtor.{lambda_name}` destructors for closure bodies that
     /// capture managed values. Must run before user fns so call sites can
     /// reference them via `Linkage::Import`.
     fn generate_lambda_destructors(
@@ -619,13 +619,13 @@ impl CraneliftBackend {
         Ok(())
     }
 
-    /// Generates `__drop_TypeName(ptr)` functions for every managed concrete type.
+    /// Generates `miri.TypeName.$drop(ptr)` functions for every managed concrete type.
     ///
     /// A type is "managed" if it is a non-generic struct, class, or enum that has
     /// at least one field of a managed (heap-allocated) type. These drop functions
     /// form the foundation of the Perceus RC destructor pipeline:
     ///
-    ///   RC reaches 0 → call `__drop_TypeName(ptr)`
+    ///   RC reaches 0 → call `miri.TypeName.$drop(ptr)`
     ///     → (1) user-defined `fn drop(self)` hook (if the type defines one)
     ///     → (2) recursively DecRef all managed fields
     ///     → (3) free the RC allocation
@@ -639,7 +639,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
     ) -> Result<(), CodegenError> {
         // Collect all Struct/Class/Enum types and sort for deterministic output.
-        // We include types without managed fields so that `__decref_TypeName` can be
+        // We include types without managed fields so that `miri.TypeName.$decref` can be
         // generated for them — it is needed as elem_drop_fn when such types are
         // stored in a List, Set, or Map. A generic struct, class or enum is
         // accepted: the bare thunk serves as the shared entry point and skips a
@@ -650,7 +650,7 @@ impl CraneliftBackend {
         // Builtin collection class names (`List`, `Map`, `Set`, `Array`, `Tuple`)
         // and `String` are skipped: their drop / decref / clone paths route through
         // dedicated runtime helpers (`miri_rt_list_free`, …) inside `emit_type_drop`
-        // before any `__drop_TypeName` thunk is consulted, so emitting one would be
+        // before any `miri.TypeName.$drop` thunk is consulted, so emitting one would be
         // dead code that bloats the object file.
         let mut managed_names: Vec<&str> = self
             .type_definitions
@@ -676,7 +676,7 @@ impl CraneliftBackend {
         managed_names.sort_unstable();
 
         for type_name in managed_names {
-            // Bare `__drop_TypeName` (+ its `__decref_TypeName` wrapper). For a
+            // Bare `miri.TypeName.$drop` (+ its `miri.TypeName.$decref` wrapper). For a
             // generic class this thunk backs the collection-element decref path;
             // direct drops route through the per-instantiation thunks below.
             FunctionTranslator::generate_drop_function(
@@ -700,8 +700,8 @@ impl CraneliftBackend {
         Ok(())
     }
 
-    /// Generate `__compare_TypeName` for every type whose values carry an
-    /// order, and `__equals_TypeName` for every type that defines its own
+    /// Generate `miri.TypeName.$compare` for every type whose values carry an
+    /// order, and `miri.TypeName.$equals` for every type that defines its own
     /// equality, so a container of them can sort or match its elements.
     ///
     /// Kept apart from the drop-thunk pass: that one skips the built-in classes
@@ -824,7 +824,7 @@ impl CraneliftBackend {
         Ok(())
     }
 
-    /// Generate a per-instantiation `__drop_TypeName__Args` thunk for each
+    /// Generate a per-instantiation `miri.TypeName$Args.$drop` thunk for each
     /// recorded instantiation of a generic struct, class or enum, so a managed
     /// field is DecRef'd and a scalar field skipped, each per instantiation.
     /// Non-generic types and types with no recorded instantiations produce
@@ -860,10 +860,10 @@ impl CraneliftBackend {
                 &self.type_definitions,
                 &self.generic_class_instantiations,
             )?;
-            // Per-instantiation `__decref_Box__String` wrapper: the collection
+            // Per-instantiation `miri.Box$String.$decref` wrapper: the collection
             // element decref helper for a `List<Box<String>>` must route to the
             // per-instantiation drop thunk so the concrete managed field is
-            // released. The bare `__decref_Box` would reach only `__drop_Box`,
+            // released. The bare `miri.Box.$decref` would reach only `miri.Box.$drop`,
             // which skips the unresolved generic field.
             FunctionTranslator::generate_decref_function(module, ctx, isa, type_name, args)?;
         }

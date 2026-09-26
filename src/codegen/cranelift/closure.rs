@@ -3,7 +3,7 @@
 
 //! Closure destructor generation.
 //!
-//! Emits `__dtor_{lambda_name}(env_ptr)` for lambdas that capture managed
+//! Emits `miri.$dtor.{lambda_name}(env_ptr)` for lambdas that capture managed
 //! values, so the runtime can DecRef captures when the closure RC reaches 0
 //! without needing static knowledge of capture types at the drop site.
 
@@ -77,7 +77,7 @@ impl CaptureLayout {
 }
 
 impl<'a> FunctionTranslator<'a> {
-    /// Generates `__dtor_{lambda_name}(env_ptr)` for a lambda that has managed captures.
+    /// Generates `miri.$dtor.{lambda_name}(env_ptr)` for a lambda that has managed captures.
     ///
     /// The destructor DecRefs every managed capture stored in the closure env,
     /// enabling correct cleanup when a closure is dropped in a scope that does not
@@ -129,7 +129,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit the body of `__dtor_{lambda_name}(env_ptr)`: DecRef every managed
+    /// Emit the body of `miri.$dtor.{lambda_name}(env_ptr)`: DecRef every managed
     /// capture where [`CaptureLayout`] places it, then return.
     #[allow(clippy::too_many_arguments)]
     fn emit_closure_destructor_body(

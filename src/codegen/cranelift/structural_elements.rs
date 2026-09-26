@@ -7,7 +7,7 @@
 //! A collection releases the entries it discards through a drop callback — a
 //! map's `key_drop_fn` and `val_drop_fn`, a list's or set's `elem_drop_fn` —
 //! each of which needs the address of a decref function. An entry that is a
-//! named type already has one (`__decref_TypeName`); a tuple, an option or a
+//! named type already has one (`miri.TypeName.$decref`); a tuple, an option or a
 //! function value does not, because there is no declaration whose name could be
 //! mangled into a symbol. This module encodes such a type's structure into a
 //! symbol suffix, and finds every structural entry type a program uses so the

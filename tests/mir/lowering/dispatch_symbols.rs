@@ -104,7 +104,7 @@ fn resolve_vtable_method_picks_concrete_override() {
     ]);
     assert_eq!(
         resolve_vtable_method("Derived", "greet", &defs),
-        Some("Derived_greet".to_string()),
+        Some("miri.Derived.greet".to_string()),
     );
 }
 
@@ -125,7 +125,7 @@ fn resolve_vtable_method_walks_to_base_when_derived_is_abstract() {
     // Mid declares greet abstract — resolver continues to Base.
     assert_eq!(
         resolve_vtable_method("Mid", "greet", &defs),
-        Some("Base_greet".to_string()),
+        Some("miri.Base.greet".to_string()),
     );
 }
 
@@ -144,7 +144,7 @@ fn resolve_vtable_method_names_the_class_copy_of_a_trait_default() {
     ]);
     assert_eq!(
         resolve_vtable_method("Impl", "greet", &defs),
-        Some("Impl_greet".to_string()),
+        Some("miri.Impl.greet".to_string()),
     );
 }
 
@@ -166,7 +166,7 @@ fn resolve_vtable_method_names_the_shared_default_for_a_generic_class() {
     ]);
     assert_eq!(
         resolve_vtable_method("Impl", "greet", &defs),
-        Some("Greeter_greet".to_string()),
+        Some("miri.Greeter.greet".to_string()),
     );
 }
 
@@ -193,7 +193,7 @@ fn resolve_vtable_method_names_the_shared_default_under_an_abstract_declaration(
     ]);
     assert_eq!(
         resolve_vtable_method("Impl", "greet", &defs),
-        Some("Greeter_greet".to_string()),
+        Some("miri.Greeter.greet".to_string()),
     );
 }
 
@@ -455,18 +455,18 @@ fn vtable_instance_at_spelled_arguments_names_its_instantiation_bodies() {
     let Some(instance) = instance else {
         panic!("a class implementing a trait takes part in virtual dispatch");
     };
-    assert_eq!(instance.symbol(), "__vtable_Impl__String");
+    assert_eq!(instance.symbol(), "miri.Impl$String.$vtable");
     assert_eq!(
         instance.slot_targets(&defs),
         vec![
-            ("describe", Some("Impl_describe__String".to_string())),
-            ("name", Some("Impl_name__String".to_string())),
+            ("describe", Some("miri.Impl$String.describe".to_string())),
+            ("name", Some("miri.Impl$String.name".to_string())),
         ],
     );
     let at_int = VtableInstance::of(&instance_type(&[TypeKind::Int]), &defs);
     assert_eq!(
         at_int.map(|instance| instance.symbol()),
-        Some("__vtable_Impl__int".to_string()),
+        Some("miri.Impl$int.$vtable".to_string()),
     );
 }
 
@@ -479,12 +479,12 @@ fn vtable_instance_without_spelled_arguments_names_the_shared_bodies() {
     let Some(instance) = VtableInstance::of(&bare, &defs) else {
         panic!("a class implementing a trait takes part in virtual dispatch");
     };
-    assert_eq!(instance.symbol(), "__vtable_Impl");
+    assert_eq!(instance.symbol(), "miri.Impl.$vtable");
     assert_eq!(
         instance.slot_targets(&defs),
         vec![
-            ("describe", Some("Op_describe".to_string())),
-            ("name", Some("Impl_name".to_string())),
+            ("describe", Some("miri.Op.describe".to_string())),
+            ("name", Some("miri.Impl.name".to_string())),
         ],
     );
 }
@@ -518,11 +518,11 @@ fn resolve_vtable_method_finds_a_default_through_a_parent_trait() {
     ]);
     assert_eq!(
         resolve_vtable_method("Impl", "who", &defs),
-        Some("Impl_who".to_string()),
+        Some("miri.Impl.who".to_string()),
     );
     assert_eq!(
         resolve_vtable_method("GenericImpl", "who", &defs),
-        Some("A_who".to_string()),
+        Some("miri.A.who".to_string()),
     );
 }
 
@@ -541,7 +541,7 @@ fn inherited_trait_default_prefers_the_first_listed_trait() {
     assert_eq!(inherited_trait_default(&defs, "Box", "who"), Some("First"));
     assert_eq!(
         resolve_vtable_method("Box", "who", &defs),
-        Some("First_who".to_string()),
+        Some("miri.First.who".to_string()),
     );
 }
 
@@ -555,7 +555,7 @@ fn synthesized_references_names_the_drop_hook_an_abstract_class_inherits() {
         ("Closer".to_string(), TypeDefinition::Trait(closer)),
         ("A".to_string(), TypeDefinition::Class(base)),
     ]);
-    assert!(synthesized_references(&defs).contains("Closer_drop"));
+    assert!(synthesized_references(&defs).contains("miri.Closer.drop"));
 }
 
 /// A method the chain declares names its declaring class; one it does not
@@ -568,8 +568,8 @@ fn method_symbol_names_the_declaring_class_else_the_type_itself() {
         ("Base".to_string(), TypeDefinition::Class(base)),
         ("Sub".to_string(), TypeDefinition::Class(sub)),
     ]);
-    assert_eq!(method_symbol(&defs, "Sub", "area"), "Base_area");
-    assert_eq!(method_symbol(&defs, "Sub", "clone"), "Sub_clone");
+    assert_eq!(method_symbol(&defs, "Sub", "area"), "miri.Base.area");
+    assert_eq!(method_symbol(&defs, "Sub", "clone"), "miri.Sub.clone");
 }
 
 /// Every method a container's thunk asks of an element, and its `clone`, is
@@ -586,7 +586,7 @@ fn synthesized_references_names_each_element_method_and_clone_a_class_declares()
     let symbols = synthesized_references(&defs);
     for name in ELEMENT_METHOD_NAMES.into_iter().chain(["clone"]) {
         assert!(
-            symbols.contains(&format!("Item_{name}")),
+            symbols.contains(&format!("miri.Item.{name}")),
             "{name}: {symbols:?}"
         );
     }

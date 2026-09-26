@@ -9,8 +9,8 @@
 //! element type that answers such a question itself, codegen emits a small
 //! exported function taking the two element values and calling the type's own
 //! method; the container registers that function's address and calls through
-//! it. A List or Array sorts through `__compare_T`, and a Set or Map matches
-//! elements and keys through `__equals_T`.
+//! it. A List or Array sorts through `miri.T.$compare`, and a Set or Map matches
+//! elements and keys through `miri.T.$equals`.
 
 use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
 use crate::codegen::cranelift::translator::FunctionTranslator;

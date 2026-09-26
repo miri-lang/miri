@@ -10,27 +10,71 @@
 //! the one place that spells it. MIR lowering and codegen both compose names
 //! through it.
 //!
-//! Two symbols are equal when they stand for the same thing, which is a finer
-//! question than whether they spell the same link name. The spelling joins
-//! user identifiers with `_` and `__`, which a user identifier may itself
-//! contain, so different symbols can spell one name: a class `A_b` with a
-//! method `c` and a class `A` with a method `b_c`, a generic `pick` at `int`
-//! and a function written `pick__int`, the drop function of a type and that of
-//! a type whose name continues it. Comparing symbols, never link names, is
-//! what keeps those apart.
+//! # The link-name grammar
 //!
-//! Type arguments are held as the tokens
-//! [`type_kind_to_mangle_str`] gives them, so a symbol is hashable and
-//! comparable without comparing [`Type`]s, and two different types never
-//! compare equal.
+//! ```text
+//! link name   := "main" | c-name | compiler-datum | miri-symbol
+//! miri-symbol := "miri" [ "." residency ] "." definition
+//! residency   := "$gpu" ( "$p" position "h" handle )+
+//! definition  := item                                  a function
+//!              | item "." item                         a method of an owner
+//!              | item ".$vtable"                       a vtable
+//!              | item ".$" thunk                       a type's drop, decref, clone, compare or equals
+//!              | "$" thunk "." encoding                the same for a structural type
+//!              | "$lambda" id args                     a lambda
+//!              | "$fnref" id args "." target           the thunk of a function reference
+//!              | "$nested" id args "." identifier      a nested function
+//!              | "$dtor." closure                      a closure's capture destructor
+//! item        := identifier args
+//! args        := ( "$" token )*
+//! ```
+//!
+//! For example `miri.pick$int` is `pick<int>` and `miri.pick__int` a function
+//! written `pick__int`; `miri.Pick._int` is a static method `_int` of `Pick`;
+//! `miri.A_b.c` and `miri.A.b_c` are the methods of `A_b` and `A`;
+//! `miri.W$int.$drop` and `miri.W__int.$drop` drop a `W<int>` and a `W__int`.
+//!
+//! The program's entry point is `main` and a `runtime` function is its C name,
+//! verbatim, because code outside this compilation calls them by those names.
+//! GPU kernels, the data emitted beside them and string literals keep the
+//! compiler's own fixed spellings (`miri_gpu_forall_0`,
+//! `__miri_kernel_…_wgsl`, `.miri_str_0_bytes`), which carry no identifier a
+//! program wrote.
+//!
+//! # Why distinct symbols never share a link name
+//!
+//! An identifier is `[A-Za-z_][A-Za-z0-9_]*`, and a type argument's token is
+//! made of `[A-Za-z0-9_-]` only (see [`type_kind_to_mangle_str`], under which
+//! two different types never share a token). Neither contains `.` or `$`, so
+//! within a Miri symbol every `.` ends a segment and every `$` starts an
+//! argument token or a marker the compiler synthesizes — and a marker can never
+//! be mistaken for an identifier, which never starts with `$`. Reading a
+//! Miri symbol left to right therefore recovers the symbol: the root, an
+//! optional residency segment (the only segment after the root that starts
+//! with `$gpu`), then a definition whose first segment says which kind it is —
+//! an identifier for a function, a method, a vtable or a declared type's thunk,
+//! told apart by what follows its first `.`; a `$` marker for the rest, each of
+//! which either ends there or takes the whole remainder as the one name it
+//! carries. Every Miri symbol contains a `.`, and neither `main` nor a C name
+//! does, so no definition can be linked under the name of the entry point or
+//! of a function the runtime library or the C library exports.
+//!
+//! Two symbols are still compared as values, never through their link names:
+//! [`SymbolTable`] refuses a second symbol that spells a name already claimed,
+//! as a guard over this grammar rather than a rule a program can meet.
+//!
+//! Type arguments are held as the tokens [`type_kind_to_mangle_str`] gives
+//! them, so a symbol is hashable and comparable without comparing [`Type`]s,
+//! and two different types never compare equal.
 
 mod table;
+mod wgsl;
 mod written;
 
 pub use table::{Claim, SymbolCollision, SymbolTable};
 
 use std::borrow::Cow;
-use std::fmt;
+use std::fmt::{self, Write};
 
 use crate::ast::types::Type;
 use crate::mir::body::DeviceHandleId;
@@ -39,8 +83,33 @@ use crate::mir::lowering::method_dispatch::type_kind_to_mangle_str;
 /// One type argument's token, as [`type_kind_to_mangle_str`] spells it.
 type Token = Cow<'static, str>;
 
-/// The separator between a name and each of its argument tokens.
-const ARGUMENT_SEPARATOR: &str = "__";
+/// The first segment of every symbol a Miri definition is linked under.
+const ROOT: &str = "miri";
+
+/// Ends each segment of a Miri symbol.
+const SEGMENT_SEPARATOR: char = '.';
+
+/// Starts each argument token of a segment and each marker the compiler
+/// synthesizes; no identifier or token contains it.
+const MARKER: char = '$';
+
+/// Marks the segment naming a specialization's gpu-resident buffers.
+const RESIDENCY_MARKER: &str = "gpu";
+
+/// Marks a class's virtual-dispatch table.
+const VTABLE_MARKER: &str = "vtable";
+
+/// Marks a lambda's body.
+const LAMBDA_MARKER: &str = "lambda";
+
+/// Marks the thunk a reference to a named function is called through.
+const FUNCTION_REFERENCE_MARKER: &str = "fnref";
+
+/// Marks a function declared inside another body.
+const NESTED_FUNCTION_MARKER: &str = "nested";
+
+/// Marks the destructor releasing a closure's captures.
+const DESTRUCTOR_MARKER: &str = "dtor";
 
 /// The name the program's entry point is linked under.
 const ENTRY_NAME: &str = "main";
@@ -169,6 +238,16 @@ impl Symbol {
             name: name.to_string(),
             args: tokens(args),
         })
+    }
+
+    /// The non-generic function a program declares at the top level as
+    /// `name`: the entry point when that is `main`.
+    pub fn declared_function(name: &str) -> Self {
+        if name == ENTRY_NAME {
+            Self::entry()
+        } else {
+            Self::function(name, &[])
+        }
     }
 
     /// The method `method` of `owner`, with the owner's type arguments and the
@@ -307,10 +386,11 @@ impl Symbol {
         self.to_string()
     }
 
-    /// The name a WGSL module declares this symbol under. A kernel's entry
-    /// point is spelled exactly as the host names it when it launches it.
+    /// The name a WGSL module declares this symbol under, spelled with
+    /// identifier characters only. A compiler-emitted kernel's entry point is
+    /// spelled exactly as the host names it when it launches it.
     pub fn wgsl_name(&self) -> String {
-        self.link_name()
+        wgsl::Wgsl(self).to_string()
     }
 
     fn of(kind: SymbolKind) -> Self {
@@ -323,123 +403,135 @@ impl Symbol {
 
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_kind(f, &self.kind)?;
-        write_residency(f, &self.residency)
+        match &self.kind {
+            SymbolKind::Runtime(c_name) => f.write_str(c_name),
+            SymbolKind::Entry => f.write_str(ENTRY_NAME),
+            SymbolKind::GpuKernel { .. }
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => wgsl::write_kind(f, &self.kind),
+            SymbolKind::Function { .. }
+            | SymbolKind::Method { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureDestructor(_) => {
+                f.write_str(ROOT)?;
+                write_residency(f, &self.residency)?;
+                f.write_char(SEGMENT_SEPARATOR)?;
+                write_definition(f, &self.kind)
+            }
+        }
     }
 }
 
-fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
+/// The segments after the root of a symbol for something the program defines
+/// or the compiler synthesizes from one.
+fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
     match kind {
-        SymbolKind::Function { name, args } => {
-            f.write_str(name)?;
-            write_arguments(f, args)
-        }
+        SymbolKind::Function { name, args } => write_item(f, name, args),
         SymbolKind::Method {
             owner,
             owner_args,
             method,
             method_args,
         } => {
-            write!(f, "{owner}_{method}")?;
-            write_arguments(f, owner_args)?;
-            write_arguments(f, method_args)
+            write_item(f, owner, owner_args)?;
+            f.write_char(SEGMENT_SEPARATOR)?;
+            write_item(f, method, method_args)
         }
         SymbolKind::Vtable { class, args } => {
-            write!(f, "__vtable_{class}")?;
-            write_arguments(f, args)
+            write_item(f, class, args)?;
+            write_marker_segment(f, VTABLE_MARKER)
         }
         SymbolKind::Closure {
             kind,
             id,
             context_args,
-        } => {
-            write_closure_base(f, kind, *id)?;
-            write_arguments(f, context_args)
+        } => write_closure(f, kind, *id, context_args),
+        SymbolKind::TypeThunk { kind, subject } => write_thunk(f, *kind, subject),
+        SymbolKind::ClosureDestructor(closure) => {
+            write!(f, "{MARKER}{DESTRUCTOR_MARKER}{SEGMENT_SEPARATOR}{closure}")
         }
-        SymbolKind::GpuKernel { kind, index } => write_gpu_kernel(f, *kind, *index),
-        SymbolKind::Runtime(c_name) => f.write_str(c_name),
-        SymbolKind::Entry => f.write_str(ENTRY_NAME),
-        SymbolKind::TypeThunk { kind, subject } => {
-            f.write_str(thunk_prefix(*kind))?;
-            write_thunk_subject(f, subject)
-        }
-        SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
-        SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
-        SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
+        SymbolKind::Runtime(_)
+        | SymbolKind::Entry
+        | SymbolKind::GpuKernel { .. }
+        | SymbolKind::KernelDatum { .. }
+        | SymbolKind::StringLiteral { .. } => wgsl::write_kind(f, kind),
     }
 }
 
-fn thunk_prefix(kind: ThunkKind) -> &'static str {
+/// An identifier followed by each of its argument tokens: `pick$int$String`.
+fn write_item(f: &mut fmt::Formatter<'_>, name: &str, args: &[Token]) -> fmt::Result {
+    f.write_str(name)?;
+    write_arguments(f, args)
+}
+
+/// A trailing segment the compiler synthesizes: `.$vtable`, `.$drop`.
+fn write_marker_segment(f: &mut fmt::Formatter<'_>, marker: &str) -> fmt::Result {
+    write!(f, "{SEGMENT_SEPARATOR}{MARKER}{marker}")
+}
+
+fn write_closure(
+    f: &mut fmt::Formatter<'_>,
+    kind: &ClosureKind,
+    id: usize,
+    context_args: &[Token],
+) -> fmt::Result {
+    let marker = match kind {
+        ClosureKind::Lambda => LAMBDA_MARKER,
+        ClosureKind::FunctionReference(_) => FUNCTION_REFERENCE_MARKER,
+        ClosureKind::NestedFunction(_) => NESTED_FUNCTION_MARKER,
+    };
+    write!(f, "{MARKER}{marker}{id}")?;
+    write_arguments(f, context_args)?;
     match kind {
-        ThunkKind::Drop => "__drop_",
-        ThunkKind::Decref => "__decref_",
-        ThunkKind::Clone => "__clone_",
-        ThunkKind::Compare => "__compare_",
-        ThunkKind::Equals => "__equals_",
+        ClosureKind::Lambda => Ok(()),
+        ClosureKind::FunctionReference(name) | ClosureKind::NestedFunction(name) => {
+            write!(f, "{SEGMENT_SEPARATOR}{name}")
+        }
     }
 }
 
-fn write_thunk_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> fmt::Result {
+fn write_thunk(f: &mut fmt::Formatter<'_>, kind: ThunkKind, subject: &ThunkSubject) -> fmt::Result {
     match subject {
         ThunkSubject::Named { name, args } => {
-            f.write_str(name)?;
-            write_arguments(f, args)
+            write_item(f, name, args)?;
+            write_marker_segment(f, thunk_marker(kind))
         }
-        ThunkSubject::Structural(encoding) => f.write_str(encoding),
+        ThunkSubject::Structural(encoding) => write!(
+            f,
+            "{MARKER}{}{SEGMENT_SEPARATOR}{encoding}",
+            thunk_marker(kind)
+        ),
     }
 }
 
-fn write_kernel_datum(f: &mut fmt::Formatter<'_>, kernel: &str, datum: KernelDatum) -> fmt::Result {
-    match datum {
-        KernelDatum::Wgsl => write!(f, "__miri_kernel_{kernel}_wgsl"),
-        KernelDatum::Name => write!(f, "__miri_kernel_{kernel}_name"),
-    }
-}
-
-fn write_string_literal(
-    f: &mut fmt::Formatter<'_>,
-    index: usize,
-    part: StringLiteralPart,
-) -> fmt::Result {
-    match part {
-        StringLiteralPart::Bytes => write!(f, ".miri_str_{index}_bytes"),
-        StringLiteralPart::Object => write!(f, ".miri_str_{index}_struct"),
-    }
-}
-
-fn write_closure_base(f: &mut fmt::Formatter<'_>, kind: &ClosureKind, id: usize) -> fmt::Result {
+fn thunk_marker(kind: ThunkKind) -> &'static str {
     match kind {
-        ClosureKind::Lambda => write!(f, "__lambda_{id}"),
-        ClosureKind::FunctionReference(target) => write!(f, "__fnref_{target}_{id}"),
-        ClosureKind::NestedFunction(name) => write!(f, "__nested_{name}_{id}"),
-    }
-}
-
-fn write_gpu_kernel(f: &mut fmt::Formatter<'_>, kind: GpuKernelKind, index: usize) -> fmt::Result {
-    match kind {
-        GpuKernelKind::Forall => write!(f, "miri_gpu_forall_{index}"),
-        GpuKernelKind::Reduce => write!(f, "miri_gpu_reduce_{index}"),
-        GpuKernelKind::FramePass { pass } => write!(f, "miri_gpu_for_{index}_{pass}"),
+        ThunkKind::Drop => "drop",
+        ThunkKind::Decref => "decref",
+        ThunkKind::Clone => "clone",
+        ThunkKind::Compare => "compare",
+        ThunkKind::Equals => "equals",
     }
 }
 
 fn write_arguments(f: &mut fmt::Formatter<'_>, args: &[Token]) -> fmt::Result {
     args.iter().try_for_each(|token| {
-        f.write_str(ARGUMENT_SEPARATOR)?;
+        f.write_char(MARKER)?;
         f.write_str(token)
     })
 }
 
-/// Each gpu-resident argument contributes its position and device handle, so
-/// distinct buffers specialize to distinct bodies and one buffer reused across
-/// calls maps to one.
+/// The segment naming the gpu-resident buffers a specialization is for, right
+/// after the root: `miri.$gpu$p0h1.scale`. Each gpu-resident argument
+/// contributes its position and device handle, so distinct buffers specialize
+/// to distinct bodies and one buffer reused across calls maps to one.
 ///
-/// The suffix is joined with `__gpu_p…h…`, a spelling a user identifier may
-/// also contain: a function named `f__gpu_p0h1` spells the same name as `f`
-/// specialized for handle 1 at position 0, and nothing here tells the two
-/// apart. Nothing reads the specialized function back out of this name — the
-/// lowering records which function each specialized call targets — so the
-/// only exposure is that collision.
+/// It precedes the definition rather than following it because some
+/// definitions end in a name the symbol only carries — the target of a
+/// function reference, the closure a destructor releases — and a suffix after
+/// one of those could be read as part of it.
 fn write_residency(
     f: &mut fmt::Formatter<'_>,
     residency: &[(usize, DeviceHandleId)],
@@ -447,10 +539,10 @@ fn write_residency(
     if residency.is_empty() {
         return Ok(());
     }
-    f.write_str("__gpu")?;
+    write!(f, "{SEGMENT_SEPARATOR}{MARKER}{RESIDENCY_MARKER}")?;
     residency
         .iter()
-        .try_for_each(|(position, handle)| write!(f, "_p{position}h{}", handle.0))
+        .try_for_each(|(position, handle)| write!(f, "{MARKER}p{position}h{}", handle.0))
 }
 
 fn tokens<'t>(types: impl IntoIterator<Item = &'t Type>) -> Vec<Token> {

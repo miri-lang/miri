@@ -83,7 +83,7 @@ impl OptimizationPass for Perceus {
         // the parameter's RC to remain at 1 while the closure holds a dangling ref.
         //
         // Per-capture DecRef at StorageDead is intentionally OMITTED: captured
-        // managed values are released by the runtime destructor (`__dtor_{lambda}`)
+        // managed values are released by the runtime destructor (`miri.$dtor.{lambda}`)
         // stored in the closure struct.  This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
         // destructor and Perceus decremented the same capture on drop.
@@ -289,7 +289,7 @@ impl Perceus {
     /// Handles a storage end-of-life by decrementing the RC of managed locals.
     ///
     /// Managed captures inside closure locals are now DecRef'd by the runtime
-    /// destructor (`__dtor_{lambda_name}`) when the closure RC reaches zero, so
+    /// destructor (`miri.$dtor.{lambda_name}`) when the closure RC reaches zero, so
     /// Perceus no longer needs to emit per-field DecRefs for closure locals.
     fn handle_storage_dead(
         &self,

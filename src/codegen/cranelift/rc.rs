@@ -77,9 +77,9 @@ struct EnumDropSite {
 }
 
 /// The link spelling of a generic class at a concrete instantiation's type
-/// arguments (`Box` + `[String]` → `Box__String`), as [`Symbol::function`]
+/// arguments (`Box` + `[String]` → `miri.Box$String`), as [`Symbol::function`]
 /// spells it. Instantiations are compared by their [`Symbol`], never by this
-/// spelling, which two different argument lists can share.
+/// spelling.
 pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
     crate::mir::lowering::dispatch::mangle_instantiation_name(class_name, type_args)
 }
@@ -122,7 +122,7 @@ impl<'a> FunctionTranslator<'a> {
     /// for element type `elem_kind`, or `None` when the element needs no decref.
     ///
     /// A recorded generic-class instantiation (`Box<String>`) routes to its
-    /// per-instantiation `__decref_Box__String` wrapper so the concrete managed
+    /// per-instantiation `miri.Box$String.$decref` wrapper so the concrete managed
     /// field is released when the runtime drops an element (`clear`, `remove_at`,
     /// `pop`). A structural element — a tuple, an option, a function value —
     /// routes to the thunk generated for its structure, since it has no
@@ -229,7 +229,7 @@ impl<'a> FunctionTranslator<'a> {
     /// extracted from the assignment target's type annotation.
     ///
     /// `elem_kind` may be a generic placeholder (e.g. `T` inside a generic class
-    /// method) — in that case there is no concrete `__decref_T` to register, so
+    /// method) — in that case there is no concrete `miri.T.$decref` to register, so
     /// the runtime keeps its default no-op elem_drop_fn.
     pub(crate) fn emit_list_drop_fn_for_elem_kind(
         builder: &mut FunctionBuilder,
@@ -250,7 +250,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// True when `elem_kind` is a generic placeholder that has no concrete
-    /// `__decref_TypeName` symbol — either `TypeKind::Generic`, or a
+    /// `miri.TypeName.$decref` symbol — either `TypeKind::Generic`, or a
     /// `TypeKind::Custom(name, _)` whose `name` is unknown to the type-definition
     /// table or known only as `TypeDefinition::Generic`. This guards the
     /// elem-drop-fn override sites where emitting a reference to an undefined
@@ -905,7 +905,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Drop a custom struct/class/enum: dispatch through the type-specific
-    /// `__drop_TypeName` thunk when it carries managed fields or a user-defined
+    /// `miri.TypeName.$drop` thunk when it carries managed fields or a user-defined
     /// drop hook; otherwise, for enums, emit field drops inline and free the RC
     /// block, or just free the block for non-enums.
     fn emit_drop_custom(
@@ -923,10 +923,10 @@ impl<'a> FunctionTranslator<'a> {
         let concrete_args = Self::extract_type_args_from_exprs(type_args);
 
         // A generic class instantiated at a recorded set of type arguments
-        // dispatches to its per-instantiation drop thunk (`__drop_Box__String`)
+        // dispatches to its per-instantiation drop thunk (`miri.Box$String.$drop`)
         // so a managed field is DecRef'd and a scalar field skipped, each per
         // instantiation. Non-generic types and unrecorded instantiations use
-        // the bare `__drop_Name` thunk.
+        // the bare `miri.Name.$drop` thunk.
         let recorded = Self::recorded_instantiation(name, type_args, type_ctx);
         // A recorded generic instantiation always routes through its thunk: the
         // class's declared field kinds see only the bare generic `T` (never
@@ -1123,7 +1123,7 @@ impl<'a> FunctionTranslator<'a> {
     /// for each managed (heap-allocated) field. For enums, reads the discriminant
     /// and conditionally DecRefs the active variant's managed fields.
     ///
-    /// This is the body of the generated `__drop_TypeName` function and is also
+    /// This is the body of the generated `miri.TypeName.$drop` function and is also
     /// called directly from `generate_drop_function`.
     pub(crate) fn emit_struct_drop(
         builder: &mut FunctionBuilder,
@@ -1156,7 +1156,7 @@ impl<'a> FunctionTranslator<'a> {
                 // A field of a generic class is written in the type parameters
                 // of the class that declares it (`value T`, `items List<T>`),
                 // which name nothing concrete on their own. The
-                // per-instantiation drop thunk (`__drop_Box__String`) supplies
+                // per-instantiation drop thunk (`miri.Box$String.$drop`) supplies
                 // `inst_args`, and the `extends` chain carries them on to every
                 // ancestor, so each field resolves to the kind this instance
                 // actually stores: a managed one joins the DecRef set at that
@@ -1437,7 +1437,7 @@ impl<'a> FunctionTranslator<'a> {
     /// so that overwriting an existing slot does not leak the old value.
     ///
     /// Routing: built-in collections / String use their per-shape runtime decref
-    /// helper (the fast path); user classes call `__decref_TypeName`; Tuple,
+    /// helper (the fast path); user classes call `miri.TypeName.$decref`; Tuple,
     /// Option and function values (the only `ElementShape::Other` variants that
     /// `is_field_managed` reports as managed) inline through
     /// `emit_decref_value`, which dispatches to `emit_type_drop` and
@@ -1477,10 +1477,10 @@ impl<'a> FunctionTranslator<'a> {
         }
         if let ElementShape::UserClass(class_name) = shape {
             // Route a recorded generic-class instantiation (`Box<String>`) to its
-            // per-instantiation `__decref_Box__String` wrapper so the concrete
+            // per-instantiation `miri.Box$String.$decref` wrapper so the concrete
             // managed field is released; other classes use the bare name.
             // TODO: an element typed at a trait (`List<Op<String>>`) names a
-            // `__decref_Op` that `generate_type_drop_functions` never emits, as
+            // `miri.Op.$decref` that `generate_type_drop_functions` never emits, as
             // it emits wrappers for structs, classes and enums only, so such a
             // collection does not link. Its release has to dispatch through the
             // element's vtable to the concrete class's drop.
@@ -1620,7 +1620,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Generates the `__drop_{type_name}(ptr)` function in the given module.
+    /// Generates the `miri.{type_name}.$drop(ptr)` function in the given module.
     ///
     /// The generated function implements the three-step destructor pipeline:
     /// 1. User-defined drop hook — invoked when the type defines `fn drop(self)`.
@@ -1630,11 +1630,11 @@ impl<'a> FunctionTranslator<'a> {
     /// This function is called once per managed concrete type during codegen,
     /// before any user functions are compiled, so the thunk symbols are available
     /// when user code later references them via Import declarations.
-    /// `type_args = None` generates the bare `__drop_TypeName`; `Some(args)`
-    /// generates a per-instantiation thunk (`__drop_Box__String`) whose body
+    /// `type_args = None` generates the bare `miri.TypeName.$drop`; `Some(args)`
+    /// generates a per-instantiation thunk (`miri.Box$String.$drop`) whose body
     /// resolves each bare-generic field against `args`. This function emits only
-    /// the bare thunk's matching `__decref_TypeName` wrapper; the caller emits
-    /// the per-instantiation `__decref_Box__String` wrapper separately (via
+    /// the bare thunk's matching `miri.TypeName.$decref` wrapper; the caller emits
+    /// the per-instantiation `miri.Box$String.$decref` wrapper separately (via
     /// `generate_decref_function`) so a `List<Box<String>>` element's runtime
     /// decref helper routes through the per-instantiation drop.
     pub(crate) fn generate_drop_function(
@@ -1681,16 +1681,16 @@ impl<'a> FunctionTranslator<'a> {
         ctx.clear();
 
         if type_args.is_some() {
-            // The per-instantiation `__decref_Box__String` wrapper is emitted by
+            // The per-instantiation `miri.Box$String.$decref` wrapper is emitted by
             // the caller after this thunk is defined, keyed by the mangled name.
             return Ok(());
         }
-        // Generate __decref_TypeName: the RC-decrement wrapper used as
+        // Generate miri.TypeName.$decref: the RC-decrement wrapper used as
         // elem_drop_fn for collections holding custom-type elements.
         Self::generate_decref_function(module, ctx, isa, type_name, &[])
     }
 
-    /// Emit the body of `__drop_TypeName(ptr)`:
+    /// Emit the body of `miri.TypeName.$drop(ptr)`:
     ///   1. invoke user-defined `fn drop(self)` when the type defines one,
     ///   2. DecRef every managed field via `emit_struct_drop`,
     ///   3. free the RC allocation via libc `free`.
@@ -2013,7 +2013,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Generates `__clone_{type_name}(ptr) -> ptr` for each concrete class that
+    /// Generates `miri.{type_name}.$clone(ptr) -> ptr` for each concrete class that
     /// implements `Cloneable`.
     ///
     /// This function is used as `elem_clone_fn` in Array/List/Set so that
@@ -2084,7 +2084,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit the body of `__clone_TypeName(ptr)`: null guard → call the
+    /// Emit the body of `miri.TypeName.$clone(ptr)`: null guard → call the
     /// user-defined `clone()` resolved through the inheritance chain →
     /// return the result.
     #[allow(clippy::too_many_arguments)]

@@ -59,11 +59,14 @@ impl TypeChecker {
     /// Infers the type of an identifier reference.
     ///
     /// Handles special identifiers (`None`, `Ok`, `Err`, `self`), scope lookup,
-    /// visibility checking, and linear type consumption tracking.
+    /// visibility checking, and linear type consumption tracking. A reference
+    /// that resolves to a `runtime` or `intrinsic` declaration is recorded
+    /// under `expr_id`.
     pub(crate) fn infer_identifier(
         &mut self,
         name: &str,
         span: Span,
+        expr_id: usize,
         context: &mut Context,
     ) -> Type {
         if let Some(ty) = self.try_builtin_identifier(name) {
@@ -78,7 +81,7 @@ impl TypeChecker {
             return self.infer_self(span, context);
         }
 
-        if let Some(ty) = self.try_variable_lookup(name, span, context) {
+        if let Some(ty) = self.try_variable_lookup(name, span, expr_id, context) {
             return ty;
         }
 
@@ -226,6 +229,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         span: Span,
+        expr_id: usize,
         context: &mut Context,
     ) -> Option<Type> {
         let info_opt = context
@@ -234,6 +238,12 @@ impl TypeChecker {
             .or_else(|| self.type_table.global_scope.get(name).cloned());
 
         if let Some(info) = info_opt {
+            if info.is_runtime {
+                self.fn_analysis.runtime_references.insert(expr_id);
+            }
+            if info.is_intrinsic {
+                self.fn_analysis.intrinsic_references.insert(expr_id);
+            }
             if !self.check_visibility(&info.visibility, &info.module) {
                 let kind = if self.type_table.global_type_definitions.contains_key(name) {
                     "Type"

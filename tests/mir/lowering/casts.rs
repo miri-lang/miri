@@ -84,7 +84,7 @@ fn main()
             let _2: void;
 
             bb0: {
-                _1 = const Identifier("take_i64")(const Integer(I8(10))) -> bb1;
+                _1 = const Identifier("miri.take_i64")(const Integer(I8(10))) -> bb1;
             }
 
             bb1: {

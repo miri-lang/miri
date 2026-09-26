@@ -53,12 +53,10 @@ pub(crate) fn try_lower_function_reference(
     };
     let func_data = func_data.clone();
     let fn_ty = info.ty.clone();
-    let symbol = info
-        .original_name
-        .clone()
-        .unwrap_or_else(|| name.to_string());
+    let declared = info.original_name.as_deref().unwrap_or(name);
+    let target = super::identifier_expr::global_function_link_name(ctx, expr, declared);
     Some(lower_function_reference(
-        ctx, expr, &symbol, &fn_ty, &func_data, dest,
+        ctx, expr, &target, &fn_ty, &func_data, dest,
     ))
 }
 
@@ -76,7 +74,7 @@ fn lower_function_reference(
     let thunk_symbol =
         ctx.closure_symbol(ClosureKind::FunctionReference(symbol.to_string()), expr.id);
     let thunk_name: std::rc::Rc<str> = thunk_symbol.link_name().into();
-    let forwarded_allocator = forwarded_allocator(ctx, symbol);
+    let forwarded_allocator = forwarded_allocator(ctx, expr);
     let thunk = build_forwarding_thunk(
         ctx,
         expr,
@@ -117,8 +115,8 @@ fn lower_function_reference(
 /// parameter, so the thunk has to supply it — and the thunk's own signature is
 /// fixed by the closure calling convention. The allocator therefore travels the
 /// only way anything else reaches a closure body: as a capture.
-fn forwarded_allocator(ctx: &LoweringContext, symbol: &str) -> Option<AllocatorCapture> {
-    if !crate::mir::lowering::dispatch::callee_takes_allocator(ctx, symbol) {
+fn forwarded_allocator(ctx: &LoweringContext, reference: &Expression) -> Option<AllocatorCapture> {
+    if !crate::mir::lowering::dispatch::callee_takes_allocator(ctx, reference) {
         return None;
     }
     let local = *ctx.variable_map.get("allocator")?;

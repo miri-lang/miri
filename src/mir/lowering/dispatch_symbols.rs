@@ -290,7 +290,7 @@ impl VtableInstance {
         &self.args
     }
 
-    /// The data symbol of this vtable: `__vtable_{class}`, mangled by the
+    /// The data symbol of this vtable: `miri.{class}.$vtable`, mangled by the
     /// instantiation's arguments as every other per-instantiation symbol is.
     pub fn symbol(&self) -> String {
         Symbol::vtable(&self.class, &self.args).link_name()

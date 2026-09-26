@@ -4,8 +4,9 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, STRING_TYPE_NAME};
 use crate::error::lowering::LoweringError;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
@@ -13,6 +14,9 @@ use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::statement::lower_statement;
+
+/// The method of the string type a `+` of two strings calls.
+const STRING_CONCAT_METHOD: &str = "concat";
 
 pub mod aggregate_to_string;
 pub mod array_expr;
@@ -322,9 +326,9 @@ fn emit_runtime_to_string(
     Ok(result)
 }
 
-/// Emits a call to `String_concat` and returns the result local.
+/// Emits a call to `String.concat` and returns the result local.
 ///
-/// Concatenates two String values by calling the `String_concat` intrinsic.
+/// Concatenates two String values by calling the `concat` method of `String`.
 /// After the call returns, this function sets the current block to the target
 /// and returns the result local. The caller is responsible for tracking and
 /// releasing the left and right operands if they are temporary values.
@@ -347,7 +351,9 @@ pub(super) fn emit_string_concat(
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
-        literal: Literal::Identifier("String_concat".to_string()),
+        literal: Literal::Identifier(
+            Symbol::method(STRING_TYPE_NAME, &[], STRING_CONCAT_METHOD, &[]).link_name(),
+        ),
     }));
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
