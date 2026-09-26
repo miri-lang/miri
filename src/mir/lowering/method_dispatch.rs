@@ -365,6 +365,50 @@ pub(super) fn resolve_receiver_override(
     None
 }
 
+/// The trait a receiver typed as a bounded type parameter is called through.
+///
+/// A body still written at its open parameter — `x.close()` for
+/// `x T` where `T extends Closable` — knows only what the bound promises, so
+/// the call dispatches through the trait's vtable exactly as one through a
+/// binding of the trait's type would. A body instantiated at a concrete type
+/// has its parameter substituted and never reaches this.
+fn bounding_trait(ctx: &LoweringContext, obj_ty: &Type) -> Option<Type> {
+    let constraint = match &obj_ty.kind {
+        TypeKind::Generic(_, Some(constraint), _) => (**constraint).clone(),
+        TypeKind::Custom(name, None) => enclosing_parameter_bound(ctx, name)?,
+        _ => return None,
+    };
+    let TypeKind::Custom(trait_name, _) = &constraint.kind else {
+        return None;
+    };
+    matches!(
+        ctx.type_checker.type_definitions().get(trait_name.as_str()),
+        Some(TypeDefinition::Trait(_))
+    )
+    .then_some(constraint)
+}
+
+/// The bound the enclosing class declares for its type parameter `name`, or
+/// `None` when `name` is none of its parameters or carries no bound.
+fn enclosing_parameter_bound(ctx: &LoweringContext, name: &str) -> Option<Type> {
+    let self_type = ctx.self_type.as_ref()?;
+    let TypeKind::Custom(class_name, _) = &self_type.kind else {
+        return None;
+    };
+    let Some(TypeDefinition::Class(class_def)) =
+        ctx.type_checker.type_definitions().get(class_name.as_str())
+    else {
+        return None;
+    };
+    class_def
+        .generics
+        .as_ref()?
+        .iter()
+        .find(|generic| generic.name == name)?
+        .constraint
+        .clone()
+}
+
 /// Extract the class name from a type, handling builtins and custom types.
 pub(super) fn extract_class_name(obj_ty: &Type) -> Option<String> {
     match &obj_ty.kind {
@@ -442,6 +486,7 @@ fn resolve_method_receiver(
 ) -> Option<(Type, String, String)> {
     let raw_obj_ty = ctx.recorded_type(obj.id)?;
     let obj_ty = resolve_receiver_override(ctx, &raw_obj_ty, obj).unwrap_or(raw_obj_ty);
+    let obj_ty = bounding_trait(ctx, &obj_ty).unwrap_or(obj_ty);
     let class_name = extract_class_name(&obj_ty)?;
     let method_name = match &method_expr.node {
         ExpressionKind::Identifier(name, _) => name.clone(),
@@ -601,6 +646,11 @@ fn orders_differently_from_signed_fallback(kind: &TypeKind) -> bool {
 /// from what that function hands back and from the collection's own element
 /// reads — ordinary Miri code, like a trait default — so no intrinsic accounts
 /// for either, and neither does a method the collection only inherits.
+// TODO: a declared method that calls a trait default on `self` is not settled
+// by the runtime although it takes no function value. `List.remove` calls the
+// `index_of` default, which compares elements with `==`, so the shared body it
+// is routed to compares a `List<String>`'s computed elements by address and
+// answers `false` for an element the list holds.
 pub(crate) fn is_settled_by_the_runtime(
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,

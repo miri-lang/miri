@@ -2261,6 +2261,15 @@ impl Pipeline {
                 symbols,
                 compilation_ids,
             )?;
+            Self::lower_called_shared_generic_functions(
+                result,
+                reach,
+                &called,
+                is_release,
+                bodies,
+                symbols,
+                compilation_ids,
+            )?;
             Self::lower_generic_functions_reached_from(
                 result,
                 is_release,
@@ -2341,6 +2350,59 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Emit the shared body of each generic function a lowered body calls by
+    /// its bare symbol.
+    ///
+    /// The shared body is written in the function's own parameters and leaves
+    /// them open, so it cannot know whether an element it reads is reference
+    /// counted. A call at concrete arguments names the copy compiled for them;
+    /// only a body that is itself still open — the shared body of a generic
+    /// caller handing its own parameters on — names the shared one. So one
+    /// nothing names is never compiled, and never reaches a collection method
+    /// at an element type it cannot own correctly.
+    // TODO: only calls are scanned for a bare symbol. A generic function bound
+    // to a local (`let g = ident`) is not a reference to its shared body today —
+    // it fails to link as `g` at its argument — and making such a value work has
+    // to name the per-instantiation body, never the shared one this scan finds.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_called_shared_generic_functions(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        called: &CalledNames,
+        is_release: bool,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        let mut named: Vec<(String, &DeclaredFunction, StatementSite)> = reach
+            .generic_functions
+            .iter()
+            .filter_map(|(function, site)| {
+                let symbol = Symbol::declared_function(&function.module, &function.name);
+                let link_name = symbol.link_name();
+                let is_named =
+                    called.contains(&link_name) || reach.synthesized.contains(&link_name);
+                (is_named && !symbols.is_claimed(&symbol)).then_some((link_name, function, *site))
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, function, site) in named {
+            let Some(stmt) = site.statement(result) else {
+                continue;
+            };
+            Self::lower_top_level_function(
+                result,
+                stmt,
+                &function.name,
+                is_release,
+                bodies,
+                symbols,
+                compilation_ids,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Run every verification pass over every body and turn what they find
     /// into one report — printed under `warn`, fatal otherwise.
     fn report_mir_violations(
@@ -2397,6 +2459,7 @@ impl Pipeline {
         // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
             match &stmt.node {
+                StatementKind::FunctionDeclaration(decl) if decl.generics.is_some() => {}
                 StatementKind::FunctionDeclaration(decl) => {
                     Self::lower_top_level_function(
                         result,
@@ -2575,6 +2638,7 @@ impl Pipeline {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
+                StatementKind::FunctionDeclaration(decl) if decl.generics.is_some() => {}
                 StatementKind::FunctionDeclaration(decl) => {
                     Self::lower_top_level_function(
                         result,
