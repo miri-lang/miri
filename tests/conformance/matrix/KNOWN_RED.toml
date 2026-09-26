@@ -95,30 +95,6 @@ cells = [
 # generic instantiation read after substitution
 [C]
 cells = [
-    "inherited_field/i128/compound_assign/generic_class", # crashed without a report
-    "inherited_field/i128/compound_assign/generic_fn", # crashed without a report
-    "inherited_field/i128/compound_assign/inherited", # crashed without a report
-    "inherited_field/i128/eq/generic_class", # crashed without a report
-    "inherited_field/i128/eq/generic_fn", # crashed without a report
-    "inherited_field/i128/eq/inherited", # crashed without a report
-    "inherited_field/i128/overwrite/generic_class", # crashed without a report
-    "inherited_field/i128/overwrite/generic_fn", # crashed without a report
-    "inherited_field/i128/overwrite/inherited", # crashed without a report
-    "inherited_field/i128/store_read/generic_class", # crashed without a report
-    "inherited_field/i128/store_read/generic_fn", # crashed without a report
-    "inherited_field/i128/store_read/inherited", # crashed without a report
-    "inherited_field/u128/compound_assign/generic_class", # crashed without a report
-    "inherited_field/u128/compound_assign/generic_fn", # crashed without a report
-    "inherited_field/u128/compound_assign/inherited", # crashed without a report
-    "inherited_field/u128/eq/generic_class", # crashed without a report
-    "inherited_field/u128/eq/generic_fn", # crashed without a report
-    "inherited_field/u128/eq/inherited", # crashed without a report
-    "inherited_field/u128/overwrite/generic_class", # crashed without a report
-    "inherited_field/u128/overwrite/generic_fn", # crashed without a report
-    "inherited_field/u128/overwrite/inherited", # crashed without a report
-    "inherited_field/u128/store_read/generic_class", # crashed without a report
-    "inherited_field/u128/store_read/generic_fn", # crashed without a report
-    "inherited_field/u128/store_read/inherited", # crashed without a report
 ]
 
 # drop hooks, release paths and ownership transfer

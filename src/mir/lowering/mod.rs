@@ -423,6 +423,12 @@ pub(crate) fn type_argument(arg: &Expression) -> Option<Type> {
     })
 }
 
+/// Every argument of `args` as the type it denotes (see [`type_argument`]), or
+/// `None` when any of them is a value rather than a type.
+pub(crate) fn type_arguments(args: &[Expression]) -> Option<Vec<Type>> {
+    args.iter().map(type_argument).collect()
+}
+
 /// One argument of a generic-class reference as the instantiation registry
 /// records it and every per-instantiation symbol is mangled from: the type
 /// [`type_argument`] reads, or the marker standing for a value generic. `None`

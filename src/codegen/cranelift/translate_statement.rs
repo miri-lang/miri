@@ -1425,7 +1425,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> TypeKind {
         let fields = match type_args {
-            Some(args) => match Self::extract_type_args_from_exprs(Some(args.as_slice())) {
+            Some(args) => match crate::mir::lowering::type_arguments(args) {
                 Some(written) => {
                     crate::mir::lowering::inherited_instantiation::instantiated_field_types(
                         type_ctx.type_definitions,

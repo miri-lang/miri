@@ -212,3 +212,70 @@ fn main()
         "42 hi",
     );
 }
+
+/// A 128-bit argument widens the field it binds and moves every field after
+/// it, so the thunk must find the managed field where the instance put it.
+#[test]
+fn a_generic_struct_at_i128_releases_the_string_after_its_wide_field() {
+    assert_heap_guard_output(
+        r#"
+struct Wide<T>
+    v T
+    n int
+    s String
+
+fn main()
+    let a i128 = 170141183460469231731687303715884105727
+    let w = Wide<i128>(v: a, n: 7, s: "x" + "y")
+    println(f"{w.v == a} {w.n} {w.s}")
+"#,
+        "true 7 xy",
+    );
+}
+
+#[test]
+fn a_generic_class_at_u128_releases_the_string_after_its_wide_field() {
+    assert_heap_guard_output(
+        r#"
+class Wide<T>
+    public v T
+    public n int
+    public s String
+
+    fn init(v T, n int, s String)
+        self.v = v
+        self.n = n
+        self.s = s
+
+fn main()
+    let a u128 = 340282366920938463463374607431768211455
+    let w = Wide<u128>(v: a, n: 7, s: "x" + "y")
+    println(f"{w.v == a} {w.n} {w.s}")
+"#,
+        "true 7 xy",
+    );
+}
+
+/// A nullable argument is the option it stands for: the instance is released
+/// at `Option<String>`, and each held string is freed exactly once.
+#[test]
+fn a_generic_class_at_a_nullable_string_is_released_at_the_option() {
+    assert_heap_guard_output(
+        r#"
+class Cell<T>
+    v T
+    fn init(v T)
+        self.v = v
+    public fn get() T
+        return self.v
+
+fn main()
+    let full = Cell<String?>("a" + "b")
+    let empty = Cell<String?>(None)
+    let a = full.get() ?? "-"
+    let c = empty.get() ?? "-"
+    println(f"{a} {c}")
+"#,
+        "ab -",
+    );
+}
