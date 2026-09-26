@@ -11,6 +11,7 @@ use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
 use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
+use crate::type_checker::CalleeKind;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -191,6 +192,12 @@ impl<'a> LoweringContext<'a> {
     /// body's own parameters, so read raw it pins its callee to the caller's
     /// parameter rather than to the type the caller was instantiated at. The
     /// callee would then be named — and compiled — for a type no value has.
+    /// How a call through `callee` is compiled, as the declaration the type
+    /// checker resolved it to where it was written says.
+    pub fn callee_kind(&self, callee: &Expression) -> CalleeKind {
+        self.type_checker.callee_kind(callee.id)
+    }
+
     pub fn instantiated_call_mapping(&self, call_id: usize) -> Option<Vec<(String, Type)>> {
         let mapping = self.type_checker.call_generic_mappings.get(&call_id)?;
         Some(super::substitute_call_mapping(mapping, &self.generic_subs))

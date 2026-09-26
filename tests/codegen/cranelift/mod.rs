@@ -8,6 +8,7 @@ pub mod determinism;
 pub mod layout;
 pub mod predicates;
 pub mod rc;
+pub mod structural_elements;
 pub mod translate_rvalue;
 pub mod translate_statement;
 pub mod translator;

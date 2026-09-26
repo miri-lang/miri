@@ -1,15 +1,19 @@
-// summary: Accepted counterpart of MER_MIR_018: a function named apart from the method compiles beside it.
-// expect-stdout: 1 2
+// summary: Accepted counterpart of MER_MIR_018: two functions named apart are both reached from GPU code.
+// command: build
+// The kernel dispatches to the GPU, so running this would need a device the
+// machine may not have. Building carries the program past the lowering that
+// raises the diagnostic and stops before dispatch.
 use system.io
 
-class Point
-    x int
-    fn norm() int
-        return self.x
+fn plus_one(x int) int
+    return x + 1
 
-fn doubled_norm(p Point) int
-    return p.x * 2
+fn plus_two(x int) int
+    return x + 2
 
 fn main()
-    let p = Point(x: 1)
-    println(f"{p.norm()} {doubled_norm(p)}")
+    gpu var a = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        a[i] = plus_one(a[i]) + plus_two(a[i])
+    let h = a
+    println(f"{h[0]}")

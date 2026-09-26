@@ -160,7 +160,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_MIR_014", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_MIR_016", "raised while lowering the method bodies a build reaches, which a check does not perform"),
     ("MER_MIR_017", "raised while lowering the method bodies a build reaches, which a check does not perform"),
-    ("MER_MIR_018", "guard over the injective link-name grammar, which no source reaches; the Before snippet shows two definitions it keeps apart"),
+    ("MER_MIR_018", "raised while lowering the bodies a build reaches, which a check does not perform"),
     ("MER_NAM_003", "shadowed: MER_PAR_001 is reported first"),
     ("MER_OWN_002", "shadowed: MER_PAR_001 is reported first"),
     ("MER_PAR_006", "shadowed: MER_PAR_001 is reported first"),

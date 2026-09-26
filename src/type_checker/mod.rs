@@ -41,6 +41,7 @@ pub mod escape_analysis;
 pub mod expressions;
 pub(crate) mod float_literals;
 mod function_analysis;
+pub use function_analysis::CalleeKind;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
@@ -296,26 +297,25 @@ impl TypeChecker {
             .unwrap_or(false)
     }
 
-    /// Returns whether a global variable is an intrinsic.
-    pub fn is_intrinsic(&self, name: &str) -> bool {
-        self.type_table
-            .global_scope
-            .get(name)
-            .map(|info| info.is_intrinsic)
-            .unwrap_or(false)
+    /// How a call through the identifier expression `expr_id` is compiled,
+    /// as the declaration it resolved to where it was written says.
+    pub fn callee_kind(&self, expr_id: usize) -> CalleeKind {
+        self.fn_analysis
+            .callee_kinds
+            .get(&expr_id)
+            .copied()
+            .unwrap_or(CalleeKind::Program)
     }
 
-    /// Whether the identifier expression `expr_id` names a function the
-    /// runtime library exports, declared with the `runtime` keyword where the
-    /// reference resolved, rather than one this compilation lowers.
-    pub fn is_runtime_reference(&self, expr_id: usize) -> bool {
-        self.fn_analysis.runtime_references.contains(&expr_id)
-    }
-
-    /// Whether the identifier expression `expr_id` resolved, where it was
-    /// written, to a function declared with the `intrinsic` keyword.
-    pub fn is_intrinsic_reference(&self, expr_id: usize) -> bool {
-        self.fn_analysis.intrinsic_references.contains(&expr_id)
+    /// Record the kind of callee the identifier expression `expr_id` names,
+    /// having resolved to the declaration `info`.
+    pub(crate) fn record_callee_kind(&mut self, expr_id: usize, info: &SymbolInfo) {
+        match CalleeKind::of(info) {
+            CalleeKind::Program => {}
+            kind @ (CalleeKind::Runtime | CalleeKind::Intrinsic) => {
+                self.fn_analysis.callee_kinds.insert(expr_id, kind);
+            }
+        }
     }
 
     /// Returns the global type definitions.

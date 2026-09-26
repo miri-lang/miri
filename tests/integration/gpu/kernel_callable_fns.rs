@@ -114,6 +114,27 @@ fn main()
     assert_gpu_runs_with_output(source, "3.0 5.0 7.0");
 }
 
+/// A helper calling another helper is declared, and called, under its WGSL
+/// name in the kernel module: the chain validates without a device.
+#[test]
+fn kernel_calls_function_that_calls_another_function_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.collections.array
+
+fn add_one(x float) float: x + 1.0
+fn double_then_add_one(x float) float: add_one(x * 2.0)
+
+fn main()
+    gpu let src = [1.0, 2.0, 3.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = double_then_add_one(src[i])
+",
+    );
+}
+
 /// User function calls a Part-1 math intrinsic.
 #[test]
 #[cfg_attr(

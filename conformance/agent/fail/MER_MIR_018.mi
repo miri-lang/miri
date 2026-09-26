@@ -1,0 +1,20 @@
+// expect: MER_MIR_018
+// summary: Triggers MER_MIR_018: Symbol Name Collision.
+// command: build
+// Bodies GPU code reaches claim their kernel-side names while a build lowers
+// them, a stage `check` does not run; building stops before any dispatch.
+use system.io
+
+class P
+    static fn norm(x int) int
+        return x + 1
+
+fn P_norm(x int) int
+    return x + 2
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        a[i] = P.norm(a[i]) + P_norm(a[i])
+    let h = a
+    println(f"{h[0]}")

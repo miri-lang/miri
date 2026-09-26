@@ -27,9 +27,12 @@ use crate::mir::Body;
 ///
 /// The encoding is a prefix code: `t<arity>.` introduces a tuple's elements,
 /// `o` an option's payload, `c<count>.` a generic instantiation's arguments,
-/// and `n<len>.` a leading-length name. Every form is self-delimiting, so two
-/// types with different drop behavior never encode alike and one thunk can
-/// never run another type's field layout. A `.` cannot appear in a Miri
+/// `u`, `k` and `z` the payload of a future, a meta type and a linear type,
+/// `n<len>.` a leading-length declared name and `b<len>.` a built-in kind's
+/// spelling — tagged apart from a declared name, since a program may declare
+/// a type spelled like one. Every form is self-delimiting, so two types with
+/// different drop behavior never encode alike and one thunk can never run
+/// another type's field layout. A `.` cannot appear in a Miri
 /// identifier, so the suffix also cannot collide with a user type's.
 pub fn structural_thunk_symbol(kind: &TypeKind) -> Option<String> {
     match kind {
@@ -114,33 +117,37 @@ fn encode(kind: &TypeKind, out: &mut String) {
             out.push('u');
             encode_expr(inner, out);
         }
-        TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
-            out.push('u');
+        TypeKind::Meta(inner) => {
+            out.push('k');
+            encode(&inner.kind, out);
+        }
+        TypeKind::Linear(inner) => {
+            out.push('z');
             encode(&inner.kind, out);
         }
         TypeKind::Generic(name, _, _) => encode_name(name, out),
-        TypeKind::Int => encode_name("int", out),
-        TypeKind::I8 => encode_name("i8", out),
-        TypeKind::I16 => encode_name("i16", out),
-        TypeKind::I32 => encode_name("i32", out),
-        TypeKind::I64 => encode_name("i64", out),
-        TypeKind::I128 => encode_name("i128", out),
-        TypeKind::U8 => encode_name("u8", out),
-        TypeKind::U16 => encode_name("u16", out),
-        TypeKind::U32 => encode_name("u32", out),
-        TypeKind::U64 => encode_name("u64", out),
-        TypeKind::U128 => encode_name("u128", out),
-        TypeKind::Float => encode_name("float", out),
-        TypeKind::F16 => encode_name("f16", out),
-        TypeKind::F32 => encode_name("f32", out),
-        TypeKind::F64 => encode_name("f64", out),
-        TypeKind::String => encode_name(crate::ast::types::STRING_TYPE_NAME, out),
-        TypeKind::Boolean => encode_name("bool", out),
-        TypeKind::Identifier => encode_name("ident", out),
-        TypeKind::RawPtr => encode_name("rawptr", out),
-        TypeKind::Function(_) => encode_name("fn", out),
-        TypeKind::Void => encode_name("void", out),
-        TypeKind::Error => encode_name("error", out),
+        TypeKind::Int => encode_built_in("int", out),
+        TypeKind::I8 => encode_built_in("i8", out),
+        TypeKind::I16 => encode_built_in("i16", out),
+        TypeKind::I32 => encode_built_in("i32", out),
+        TypeKind::I64 => encode_built_in("i64", out),
+        TypeKind::I128 => encode_built_in("i128", out),
+        TypeKind::U8 => encode_built_in("u8", out),
+        TypeKind::U16 => encode_built_in("u16", out),
+        TypeKind::U32 => encode_built_in("u32", out),
+        TypeKind::U64 => encode_built_in("u64", out),
+        TypeKind::U128 => encode_built_in("u128", out),
+        TypeKind::Float => encode_built_in("float", out),
+        TypeKind::F16 => encode_built_in("f16", out),
+        TypeKind::F32 => encode_built_in("f32", out),
+        TypeKind::F64 => encode_built_in("f64", out),
+        TypeKind::String => encode_built_in(crate::ast::types::STRING_TYPE_NAME, out),
+        TypeKind::Boolean => encode_built_in("bool", out),
+        TypeKind::Identifier => encode_built_in("ident", out),
+        TypeKind::RawPtr => encode_built_in("rawptr", out),
+        TypeKind::Function(_) => encode_built_in("fn", out),
+        TypeKind::Void => encode_built_in("void", out),
+        TypeKind::Error => encode_built_in("error", out),
     }
 }
 
@@ -162,12 +169,23 @@ fn encode_expr(expr: &Expression, out: &mut String) {
     }
 }
 
-/// Append a length-prefixed name, the encoding's only self-delimiting leaf.
+/// Append a length-prefixed declared name.
 fn encode_name(name: &str, out: &mut String) {
-    out.push('n');
-    out.push_str(&name.len().to_string());
+    encode_leaf('n', name, out);
+}
+
+/// Append a length-prefixed built-in kind's spelling, tagged apart from a
+/// declared name spelled the same.
+fn encode_built_in(spelling: &str, out: &mut String) {
+    encode_leaf('b', spelling, out);
+}
+
+/// Append `tag`, the length of `text`, `.` and `text`: a self-delimiting leaf.
+fn encode_leaf(tag: char, text: &str, out: &mut String) {
+    out.push(tag);
+    out.push_str(&text.len().to_string());
     out.push('.');
-    out.push_str(name);
+    out.push_str(text);
 }
 
 /// Every structural collection-entry type a program uses, paired with its

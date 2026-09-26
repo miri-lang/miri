@@ -880,6 +880,7 @@ impl TypeChecker {
             .get(prop_name.as_str())
             .cloned()
         {
+            self.record_callee_kind(prop.id, &info);
             if !self.check_visibility(&info.visibility, &info.module) {
                 self.report_error(
                     DiagnosticCode::TypNameNotVisible,

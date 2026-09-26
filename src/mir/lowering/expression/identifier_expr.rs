@@ -9,6 +9,8 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::{LoweringError, LoweringErrorKind};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind};
+use crate::type_checker::context::SymbolInfo;
+use crate::type_checker::CalleeKind;
 
 use crate::mir::lowering::context::LoweringContext;
 
@@ -160,7 +162,7 @@ pub(crate) fn build_global_identifier_operand(
         return Ok(identifier_const(unscoped_identifier_name(ctx, name, expr)));
     };
     if matches!(info.ty.kind, TypeKind::Function(_)) {
-        let declared = info.original_name.as_deref().unwrap_or(name);
+        let declared = declared_name(info, name);
         return Ok(identifier_const(global_function_link_name(
             ctx, expr, declared,
         )));
@@ -173,17 +175,21 @@ pub(crate) fn build_global_identifier_operand(
             literal: literal.clone(),
         }))),
         _ if info.module_scope => Err(module_binding_without_value(name, expr)),
-        _ => Ok(identifier_const(
-            info.original_name.as_deref().unwrap_or(name).to_string(),
-        )),
+        _ => Ok(identifier_const(declared_name(info, name).to_string())),
     }
+}
+
+/// The name the global `info`, written as `written`, is declared under: the
+/// original name when `written` is an import alias.
+pub(crate) fn declared_name<'n>(info: &'n SymbolInfo, written: &'n str) -> &'n str {
+    info.original_name.as_deref().unwrap_or(written)
 }
 
 /// The name an identifier the program's global scope does not hold stands
 /// for: a function private to the module whose body the reference sits in,
 /// which is linked like any other declared function, or else the name itself.
 fn unscoped_identifier_name(ctx: &LoweringContext, name: &str, expr: &Expression) -> String {
-    let names_function = ctx.type_checker.is_runtime_reference(expr.id)
+    let names_function = ctx.callee_kind(expr) == CalleeKind::Runtime
         || ctx
             .type_checker
             .get_type(expr.id)
@@ -204,7 +210,7 @@ pub(crate) fn global_function_link_name(
     expr: &Expression,
     declared: &str,
 ) -> String {
-    if ctx.type_checker.is_runtime_reference(expr.id) {
+    if ctx.callee_kind(expr) == CalleeKind::Runtime {
         return Symbol::runtime(declared).link_name();
     }
     Symbol::declared_function(declared).link_name()

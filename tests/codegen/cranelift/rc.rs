@@ -19,7 +19,7 @@ use miri::ast::types::{
 };
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::translator::TypeCtx;
-use miri::codegen::cranelift::{mangle_class_instantiation, FunctionTranslator};
+use miri::codegen::cranelift::FunctionTranslator;
 use miri::error::syntax::Span;
 use miri::mir::symbol::Symbol;
 use miri::type_checker::context::{
@@ -135,13 +135,13 @@ fn minimal_type_ctx<'a>(
 
 #[test]
 fn test_instantiation_without_type_arguments_mangles_to_the_bare_name() {
-    assert_eq!(mangle_class_instantiation("Box", &[]), "miri.Box");
+    assert_eq!(Symbol::function("Box", &[]).link_name(), "miri.Box");
 }
 
 #[test]
 fn test_string_type_argument_mangles_to_the_canonical_string_name() {
     assert_eq!(
-        mangle_class_instantiation("Box", &[ty(TypeKind::String)]),
+        Symbol::function("Box", &[ty(TypeKind::String)]).link_name(),
         format!("miri.Box${STRING_TYPE_NAME}")
     );
 }
@@ -149,15 +149,15 @@ fn test_string_type_argument_mangles_to_the_canonical_string_name() {
 #[test]
 fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
     assert_eq!(
-        mangle_class_instantiation("Box", &[ty(TypeKind::Int)]),
+        Symbol::function("Box", &[ty(TypeKind::Int)]).link_name(),
         "miri.Box$int"
     );
     assert_eq!(
-        mangle_class_instantiation("Box", &[ty(TypeKind::F32)]),
+        Symbol::function("Box", &[ty(TypeKind::F32)]).link_name(),
         "miri.Box$f32"
     );
     assert_eq!(
-        mangle_class_instantiation("Box", &[ty(TypeKind::Boolean)]),
+        Symbol::function("Box", &[ty(TypeKind::Boolean)]).link_name(),
         "miri.Box$bool"
     );
 }
@@ -165,29 +165,27 @@ fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
 #[test]
 fn test_multiple_type_arguments_mangle_in_declaration_order() {
     assert_eq!(
-        mangle_class_instantiation("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]),
+        Symbol::function("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]).link_name(),
         format!("miri.Pair$int${STRING_TYPE_NAME}")
     );
     assert_ne!(
-        mangle_class_instantiation("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]),
-        mangle_class_instantiation("Pair", &[ty(TypeKind::String), ty(TypeKind::Int)]),
+        Symbol::function("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]).link_name(),
+        Symbol::function("Pair", &[ty(TypeKind::String), ty(TypeKind::Int)]).link_name(),
         "argument order must change the thunk symbol"
     );
 }
 
-/// Every user-defined type argument mangles to the same `custom` token, so
-/// `Box<Widget>` and `Box<Gadget>` name one shared drop thunk. Both sides of
-/// the call agree, so the symbol always resolves — the shared thunk is why the
-/// two instantiations cannot be given different field layouts.
+/// A user-defined type argument spells its own name, so `Box<Widget>` and
+/// `Box<Gadget>` name two drop thunks, each laid out for its own argument.
 #[test]
 fn test_class_type_arguments_mangle_to_their_own_names() {
     assert_eq!(
-        mangle_class_instantiation("Box", &[ty(custom("Widget"))]),
+        Symbol::function("Box", &[ty(custom("Widget"))]).link_name(),
         "miri.Box$Widget"
     );
     assert_ne!(
-        mangle_class_instantiation("Box", &[ty(custom("Gadget"))]),
-        mangle_class_instantiation("Box", &[ty(custom("Widget"))]),
+        Symbol::function("Box", &[ty(custom("Gadget"))]).link_name(),
+        Symbol::function("Box", &[ty(custom("Widget"))]).link_name(),
         "two instantiations sharing a symbol would run one body against the other's layout"
     );
 }

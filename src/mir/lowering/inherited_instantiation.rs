@@ -423,8 +423,8 @@ mod tests {
         assert_eq!(found.0, "Base");
         assert!(matches!(found.1[0].kind, TypeKind::List(_)));
         assert_eq!(
-            crate::mir::lowering::dispatch::mangle_instantiation_name("Base_equals", &found.1),
-            "miri.Base_equals$List_String"
+            crate::mir::symbol::Symbol::function("Base", &found.1).link_name(),
+            "miri.Base$List_String"
         );
     }
 

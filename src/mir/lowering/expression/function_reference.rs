@@ -53,7 +53,7 @@ pub(crate) fn try_lower_function_reference(
     };
     let func_data = func_data.clone();
     let fn_ty = info.ty.clone();
-    let declared = info.original_name.as_deref().unwrap_or(name);
+    let declared = super::identifier_expr::declared_name(info, name);
     let target = super::identifier_expr::global_function_link_name(ctx, expr, declared);
     Some(lower_function_reference(
         ctx, expr, &target, &fn_ty, &func_data, dest,

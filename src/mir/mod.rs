@@ -19,6 +19,7 @@ pub mod block;
 pub mod body;
 pub mod declaration;
 pub mod element_abi;
+pub mod gpu_names;
 pub mod lambda;
 pub mod lowering;
 pub mod module;

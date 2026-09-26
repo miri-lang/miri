@@ -113,10 +113,7 @@ fn try_lower_testing_intrinsic(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let ExpressionKind::Identifier(name, _) = &func.node else {
-        return Ok(None);
-    };
-    let Some(intrinsic) = testing_intrinsic::testing_intrinsic_callee(ctx, name) else {
+    let Some(intrinsic) = testing_intrinsic::testing_intrinsic_callee(ctx, func) else {
         return Ok(None);
     };
     testing_intrinsic::lower_testing_intrinsic(ctx, expr, intrinsic, args, dest).map(Some)

@@ -39,7 +39,6 @@ use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 
-pub use rc::mangle_class_instantiation;
 pub use translator::FunctionTranslator;
 pub use types::translate_type;
 
@@ -829,7 +828,9 @@ impl CraneliftBackend {
     /// field is DecRef'd and a scalar field skipped, each per instantiation.
     /// Non-generic types and types with no recorded instantiations produce
     /// nothing here (the bare thunk suffices). Each drop thunk symbol is
-    /// generated once, so the same symbol is never defined twice.
+    /// generated once, so the same symbol is never defined twice; two
+    /// instantiations meeting in one symbol only because their arguments have
+    /// no name are refused rather than merged.
     fn generate_instantiation_drop_functions(
         &self,
         module: &mut ObjectModule,
@@ -848,7 +849,15 @@ impl CraneliftBackend {
         };
         let mut emitted = std::collections::HashSet::new();
         for args in tuples {
-            if !emitted.insert(Symbol::type_thunk(ThunkKind::Drop, type_name, args)) {
+            let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, args);
+            if thunk.has_an_unnameable_argument() && emitted.contains(&thunk) {
+                return Err(CodegenError::Internal(format!(
+                    "two instantiations of `{type_name}` at types with no name would share \
+                     {}, laid out for only one of them",
+                    thunk.written()
+                )));
+            }
+            if !emitted.insert(thunk) {
                 continue;
             }
             FunctionTranslator::generate_drop_function(

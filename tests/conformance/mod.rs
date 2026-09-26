@@ -539,7 +539,6 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_MIR_008", "ICE guard: the documented trigger is rejected by the parser first (MER_PAR_001)"),
     ("MER_MIR_010", "ICE guard: the type checker rejects the documented trigger first (MER_TYP_030)"),
     ("MER_MIR_012", "ICE guard: the type checker rejects the documented trigger first (MER_TYP_030)"),
-    ("MER_MIR_018", "Guard over the injective link-name grammar: no identifier or type token contains `.` or `$`, so no source spells two definitions under one compiled name"),
     ("MER_TYP_035", "Requires a second module to hold the non-visible symbol; the harness runs single-file fixtures only"),
     ("MER_BLD_021", "Command-invocation diagnostic (miri run/build on a program with no entry point); the corpus runs `miri check`, which accepts a module and does not raise it"),
     ("MER_BLD_022", "Command-invocation diagnostic (miri view --type asked about a name not in scope); reports what the view command was asked for rather than a property of the source"),

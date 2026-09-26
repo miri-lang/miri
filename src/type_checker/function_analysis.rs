@@ -9,10 +9,38 @@
 //!
 //! [`TypeChecker`]: super::TypeChecker
 
+use super::context::SymbolInfo;
 use super::FnResidency;
 use crate::ast::Statement;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
+
+/// How a call to a name is compiled, as the declaration the name resolved to
+/// where it was written says — never as the name is spelled, since a program
+/// may declare a function under any name a runtime export or an intrinsic has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalleeKind {
+    /// A function the runtime library exports, declared with `runtime`.
+    Runtime,
+    /// A declaration made `intrinsic`, whose meaning the compiler supplies;
+    /// its name says which intrinsic it is.
+    Intrinsic,
+    /// A function this compilation lowers, or a name that is no function.
+    Program,
+}
+
+impl CalleeKind {
+    /// The kind of callee the declaration `info` declares.
+    pub(crate) fn of(info: &SymbolInfo) -> Self {
+        if info.is_runtime {
+            CalleeKind::Runtime
+        } else if info.is_intrinsic {
+            CalleeKind::Intrinsic
+        } else {
+            CalleeKind::Program
+        }
+    }
+}
 
 /// Function metadata tracking for GPU analysis and call site validation.
 ///
@@ -33,14 +61,10 @@ pub(crate) struct FunctionAnalysis {
     /// determine if gpu-resident args are allowed.
     pub(crate) fn_residencies: HashMap<String, FnResidency>,
     /// Every identifier expression, by id, that resolved in its scope to a
-    /// function declared with the `runtime` keyword. A program function may
-    /// share a runtime function's name, so the declaration a reference reached
-    /// — never the name — is what says whether its callee is the C export.
-    pub(crate) runtime_references: HashSet<usize>,
-    /// Every identifier expression, by id, that resolved in its scope to a
-    /// function declared with the `intrinsic` keyword — including one a module
-    /// body reaches that the program's own imports leave out of its scope.
-    pub(crate) intrinsic_references: HashSet<usize>,
+    /// declaration made `runtime` or `intrinsic` — including one a module body
+    /// reaches that the program's own imports leave out of its scope. Every
+    /// other expression names a [`CalleeKind::Program`] callee.
+    pub(crate) callee_kinds: HashMap<usize, CalleeKind>,
 }
 
 impl FunctionAnalysis {
@@ -50,8 +74,7 @@ impl FunctionAnalysis {
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
             fn_residencies: HashMap::new(),
-            runtime_references: HashSet::new(),
-            intrinsic_references: HashSet::new(),
+            callee_kinds: HashMap::new(),
         }
     }
 }

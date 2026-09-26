@@ -340,3 +340,25 @@ fn main()
         "nests its type argument 33 levels deep",
     );
 }
+
+/// A generic function calling itself at an ever deeper optional builds no
+/// class whose growth could be reported; the function's own instantiation is
+/// refused once it nests past the depth one instance may nest to.
+#[test]
+fn test_a_body_that_calls_itself_at_a_deeper_optional_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+fn nest<T>(a T, n int) int
+    if n == 0
+        return 0
+    let wrapped T? = a
+    return 1 + nest(wrapped, n - 1)
+
+fn main()
+    println(f"{nest(1, 3)}")
+"#,
+        "nests its type argument 33 levels deep",
+    );
+}

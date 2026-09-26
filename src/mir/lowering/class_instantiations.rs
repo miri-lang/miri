@@ -42,7 +42,7 @@ use std::collections::{HashMap, HashSet};
 /// How deep [`collect_generic_instantiations`] descends through a type's own
 /// arguments. Matches the depth the symbol mangler names a type to, past the
 /// depth any instance may nest to.
-const MAX_INSTANTIATION_NESTING: usize = super::method_dispatch::MAX_TOKEN_DEPTH;
+const MAX_INSTANTIATION_NESTING: usize = crate::mir::symbol::token::MAX_TOKEN_DEPTH;
 
 /// Append every generic-class instantiation written inside `kind`, including
 /// the ones nested in its own arguments (`List<List<W>>` yields both).
@@ -433,27 +433,28 @@ fn same_arguments(left: &[Type], right: &[Type]) -> bool {
 
 impl LoweringContext<'_> {
     /// Refuse an instance of a generic class at `ty`, built at `span`, whose
-    /// arguments name no single instantiation although the body building it
-    /// is lowered for one.
+    /// arguments name no single instantiation.
     ///
-    /// Inside such a body every parameter is bound, so an argument computed
-    /// from them (`Size * 2`) that does not fold, or a type argument with no
-    /// name to compile a body at, would otherwise leave the instance running
-    /// the body shared by every instantiation, which reads its values at no
-    /// type in particular. An argument naming a parameter the substitution
-    /// leaves unbound — one the body declares — is not an instantiation yet
-    /// and passes, as does every instance in a body lowered without a
-    /// substitution. An operand that is neither bound nor declared has no
-    /// value at any instantiation and is refused.
+    /// A type argument with no name to compile a body at — one nested past
+    /// the depth types are named to, or a closure type declaring type
+    /// parameters of its own — is refused wherever the instance is built:
+    /// every such instance would otherwise share one compiled body and one
+    /// drop function, each laid out for whichever instance claimed it first.
+    /// An argument naming a parameter no substitution binds is not an
+    /// instantiation yet and passes.
+    ///
+    /// A value argument is checked only in a body lowered for one
+    /// instantiation. There every parameter is bound, so an argument computed
+    /// from them (`Size * 2`) that does not fold would leave the instance
+    /// running the body shared by every instantiation. An operand that is
+    /// neither bound nor declared has no value at any instantiation and is
+    /// refused.
     // TODO: a body shared by every instantiation of its declaration — a
     // method of `class Wrapper<T>` lowered once, or a generic function whose
     // parameter appears only in its return type — builds its instances at
     // open arguments and still runs them through shared bodies and the bare
     // vtable. Closing that needs those bodies specialized per instantiation.
     pub fn refuse_unnameable_instance(&self, ty: &Type, span: Span) -> Result<(), LoweringError> {
-        if self.generic_subs.is_empty() {
-            return Ok(());
-        }
         let TypeKind::Custom(class, Some(arg_exprs)) = &ty.kind else {
             return Ok(());
         };
@@ -468,17 +469,40 @@ impl LoweringContext<'_> {
         let args: Vec<Type> = arg_exprs.iter().map(spelled_argument).collect();
         for (position, (arg, arg_ty)) in arg_exprs.iter().zip(&args).enumerate() {
             match super::type_argument(arg) {
-                Some(written) => {
-                    if !super::has_a_monomorphized_spelling(&written.kind)
-                        && !mentions_open_parameter(&written, type_defs)
-                    {
-                        return Err(unnameable_type_argument(class, &args, arg_ty, span));
-                    }
+                Some(written) if self.is_unnameable_type_argument(&written) => {
+                    return Err(unnameable_type_argument(class, &args, arg_ty, span));
                 }
+                Some(_) => {}
+                None if self.generic_subs.is_empty() => {}
                 None => self.refuse_unfoldable_value(class, &args, (position, arg), span)?,
             }
         }
         Ok(())
+    }
+
+    /// Refuse `name` instantiated at `args`, reached at `span`, when one of
+    /// the arguments has no name to compile a body at: every such
+    /// instantiation would otherwise share one compiled body.
+    pub fn refuse_unnameable_type_arguments(
+        &self,
+        name: &str,
+        args: &[Type],
+        span: Span,
+    ) -> Result<(), LoweringError> {
+        match args
+            .iter()
+            .find(|arg| self.is_unnameable_type_argument(arg))
+        {
+            Some(arg) => Err(unnameable_type_argument(name, args, arg, span)),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether `arg` has no spelling to compile a body at and is not merely a
+    /// type parameter still awaiting its substitution.
+    fn is_unnameable_type_argument(&self, arg: &Type) -> bool {
+        !super::has_a_monomorphized_spelling(&arg.kind)
+            && !mentions_open_parameter(arg, self.type_checker.type_definitions())
     }
 
     /// Refuse the value argument `arg`, at `position` among the arguments of

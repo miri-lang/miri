@@ -2,10 +2,10 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! The symbols a compilation has given bodies, and the refusal of a second
-//! definition that would be linked under a name one of them already holds.
+//! definition that would be declared under a name one of them already holds.
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::Symbol;
@@ -17,25 +17,79 @@ use crate::error::syntax::Span;
 const COLLISION_HELP: &str =
     "rename one of the two definitions so that their compiled names differ";
 
+/// What a definition at a type argument with no name asks of the program.
+const UNNAMEABLE_HELP: &str =
+    "instantiate at a type the compiler can name; wrap the value in a class or struct and instantiate at that";
+
+/// The names a [`SymbolTable`] keeps apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Namespace {
+    /// The names the linker knows compiled bodies and data by.
+    #[default]
+    Link,
+    /// The names a WGSL module declares kernel entry points and helpers under.
+    Wgsl,
+}
+
+impl Namespace {
+    fn spell(self, symbol: &Symbol) -> String {
+        match self {
+            Namespace::Link => symbol.link_name(),
+            Namespace::Wgsl => symbol.wgsl_name(),
+        }
+    }
+}
+
 /// The answer to claiming a symbol for a body about to be lowered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Claim {
-    /// Nothing holds the symbol's link name yet; the body is lowered now.
+    /// Nothing holds the symbol's name yet; the body is lowered now.
     New,
     /// This very symbol already has its body.
     AlreadyLowered,
 }
 
-/// Two distinct symbols that spell one link name. Linking both is impossible,
-/// and keeping one would run its body wherever the other is called.
+/// Why a symbol could not be claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimRefusal {
+    /// A different symbol already holds the name this one spells.
+    Collision(SymbolCollision),
+    /// The symbol has a type argument with no name, so it stands for every
+    /// instantiation at such a type and cannot hold the body of any one.
+    Unnameable(Symbol),
+}
+
+impl ClaimRefusal {
+    /// The refusal of the program, at `span`, the definition claimed.
+    pub fn refusal(&self, span: Span) -> LoweringError {
+        match self {
+            ClaimRefusal::Collision(collision) => collision.refusal(span),
+            ClaimRefusal::Unnameable(symbol) => LoweringError::coded(
+                DiagnosticCode::MirInvalidInstantiationArgument,
+                format!(
+                    "{} has a type argument with no name the compiler can compile a body at",
+                    symbol.written()
+                ),
+                span,
+                Some(UNNAMEABLE_HELP.to_string()),
+            ),
+        }
+    }
+}
+
+/// Two distinct symbols that spell one name in one namespace. Declaring both
+/// is impossible, and keeping one would run its body wherever the other is
+/// called.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolCollision {
     /// The symbol claimed first.
     pub existing: Symbol,
     /// The symbol whose claim was refused.
     pub incoming: Symbol,
-    /// The link name both spell.
-    pub link_name: String,
+    /// The name both spell.
+    pub name: String,
+    /// Where that name is declared.
+    pub namespace: Namespace,
 }
 
 impl SymbolCollision {
@@ -52,45 +106,81 @@ impl SymbolCollision {
 
 impl fmt::Display for SymbolCollision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} and {} compile to the same symbol `{}`",
-            self.existing.written(),
-            self.incoming.written(),
-            self.link_name
-        )
+        let existing = self.existing.written();
+        let incoming = self.incoming.written();
+        match self.namespace {
+            Namespace::Link => write!(
+                f,
+                "{existing} and {incoming} compile to the same symbol `{}`",
+                self.name
+            ),
+            Namespace::Wgsl => write!(
+                f,
+                "{existing} and {incoming} are both reached from GPU code, \
+                 where both are declared as `{}`",
+                self.name
+            ),
+        }
     }
 }
 
-/// Every symbol a compilation has claimed, keyed by the link name it spells.
+/// Every symbol a compilation has claimed in one [`Namespace`], keyed by the
+/// name it spells there.
 #[derive(Debug, Default)]
 pub struct SymbolTable {
-    by_link_name: HashMap<String, Symbol>,
+    namespace: Namespace,
+    by_name: HashMap<String, Symbol>,
+    claimed: HashSet<Symbol>,
 }
 
 impl SymbolTable {
-    /// Claim `symbol` for a body: [`Claim::New`] the first time,
-    /// [`Claim::AlreadyLowered`] after that, and a [`SymbolCollision`] when a
-    /// different symbol already holds its link name.
-    pub fn claim(&mut self, symbol: &Symbol) -> Result<Claim, Box<SymbolCollision>> {
-        match self.by_link_name.entry(symbol.link_name()) {
-            Entry::Vacant(slot) => {
-                slot.insert(symbol.clone());
-                Ok(Claim::New)
-            }
-            Entry::Occupied(slot) if slot.get() == symbol => Ok(Claim::AlreadyLowered),
-            Entry::Occupied(slot) => Err(Box::new(SymbolCollision {
-                existing: slot.get().clone(),
-                incoming: symbol.clone(),
-                link_name: slot.key().clone(),
-            })),
+    /// An empty table keeping apart the names spelled in `namespace`.
+    pub fn new(namespace: Namespace) -> Self {
+        Self {
+            namespace,
+            ..Self::default()
         }
     }
 
-    /// Whether `symbol` itself, not merely its link name, has been claimed.
+    /// Claim `symbol` for a body: [`Claim::New`] the first time,
+    /// [`Claim::AlreadyLowered`] after that. A different symbol already
+    /// holding its name, or a symbol with a type argument that has no name,
+    /// is refused.
+    pub fn claim(&mut self, symbol: &Symbol) -> Result<Claim, Box<ClaimRefusal>> {
+        if symbol.has_an_unnameable_argument() {
+            return Err(Box::new(ClaimRefusal::Unnameable(symbol.clone())));
+        }
+        if self.claimed.contains(symbol) {
+            return Ok(Claim::AlreadyLowered);
+        }
+        match self.by_name.entry(self.namespace.spell(symbol)) {
+            Entry::Vacant(slot) => {
+                slot.insert(symbol.clone());
+                self.claimed.insert(symbol.clone());
+                Ok(Claim::New)
+            }
+            Entry::Occupied(slot) => Err(Box::new(ClaimRefusal::Collision(SymbolCollision {
+                existing: slot.get().clone(),
+                incoming: symbol.clone(),
+                name: slot.key().clone(),
+                namespace: self.namespace,
+            }))),
+        }
+    }
+
+    /// Claim `symbol` for the body of the definition at `span`: whether that
+    /// body is still to be lowered. A refused claim refuses the program at
+    /// `span`.
+    pub fn claim_at(&mut self, symbol: &Symbol, span: Span) -> Result<bool, LoweringError> {
+        match self.claim(symbol) {
+            Ok(Claim::New) => Ok(true),
+            Ok(Claim::AlreadyLowered) => Ok(false),
+            Err(refusal) => Err(refusal.refusal(span)),
+        }
+    }
+
+    /// Whether `symbol` itself, not merely its name, has been claimed.
     pub fn is_claimed(&self, symbol: &Symbol) -> bool {
-        self.by_link_name
-            .get(&symbol.link_name())
-            .is_some_and(|claimed| claimed == symbol)
+        self.claimed.contains(symbol)
     }
 }
