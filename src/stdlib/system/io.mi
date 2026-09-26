@@ -5,17 +5,13 @@
 ///
 /// Provides functions for writing to stdout and stderr.
 ///
-/// TODO: there is no way to read standard input. No runtime intrinsic backs
-/// one, so a program that consumes piped input cannot be written at all, and a
-/// program that needs input has to be handed a file path and read it through
-/// the filesystem capability. The gap belongs here beside the writers.
+/// Note: Standard input reading is currently unsupported; input should be provided
+/// via file paths or command-line arguments using the filesystem capability.
 
 use system.string
 
-// =============================================================================
 // Intrinsic function declarations
 // These map to miri_rt_* functions in the Rust runtime.
-// =============================================================================
 
 runtime "core" fn miri_rt_print(message String)
 runtime "core" fn miri_rt_println(message String)
@@ -24,9 +20,7 @@ runtime "core" fn miri_rt_eprintln(message String)
 runtime "core" fn miri_rt_get_line_end() String
 runtime "core" fn miri_rt_panic(message String)
 
-// =============================================================================
 // Public API
-// =============================================================================
 
 /// Prints a string to stdout without a trailing newline.
 ///
