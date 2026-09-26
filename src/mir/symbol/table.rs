@@ -185,9 +185,11 @@ impl SymbolTable {
     /// Claim `symbol` for the body of the declaration statement `definition`
     /// at `span`: whether that body is still to be lowered. The same
     /// declaration claiming again finds its body lowered. A different
-    /// declaration reaching a symbol one already holds means two definitions
-    /// were taken for one; keeping either would run its body wherever the
-    /// other is called, so that is refused rather than one silently dropped.
+    /// declaration reaching a symbol one already holds, or any declaration
+    /// reaching a symbol claimed with no declaration recorded, means two
+    /// bodies were taken for one symbol; keeping either would run it wherever
+    /// the other is called, so that is refused rather than one silently
+    /// dropped.
     pub fn claim_definition(
         &mut self,
         symbol: &Symbol,
@@ -199,12 +201,12 @@ impl SymbolTable {
             return Ok(true);
         }
         match self.definitions.get(symbol) {
-            Some(&holder) if holder != definition => Err(LoweringError::internal(
+            Some(&holder) if holder == definition => Ok(false),
+            Some(_) | None => Err(LoweringError::internal(
                 DiagnosticCode::MirSymbolCollision,
-                format!("two declarations were both taken for {}", symbol.written()),
+                format!("two bodies were both taken for {}", symbol.written()),
                 span,
             )),
-            Some(_) | None => Ok(false),
         }
     }
 

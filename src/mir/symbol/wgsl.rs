@@ -16,14 +16,17 @@
 //!
 //! ```text
 //! function  = program | escaped | imported
-//! program   = name                          (name does not begin with `m__`)
-//! escaped   = "m__0_" name                  (name begins with `m__`)
+//! program   = name                  (name begins with neither `m__` nor `__`)
+//! escaped   = "m__0_" name          (name begins with `m__` or `__`)
 //! imported  = "m__" { length ident }+ "_" name
 //! length    = decimal length of the ident, no leading zero
 //! ```
 //!
 //! The program's own `helper` is spelled `helper`, its `m__x` is `m__0_m__x`,
-//! and the `helper` of `system.math` is `m__6system4math_helper`.
+//! its `__h` is `m__0___h`, and the `helper` of `system.math` is
+//! `m__6system4math_helper`. WGSL reserves identifiers beginning `__`; no
+//! function spelling begins that way, since a `program` name that would is
+//! escaped and every other spelling begins `m__`.
 //!
 //! Without argument tokens this is injective. Only `program` spellings lack
 //! the `m__` prefix, and on them the spelling is the name itself. After the
@@ -51,9 +54,12 @@ const ARGUMENT_SEPARATOR: &str = "__";
 const MODULE_PREFIX: &str = "m__";
 
 /// Follows [`MODULE_PREFIX`] in the spelling of a program function whose name
-/// begins with that prefix; a module path identifier's length never begins
-/// with `0`.
+/// begins with that prefix or with [`RESERVED_PREFIX`]; a module path
+/// identifier's length never begins with `0`.
 const PROGRAM_ESCAPE: &str = "0_";
+
+/// The prefix WGSL reserves: no identifier a module declares may begin with it.
+const RESERVED_PREFIX: &str = "__";
 
 /// A [`Symbol`] displayed in its identifier-only spelling.
 pub(super) struct Wgsl<'s>(pub(super) &'s Symbol);
@@ -111,7 +117,7 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
 /// argument tokens.
 fn write_function_name(f: &mut fmt::Formatter<'_>, module: &ModuleId, name: &str) -> fmt::Result {
     match module {
-        ModuleId::Program if name.starts_with(MODULE_PREFIX) => {
+        ModuleId::Program if is_escaped_program_name(name) => {
             write!(f, "{MODULE_PREFIX}{PROGRAM_ESCAPE}{name}")
         }
         ModuleId::Program => f.write_str(name),
@@ -122,6 +128,13 @@ fn write_function_name(f: &mut fmt::Formatter<'_>, module: &ModuleId, name: &str
             write!(f, "_{name}")
         }
     }
+}
+
+/// Whether a program function named `name` is spelled escaped: its name
+/// would otherwise read as a module function's spelling or begin with the
+/// prefix WGSL reserves.
+fn is_escaped_program_name(name: &str) -> bool {
+    name.starts_with(MODULE_PREFIX) || name.starts_with(RESERVED_PREFIX)
 }
 
 fn thunk_prefix(kind: ThunkKind) -> &'static str {

@@ -729,3 +729,39 @@ fn f(n int) int
 ",
     );
 }
+
+/// Every top-level function the program itself declares is recorded as
+/// declared by the program, never left for a reader to assume.
+#[test]
+fn a_program_function_is_recorded_as_declared_by_the_program() {
+    let source = "
+fn helper() int
+    return 1
+
+helper()
+";
+    let mut lexer = miri::lexer::Lexer::new(source);
+    let mut parser = miri::parser::Parser::new(&mut lexer, source);
+    let program = parser.parse().expect("the source parses");
+    let mut type_checker = miri::type_checker::TypeChecker::new();
+    type_checker
+        .check(&program)
+        .expect("the source type-checks");
+    let helper = program
+        .body
+        .iter()
+        .find(|stmt| matches!(stmt.node, miri::ast::StatementKind::FunctionDeclaration(_)))
+        .expect("the program declares a function");
+    assert_eq!(
+        type_checker.declaring_module(helper.id),
+        Some(&miri::type_checker::ModuleId::Program)
+    );
+}
+
+/// A statement the type checker never saw has no declaring module; nothing
+/// is guessed for it.
+#[test]
+fn an_unchecked_statement_has_no_declaring_module() {
+    let type_checker = miri::type_checker::TypeChecker::new();
+    assert_eq!(type_checker.declaring_module(usize::MAX), None);
+}

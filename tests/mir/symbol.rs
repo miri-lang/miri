@@ -234,6 +234,20 @@ fn a_program_function_keeps_its_name_as_its_wgsl_name() {
 }
 
 #[test]
+fn a_program_function_named_with_a_reserved_prefix_has_its_wgsl_name_escaped() {
+    for (name, spelling) in [
+        ("__h", "m__0___h"),
+        ("__", "m__0___"),
+        ("___x", "m__0____x"),
+    ] {
+        assert_eq!(
+            Symbol::function(&ModuleId::Program, name, &[]).wgsl_name(),
+            spelling
+        );
+    }
+}
+
+#[test]
 fn a_program_function_named_like_a_module_function_s_wgsl_name_is_escaped() {
     let module_function = Symbol::function(&module("system.math"), "lattice_unit", &[]);
     let program_function = Symbol::function(&ModuleId::Program, &module_function.wgsl_name(), &[]);
@@ -245,8 +259,8 @@ fn a_program_function_named_like_a_module_function_s_wgsl_name_is_escaped() {
 }
 
 /// Every pairing of a declaring module and a name spells its own WGSL name:
-/// the program's functions against every module's, names beginning `m__`
-/// (escaped or not), and module paths whose identifiers could be regrouped
+/// the program's functions against every module's, names beginning `m__` or
+/// `__` (escaped or not), and module paths whose identifiers could be regrouped
 /// across the boundary with the name if they were not length-prefixed.
 #[test]
 fn distinct_functions_without_arguments_have_distinct_wgsl_names() {
@@ -275,6 +289,10 @@ fn distinct_functions_without_arguments_have_distinct_wgsl_names() {
         "m__5local1a1b_helper",
         "m__6system4math_lattice_unit",
         "lattice_unit",
+        "__h",
+        "__",
+        "___x",
+        "m__0___h",
     ];
     let mut owners: std::collections::HashMap<String, (usize, &str)> =
         std::collections::HashMap::new();
@@ -798,4 +816,37 @@ fn distinct_symbols_never_spell_one_link_name() {
         );
         seen.insert(link_name, symbol);
     }
+}
+
+/// The declaration that claims a symbol's definition holds it; claiming it
+/// again from that declaration finds its body lowered.
+#[test]
+fn a_definition_claimed_twice_by_one_declaration_is_already_lowered() {
+    let symbol = Symbol::function(&ModuleId::Program, "helper", &[]);
+    let mut table = SymbolTable::default();
+    assert_eq!(
+        table.claim_definition(&symbol, 7, Span::new(0, 0)),
+        Ok(true)
+    );
+    assert_eq!(
+        table.claim_definition(&symbol, 7, Span::new(0, 0)),
+        Ok(false)
+    );
+}
+
+/// A symbol claimed with no declaration recorded holds a body some other
+/// path lowered; a declaration claiming its definition afterwards would be a
+/// second body for it, so that is refused rather than dropped.
+#[test]
+fn a_definition_claimed_over_a_claim_without_one_is_refused() {
+    let symbol = Symbol::function(&ModuleId::Program, "helper", &[]);
+    let mut table = SymbolTable::default();
+    assert_eq!(table.claim_at(&symbol, Span::new(0, 0)), Ok(true));
+    let refusal = table
+        .claim_definition(&symbol, 7, Span::new(0, 0))
+        .expect_err("a definition over a claim without one is refused");
+    assert_eq!(
+        refusal.kind.properties().code,
+        DiagnosticCode::MirSymbolCollision
+    );
 }

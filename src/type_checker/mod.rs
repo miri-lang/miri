@@ -313,14 +313,12 @@ impl TypeChecker {
         self.fn_analysis.declared_callees.get(&expr_id)
     }
 
-    /// The module the top-level declaration `statement_id` is written in:
-    /// the module a `use` loaded it from, or the program's own file.
-    pub fn declaring_module(&self, statement_id: usize) -> &ModuleId {
-        const PROGRAM: &ModuleId = &ModuleId::Program;
-        self.fn_analysis
-            .declaring_modules
-            .get(&statement_id)
-            .unwrap_or(PROGRAM)
+    /// The module the top-level function declaration `statement_id` is
+    /// written in: the module a `use` loaded it from, or the program's own
+    /// file. `None` for a statement the type checker never recorded, for
+    /// which no module is guessed.
+    pub fn declaring_module(&self, statement_id: usize) -> Option<&ModuleId> {
+        self.fn_analysis.declaring_modules.get(&statement_id)
     }
 
     /// Record the callee the identifier expression `expr_id`, written as
@@ -433,6 +431,7 @@ impl TypeChecker {
         let mut context = Context::new();
         self.load_prelude(&mut context);
 
+        self.record_declaring_modules(ModuleId::Program, program);
         self.run_pass_collect_type_shells(program);
         self.load_shadowable_prelude(&mut context);
         self.run_pass_collect_declarations(program, &mut context);
