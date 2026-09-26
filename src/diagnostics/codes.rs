@@ -1055,7 +1055,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // MIR — MIR lowering (15 codes: 001-015)
+    // MIR — MIR lowering (16 codes: 001-016)
     "MIR",
     "001",
     MirUnsupportedExpression,
@@ -1161,6 +1161,13 @@ diagnostics!(
     Severity::Error,
     true,
     FixSafety::LocalEdit,
+    "MIR",
+    "016",
+    MirPolymorphicRecursion,
+    "Polymorphic Recursion",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // CG — Code generation (8 codes: 001-008)
     "CG",
     "001",

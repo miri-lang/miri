@@ -9,16 +9,34 @@
 //! `Box<T>` inside `via_box<T>` becomes `Box<String>` only once `via_box` is
 //! lowered at `String` — and records them on the body so the pipeline can add
 //! them too.
+//!
+//! Every instantiation added that way passes the bounds of
+//! [`super::instantiation_limits`] first, and a growing chain of them is
+//! followed deepest first, so a program that grows without end reaches the
+//! depth bound after one instantiation per level rather than after every
+//! combination of the levels below it.
 
 use super::context::LoweringContext;
-use super::method_dispatch::resolve_generic_argument;
+use super::dispatch_symbols::constructed_class;
+use super::instantiation_argument;
+use super::instantiation_limits::{
+    exceeded_limit, has_value_argument, instance_type_depth, polymorphic_recursion, ExceededLimit,
+    Growth, MAX_INSTANCE_TYPE_DEPTH,
+};
+use super::method_dispatch::mangle_instantiation_name;
 use crate::ast::types::{Type, TypeKind};
+use crate::error::lowering::LoweringError;
+use crate::error::syntax::Span;
 use crate::mir::body::GenericClassInstantiation;
+use crate::mir::{Body, StatementKind};
+use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
+use std::collections::{HashMap, HashSet};
 
 /// How deep [`collect_generic_instantiations`] descends through a type's own
-/// arguments. Matches the depth the symbol mangler names a type to.
-const MAX_INSTANTIATION_NESTING: usize = 64;
+/// arguments. Matches the depth the symbol mangler names a type to, past the
+/// depth any instance may nest to.
+const MAX_INSTANTIATION_NESTING: usize = super::method_dispatch::MAX_TOKEN_DEPTH;
 
 /// Append every generic-class instantiation written inside `kind`, including
 /// the ones nested in its own arguments (`List<List<W>>` yields both).
@@ -64,10 +82,7 @@ fn collect_nested_instantiations(
     let Some(generics) = def.generics() else {
         return;
     };
-    let resolved: Option<Vec<Type>> = args
-        .iter()
-        .map(|arg| resolve_generic_argument(type_checker, arg))
-        .collect();
+    let resolved: Option<Vec<Type>> = args.iter().map(instantiation_argument).collect();
     let Some(resolved) = resolved else {
         return;
     };
@@ -94,12 +109,275 @@ pub(crate) fn is_registered_instantiation(
     type_checker
         .generic_class_instantiations
         .get(class)
-        .is_some_and(|tuples| {
-            tuples.iter().any(|tuple| {
-                tuple.len() == type_args.len()
-                    && tuple.iter().zip(type_args).all(|(a, b)| a.kind == b.kind)
-            })
+        .is_some_and(|tuples| tuples.iter().any(|tuple| same_arguments(tuple, type_args)))
+}
+
+/// One instantiation a lowered body names that the registry does not hold.
+#[derive(Debug, Clone)]
+pub struct Unregistered {
+    pub class: String,
+    pub args: Vec<Type>,
+    /// The position of the first lowered body naming it.
+    body: usize,
+}
+
+/// Every instantiation `bodies` name that the registry does not hold, each
+/// once, in the order the bodies first name them.
+pub fn unregistered_instantiations(
+    type_checker: &TypeChecker,
+    bodies: &[(String, Body)],
+) -> Vec<Unregistered> {
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    for (index, (_, body)) in bodies.iter().enumerate() {
+        for named in &body.generic_class_instantiations {
+            if is_registered_instantiation(type_checker, &named.class, &named.type_args)
+                || !seen.insert(mangle_instantiation_name(&named.class, &named.type_args))
+            {
+                continue;
+            }
+            found.push(Unregistered {
+                class: named.class.clone(),
+                args: named.type_args.clone(),
+                body: index,
+            });
+        }
+    }
+    found
+}
+
+/// Refuse the first of `found` that passes a bound of
+/// [`super::instantiation_limits`], counting each class's instantiations at
+/// value arguments across the registry and all of `found`.
+pub fn refuse_past_limits(
+    type_checker: &TypeChecker,
+    found: &[Unregistered],
+    bodies: &[(String, Body)],
+) -> Result<(), LoweringError> {
+    let type_defs = type_checker.type_definitions();
+    let mut value_instances: HashMap<&str, usize> = HashMap::new();
+    for instance in found {
+        let count = if has_value_argument(&instance.args) {
+            let count = value_instances
+                .entry(&instance.class)
+                .or_insert_with(|| registered_value_instances(type_checker, &instance.class));
+            *count += 1;
+            *count
+        } else {
+            0
+        };
+        if let Some(limit) = exceeded_limit(&instance.class, &instance.args, count, type_defs) {
+            return Err(refusal_of(instance, &limit, bodies, type_defs));
+        }
+    }
+    Ok(())
+}
+
+/// The refusal of `instance`, which passes `limit`, at the place the first
+/// body naming it names it, explained by the chain of instances that built it.
+fn refusal_of(
+    instance: &Unregistered,
+    limit: &ExceededLimit,
+    bodies: &[(String, Body)],
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> LoweringError {
+    let (chain, method) = static_growth(instance, bodies, type_defs);
+    let growth = Growth {
+        chain: chain.iter().map(Vec::as_slice).collect(),
+        method: method.as_deref(),
+        through_trait: false,
+    };
+    let span = naming_span(&bodies[instance.body].1, &instance.class, &instance.args);
+    polymorphic_recursion(&instance.class, &instance.args, limit, &growth, span)
+}
+
+/// Refuse `class` at `args`, an instantiation the declaration at `span`
+/// derives from one the registry holds, where it passes a bound of
+/// [`super::instantiation_limits`].
+pub fn refuse_derived_past_limits(
+    type_checker: &TypeChecker,
+    class: &str,
+    args: &[Type],
+    span: Span,
+) -> Result<(), LoweringError> {
+    if is_registered_instantiation(type_checker, class, args) {
+        return Ok(());
+    }
+    let value_instances = if has_value_argument(args) {
+        registered_value_instances(type_checker, class) + 1
+    } else {
+        0
+    };
+    match exceeded_limit(
+        class,
+        args,
+        value_instances,
+        type_checker.type_definitions(),
+    ) {
+        Some(limit) => Err(polymorphic_recursion(
+            class,
+            args,
+            &limit,
+            &Growth::default(),
+            span,
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Of `found`, the instantiations to register this round.
+///
+/// Every one of them, unless one nests deeper than anything the registry
+/// holds: then only the deepest, the first of them on a tie. A chain that
+/// grows on every level is followed down one instantiation at a time, and
+/// reaches the depth bound after one round per level; the ones held back are
+/// named again next round, and registered once nothing grows any deeper.
+pub fn admitted_this_round(
+    type_checker: &TypeChecker,
+    found: Vec<Unregistered>,
+) -> Vec<Unregistered> {
+    let registry_depth = type_checker
+        .generic_class_instantiations
+        .values()
+        .flatten()
+        .map(|args| instance_type_depth(args))
+        .max()
+        .unwrap_or(0);
+    let deepest = found
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| (instance_type_depth(&instance.args), index))
+        .max_by_key(|&(depth, index)| (depth, std::cmp::Reverse(index)));
+    match deepest {
+        Some((depth, index)) if depth > registry_depth => {
+            found.into_iter().skip(index).take(1).collect()
+        }
+        Some(_) | None => found,
+    }
+}
+
+/// How many instantiations of `class` at value arguments the registry holds.
+fn registered_value_instances(type_checker: &TypeChecker, class: &str) -> usize {
+    type_checker
+        .generic_class_instantiations
+        .get(class)
+        .map_or(0, |tuples| {
+            tuples
+                .iter()
+                .filter(|args| has_value_argument(args))
+                .count()
         })
+}
+
+/// Where `body` names `class` at `args`: the statement constructing it, else
+/// the local declared at a type spelling it, else the body itself.
+fn naming_span(body: &Body, class: &str, args: &[Type]) -> Span {
+    let constructs = body
+        .basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find(|statement| match &statement.kind {
+            StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
+                constructed_class(rvalue).is_some_and(|ty| spells_instance(ty, class, args))
+            }
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::Nop
+            | StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_) => false,
+        });
+    if let Some(statement) = constructs {
+        return statement.span;
+    }
+    body.local_decls
+        .iter()
+        .find(|decl| spells_instance(&decl.ty, class, args))
+        .map_or(body.span, |decl| decl.span)
+}
+
+/// Whether `ty` is `class` at exactly `args`.
+fn spells_instance(ty: &Type, class: &str, args: &[Type]) -> bool {
+    let TypeKind::Custom(name, Some(arg_exprs)) = &ty.kind else {
+        return false;
+    };
+    name == class
+        && arg_exprs.len() == args.len()
+        && arg_exprs
+            .iter()
+            .zip(args)
+            .all(|(expr, arg)| instantiation_argument(expr).is_some_and(|ty| ty.kind == arg.kind))
+}
+
+/// The instances of `instance`'s class whose methods built each next one on
+/// the way to it, outermost first, and the method of the last of them.
+///
+/// A body lowered for a method runs at the instance its `self` is, so the
+/// instance that built another is the `self` of the first body naming it; the
+/// chain ends at an instance no lowered body names, the one the program wrote.
+fn static_growth(
+    instance: &Unregistered,
+    bodies: &[(String, Body)],
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> (Vec<Vec<Type>>, Option<String>) {
+    let class = instance.class.as_str();
+    let mut chain: Vec<Vec<Type>> = Vec::new();
+    let mut method = None;
+    let mut builder = Some(instance.body);
+    while let Some(index) = builder.filter(|_| chain.len() <= MAX_INSTANCE_TYPE_DEPTH) {
+        let (symbol, body) = &bodies[index];
+        let Some(owner) = self_instance(body, class) else {
+            break;
+        };
+        if method.is_none() {
+            method = method_named(symbol, class, &owner, type_defs);
+        }
+        builder = bodies.iter().position(|(_, body)| {
+            body.generic_class_instantiations
+                .iter()
+                .any(|named| named.class == class && same_arguments(&named.type_args, &owner))
+        });
+        chain.push(owner);
+    }
+    chain.reverse();
+    (chain, method)
+}
+
+/// The arguments of the `class` instance `body` runs at, read off its first
+/// parameter; `None` when it is not a method of `class`.
+fn self_instance(body: &Body, class: &str) -> Option<Vec<Type>> {
+    if body.arg_count == 0 {
+        return None;
+    }
+    let ty = &body.local_decls.get(1)?.ty;
+    let TypeKind::Custom(name, Some(arg_exprs)) = &ty.kind else {
+        return None;
+    };
+    (name == class)
+        .then(|| arg_exprs.iter().map(instantiation_argument).collect())
+        .flatten()
+}
+
+/// The method of `class` whose body at `args` is emitted as `symbol`.
+fn method_named(
+    symbol: &str,
+    class: &str,
+    args: &[Type],
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<String> {
+    let Some(TypeDefinition::Class(definition)) = type_defs.get(class) else {
+        return None;
+    };
+    definition
+        .methods
+        .keys()
+        .find(|method| mangle_instantiation_name(&format!("{class}_{method}"), args) == symbol)
+        .cloned()
+}
+
+/// Whether two instantiation tuples name one instantiation.
+fn same_arguments(left: &[Type], right: &[Type]) -> bool {
+    left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.kind == b.kind)
 }
 
 impl LoweringContext<'_> {

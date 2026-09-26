@@ -11,13 +11,10 @@ use crate::error::syntax::Span;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
-use crate::type_checker::TypeChecker;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, trait_default_among, vtable_slot_index};
-use super::{
-    apply_generic_sub, is_monomorphizable_type_argument, lower_expression, LoweringContext,
-};
+use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -29,14 +26,21 @@ pub(crate) fn mangle_generic_name(
     base: &str,
     type_args: &[(String, crate::ast::types::Type)],
 ) -> String {
-    if type_args.is_empty() {
+    mangle_arguments(base, type_args.iter().map(|(_, ty)| ty))
+}
+
+/// `base` followed by the token of each of `type_args`, each after a `__`.
+fn mangle_arguments<'t>(
+    base: &str,
+    type_args: impl ExactSizeIterator<Item = &'t crate::ast::types::Type>,
+) -> String {
+    if type_args.len() == 0 {
         return base.to_string();
     }
 
     let mut total_len = base.len();
     let mangled_types: Vec<Cow<'static, str>> = type_args
-        .iter()
-        .map(|(_, ty)| {
+        .map(|ty| {
             let s = type_kind_to_mangle_str(&ty.kind);
             total_len += 2 + s.len();
             s
@@ -56,11 +60,7 @@ pub(crate) fn mangle_generic_name(
 /// `[String]` → `Box__String`. The parameter names play no part in the symbol,
 /// so only the arguments are needed.
 pub(crate) fn mangle_instantiation_name(class_name: &str, type_args: &[Type]) -> String {
-    let pairs: Vec<(String, Type)> = type_args
-        .iter()
-        .map(|ty| (String::new(), ty.clone()))
-        .collect();
-    mangle_generic_name(class_name, &pairs)
+    mangle_arguments(class_name, type_args.iter())
 }
 
 /// The token [`type_kind_to_mangle_str`] yields for a type it cannot name.
@@ -82,7 +82,7 @@ pub(crate) const UNSPELLABLE_TYPE_TOKEN: &str = "__unspellable";
 /// compiles, and the verifier's exemption reads the same answer. Bounding the
 /// descent keeps a deeply nested type in a source file from being a way to
 /// exhaust the compiler's stack.
-const MAX_TOKEN_DEPTH: usize = 64;
+pub(crate) const MAX_TOKEN_DEPTH: usize = 64;
 
 /// The token one type argument contributes to a mangled name.
 ///
@@ -101,7 +101,7 @@ const MAX_TOKEN_DEPTH: usize = 64;
 /// A component that has no token of its own makes the whole type unspellable:
 /// a name built from [`UNSPELLABLE_TYPE_TOKEN`] would be the same name for
 /// every type that contains one.
-fn type_kind_to_mangle_str(kind: &TypeKind) -> Cow<'static, str> {
+pub(crate) fn type_kind_to_mangle_str(kind: &TypeKind) -> Cow<'static, str> {
     type_kind_token(kind, 0)
 }
 
@@ -910,16 +910,6 @@ fn builtin_collection_needs_its_own_body(
         })
 }
 
-/// One argument of a generic-class reference as the instantiation registry
-/// records it: the argument's type, or the marker standing for a value generic.
-/// `None` when the argument is neither.
-pub(crate) fn resolve_generic_argument(tc: &TypeChecker, arg: &Expression) -> Option<Type> {
-    match tc.extract_type_from_expression(arg) {
-        Ok(ty) => Some(ty),
-        Err(_) => crate::type_checker::generics::value_generic_slot(arg),
-    }
-}
-
 /// The symbol an operator calls for `owner`'s `method_name` on a receiver of
 /// `receiver_ty`, and the type that call returns.
 ///
@@ -970,6 +960,63 @@ fn resolve_generic_class_monomorph(
     monomorph_for_instantiation(ctx, &name, &resolved, method_name, method_info)
 }
 
+/// The per-instantiation body a call to one method on an instance of a class
+/// at concrete type arguments reaches.
+pub(crate) struct InstantiatedCallee {
+    /// The class compiling the body: the receiver's, or the ancestor it
+    /// inherits the method from.
+    pub(crate) owner: String,
+    /// The owner's parameters at the arguments the receiver reaches it at.
+    pub(crate) owner_subs: HashMap<String, Type>,
+    /// The mangled symbol of the body, `{owner}_{method}__{args}`.
+    pub(crate) symbol: String,
+}
+
+/// The per-instantiation body `method_name` resolves to on `name` instantiated
+/// at `resolved` — the one a static call and a vtable slot both name — or
+/// `None` when the shared generic body applies: the method belongs to a class
+/// declaring no parameters, the owner's arguments have no monomorphized
+/// spelling, or a built-in collection's shared body serves. An inherited
+/// method's body belongs to the ancestor declaring it, at its own arguments.
+pub(crate) fn instantiated_callee(
+    defs: &HashMap<String, TypeDefinition>,
+    name: &str,
+    resolved: &[Type],
+    method_name: &str,
+) -> Option<InstantiatedCallee> {
+    let Some(TypeDefinition::Class(class_def)) = defs.get(name) else {
+        return None;
+    };
+    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved) {
+        return None;
+    }
+    let (owner, owner_args) =
+        crate::mir::lowering::inherited_instantiation::declaring_class_instantiation(
+            defs,
+            name,
+            resolved,
+            method_name,
+        )?;
+    let Some(TypeDefinition::Class(owner_def)) = defs.get(owner.as_str()) else {
+        return None;
+    };
+    let owner_gens = owner_def.generics.as_ref()?;
+    if !super::is_monomorphized_instantiation(&owner_args, owner_gens.len(), defs) {
+        return None;
+    }
+    let symbol = mangle_instantiation_name(&format!("{owner}_{method_name}"), &owner_args);
+    let owner_subs = owner_gens
+        .iter()
+        .zip(owner_args)
+        .map(|(g, t)| (g.name.clone(), t))
+        .collect();
+    Some(InstantiatedCallee {
+        owner,
+        owner_subs,
+        symbol,
+    })
+}
+
 /// Resolve a `super.method(...)` call inside a generic class to the body
 /// compiled for the base class's own instantiation.
 ///
@@ -1012,18 +1059,7 @@ fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(Strin
     let Some(gens) = class_def.generics.as_ref() else {
         return Some((name.clone(), Vec::new()));
     };
-    let arg_exprs = arg_exprs.as_ref()?;
-    let resolved: Vec<Type> = arg_exprs
-        .iter()
-        .map(|e| resolve_generic_argument(ctx.type_checker, e))
-        .collect::<Option<_>>()?;
-    if resolved.len() != gens.len()
-        || !resolved
-            .iter()
-            .all(|t| is_monomorphizable_type_argument(&t.kind, defs))
-    {
-        return None;
-    }
+    let resolved = super::monomorphized_arguments(arg_exprs.as_ref()?, gens.len(), defs)?;
     Some((name.clone(), resolved))
 }
 
@@ -1036,13 +1072,6 @@ fn monomorph_for_instantiation(
     method_name: &str,
     method_info: &MethodInfo,
 ) -> Option<(String, Type)> {
-    let defs = &ctx.type_checker.type_definitions();
-    let Some(TypeDefinition::Class(class_def)) = defs.get(name) else {
-        return None;
-    };
-    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved) {
-        return None;
-    }
     // An instantiated body reaches instantiations the registry was never told
     // about; the caller records the receiver's so the pipeline registers it.
     // A receiver that declares no parameters carries no instantiation to
@@ -1053,35 +1082,20 @@ fn monomorph_for_instantiation(
     if !is_recorded && ctx.generic_subs.is_empty() {
         return None;
     }
-    // An inherited method has no copy of its own: its body belongs to the
-    // ancestor that declares it, compiled at that ancestor's type arguments.
-    let (owner, owner_args) =
-        crate::mir::lowering::inherited_instantiation::declaring_class_instantiation(
-            defs,
-            name,
-            resolved,
-            method_name,
-        )?;
-    let Some(TypeDefinition::Class(owner_def)) = defs.get(owner.as_str()) else {
-        return None;
-    };
-    let owner_gens = owner_def.generics.as_ref()?;
-    if owner_args.len() != owner_gens.len()
-        || !owner_args
-            .iter()
-            .all(|t| is_monomorphizable_type_argument(&t.kind, defs))
-    {
-        return None;
-    }
-    let owner_subs: HashMap<String, Type> = owner_gens
-        .iter()
-        .zip(&owner_args)
-        .map(|(g, t)| (g.name.clone(), t.clone()))
-        .collect();
-    let mangled = mangle_instantiation_name(&format!("{owner}_{method_name}"), &owner_args);
-    let subs = instantiation_substitution(ctx.type_checker, &owner, method_name, &owner_subs);
+    let callee = instantiated_callee(
+        ctx.type_checker.type_definitions(),
+        name,
+        resolved,
+        method_name,
+    )?;
+    let subs = instantiation_substitution(
+        ctx.type_checker,
+        &callee.owner,
+        method_name,
+        &callee.owner_subs,
+    );
     let return_ty = apply_generic_sub(&method_info.return_type, &subs);
-    Some((mangled, return_ty))
+    Some((callee.symbol, return_ty))
 }
 
 /// Lower the receiver, apply a CoW check for mutating collection methods, and

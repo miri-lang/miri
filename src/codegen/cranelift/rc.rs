@@ -996,21 +996,6 @@ impl<'a> FunctionTranslator<'a> {
         Self::generic_drop_thunk_name_part(class_name, type_args, type_ctx)
     }
 
-    /// The type an instantiation argument stands for, as the registry recorded
-    /// it: a written type, or the marker a value argument denotes.
-    ///
-    /// A value-generic class is recorded at arguments that include the size,
-    /// wrapped in a marker type. Skipping the value here would mangle a
-    /// different name than the thunk generated for that instantiation, and the
-    /// call would fall back to the shared thunk — which skips a field still
-    /// written at a parameter, leaving a managed one unreleased.
-    fn instantiation_argument(arg: &Expression) -> Option<Type> {
-        if let ExpressionKind::Type(ty, _) = &arg.node {
-            return Some((**ty).clone());
-        }
-        crate::type_checker::generics::value_generic_slot(arg)
-    }
-
     /// Extract Type arguments from Expression type arguments.
     /// Returns `None` if no args or extraction fails; `Some(Vec)` otherwise.
     pub(crate) fn extract_type_args_from_exprs(
@@ -1054,13 +1039,17 @@ impl<'a> FunctionTranslator<'a> {
         let Some(args) = type_args else {
             return class_name.to_string();
         };
-        let mut concrete: Vec<Type> = Vec::with_capacity(args.len());
-        for arg in args {
-            let Some(ty) = Self::instantiation_argument(arg) else {
-                return class_name.to_string();
-            };
-            concrete.push(ty);
-        }
+        // A value-generic class is recorded at arguments that include the size,
+        // wrapped in a marker type; skipping it would name a thunk nothing
+        // generated and fall back to the shared one, which leaves a managed
+        // field still written at a parameter unreleased.
+        let Some(concrete) = args
+            .iter()
+            .map(crate::mir::lowering::instantiation_argument)
+            .collect::<Option<Vec<Type>>>()
+        else {
+            return class_name.to_string();
+        };
         let want = mangle_class_instantiation(class_name, &concrete);
         let recorded = type_ctx
             .generic_class_instantiations
@@ -1215,6 +1204,12 @@ impl<'a> FunctionTranslator<'a> {
                     type_ctx,
                 )
             }
+            // TODO: releasing a class instance through a trait-typed binding
+            // (`let held Get<String> = Cell<String>(..)`) lands here and frees
+            // the object without releasing any of its managed fields, for a
+            // generic and a plain class alike. The concrete class is known only
+            // at run time, so the release needs a drop entry in the instance's
+            // vtable to dispatch to.
             TypeDefinition::Trait(_) | TypeDefinition::Alias(_) | TypeDefinition::Generic(_) => {
                 Ok(())
             }
@@ -1494,6 +1489,11 @@ impl<'a> FunctionTranslator<'a> {
             // Route a recorded generic-class instantiation (`Box<String>`) to its
             // per-instantiation `__decref_Box__String` wrapper so the concrete
             // managed field is released; other classes use the bare name.
+            // TODO: an element typed at a trait (`List<Op<String>>`) names a
+            // `__decref_Op` that `generate_type_drop_functions` never emits, as
+            // it emits wrappers for structs, classes and enums only, so such a
+            // collection does not link. Its release has to dispatch through the
+            // element's vtable to the concrete class's drop.
             let symbol = Self::generic_drop_thunk_name_part(
                 class_name,
                 Self::custom_type_args(elem_type_kind),

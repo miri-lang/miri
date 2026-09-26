@@ -25,12 +25,14 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod inherited_instantiation;
+pub mod instantiation_limits;
 pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;
 pub mod reduce_gpu;
 pub mod statement;
 pub mod variable;
+pub mod vtable_demand;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
@@ -324,6 +326,13 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
             },
             None => expr.clone(),
         },
+        // A value argument computed from the parameters (`Size + 1`) names one
+        // instantiation once they are bound; folded, it is spelled like any
+        // other value argument instead of leaving the instance unspellable.
+        ExpressionKind::Binary(..) | ExpressionKind::Unary(..) => {
+            crate::type_checker::generics::fold_value_generic_arithmetic(expr, subs)
+                .unwrap_or_else(|| expr.clone())
+        }
         _ => expr.clone(),
     }
 }
@@ -411,6 +420,46 @@ pub(crate) fn type_argument(arg: &Expression) -> Option<Type> {
     } else {
         (**arg_ty).clone()
     })
+}
+
+/// One argument of a generic-class reference as the instantiation registry
+/// records it and every per-instantiation symbol is mangled from: the type
+/// [`type_argument`] reads, or the marker standing for a value generic. `None`
+/// when the argument is neither.
+///
+/// A static call, a vtable and a drop thunk all name an instantiation from
+/// what this answers, so they cannot spell one instantiation two ways.
+pub(crate) fn instantiation_argument(arg: &Expression) -> Option<Type> {
+    type_argument(arg).or_else(|| crate::type_checker::generics::value_generic_slot(arg))
+}
+
+/// The type arguments `arg_exprs` spell for a generic class of `arity`
+/// parameters, or `None` when they name no per-instantiation body: an argument
+/// that is neither a type nor a value, a count that disagrees, or an argument
+/// [`is_monomorphized_instantiation`] rejects.
+pub(crate) fn monomorphized_arguments(
+    arg_exprs: &[Expression],
+    arity: usize,
+    type_definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> Option<Vec<Type>> {
+    let args: Vec<Type> = arg_exprs
+        .iter()
+        .map(instantiation_argument)
+        .collect::<Option<_>>()?;
+    is_monomorphized_instantiation(&args, arity, type_definitions).then_some(args)
+}
+
+/// Whether `args` fill a generic class's `arity` parameters with arguments a
+/// per-instantiation body is compiled at.
+pub(crate) fn is_monomorphized_instantiation(
+    args: &[Type],
+    arity: usize,
+    type_definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> bool {
+    args.len() == arity
+        && args
+            .iter()
+            .all(|arg| is_monomorphizable_type_argument(&arg.kind, type_definitions))
 }
 
 /// Apply a generic substitution mapping to a `Type`, replacing generic parameters

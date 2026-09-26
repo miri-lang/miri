@@ -11,6 +11,7 @@ pub mod custom_iterable;
 pub mod derived_traits;
 pub mod drop;
 pub mod generic_class_monomorphization;
+pub mod generic_virtual_dispatch;
 pub mod inheritance;
 pub mod inherited_arg_count;
 pub mod inherited_field_types;

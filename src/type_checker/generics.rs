@@ -166,6 +166,79 @@ pub(crate) fn substitute_value_generic_in_expr(
     expr.clone()
 }
 
+/// A value argument computed from value parameters — the `Size + 1` in
+/// `Buf<T, Size + 1>` — folded to the integer literal it denotes once
+/// `mapping` binds each parameter it names to a constant.
+///
+/// `None` when the expression names something `mapping` does not bind to a
+/// value, or does not evaluate to an integer: it then names no single
+/// instantiation and stays as written.
+pub(crate) fn fold_value_generic_arithmetic(
+    expr: &Expression,
+    mapping: &HashMap<String, Type>,
+) -> Option<Expression> {
+    let substituted = substitute_value_names(expr, mapping)?;
+    let value = TypeChecker::try_eval_const_int(&substituted)?;
+    Some(crate::ast::factory::literal_with_span(
+        crate::ast::factory::int_literal(value),
+        expr.span,
+    ))
+}
+
+/// `expr` with each value parameter it names replaced by the value `mapping`
+/// binds it to; `None` when it names anything else, or is not arithmetic.
+fn substitute_value_names(
+    expr: &Expression,
+    mapping: &HashMap<String, Type>,
+) -> Option<Expression> {
+    if let Some(name) = written_name(expr) {
+        return bound_value(name, mapping);
+    }
+    let rebuilt = |node: ExpressionKind| Expression {
+        id: expr.id,
+        span: expr.span,
+        node,
+    };
+    if let ExpressionKind::Binary(left, op, right) = &expr.node {
+        return Some(rebuilt(ExpressionKind::Binary(
+            Box::new(substitute_value_names(left, mapping)?),
+            *op,
+            Box::new(substitute_value_names(right, mapping)?),
+        )));
+    }
+    if let ExpressionKind::Unary(op, inner) = &expr.node {
+        return Some(rebuilt(ExpressionKind::Unary(
+            *op,
+            Box::new(substitute_value_names(inner, mapping)?),
+        )));
+    }
+    matches!(
+        &expr.node,
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+    )
+    .then(|| expr.clone())
+}
+
+/// The bare name `expr` writes, as an identifier or as a type argument
+/// naming no type (`Size` in `Array<T, Size>`).
+fn written_name(expr: &Expression) -> Option<&str> {
+    if let ExpressionKind::Identifier(name, None) = &expr.node {
+        return Some(name);
+    }
+    let ExpressionKind::Type(ty, false) = &expr.node else {
+        return None;
+    };
+    let TypeKind::Custom(name, None) = &ty.kind else {
+        return None;
+    };
+    Some(name)
+}
+
+/// The value `mapping` binds the value parameter `name` to.
+fn bound_value(name: &str, mapping: &HashMap<String, Type>) -> Option<Expression> {
+    mapping.get(name).and_then(extract_value_generic).cloned()
+}
+
 impl TypeChecker {
     /// Infers generic type parameters from argument types.
     ///

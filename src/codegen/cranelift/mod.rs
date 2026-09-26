@@ -69,6 +69,8 @@ pub struct CraneliftBackend {
     /// by the drop-thunk generator to resolve a bare-generic field to its
     /// instantiation's concrete type.
     generic_class_instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
+    /// The slots each vtable fills, as the pipeline settled them.
+    vtable_fills: crate::mir::lowering::vtable_demand::VtableFills,
     /// Runtime function imports to declare as external symbols.
     runtime_imports: Vec<RuntimeImport>,
 }
@@ -156,6 +158,7 @@ impl CraneliftBackend {
             isa,
             type_definitions: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
+            vtable_fills: Default::default(),
             runtime_imports: Vec::new(),
         })
     }
@@ -182,6 +185,12 @@ impl CraneliftBackend {
         instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
     ) {
         self.generic_class_instantiations = instantiations;
+    }
+
+    /// Set the slots each vtable fills. A vtable no fill names is defined
+    /// with every slot null.
+    pub fn set_vtable_fills(&mut self, fills: crate::mir::lowering::vtable_demand::VtableFills) {
+        self.vtable_fills = fills;
     }
 
     /// Set runtime function imports that should be declared as external symbols.
@@ -268,7 +277,18 @@ impl Backend for CraneliftBackend {
             )?;
         }
 
-        FunctionTranslator::generate_vtables(&mut module, &isa, &self.type_definitions)?;
+        let vtables = crate::mir::lowering::dispatch_symbols::constructed_vtable_symbols(
+            cpu_bodies.iter().map(|(_, body)| *body),
+            &self.type_definitions,
+        );
+        FunctionTranslator::generate_vtables(
+            &mut module,
+            isa.pointer_type(),
+            &self.type_definitions,
+            vtables
+                .iter()
+                .map(|symbol| (symbol.as_str(), self.vtable_fills.slots(symbol))),
+        )?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
         let object = self.finalize_object(module)?;
 

@@ -12,11 +12,11 @@ use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
+use crate::mir::lowering::dispatch_symbols::VtableInstance;
 use crate::mir::{
     AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue, UnOp,
 };
 use crate::runtime_fns::rt;
-use crate::type_checker::context::class_needs_vtable;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
@@ -635,8 +635,8 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
 
-        let vtable_class_name = Self::class_vtable_name(kind, type_ctx);
-        let needs_vtable_alloc = vtable_class_name.is_some();
+        let vtable_symbol = Self::class_vtable_symbol(kind, type_ctx);
+        let needs_vtable_alloc = vtable_symbol.is_some();
         if operands.is_empty() && !needs_vtable_alloc {
             return Ok(builder.ins().iconst(ptr_type, 0));
         }
@@ -677,8 +677,8 @@ impl<'a> FunctionTranslator<'a> {
             let count = builder.ins().iconst(ptr_type, translated.len() as i64);
             builder.ins().store(MemFlags::new(), count, payload_ptr, 0);
         }
-        if let Some(class_name) = vtable_class_name {
-            Self::store_vtable_pointer(builder, ctx, &class_name, payload_ptr, ptr_type)?;
+        if let Some(symbol) = vtable_symbol {
+            Self::store_vtable_pointer(builder, ctx, &symbol, payload_ptr, ptr_type)?;
         }
 
         for (val, offset) in translated.into_iter().zip(&field_offsets) {
@@ -866,21 +866,17 @@ impl<'a> FunctionTranslator<'a> {
         Ok((offsets, layout.size))
     }
 
-    /// Returns the class name when `kind` is `AggregateKind::Class(ty)` and
-    /// the class participates in virtual dispatch (i.e. needs a vtable slot at
-    /// `payload[0]`); otherwise returns `None`.
-    fn class_vtable_name(kind: &AggregateKind, type_ctx: &TypeCtx) -> Option<String> {
+    /// The symbol of the vtable an instance built by `kind` points at from
+    /// `payload[0]`, when `kind` is `AggregateKind::Class(ty)` of a class that
+    /// takes part in virtual dispatch; otherwise `None`.
+    ///
+    /// The vtable is the instantiation's own, named by the arguments `ty`
+    /// carries; `generate_vtables` defines it from the same answer.
+    fn class_vtable_symbol(kind: &AggregateKind, type_ctx: &TypeCtx) -> Option<String> {
         let AggregateKind::Class(ty) = kind else {
             return None;
         };
-        let TypeKind::Custom(class_name, _) = &ty.kind else {
-            return None;
-        };
-        if class_needs_vtable(class_name, type_ctx.type_definitions) {
-            Some(class_name.clone())
-        } else {
-            None
-        }
+        VtableInstance::of(ty, type_ctx.type_definitions).map(|instance| instance.symbol())
     }
 
     /// Resolve the declared payload types for an aggregate kind, one entry per
@@ -1060,22 +1056,19 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.ins().iadd_imm(raw_ptr, header_size as i64))
     }
 
-    /// Store the `__vtable_{class_name}` pointer at offset 0 of `payload_ptr`.
+    /// Store the address of the vtable `vtable_sym` at offset 0 of `payload_ptr`.
     fn store_vtable_pointer(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        class_name: &str,
+        vtable_sym: &str,
         payload_ptr: Value,
         ptr_type: cl_types::Type,
     ) -> Result<(), CodegenError> {
         use cranelift_module::Module;
-        let mut vtable_sym = String::with_capacity(9 + class_name.len());
-        vtable_sym.push_str("__vtable_");
-        vtable_sym.push_str(class_name);
         let vtable_data_id = ctx
             .module
-            .declare_data(&vtable_sym, cranelift_module::Linkage::Import, false, false)
-            .map_err(|e| CodegenError::declare_function(vtable_sym.clone(), e.to_string()))?;
+            .declare_data(vtable_sym, cranelift_module::Linkage::Import, false, false)
+            .map_err(|e| CodegenError::declare_function(vtable_sym.to_string(), e.to_string()))?;
         let gv = ctx
             .module
             .declare_data_in_func(vtable_data_id, builder.func);

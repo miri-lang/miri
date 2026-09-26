@@ -6,8 +6,8 @@
 
 use miri::mir::lowering::dispatch_symbols::{
     collect_vtable_methods, inherited_trait_default, instantiation_substitution, method_symbol,
-    resolve_vtable_method, synthesized_references, vtable_slot_index, vtable_slot_symbols,
-    VtableLayout, ELEMENT_METHOD_NAMES,
+    resolve_vtable_method, synthesized_references, vtable_slot_index, VtableInstance, VtableLayout,
+    ELEMENT_METHOD_NAMES,
 };
 use miri::type_checker::context::TypeDefinition;
 use std::collections::HashMap;
@@ -405,20 +405,98 @@ fn generic(mut class_def: ClassDefinition, param: &str) -> ClassDefinition {
     class_def
 }
 
-/// `trait Op<T>` defaults `describe`, `abstract class Base<U> implements
-/// Op<U>` and `class Box<T> extends Base<T>`: Box's slot names the trait's
-/// shared body, which no call spells, so the slot set must.
-#[test]
-fn vtable_slot_symbols_names_the_shared_default_a_generic_class_inherits() {
-    let op = trait_def("Op", &[], &[("describe", method(false, false))]);
-    let base = generic(class("Base", None, &["Op"], &[], true), "U");
-    let boxed = generic(class("Box", Some("Base"), &[], &[], false), "T");
-    let defs = make_defs([
+/// `trait Op` defaults `describe` and requires `name`, which `class Impl<T>
+/// implements Op` declares.
+fn generic_implementor() -> HashMap<String, TypeDefinition> {
+    let op = trait_def(
+        "Op",
+        &[],
+        &[
+            ("describe", method(false, false)),
+            ("name", method(true, false)),
+        ],
+    );
+    let implementor = generic(
+        class(
+            "Impl",
+            None,
+            &["Op"],
+            &[("name", method(false, false))],
+            false,
+        ),
+        "T",
+    );
+    make_defs([
         ("Op".to_string(), TypeDefinition::Trait(op)),
-        ("Base".to_string(), TypeDefinition::Class(base)),
-        ("Box".to_string(), TypeDefinition::Class(boxed)),
-    ]);
-    assert!(vtable_slot_symbols(&defs).contains("Op_describe"));
+        ("Impl".to_string(), TypeDefinition::Class(implementor)),
+    ])
+}
+
+/// `Impl<args>` as a constructor builds it, the arguments spelled as types.
+fn instance_type(args: &[TypeKind]) -> Type {
+    let exprs = args
+        .iter()
+        .map(|kind| miri::ast::expression::Expression {
+            id: 0,
+            span: span(),
+            node: miri::ast::ExpressionKind::Type(Box::new(Type::new(kind.clone(), span())), false),
+        })
+        .collect();
+    Type::new(TypeKind::Custom("Impl".to_string(), Some(exprs)), span())
+}
+
+/// An instance built at spelled arguments points at its own vtable, whose
+/// slots name the bodies compiled for those arguments — a trait default's
+/// copy included — never the trait's shared body.
+#[test]
+fn vtable_instance_at_spelled_arguments_names_its_instantiation_bodies() {
+    let defs = generic_implementor();
+    let instance = VtableInstance::of(&instance_type(&[TypeKind::String]), &defs);
+    let Some(instance) = instance else {
+        panic!("a class implementing a trait takes part in virtual dispatch");
+    };
+    assert_eq!(instance.symbol(), "__vtable_Impl__String");
+    assert_eq!(
+        instance.slot_targets(&defs),
+        vec![
+            ("describe", Some("Impl_describe__String".to_string())),
+            ("name", Some("Impl_name__String".to_string())),
+        ],
+    );
+    let at_int = VtableInstance::of(&instance_type(&[TypeKind::Int]), &defs);
+    assert_eq!(
+        at_int.map(|instance| instance.symbol()),
+        Some("__vtable_Impl__int".to_string()),
+    );
+}
+
+/// An instance built where its arguments have no spelling points at the
+/// class's bare vtable, whose slots name the shared bodies.
+#[test]
+fn vtable_instance_without_spelled_arguments_names_the_shared_bodies() {
+    let defs = generic_implementor();
+    let bare = Type::new(TypeKind::Custom("Impl".to_string(), None), span());
+    let Some(instance) = VtableInstance::of(&bare, &defs) else {
+        panic!("a class implementing a trait takes part in virtual dispatch");
+    };
+    assert_eq!(instance.symbol(), "__vtable_Impl");
+    assert_eq!(
+        instance.slot_targets(&defs),
+        vec![
+            ("describe", Some("Op_describe".to_string())),
+            ("name", Some("Impl_name".to_string())),
+        ],
+    );
+}
+
+/// A type that names no class in virtual dispatch has no vtable.
+#[test]
+fn vtable_instance_is_none_for_a_class_outside_virtual_dispatch() {
+    let plain = class("Plain", None, &[], &[], false);
+    let defs = make_defs([("Plain".to_string(), TypeDefinition::Class(plain))]);
+    let ty = Type::new(TypeKind::Custom("Plain".to_string(), None), span());
+    assert_eq!(VtableInstance::of(&ty, &defs), None);
+    assert_eq!(VtableInstance::of(&void_type(), &defs), None);
 }
 
 /// `trait B<T> extends A<T>` with the default in `A`: a class implementing

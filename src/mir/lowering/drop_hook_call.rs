@@ -128,6 +128,7 @@ fn borrowed_receiver_error(span: Span) -> LoweringError {
             code: DiagnosticCode::OwnDropOfBorrowedValue,
             message: BORROWED_DROP_MESSAGE.to_string(),
             help: Some(BORROWED_DROP_HELP.to_string()),
+            notes: Vec::new(),
         },
         span,
     }

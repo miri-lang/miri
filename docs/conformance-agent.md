@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 89
+## Error fixtures (`fail/`) — 90
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -24,6 +24,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_LEX_008 | Triggers MER_LEX_008: Invalid Number Literal. |
 | MER_LEX_011 | Triggers MER_LEX_011: Backslash in Format String. |
 | MER_LEX_012 | Triggers MER_LEX_012: Invalid Formatted String Expression. |
+| MER_MIR_016 | Triggers MER_MIR_016: Polymorphic Recursion. |
 | MER_NAM_002 | Triggers MER_NAM_002: Module Not Found. |
 | MER_OWN_003 | Triggers MER_OWN_003: Use of Moved Value. |
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |
@@ -123,7 +124,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 100
+## Accepted fixtures (`pass/`) — 101
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -148,6 +149,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_MIR_008 | Accepted counterpart of MER_MIR_008: Unsupported Operator does not fire. |
 | MER_MIR_010 | Accepted counterpart of MER_MIR_010: Invalid GPU Launch Arguments does not fire. |
 | MER_MIR_012 | Accepted counterpart of MER_MIR_012: Missing Struct Field does not fire. |
+| MER_MIR_016 | Accepted counterpart of MER_MIR_016: a class that calls itself through a trait at its own type argument is compiled once. |
 | MER_NAM_001 | Accepted counterpart of MER_NAM_001: Deprecated Kernel Context Identifier does not fire. |
 | MER_NAM_002 | Accepted counterpart of MER_NAM_002: Module Not Found does not fire. |
 | MER_NAM_003 | Accepted counterpart of MER_NAM_003: Invalid Import Path does not fire. |
