@@ -766,38 +766,17 @@ impl TypeChecker {
         return_type_expr: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
-        self.fn_analysis
-            .runtime_functions
-            .insert(rt_name.to_string());
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params: params.to_vec(),
             return_type: return_type_expr.clone(),
         })));
+        let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
 
-        self.type_table.global_scope.insert(
-            rt_name.to_string(),
-            SymbolInfo::new(
-                func_type.clone(),
-                false,
-                false,
-                MemberVisibility::Private,
-                self.modules.current_module.clone(),
-                None,
-            ),
-        );
-
-        context.define(
-            rt_name.to_string(),
-            SymbolInfo::new(
-                func_type,
-                false,
-                false,
-                MemberVisibility::Private,
-                self.modules.current_module.clone(),
-                None,
-            ),
-        );
+        self.type_table
+            .global_scope
+            .insert(rt_name.to_string(), info.clone());
+        context.define(rt_name.to_string(), info);
     }
 
     /// Register an intrinsic function declaration in class scope

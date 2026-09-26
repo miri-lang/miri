@@ -93,7 +93,9 @@ impl TypeChecker {
                 self.infer_logical(left, op, right, span, context)
             }
             ExpressionKind::Unary(op, operand) => self.infer_unary(op, operand, span, context),
-            ExpressionKind::Identifier(name, _) => self.infer_identifier(name, span, context),
+            ExpressionKind::Identifier(name, _) => {
+                self.infer_identifier(name, span, expr_id, context)
+            }
             ExpressionKind::Assignment(lhs, op, rhs) => {
                 self.infer_assignment(lhs, op, rhs, span, context)
             }

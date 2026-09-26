@@ -811,12 +811,10 @@ fn main()
 
 #[test]
 fn test_method_summary_is_not_shared_with_a_method_spelled_alike() {
-    // `A.b_keep` and `A_b.keep` would both spell `A_b_keep`; only the second
-    // stores its argument, so a call to the first must not consume it.
-    // TODO: run this program and assert it prints `kept` once the link-name
-    // spelling tells `A.b_keep` from `A_b.keep`; until then a build refuses the
-    // pair as a symbol collision (MER_MIR_018), so only the check is asserted.
-    assert_type_checks(
+    // `A.b_keep` and `A_b.keep` are different methods whose names run
+    // together; only the second stores its argument, so a call to the first
+    // must not consume it.
+    assert_runs_with_output(
         r#"
 
 class Tag
@@ -845,5 +843,6 @@ fn run(a A, t Tag)
 let a = A()
 run(a, Tag("kept"))
 "#,
+        "kept",
     );
 }

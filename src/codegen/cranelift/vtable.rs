@@ -3,7 +3,7 @@
 
 //! Vtable layout and resolution for abstract-class / trait dispatch.
 //!
-//! Generates one `__vtable_{Class}[__{args}]` data symbol per class
+//! Generates one `miri.{Class}[${args}].$vtable` data symbol per class
 //! instantiation a compiled body builds, for use by
 //! `TerminatorKind::VirtualCall`. Which vtables exist comes from
 //! `mir::lowering::dispatch_symbols`; the slots each fills and the symbol each

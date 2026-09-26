@@ -614,7 +614,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Returns true if a named Custom type has at least one managed field.
     ///
-    /// Used to decide whether to call `__drop_TypeName` (when there are managed
+    /// Used to decide whether to call `miri.TypeName.$drop` (when there are managed
     /// fields to clean up) or just `libc::free` (when all fields are primitives).
     /// Returns true if releasing the type runs a `fn drop(self)` hook, declared
     /// on the type itself or inherited from a base class.

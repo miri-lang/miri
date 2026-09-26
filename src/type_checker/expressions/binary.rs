@@ -526,7 +526,7 @@ impl TypeChecker {
                 None => self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span),
             }
         }
-        self.infer_identifier(name, id_expr.span, context)
+        self.infer_identifier(name, id_expr.span, id_expr.id, context)
     }
 
     fn infer_assignment_to_member(

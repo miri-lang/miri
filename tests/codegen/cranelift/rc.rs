@@ -21,6 +21,7 @@ use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::translator::TypeCtx;
 use miri::codegen::cranelift::{mangle_class_instantiation, FunctionTranslator};
 use miri::error::syntax::Span;
+use miri::mir::symbol::Symbol;
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, MethodInfo,
     StructDefinition, TraitDefinition, TypeDefinition,
@@ -134,14 +135,14 @@ fn minimal_type_ctx<'a>(
 
 #[test]
 fn test_instantiation_without_type_arguments_mangles_to_the_bare_name() {
-    assert_eq!(mangle_class_instantiation("Box", &[]), "Box");
+    assert_eq!(mangle_class_instantiation("Box", &[]), "miri.Box");
 }
 
 #[test]
 fn test_string_type_argument_mangles_to_the_canonical_string_name() {
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(TypeKind::String)]),
-        format!("Box__{STRING_TYPE_NAME}")
+        format!("miri.Box${STRING_TYPE_NAME}")
     );
 }
 
@@ -149,15 +150,15 @@ fn test_string_type_argument_mangles_to_the_canonical_string_name() {
 fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(TypeKind::Int)]),
-        "Box__int"
+        "miri.Box$int"
     );
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(TypeKind::F32)]),
-        "Box__f32"
+        "miri.Box$f32"
     );
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(TypeKind::Boolean)]),
-        "Box__bool"
+        "miri.Box$bool"
     );
 }
 
@@ -165,7 +166,7 @@ fn test_scalar_type_arguments_mangle_to_their_width_tokens() {
 fn test_multiple_type_arguments_mangle_in_declaration_order() {
     assert_eq!(
         mangle_class_instantiation("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]),
-        format!("Pair__int__{STRING_TYPE_NAME}")
+        format!("miri.Pair$int${STRING_TYPE_NAME}")
     );
     assert_ne!(
         mangle_class_instantiation("Pair", &[ty(TypeKind::Int), ty(TypeKind::String)]),
@@ -182,7 +183,7 @@ fn test_multiple_type_arguments_mangle_in_declaration_order() {
 fn test_class_type_arguments_mangle_to_their_own_names() {
     assert_eq!(
         mangle_class_instantiation("Box", &[ty(custom("Widget"))]),
-        "Box__Widget"
+        "miri.Box$Widget"
     );
     assert_ne!(
         mangle_class_instantiation("Box", &[ty(custom("Gadget"))]),
@@ -504,7 +505,7 @@ fn test_clone_resolves_to_the_class_that_defines_it() {
 
     assert_eq!(
         FunctionTranslator::resolve_clone_method_name("Widget", &table),
-        "Widget_clone"
+        Symbol::method("Widget", &[], "clone", &[]).link_name()
     );
 }
 
@@ -521,7 +522,7 @@ fn test_clone_inherited_from_a_concrete_base_uses_the_base_name() {
 
     assert_eq!(
         FunctionTranslator::resolve_clone_method_name("Derived", &table),
-        "Base_clone"
+        Symbol::method("Base", &[], "clone", &[]).link_name()
     );
 }
 
@@ -541,7 +542,7 @@ fn test_clone_inherited_from_an_abstract_base_uses_the_caller_name() {
 
     assert_eq!(
         FunctionTranslator::resolve_clone_method_name("Derived", &table),
-        "Derived_clone"
+        Symbol::method("Derived", &[], "clone", &[]).link_name()
     );
 }
 
@@ -550,7 +551,7 @@ fn test_clone_falls_back_to_the_requested_type_name() {
     let table = defs([("Widget", TypeDefinition::Class(class("Widget")))]);
     assert_eq!(
         FunctionTranslator::resolve_clone_method_name("Widget", &table),
-        "Widget_clone"
+        Symbol::method("Widget", &[], "clone", &[]).link_name()
     );
 }
 

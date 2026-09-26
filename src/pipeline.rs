@@ -548,7 +548,11 @@ fn monomorphized_lowering_failure(
     if refuses_the_program {
         return CompilerError::Lowering(error);
     }
-    CompilerError::Codegen(format!("MIR lowering failed for {}: {}", symbol, error))
+    CompilerError::Codegen(format!(
+        "MIR lowering failed for {}: {}",
+        symbol.written(),
+        error
+    ))
 }
 
 /// Claim `symbol` for the body of the definition at `span`: whether that body
@@ -563,6 +567,63 @@ fn is_first_claim(
         Ok(Claim::New) => Ok(true),
         Ok(Claim::AlreadyLowered) => Ok(false),
         Err(collision) => Err(CompilerError::Lowering(collision.refusal(span))),
+    }
+}
+
+/// The name each lowered body is emitted under: a GPU kernel's is the entry
+/// point its WGSL module declares, which the host launches it by, and every
+/// other body's is its link name.
+fn emitted_name(symbol: &Symbol, body: &mir::Body) -> String {
+    match body.execution_model {
+        mir::ExecutionModel::GpuKernel => symbol.wgsl_name(),
+        mir::ExecutionModel::Cpu | mir::ExecutionModel::GpuDevice | mir::ExecutionModel::Async => {
+            symbol.link_name()
+        }
+    }
+}
+
+/// The WGSL spelling of every lowered body whose link name WGSL cannot
+/// declare, keyed by that link name, for the bodies a GPU module takes in as
+/// helpers and the calls reaching them.
+fn wgsl_spellings(bodies: &[(Symbol, mir::Body)]) -> std::collections::HashMap<String, String> {
+    bodies
+        .iter()
+        .map(|(symbol, _)| (symbol.link_name(), symbol.wgsl_name()))
+        .filter(|(link_name, wgsl_name)| link_name != wgsl_name)
+        .collect()
+}
+
+/// Point every direct call in a GPU body at the WGSL spelling of its callee,
+/// the name that callee's helper clone is declared under.
+fn retarget_gpu_calls_to_wgsl_names(
+    bodies: &mut [(String, mir::Body)],
+    wgsl_names: &std::collections::HashMap<String, String>,
+) {
+    use crate::ast::literal::Literal;
+    let calls = bodies
+        .iter_mut()
+        .filter(|(_, body)| {
+            matches!(
+                body.execution_model,
+                mir::ExecutionModel::GpuKernel | mir::ExecutionModel::GpuDevice
+            )
+        })
+        .flat_map(|(_, body)| body.basic_blocks.iter_mut())
+        .filter_map(|block| block.terminator.as_mut());
+    for terminator in calls {
+        let mir::TerminatorKind::Call {
+            func: mir::Operand::Constant(constant),
+            ..
+        } = &mut terminator.kind
+        else {
+            continue;
+        };
+        let Literal::Identifier(name) = &mut constant.literal else {
+            continue;
+        };
+        if let Some(wgsl_name) = wgsl_names.get(name.as_str()) {
+            name.clone_from(wgsl_name);
+        }
     }
 }
 
@@ -2065,15 +2126,16 @@ impl Pipeline {
         result: &mut PipelineResult,
         is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
-        let mut bodies: Vec<(String, mir::Body)> = self
-            .lower_program(result, is_release)?
+        let lowered = self.lower_program(result, is_release)?;
+        let wgsl_names = wgsl_spellings(&lowered);
+        let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
-            .map(|(symbol, body)| (symbol.link_name(), body))
+            .map(|(symbol, body)| (emitted_name(&symbol, &body), body))
             .collect();
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
-        Self::clone_gpu_device_helpers(&mut bodies)?;
+        Self::clone_gpu_device_helpers(&mut bodies, &wgsl_names)?;
 
         // Apply recorded workgroup sizes from kernel launches to GPU kernel bodies.
         // When kernel(args).launch(grid, block) is lowered, the block size is recorded
@@ -2924,7 +2986,7 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let symbol = Symbol::function(name, &[]);
+        let symbol = Symbol::declared_function(name);
         if !is_first_claim(symbols, &symbol, stmt.span)? {
             return Ok(());
         }
@@ -3141,6 +3203,7 @@ impl Pipeline {
     /// Each clone is marked as GpuDevice and has f32-narrowed types.
     fn clone_gpu_device_helpers(
         bodies: &mut Vec<(String, mir::Body)>,
+        wgsl_names: &std::collections::HashMap<String, String>,
     ) -> Result<(), CompilerError> {
         let kernel_names: std::collections::HashSet<&str> = bodies
             .iter()
@@ -3165,7 +3228,8 @@ impl Pipeline {
                 gpu_body.execution_model = mir::ExecutionModel::GpuDevice;
                 Self::narrow_float_types(&mut gpu_body);
                 helper_names.insert(name.clone());
-                helpers_to_add.push((name.clone(), gpu_body));
+                let wgsl_name = wgsl_names.get(name).unwrap_or(name);
+                helpers_to_add.push((wgsl_name.clone(), gpu_body));
             }
         }
 
@@ -3190,6 +3254,7 @@ impl Pipeline {
         }
 
         bodies.extend(helpers_to_add);
+        retarget_gpu_calls_to_wgsl_names(bodies, wgsl_names);
         Ok(())
     }
 

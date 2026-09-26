@@ -20,41 +20,44 @@ fn list_of(element: TypeKind) -> Type {
 }
 
 #[test]
-fn a_function_without_arguments_is_its_own_name() {
-    assert_eq!(Symbol::function("pick", &[]).link_name(), "pick");
+fn a_function_without_arguments_is_its_name_under_the_root() {
+    assert_eq!(Symbol::function("pick", &[]).link_name(), "miri.pick");
 }
 
 #[test]
 fn a_generic_function_appends_each_argument_token() {
     let symbol = Symbol::function("pick", &[ty(TypeKind::Int), ty(TypeKind::String)]);
-    assert_eq!(symbol.link_name(), "pick__int__String");
+    assert_eq!(symbol.link_name(), "miri.pick$int$String");
 }
 
 #[test]
-fn a_method_joins_owner_and_method_with_one_underscore() {
+fn a_method_is_a_segment_of_its_owner() {
     assert_eq!(
         Symbol::method("Point", &[], "norm", &[]).link_name(),
-        "Point_norm"
+        "miri.Point.norm"
     );
 }
 
 #[test]
-fn a_method_appends_owner_arguments_then_method_arguments() {
+fn owner_and_method_arguments_follow_their_own_names() {
     let symbol = Symbol::method(
         "Base",
         &[list_of(TypeKind::String)],
         "map",
         &[ty(TypeKind::Int)],
     );
-    assert_eq!(symbol.link_name(), "Base_map__List_String__int");
+    assert_eq!(symbol.link_name(), "miri.Base$List_String.map$int");
 }
 
 #[test]
-fn a_vtable_is_prefixed_and_mangled_by_its_instantiation() {
-    assert_eq!(Symbol::vtable("Shape", &[]).link_name(), "__vtable_Shape");
+fn a_vtable_is_a_marker_segment_of_its_instantiation() {
+    assert_eq!(
+        Symbol::vtable("Shape", &[]).link_name(),
+        "miri.Shape.$vtable"
+    );
     assert_eq!(
         Symbol::vtable("Box", &[ty(TypeKind::Int)]).link_name(),
-        "__vtable_Box__int"
+        "miri.Box$int.$vtable"
     );
 }
 
@@ -62,20 +65,20 @@ fn a_vtable_is_prefixed_and_mangled_by_its_instantiation() {
 fn a_lambda_is_named_by_its_expression_id_and_context() {
     assert_eq!(
         Symbol::closure(ClosureKind::Lambda, 42, &[]).link_name(),
-        "__lambda_42"
+        "miri.$lambda42"
     );
     assert_eq!(
         Symbol::closure(ClosureKind::Lambda, 42, &[ty(TypeKind::Int)]).link_name(),
-        "__lambda_42__int"
+        "miri.$lambda42$int"
     );
 }
 
 #[test]
 fn a_function_reference_thunk_names_its_target() {
-    let kind = ClosureKind::FunctionReference("double".to_string());
+    let kind = ClosureKind::FunctionReference("miri.double".to_string());
     assert_eq!(
         Symbol::closure(kind, 7, &[]).link_name(),
-        "__fnref_double_7"
+        "miri.$fnref7.miri.double"
     );
 }
 
@@ -84,28 +87,28 @@ fn a_nested_function_names_its_declaration() {
     let kind = ClosureKind::NestedFunction("helper".to_string());
     assert_eq!(
         Symbol::closure(kind, 9, &[ty(TypeKind::String)]).link_name(),
-        "__nested_helper_9__String"
+        "miri.$nested9$String.helper"
     );
 }
 
 #[test]
-fn a_residency_suffix_lists_each_position_and_handle() {
+fn a_residency_segment_lists_each_position_and_handle() {
     let symbol = Symbol::function("scale", &[])
         .with_residency(&[(0, DeviceHandleId(1)), (2, DeviceHandleId(5))]);
-    assert_eq!(symbol.link_name(), "scale__gpu_p0h1_p2h5");
+    assert_eq!(symbol.link_name(), "miri.$gpu$p0h1$p2h5.scale");
 }
 
 #[test]
-fn an_empty_residency_adds_no_suffix() {
+fn an_empty_residency_adds_no_segment() {
     let symbol = Symbol::closure(ClosureKind::Lambda, 3, &[]).with_residency(&[]);
-    assert_eq!(symbol.link_name(), "__lambda_3");
+    assert_eq!(symbol.link_name(), "miri.$lambda3");
 }
 
 #[test]
-fn a_residency_suffix_follows_the_context_arguments() {
+fn a_residency_segment_precedes_the_closure_it_specializes() {
     let symbol = Symbol::closure(ClosureKind::Lambda, 3, &[ty(TypeKind::Int)])
         .with_residency(&[(1, DeviceHandleId(2))]);
-    assert_eq!(symbol.link_name(), "__lambda_3__int__gpu_p1h2");
+    assert_eq!(symbol.link_name(), "miri.$gpu$p1h2.$lambda3$int");
 }
 
 #[test]
@@ -123,6 +126,40 @@ fn a_gpu_kernel_entry_point_is_spelled_as_it_is_linked() {
 }
 
 #[test]
+fn a_wgsl_name_joins_the_parts_of_a_symbol_with_underscores() {
+    assert_eq!(
+        Symbol::function("pick", &[ty(TypeKind::Int)]).wgsl_name(),
+        "pick__int"
+    );
+    assert_eq!(Symbol::function("soup", &[]).wgsl_name(), "soup");
+    assert_eq!(
+        Symbol::method(
+            "Base",
+            &[list_of(TypeKind::String)],
+            "map",
+            &[ty(TypeKind::Int)]
+        )
+        .wgsl_name(),
+        "Base_map__List_String__int"
+    );
+    assert_eq!(
+        Symbol::function("scale", &[])
+            .with_residency(&[(0, DeviceHandleId(1)), (2, DeviceHandleId(5))])
+            .wgsl_name(),
+        "scale__gpu_p0h1_p2h5"
+    );
+}
+
+#[test]
+fn a_declared_function_named_main_is_the_entry_point() {
+    assert_eq!(Symbol::declared_function("main"), Symbol::entry());
+    assert_eq!(
+        Symbol::declared_function("pick"),
+        Symbol::function("pick", &[])
+    );
+}
+
+#[test]
 fn runtime_symbols_and_the_entry_point_are_verbatim() {
     let runtime = Symbol::runtime("miri_rt_list_new");
     assert_eq!(runtime.link_name(), "miri_rt_list_new");
@@ -133,11 +170,33 @@ fn runtime_symbols_and_the_entry_point_are_verbatim() {
 }
 
 #[test]
-fn symbols_that_differ_in_structure_are_distinct_values() {
-    let composed = Symbol::method("A_b", &[], "c", &[]);
-    let other = Symbol::method("A", &[], "b_c", &[]);
-    assert_eq!(composed.link_name(), other.link_name());
-    assert_ne!(composed, other);
+fn symbols_whose_identifiers_run_together_spell_distinct_names() {
+    let pairs = [
+        (
+            Symbol::method("A_b", &[], "c", &[]),
+            Symbol::method("A", &[], "b_c", &[]),
+        ),
+        (
+            Symbol::function("pick", &[ty(TypeKind::Int)]),
+            Symbol::function("pick__int", &[]),
+        ),
+        (
+            Symbol::method("Pick", &[], "_int", &[]),
+            Symbol::function("Pick", &[ty(TypeKind::Int)]),
+        ),
+        (
+            Symbol::type_thunk(ThunkKind::Drop, "W", &[ty(TypeKind::Int)]),
+            Symbol::type_thunk(ThunkKind::Drop, "W__int", &[]),
+        ),
+        (
+            Symbol::type_thunk(ThunkKind::Drop, "Point", &[]),
+            Symbol::function("__drop_Point", &[]),
+        ),
+    ];
+    for (first, second) in pairs {
+        assert_ne!(first, second);
+        assert_ne!(first.link_name(), second.link_name());
+    }
 }
 
 #[test]
@@ -147,42 +206,42 @@ fn symbols_display_as_their_link_name() {
 }
 
 #[test]
-fn a_type_thunk_prefixes_its_kind_to_the_type_and_its_arguments() {
+fn a_type_thunk_is_a_marker_segment_of_the_type_and_its_arguments() {
     assert_eq!(
         Symbol::type_thunk(ThunkKind::Drop, "Box", &[]).link_name(),
-        "__drop_Box"
+        "miri.Box.$drop"
     );
     assert_eq!(
         Symbol::type_thunk(ThunkKind::Decref, "Box", &[ty(TypeKind::String)]).link_name(),
-        "__decref_Box__String"
+        "miri.Box$String.$decref"
     );
     assert_eq!(
         Symbol::type_thunk(ThunkKind::Clone, "Point", &[]).link_name(),
-        "__clone_Point"
+        "miri.Point.$clone"
     );
     assert_eq!(
         Symbol::type_thunk(ThunkKind::Compare, "Box", &[ty(TypeKind::Int)]).link_name(),
-        "__compare_Box__int"
+        "miri.Box$int.$compare"
     );
     assert_eq!(
         Symbol::type_thunk(ThunkKind::Equals, "Point", &[]).link_name(),
-        "__equals_Point"
+        "miri.Point.$equals"
     );
 }
 
 #[test]
-fn a_structural_thunk_appends_the_encoding_of_its_structure() {
+fn a_structural_thunk_ends_in_the_encoding_of_its_structure() {
     assert_eq!(
         Symbol::structural_thunk(ThunkKind::Decref, ".T2_int_String").link_name(),
-        "__decref_.T2_int_String"
+        "miri.$decref..T2_int_String"
     );
 }
 
 #[test]
 fn a_closure_destructor_names_the_closure_body() {
     assert_eq!(
-        Symbol::closure_destructor("__lambda_7").link_name(),
-        "__dtor___lambda_7"
+        Symbol::closure_destructor("miri.$lambda7").link_name(),
+        "miri.$dtor.miri.$lambda7"
     );
 }
 
@@ -254,15 +313,17 @@ fn claiming_a_symbol_again_finds_it_already_lowered() {
 #[test]
 fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
     let mut table = SymbolTable::default();
-    let existing = Symbol::method("A_b", &[], "c", &[]);
-    let incoming = Symbol::method("A", &[], "b_c", &[]);
+    // No identifier contains `.`, so only a name built outside the grammar
+    // can spell another symbol's name; the table refuses it all the same.
+    let existing = Symbol::method("A", &[], "b", &[]);
+    let incoming = Symbol::function("A.b", &[]);
     assert_eq!(table.claim(&existing), Ok(Claim::New));
     assert_eq!(
         table.claim(&incoming),
         Err(Box::new(SymbolCollision {
             existing: existing.clone(),
             incoming: incoming.clone(),
-            link_name: "A_b_c".to_string(),
+            link_name: "miri.A.b".to_string(),
         }))
     );
     assert!(table.is_claimed(&existing));
@@ -273,14 +334,14 @@ fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
 fn a_collision_names_both_definitions_as_the_source_writes_them() {
     let mut table = SymbolTable::default();
     table
-        .claim(&Symbol::function("pick__int", &[]))
+        .claim(&Symbol::function("pick$int", &[]))
         .expect("first claim is new");
     let collision = table
         .claim(&Symbol::function("pick", &[ty(TypeKind::Int)]))
-        .expect_err("a second definition of `pick__int` collides");
+        .expect_err("a second definition of `miri.pick$int` collides");
     assert_eq!(
         collision.to_string(),
-        "`pick__int` and `pick<int>` compile to the same symbol `pick__int`"
+        "`pick$int` and `pick<int>` compile to the same symbol `miri.pick$int`"
     );
 }
 
@@ -295,4 +356,93 @@ fn a_method_symbol_answers_which_method_of_its_owner_it_is() {
         Symbol::function("Box_get", &at_int).method_of("Box", &at_int),
         None
     );
+}
+
+/// Every identifier of up to `max_len` characters drawn from `alphabet`.
+fn identifiers(alphabet: &[char], max_len: usize) -> Vec<String> {
+    let mut all = Vec::new();
+    let mut frontier = vec![String::new()];
+    for _ in 0..max_len {
+        frontier = frontier
+            .iter()
+            .flat_map(|prefix| {
+                alphabet.iter().map(move |c| {
+                    let mut next = prefix.clone();
+                    next.push(*c);
+                    next
+                })
+            })
+            .collect();
+        all.extend(frontier.iter().cloned());
+    }
+    all.retain(|name| !name.starts_with(|c: char| c.is_ascii_digit()));
+    all
+}
+
+/// Every symbol a program can name from `names` and `argument_lists`.
+fn symbols_named_from(names: &[String], argument_lists: &[Vec<Type>]) -> Vec<Symbol> {
+    let mut symbols = vec![Symbol::entry()];
+    for name in names {
+        symbols.push(Symbol::runtime(name));
+        for args in argument_lists {
+            symbols.push(Symbol::function(name, args));
+            symbols.push(Symbol::vtable(name, args));
+            symbols.push(Symbol::type_thunk(ThunkKind::Drop, name, args));
+            symbols.push(Symbol::type_thunk(ThunkKind::Decref, name, args));
+            symbols.push(Symbol::function(name, args).with_residency(&[(0, DeviceHandleId(1))]));
+            symbols.push(Symbol::closure(
+                ClosureKind::NestedFunction(name.clone()),
+                1,
+                args,
+            ));
+            let target = Symbol::function(name, args).link_name();
+            symbols.push(Symbol::closure(
+                ClosureKind::FunctionReference(target),
+                1,
+                &[],
+            ));
+        }
+    }
+    for id in [1, 11, 111] {
+        for args in argument_lists {
+            symbols.push(Symbol::closure(ClosureKind::Lambda, id, args));
+        }
+    }
+    let owners = names.iter().filter(|name| name.len() <= 3);
+    for owner in owners {
+        for method in names.iter().filter(|name| name.len() <= 3) {
+            for args in argument_lists {
+                symbols.push(Symbol::method(owner, args, method, &[]));
+                symbols.push(Symbol::method(owner, &[], method, args));
+            }
+        }
+    }
+    symbols
+}
+
+#[test]
+fn distinct_symbols_never_spell_one_link_name() {
+    let names = identifiers(&['a', '_', 'A', '1'], 4);
+    let argument_lists = vec![
+        Vec::new(),
+        vec![ty(TypeKind::Int)],
+        vec![ty(TypeKind::Int), ty(TypeKind::String)],
+        vec![list_of(TypeKind::String)],
+        vec![ty(TypeKind::Custom("a_A".to_string(), None))],
+    ];
+    let symbols = symbols_named_from(&names, &argument_lists);
+    let mut seen: std::collections::HashMap<String, Symbol> = std::collections::HashMap::new();
+    for symbol in symbols {
+        let link_name = symbol.link_name();
+        if let Some(earlier) = seen.get(&link_name) {
+            assert_eq!(earlier, &symbol, "two symbols spell `{link_name}`");
+        }
+        let is_foreign = symbol.is_runtime() || symbol == Symbol::entry();
+        assert_eq!(
+            link_name.contains('.'),
+            !is_foreign,
+            "`{link_name}`: only a runtime or entry symbol may be spelled without a `.`"
+        );
+        seen.insert(link_name, symbol);
+    }
 }

@@ -51,6 +51,9 @@ pub struct SymbolInfo {
     /// original symbol name (`"add"`) so MIR lowering can emit the right call target.
     pub original_name: Option<String>,
     pub is_intrinsic: bool,
+    /// True if this symbol is a function declared with the `runtime` keyword,
+    /// whose body the runtime library exports under its C name.
+    pub is_runtime: bool,
     /// Where the binding's value lives (host / device). Set from the AST
     /// `VariableDeclaration::residency` for local variables; defaults to
     /// [`BindingResidency::Host`] for every other symbol kind.
@@ -95,6 +98,7 @@ impl SymbolInfo {
             value,
             original_name: None,
             is_intrinsic: false,
+            is_runtime: false,
             residency: BindingResidency::Host,
             is_gpu_fn: false,
             is_parameter: false,
@@ -103,22 +107,18 @@ impl SymbolInfo {
         }
     }
 
+    /// A private function declared with the `runtime` keyword in `module`.
+    pub fn new_runtime(ty: Type, module: String) -> Self {
+        Self {
+            is_runtime: true,
+            ..Self::new(ty, false, false, MemberVisibility::Private, module, None)
+        }
+    }
+
     pub fn new_intrinsic(ty: Type, visibility: MemberVisibility, module: String) -> Self {
         Self {
-            ty,
-            mutable: false,
-            is_constant: false,
-            visibility,
-            module,
-            consumed: false,
-            value: None,
-            original_name: None,
             is_intrinsic: true,
-            residency: BindingResidency::Host,
-            is_gpu_fn: false,
-            is_parameter: false,
-            declaration_keyword_start: None,
-            module_scope: false,
+            ..Self::new(ty, false, false, visibility, module, None)
         }
     }
 }

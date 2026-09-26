@@ -22,19 +22,9 @@ use crate::ast::BuiltinCollectionKind as Collection;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-/// Produce a mangled function name for a generic instantiation.
-///
-/// Example: `identity` with `[("T", int)]` → `identity__int`
-///
-/// A caller that knows what it names — a method, a vtable, a closure — builds
-/// the [`Symbol`] itself, so the name records what it stands for.
-pub(crate) fn mangle_generic_name(base: &str, type_args: &[(String, Type)]) -> String {
-    Symbol::function(base, type_args.iter().map(|(_, ty)| ty)).link_name()
-}
-
 /// The mangled name of one instantiation of a generic class, e.g. `Box` at
-/// `[String]` → `Box__String`. The parameter names play no part in the symbol,
-/// so only the arguments are needed.
+/// `[String]` → `miri.Box$String`. The parameter names play no part in the
+/// symbol, so only the arguments are needed.
 pub(crate) fn mangle_instantiation_name(class_name: &str, type_args: &[Type]) -> String {
     Symbol::function(class_name, type_args).link_name()
 }
@@ -383,8 +373,9 @@ pub(crate) fn residency_specialize_call(
     }
 
     if let Operand::Constant(constant) = &*func_op {
-        if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
-            let symbol = Symbol::function(base, &[]).with_residency(&gpu_args);
+        if let crate::ast::literal::Literal::Identifier(_) = &constant.literal {
+            let symbol =
+                Symbol::function(declared_name(ctx, func_name), &[]).with_residency(&gpu_args);
             *func_op = super::dispatch::runtime_fn_operand(&symbol.link_name(), func.span);
             ctx.body
                 .residency_function_calls
@@ -396,6 +387,16 @@ pub(crate) fn residency_specialize_call(
         }
     }
     handles
+}
+
+/// The name the function a call writes as `name` is declared under: the
+/// original name when `name` is an import alias.
+fn declared_name<'n>(ctx: &'n LoweringContext, name: &'n str) -> &'n str {
+    ctx.type_checker
+        .global_scope()
+        .get(name)
+        .and_then(|info| info.original_name.as_deref())
+        .unwrap_or(name)
 }
 
 /// Walk the inheritance chain starting at `class_name` to find the first class
@@ -1022,7 +1023,7 @@ pub(crate) struct InstantiatedCallee {
     pub(crate) owner: String,
     /// The owner's parameters at the arguments the receiver reaches it at.
     pub(crate) owner_subs: HashMap<String, Type>,
-    /// The mangled symbol of the body, `{owner}_{method}__{args}`.
+    /// The link name of the body, `miri.{owner}${args}.{method}`.
     pub(crate) symbol: String,
 }
 

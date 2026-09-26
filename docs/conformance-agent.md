@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 93
+## Error fixtures (`fail/`) — 92
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -26,7 +26,6 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_LEX_012 | Triggers MER_LEX_012: Invalid Formatted String Expression. |
 | MER_MIR_016 | Triggers MER_MIR_016: Polymorphic Recursion. |
 | MER_MIR_017 | Triggers MER_MIR_017: Invalid Instantiation Argument. |
-| MER_MIR_018 | Triggers MER_MIR_018: Symbol Name Collision. |
 | MER_NAM_002 | Triggers MER_NAM_002: Module Not Found. |
 | MER_OWN_003 | Triggers MER_OWN_003: Use of Moved Value. |
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |

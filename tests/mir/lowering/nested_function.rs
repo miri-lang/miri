@@ -5,6 +5,7 @@ use miri::ast::literal::Literal;
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::mir::lambda::LambdaInfo;
 use miri::mir::lowering::lower_function;
+use miri::mir::symbol::Symbol;
 use miri::mir::{Body, Local, Operand, TerminatorKind};
 use miri::pipeline::Pipeline;
 
@@ -69,7 +70,7 @@ fn outer(a int) int
         .find(|info| info.symbol.link_name().contains("helper"))
         .expect("nested body not emitted");
 
-    let args = args_of_call_to(&helper.body, "base");
+    let args = args_of_call_to(&helper.body, &Symbol::function("base", &[]).link_name());
     assert_eq!(args.len(), 2, "base takes its argument plus the allocator");
     let Operand::Copy(forwarded) = &args[1] else {
         panic!("allocator argument is not a local read: {:?}", args[1]);

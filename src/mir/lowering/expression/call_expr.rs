@@ -142,7 +142,7 @@ fn try_lower_gpu_or_math_intrinsic(
             return Ok(Some(op));
         }
 
-        if let Some(op) = try_lower_math_intrinsic(ctx, name, args, expr, dest)? {
+        if let Some(op) = try_lower_math_intrinsic(ctx, func, args, expr, dest)? {
             return Ok(Some(op));
         }
     }
@@ -498,12 +498,12 @@ fn try_lower_vector_builtin(
 
 fn try_lower_math_intrinsic(
     ctx: &mut LoweringContext,
-    name: &str,
+    func: &Expression,
     args: &[Expression],
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let Some(intrinsic) = crate::mir::lowering::dispatch::math_intrinsic_callee(ctx, name) else {
+    let Some(intrinsic) = crate::mir::lowering::dispatch::math_intrinsic_callee(ctx, func) else {
         return Ok(None);
     };
 

@@ -235,14 +235,17 @@ fn a_declared_slot_no_call_reads_stays_unfilled() {
     let mut demand = VtableDemand::default();
     fixture.record(&mut demand, &[("main", main)]);
     assert_eq!(
-        filled(&demand, "__vtable_Impl__String"),
+        filled(&demand, "miri.Impl$String.$vtable"),
         vec![FilledSlot {
             slot: keep,
             method: "keep".to_string(),
-            symbol: "Impl_keep__String".to_string(),
+            symbol: "miri.Impl$String.keep".to_string(),
         }],
     );
-    assert_eq!(demand.take_named_slot_symbols(), vec!["Impl_keep__String"]);
+    assert_eq!(
+        demand.take_named_slot_symbols(),
+        vec!["miri.Impl$String.keep"]
+    );
 }
 
 /// The instance and the call reading its slot can come from bodies recorded
@@ -261,12 +264,12 @@ fn a_slot_is_filled_once_its_instance_and_its_call_are_both_recorded() {
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     fixture.record(&mut demand, &[("call", caller)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["Impl_keep__int"]);
+    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
 
     let callee = BodySketch::new().body();
-    fixture.record(&mut demand, &[("Impl_keep__int", callee)]);
+    fixture.record(&mut demand, &[("miri.Impl$int.keep", callee)]);
     assert!(demand.take_named_slot_symbols().is_empty());
-    assert_eq!(filled(&demand, "__vtable_Impl__int").len(), 1);
+    assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
 }
 
 /// A call through `Op<int>` fills the `int` instance's slot and leaves the
@@ -282,8 +285,8 @@ fn a_slot_is_filled_only_where_the_receiver_arguments_agree() {
         .body();
     let mut demand = VtableDemand::default();
     fixture.record(&mut demand, &[("main", main)]);
-    assert_eq!(filled(&demand, "__vtable_Impl__int").len(), 1);
-    assert!(filled(&demand, "__vtable_Impl__String").is_empty());
+    assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
+    assert!(filled(&demand, "miri.Impl$String.$vtable").is_empty());
 }
 
 /// A receiver whose argument is still open can reach any instance.
@@ -298,8 +301,8 @@ fn a_receiver_at_an_open_argument_reads_every_instance() {
         .body();
     let mut demand = VtableDemand::default();
     fixture.record(&mut demand, &[("main", main)]);
-    assert_eq!(filled(&demand, "__vtable_Impl__int").len(), 1);
-    assert_eq!(filled(&demand, "__vtable_Impl__String").len(), 1);
+    assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
+    assert_eq!(filled(&demand, "miri.Impl$String.$vtable").len(), 1);
 }
 
 /// A shared generic body builds its instance at an open argument; it counts
@@ -324,9 +327,9 @@ fn a_shared_generic_body_counts_only_once_reached() {
     fixture.record(&mut demand, &[("run", caller)]);
     assert_eq!(
         demand.vtable_symbols().collect::<Vec<_>>(),
-        vec!["__vtable_Impl"]
+        vec!["miri.Impl.$vtable"]
     );
-    assert_eq!(demand.take_named_slot_symbols(), vec!["Impl_keep"]);
+    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl.keep"]);
 }
 
 /// A body reached through `Impl<int>`'s slot that builds `Impl<Wrap<int>>`
@@ -343,21 +346,21 @@ fn an_instance_growing_past_the_one_it_was_reached_through_is_compiled_for_its_o
         .body();
     let mut demand = VtableDemand::default();
     fixture.record(&mut demand, &[("main", main)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["Impl_keep__int"]);
+    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
 
     let wrapped = generic("Wrap", vec![TypeKind::Int]);
     let body = BodySketch::new()
         .constructs(impl_at(wrapped.clone()))
         .dispatches(op_at(wrapped), keep)
         .body();
-    fixture.record(&mut demand, &[("Impl_keep__int", body)]);
+    fixture.record(&mut demand, &[("miri.Impl$int.keep", body)]);
     assert_eq!(
         demand.take_named_slot_symbols(),
-        vec!["Impl_keep__Wrap_int"]
+        vec!["miri.Impl$Wrap_int.keep"]
     );
     assert_eq!(
-        filled(&demand, "__vtable_Impl__Wrap_int")[0].symbol,
-        "Impl_keep__Wrap_int"
+        filled(&demand, "miri.Impl$Wrap_int.$vtable")[0].symbol,
+        "miri.Impl$Wrap_int.keep"
     );
 }
 
@@ -535,8 +538,8 @@ fn a_body_spelling_self_is_not_left_open() {
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("Pt_drop", hook)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["Impl_keep__int"]);
+    fixture.record(&mut demand, &[("miri.Pt.drop", hook)]);
+    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
 }
 
 /// The same instance built from a root, where nothing it grows past was
@@ -554,6 +557,6 @@ fn an_instance_built_from_a_root_is_compiled_for_its_own_arguments() {
     fixture.record(&mut demand, &[("main", main)]);
     assert_eq!(
         demand.take_named_slot_symbols(),
-        vec!["Impl_keep__Wrap_int"]
+        vec!["miri.Impl$Wrap_int.keep"]
     );
 }

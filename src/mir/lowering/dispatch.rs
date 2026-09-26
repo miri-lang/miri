@@ -34,9 +34,7 @@ pub(super) struct CollectionIntrinsicCall<'a> {
 }
 
 // Re-export method dispatch functions from the specialized module.
-pub(crate) use super::method_dispatch::{
-    mangle_generic_name, mangle_instantiation_name, resolve_inherited_method,
-};
+pub(crate) use super::method_dispatch::{mangle_instantiation_name, resolve_inherited_method};
 
 // Re-export kernel launch functions from the specialized module.
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
@@ -132,7 +130,7 @@ fn try_lower_module_alias_call(
         return Ok(None);
     }
 
-    if let Some(intrinsic) = math_intrinsic_callee(ctx, func_name) {
+    if let Some(intrinsic) = math_intrinsic_callee(ctx, method_expr) {
         return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest.cloned())
             .map(Some);
     }
@@ -255,15 +253,24 @@ fn lower_static_method_impl(
     Ok(Some(result_op))
 }
 
-/// The math intrinsic a call to `name` lowers to: the callee must be declared
-/// `intrinsic` and carry the name of a [`MathIntrinsic`]. The declaration, not
-/// the module that holds it, decides — a plain function that happens to share
-/// an intrinsic's name stays an ordinary call.
-pub(crate) fn math_intrinsic_callee(ctx: &LoweringContext, name: &str) -> Option<MathIntrinsic> {
-    if !ctx.type_checker.is_intrinsic(name) {
+/// The math intrinsic a call to `callee` lowers to: the name must resolve to
+/// a declaration made `intrinsic` and carry the name of a [`MathIntrinsic`].
+/// The declaration, not the module that holds it, decides — a plain function
+/// that happens to share an intrinsic's name stays an ordinary call, and a
+/// module body's call to its own intrinsic lowers as one even where the
+/// program's imports leave that intrinsic out of its scope.
+pub(crate) fn math_intrinsic_callee(
+    ctx: &LoweringContext,
+    callee: &Expression,
+) -> Option<MathIntrinsic> {
+    let ExpressionKind::Identifier(name, _) = &callee.node else {
         return None;
-    }
-    MathIntrinsic::from_name(name)
+    };
+    let is_intrinsic =
+        ctx.type_checker.is_intrinsic_reference(callee.id) || ctx.type_checker.is_intrinsic(name);
+    is_intrinsic
+        .then(|| MathIntrinsic::from_name(name))
+        .flatten()
 }
 
 /// Lower a call to a math intrinsic to a `MathIntrinsic` rvalue.
@@ -300,7 +307,7 @@ fn lower_aliased_function_call(
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     let mangled = generic_function_symbol(ctx, func_name, call_expr_id)
-        .unwrap_or_else(|| func_name.to_string());
+        .unwrap_or_else(|| Symbol::declared_function(func_name).link_name());
     let func_op = runtime_fn_operand(&mangled, *span);
 
     let mut arg_ops = lower_plain_args(ctx, args)?;
@@ -537,10 +544,8 @@ pub(super) fn resolve_kernel_operand(
         ));
     };
 
-    let kernel_name = match ctx.instantiated_call_mapping(callee.id) {
-        Some(generic_args) => mangle_generic_name(func_name, &generic_args),
-        None => func_name.clone(),
-    };
+    let type_args = ctx.instantiated_call_mapping(callee.id).unwrap_or_default();
+    let kernel_name = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty)).wgsl_name();
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
         span,
@@ -1334,7 +1339,7 @@ fn lower_direct_call(
 
     fill_default_args(ctx, &mut arg_ops, &param_types)?;
 
-    inject_allocator_arg(ctx, &callee.node, &func_op, &mut arg_ops);
+    inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
 
     // Per-residency device-handle Call-ABI: when a gpu-resident buffer is passed
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
@@ -1626,21 +1631,22 @@ fn fill_default_args(
     Ok(())
 }
 
-/// Whether a call to the function named `name` carries the implicit trailing
-/// allocator parameter every Miri-defined function is lowered with.
+/// Whether a call to the function `callee` names carries the implicit
+/// trailing allocator parameter every Miri-defined function is lowered with.
 ///
 /// Runtime C functions and math intrinsics are declared without it: the first is
 /// a foreign symbol with a fixed signature, the second never reaches a call at
 /// all because it lowers to a `MathIntrinsic` rvalue. Which functions are
-/// runtime ones is what their declarations say, never how they are spelled: a
-/// Miri function may be named anything a runtime export is.
-pub(super) fn callee_takes_allocator(ctx: &LoweringContext, name: &str) -> bool {
-    !ctx.type_checker.is_runtime_function(name) && math_intrinsic_callee(ctx, name).is_none()
+/// runtime ones is what the declaration the name resolved to says, never how it
+/// is spelled: a Miri function may be named anything a runtime export is.
+pub(super) fn callee_takes_allocator(ctx: &LoweringContext, callee: &Expression) -> bool {
+    !ctx.type_checker.is_runtime_reference(callee.id)
+        && math_intrinsic_callee(ctx, callee).is_none()
 }
 
 fn inject_allocator_arg(
     ctx: &mut LoweringContext,
-    func_node: &ExpressionKind,
+    callee: &Expression,
     func_op: &Operand,
     arg_ops: &mut Vec<Operand>,
 ) {
@@ -1648,14 +1654,8 @@ fn inject_allocator_arg(
         func_op,
         Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
     );
-    if is_indirect_call {
+    if is_indirect_call || !callee_takes_allocator(ctx, callee) {
         return;
-    }
-
-    if let ExpressionKind::Identifier(name, _) = func_node {
-        if !callee_takes_allocator(ctx, name.as_str()) {
-            return;
-        }
     }
 
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {

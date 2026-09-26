@@ -1911,7 +1911,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Resolve the closure's destructor pointer. When any capture is managed,
-    /// declare `__dtor_{lambda_name}` and take its address; otherwise return a
+    /// declare `miri.$dtor.{lambda_name}` and take its address; otherwise return a
     /// null pointer (no RC work needed on drop). The destructor DecRefs all
     /// managed captures when the closure's own RC reaches zero.
     fn closure_dtor_ptr(
