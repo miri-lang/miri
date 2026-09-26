@@ -3,10 +3,6 @@
 //
 // Tests for `Foldable<T>` defaults: reduce, any, all, count_where, sum, min,
 // max. Exercised via List.
-//
-// Predicates are inline lambdas — passing a named-fn reference through a
-// generic trait method (`xs.reduce(0, add)`) is currently miscompiled and
-// segfaults at runtime.
 
 use system.collections.list
 use system.testing

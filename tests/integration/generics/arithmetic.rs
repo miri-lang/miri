@@ -549,3 +549,28 @@ fn main()
         "Invalid types for arithmetic operation",
     );
 }
+
+/// A generic callee's result, used in an operator inside another generic
+/// body, is typed at the instantiation: one monomorphized symbol keeps one
+/// signature, and the same callee reached at `float` and at `int` in one
+/// program answers each at its own width.
+#[test]
+fn a_generic_callee_result_is_typed_at_the_instantiation_under_an_operator() {
+    assert_heap_guard_output(
+        r#"
+fn inner<U>(y U) U
+    return y
+
+fn outer<T>(x T, z T) T
+    return inner(x) + inner(z)
+
+fn negated<T>(x T) T
+    return -inner(x)
+
+fn main()
+    println(f"{outer(1.5, 2.5)} {outer(1, 2)}")
+    println(f"{negated(1.5)} {negated(3)}")
+"#,
+        "4.0 3\n-1.5 -3",
+    );
+}
