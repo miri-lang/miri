@@ -16,7 +16,7 @@ use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
-use crate::mir::symbol::{Claim, Symbol, SymbolTable};
+use crate::mir::symbol::{Symbol, SymbolTable};
 use crate::parser::Parser;
 use std::collections::BTreeSet;
 use std::fs;
@@ -555,78 +555,6 @@ fn monomorphized_lowering_failure(
     ))
 }
 
-/// Claim `symbol` for the body of the definition at `span`: whether that body
-/// is still to be lowered. A different definition already holding the link
-/// name `symbol` spells refuses the program.
-fn is_first_claim(
-    symbols: &mut SymbolTable,
-    symbol: &Symbol,
-    span: Span,
-) -> Result<bool, CompilerError> {
-    match symbols.claim(symbol) {
-        Ok(Claim::New) => Ok(true),
-        Ok(Claim::AlreadyLowered) => Ok(false),
-        Err(collision) => Err(CompilerError::Lowering(collision.refusal(span))),
-    }
-}
-
-/// The name each lowered body is emitted under: a GPU kernel's is the entry
-/// point its WGSL module declares, which the host launches it by, and every
-/// other body's is its link name.
-fn emitted_name(symbol: &Symbol, body: &mir::Body) -> String {
-    match body.execution_model {
-        mir::ExecutionModel::GpuKernel => symbol.wgsl_name(),
-        mir::ExecutionModel::Cpu | mir::ExecutionModel::GpuDevice | mir::ExecutionModel::Async => {
-            symbol.link_name()
-        }
-    }
-}
-
-/// The WGSL spelling of every lowered body whose link name WGSL cannot
-/// declare, keyed by that link name, for the bodies a GPU module takes in as
-/// helpers and the calls reaching them.
-fn wgsl_spellings(bodies: &[(Symbol, mir::Body)]) -> std::collections::HashMap<String, String> {
-    bodies
-        .iter()
-        .map(|(symbol, _)| (symbol.link_name(), symbol.wgsl_name()))
-        .filter(|(link_name, wgsl_name)| link_name != wgsl_name)
-        .collect()
-}
-
-/// Point every direct call in a GPU body at the WGSL spelling of its callee,
-/// the name that callee's helper clone is declared under.
-fn retarget_gpu_calls_to_wgsl_names(
-    bodies: &mut [(String, mir::Body)],
-    wgsl_names: &std::collections::HashMap<String, String>,
-) {
-    use crate::ast::literal::Literal;
-    let calls = bodies
-        .iter_mut()
-        .filter(|(_, body)| {
-            matches!(
-                body.execution_model,
-                mir::ExecutionModel::GpuKernel | mir::ExecutionModel::GpuDevice
-            )
-        })
-        .flat_map(|(_, body)| body.basic_blocks.iter_mut())
-        .filter_map(|block| block.terminator.as_mut());
-    for terminator in calls {
-        let mir::TerminatorKind::Call {
-            func: mir::Operand::Constant(constant),
-            ..
-        } = &mut terminator.kind
-        else {
-            continue;
-        };
-        let Literal::Identifier(name) = &mut constant.literal else {
-            continue;
-        };
-        if let Some(wgsl_name) = wgsl_names.get(name.as_str()) {
-            name.clone_from(wgsl_name);
-        }
-    }
-}
-
 fn called_function_names(bodies: &[(Symbol, mir::Body)]) -> std::collections::HashSet<String> {
     let mut called = std::collections::HashSet::new();
     for (_, body) in bodies {
@@ -918,9 +846,7 @@ fn record_pinned_base_class_instantiations(type_checker: &mut TypeChecker) {
                 .all(|arg| mir::lowering::has_a_monomorphized_spelling(&arg.kind))
         })
         .collect();
-    discovered.sort_by_cached_key(|(name, args)| {
-        mir::lowering::dispatch::mangle_instantiation_name(name, args)
-    });
+    discovered.sort_by_cached_key(|(name, args)| Symbol::function(name, args).link_name());
     for (name, args) in discovered {
         type_checker.record_generic_class_instantiation(&name, args);
     }
@@ -948,12 +874,59 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
             &mut discovered,
         );
     }
-    discovered.sort_by_cached_key(|(name, args)| {
-        mir::lowering::dispatch::mangle_instantiation_name(name, args)
-    });
+    discovered.sort_by_cached_key(|(name, args)| Symbol::function(name, args).link_name());
     for (name, args) in discovered {
         type_checker.record_generic_class_instantiation(&name, args);
     }
+}
+
+/// Refuse the first generic function instantiation a lowered body calls at a
+/// type argument with no name, which the worklist leaves unlowered rather than
+/// share one body between every such call.
+///
+/// A body lowered for one instantiation reaches such a call when it calls its
+/// own function at an ever deeper type; the class instances it builds on the
+/// way are refused first, with the chain that grew them, by the bounds on
+/// instantiations. When none is, the call is refused here: as polymorphic
+/// recursion when its argument nests past the depth one instance may nest to,
+/// otherwise as an argument with no name.
+fn refuse_unnameable_generic_calls(
+    result: &PipelineResult,
+    generic_functions: &std::collections::HashMap<String, StatementSite>,
+    bodies: &[(Symbol, mir::Body)],
+    symbols: &SymbolTable,
+) -> Result<(), CompilerError> {
+    use mir::lowering::instantiation_limits as limits;
+    let Some(call) = bodies
+        .iter()
+        .flat_map(|(_, body)| &body.generic_function_calls)
+        .find(|call| !symbols.is_claimed(&call.symbol) && call.symbol.has_an_unnameable_argument())
+    else {
+        return Ok(());
+    };
+    let span = generic_functions
+        .get(call.function.as_str())
+        .and_then(|site| site.statement(result))
+        .map_or_else(Span::default, |stmt| stmt.span);
+    let args: Vec<Type> = call.type_args.iter().map(|(_, ty)| ty.clone()).collect();
+    let depth = limits::deepest_argument_depth(&args);
+    if depth <= limits::MAX_INSTANCE_TYPE_DEPTH {
+        let refusal = mir::symbol::ClaimRefusal::Unnameable(call.symbol.clone());
+        return Err(CompilerError::Lowering(refusal.refusal(span)));
+    }
+    let growth = limits::Growth {
+        chain: Vec::new(),
+        method: None,
+        through_trait: false,
+    };
+    let limit = limits::ExceededLimit::TypeDepth(depth);
+    Err(CompilerError::Lowering(limits::polymorphic_recursion(
+        &call.function,
+        &args,
+        &limit,
+        &growth,
+        span,
+    )))
 }
 
 /// Add to the registry the instantiations lowered bodies recorded that it does
@@ -1743,7 +1716,10 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let symbol = Self::instantiated_method_symbol(class_name, method_name, mangle_args);
-        if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+        if !symbols
+            .claim_at(&symbol, method_stmt.span)
+            .map_err(CompilerError::Lowering)?
+        {
             return Ok(());
         }
         let self_type = mir::lowering::monomorphized_self_type(
@@ -1892,9 +1868,12 @@ impl Pipeline {
             for &(method_stmt, method_name) in &methods {
                 let symbol =
                     Self::instantiated_method_symbol(class_name, method_name, &mangle_args);
+                if symbols.is_claimed(&symbol) {
+                    continue;
+                }
                 let reached = called.contains(&symbol.link_name())
                     || Self::is_element_method_body(result, class_name, method_name);
-                if symbols.is_claimed(&symbol) || !reached {
+                if !reached {
                     continue;
                 }
                 let first_new = bodies.len();
@@ -2127,15 +2106,16 @@ impl Pipeline {
         is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
         let lowered = self.lower_program(result, is_release)?;
-        let wgsl_names = wgsl_spellings(&lowered);
+        let mut gpu_names =
+            mir::gpu_names::GpuNames::collect(&lowered).map_err(CompilerError::Lowering)?;
         let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
-            .map(|(symbol, body)| (emitted_name(&symbol, &body), body))
+            .map(|(symbol, body)| (mir::gpu_names::emitted_name(&symbol, &body), body))
             .collect();
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
-        Self::clone_gpu_device_helpers(&mut bodies, &wgsl_names)?;
+        Self::clone_gpu_device_helpers(&mut bodies, &mut gpu_names)?;
 
         // Apply recorded workgroup sizes from kernel launches to GPU kernel bodies.
         // When kernel(args).launch(grid, block) is lowered, the block size is recorded
@@ -2230,6 +2210,7 @@ impl Pipeline {
                 &result.ast,
             )?;
             if !registered && bodies.len() == first_default {
+                refuse_unnameable_generic_calls(result, &reach.generic_functions, bodies, symbols)?;
                 result.vtable_fills = called.vtables.fills();
                 return Ok(());
             }
@@ -2260,15 +2241,21 @@ impl Pipeline {
     ) -> Result<(), CompilerError> {
         for default in &reach.trait_defaults.bodies {
             let symbol = &default.symbol;
+            if symbols.is_claimed(symbol) {
+                continue;
+            }
             let link_name = symbol.link_name();
             let is_named = called.contains(&link_name) || reach.synthesized.contains(&link_name);
-            if symbols.is_claimed(symbol) || !is_named {
+            if !is_named {
                 continue;
             }
             let Some((trait_stmt, method_stmt)) = default.statements(result) else {
                 continue;
             };
-            if !is_first_claim(symbols, symbol, method_stmt.span)? {
+            if !symbols
+                .claim_at(symbol, method_stmt.span)
+                .map_err(CompilerError::Lowering)?
+            {
                 continue;
             }
             let self_type = Type::new(
@@ -2392,7 +2379,10 @@ impl Pipeline {
                             );
 
                             let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
-                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                            if !symbols
+                                .claim_at(&symbol, method_stmt.span)
+                                .map_err(CompilerError::Lowering)?
+                            {
                                 continue;
                             }
 
@@ -2436,7 +2426,10 @@ impl Pipeline {
                             }
 
                             let symbol = Symbol::method(struct_name, &[], &method_decl.name, &[]);
-                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                            if !symbols
+                                .claim_at(&symbol, method_stmt.span)
+                                .map_err(CompilerError::Lowering)?
+                            {
                                 continue;
                             }
 
@@ -2477,7 +2470,10 @@ impl Pipeline {
                             }
 
                             let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
-                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                            if !symbols
+                                .claim_at(&symbol, method_stmt.span)
+                                .map_err(CompilerError::Lowering)?
+                            {
                                 continue;
                             }
 
@@ -2564,7 +2560,10 @@ impl Pipeline {
                             );
 
                             let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
-                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                            if !symbols
+                                .claim_at(&symbol, method_stmt.span)
+                                .map_err(CompilerError::Lowering)?
+                            {
                                 continue;
                             }
 
@@ -2613,7 +2612,10 @@ impl Pipeline {
                             }
 
                             let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
-                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                            if !symbols
+                                .claim_at(&symbol, method_stmt.span)
+                                .map_err(CompilerError::Lowering)?
+                            {
                                 continue;
                             }
 
@@ -2745,7 +2747,10 @@ impl Pipeline {
                                         continue;
                                     }
                                     let symbol = Symbol::method(class_name, &[], &md.name, &[]);
-                                    if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                                    if !symbols
+                                        .claim_at(&symbol, method_stmt.span)
+                                        .map_err(CompilerError::Lowering)?
+                                    {
                                         continue;
                                     }
                                     let (mir_body, lambdas) =
@@ -2856,7 +2861,10 @@ impl Pipeline {
                 continue;
             };
             let symbol = Symbol::method(class.name, &[], method_name, &[]);
-            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+            if !symbols
+                .claim_at(&symbol, method_stmt.span)
+                .map_err(CompilerError::Lowering)?
+            {
                 continue;
             }
             let pinned = pins_of(&class.supertypes, trait_name).unwrap_or(&unpinned);
@@ -2947,13 +2955,19 @@ impl Pipeline {
         let mut pending = std::collections::VecDeque::new();
         Self::queue_generic_instantiations(&bodies[first_new..], symbols, &mut pending);
         while let Some(call) = pending.pop_front() {
+            if call.symbol.has_an_unnameable_argument() {
+                continue;
+            }
             let Some(ast_stmt) = generic_functions
                 .get(call.function.as_str())
                 .and_then(|site| site.statement(result))
             else {
                 continue;
             };
-            if !is_first_claim(symbols, &call.symbol, ast_stmt.span)? {
+            if !symbols
+                .claim_at(&call.symbol, ast_stmt.span)
+                .map_err(CompilerError::Lowering)?
+            {
                 continue;
             }
             let subs = call.type_args.into_iter().collect();
@@ -2987,7 +3001,10 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let symbol = Symbol::declared_function(name);
-        if !is_first_claim(symbols, &symbol, stmt.span)? {
+        if !symbols
+            .claim_at(&symbol, stmt.span)
+            .map_err(CompilerError::Lowering)?
+        {
             return Ok(());
         }
         let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
@@ -2997,7 +3014,7 @@ impl Pipeline {
             true,
             compilation_ids.clone(),
         )
-        .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
+        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
         Self::push_lowered_body(bodies, symbols, symbol, body, lambdas)
     }
 
@@ -3012,7 +3029,10 @@ impl Pipeline {
     ) -> Result<(), CompilerError> {
         bodies.push((symbol, body));
         for lambda in lambdas {
-            if is_first_claim(symbols, &lambda.symbol, lambda.body.span)? {
+            if symbols
+                .claim_at(&lambda.symbol, lambda.body.span)
+                .map_err(CompilerError::Lowering)?
+            {
                 bodies.push((lambda.symbol, lambda.body));
             }
         }
@@ -3091,7 +3111,10 @@ impl Pipeline {
             let Some(&ast_stmt) = decls.get(call.function.as_str()) else {
                 continue;
             };
-            if !is_first_claim(symbols, &call.symbol, ast_stmt.span)? {
+            if !symbols
+                .claim_at(&call.symbol, ast_stmt.span)
+                .map_err(CompilerError::Lowering)?
+            {
                 continue;
             }
             let (body, lambdas) =
@@ -3203,7 +3226,7 @@ impl Pipeline {
     /// Each clone is marked as GpuDevice and has f32-narrowed types.
     fn clone_gpu_device_helpers(
         bodies: &mut Vec<(String, mir::Body)>,
-        wgsl_names: &std::collections::HashMap<String, String>,
+        gpu_names: &mut mir::gpu_names::GpuNames,
     ) -> Result<(), CompilerError> {
         let kernel_names: std::collections::HashSet<&str> = bodies
             .iter()
@@ -3228,8 +3251,10 @@ impl Pipeline {
                 gpu_body.execution_model = mir::ExecutionModel::GpuDevice;
                 Self::narrow_float_types(&mut gpu_body);
                 helper_names.insert(name.clone());
-                let wgsl_name = wgsl_names.get(name).unwrap_or(name);
-                helpers_to_add.push((wgsl_name.clone(), gpu_body));
+                let wgsl_name = gpu_names
+                    .claim_helper(name, body.span)
+                    .map_err(CompilerError::Lowering)?;
+                helpers_to_add.push((wgsl_name, gpu_body));
             }
         }
 
@@ -3254,7 +3279,7 @@ impl Pipeline {
         }
 
         bodies.extend(helpers_to_add);
-        retarget_gpu_calls_to_wgsl_names(bodies, wgsl_names);
+        gpu_names.retarget_calls(bodies);
         Ok(())
     }
 

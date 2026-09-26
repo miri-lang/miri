@@ -398,3 +398,69 @@ fn main()
         "each instance of `Buf` builds the next at a new value of `Size`",
     );
 }
+
+/// `Option<Option<…<leaf>…>>` nested `depth` levels deep.
+fn nested_options(depth: usize, leaf: &str) -> String {
+    format!("{}{leaf}{}", "Option<".repeat(depth), ">".repeat(depth))
+}
+
+/// `Some(Some(…value…))` nested `depth` levels deep.
+fn nested_somes(depth: usize, value: &str) -> String {
+    format!("{}{value}{}", "Some(".repeat(depth), ")".repeat(depth))
+}
+
+/// A type argument nested past the depth the compiler names types to has no
+/// name of its own: two such instances in `main` would otherwise share one
+/// body and one drop function, and the one holding integers would be dropped
+/// as if it held strings.
+#[test]
+fn test_a_type_argument_nested_too_deeply_to_name_is_refused_outside_a_generic_body() {
+    let depth = 70;
+    let source = format!(
+        r#"
+use system.io
+
+class Wrapper<T>
+    value T
+
+    fn touch(self)
+        println("touched")
+
+fn main()
+    let a = Wrapper<{strings}>(value: {some_string})
+    let b = Wrapper<{ints}>(value: {some_int})
+    a.touch()
+    b.touch()
+"#,
+        strings = nested_options(depth, "String"),
+        ints = nested_options(depth, "int"),
+        some_string = nested_somes(depth, "\"s\" + \"t\""),
+        some_int = nested_somes(depth, "1"),
+    );
+    assert_build_error(&source, "MER_MIR_017");
+}
+
+/// A generic function called at a type argument nested too deeply to name is
+/// refused rather than sharing one compiled body with every other such call.
+#[test]
+fn test_a_generic_function_at_a_type_argument_nested_too_deeply_to_name_is_refused() {
+    let depth = 70;
+    let source = format!(
+        r#"
+use system.io
+
+fn keep<T>(x T) T
+    return x
+
+fn main()
+    let a = keep<{strings}>({some_string})
+    let b = keep<{ints}>({some_int})
+    println("kept")
+"#,
+        strings = nested_options(depth, "String"),
+        ints = nested_options(depth, "int"),
+        some_string = nested_somes(depth, "\"s\" + \"t\""),
+        some_int = nested_somes(depth, "1"),
+    );
+    assert_build_error(&source, "MER_MIR_017");
+}

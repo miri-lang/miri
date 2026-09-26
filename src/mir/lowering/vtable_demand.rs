@@ -31,11 +31,11 @@ use super::instantiation_limits::{
     constructor_parts, exceeded_limit, has_value_argument, polymorphic_recursion, Growth,
 };
 use super::is_monomorphizable_type_argument;
-use super::method_dispatch::type_kind_to_mangle_str;
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::token::type_kind_to_mangle_str;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     AggregateKind, BasicBlock, BasicBlockData, Body, Constant, Operand, Place, Rvalue,

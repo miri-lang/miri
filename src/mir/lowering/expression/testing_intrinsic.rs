@@ -15,7 +15,7 @@
 //! (`miri_rt_assert_fail`, `miri_rt_assert_eq_fail`, `miri_rt_assert_ne_fail`,
 //! `miri_rt_assert_panics`).
 
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -28,6 +28,7 @@ use crate::mir::{
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
+use crate::type_checker::CalleeKind;
 
 /// An assertion the compiler lowers in place rather than calling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,18 +52,21 @@ impl TestingIntrinsic {
     }
 }
 
-/// The assertion a call to `name` lowers to: the callee must be declared
-/// `intrinsic` and carry an assertion's name. The declaration, not the module
-/// that holds it, decides — a plain function named `assert_eq` stays a call.
+/// The assertion a call to `callee` lowers to: the name must resolve, where
+/// it is written, to a declaration made `intrinsic` and carry an assertion's
+/// name. The declaration, not the module that holds it, decides — a function
+/// named `assert_eq` stays a call wherever it is the one the name reaches.
 /// Checked before `lower_call_expr` mangles a generic callee's name.
 pub(crate) fn testing_intrinsic_callee(
     ctx: &LoweringContext<'_>,
-    name: &str,
+    callee: &Expression,
 ) -> Option<TestingIntrinsic> {
-    if !ctx.type_checker.is_intrinsic(name) {
+    let ExpressionKind::Identifier(name, _) = &callee.node else {
         return None;
-    }
-    TestingIntrinsic::from_name(name)
+    };
+    (ctx.callee_kind(callee) == CalleeKind::Intrinsic)
+        .then(|| TestingIntrinsic::from_name(name))
+        .flatten()
 }
 
 /// Lower a call to an assertion intrinsic. Returns the void-typed call result

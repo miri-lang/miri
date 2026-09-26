@@ -26,13 +26,13 @@
 //! side reach every combination up to the depth bound before either passes it.
 
 use super::instantiation_argument;
-use super::method_dispatch::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::ast::expression::Expression;
 use crate::ast::formatter::expression_text;
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::token::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::generics::{extract_value_generic_kind, UnfoldableValue};
 use std::borrow::Cow;
@@ -93,8 +93,13 @@ pub enum ExceededLimit {
 /// [`MAX_INSTANCE_TYPE_DEPTH`] the count stops one level beyond it, which is
 /// all a caller asking whether the bound is passed needs.
 pub fn instance_type_depth(args: &[Type]) -> usize {
-    1 + args
-        .iter()
+    1 + deepest_argument_depth(args)
+}
+
+/// How many type constructors deep the deepest of `args` nests, stopping one
+/// level past [`MAX_INSTANCE_TYPE_DEPTH`].
+pub fn deepest_argument_depth<'t>(args: impl IntoIterator<Item = &'t Type>) -> usize {
+    args.into_iter()
         .map(|arg| type_depth(arg, MAX_INSTANCE_TYPE_DEPTH))
         .max()
         .unwrap_or(0)

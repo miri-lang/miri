@@ -76,14 +76,6 @@ struct EnumDropSite {
     slot_size: i32,
 }
 
-/// The link spelling of a generic class at a concrete instantiation's type
-/// arguments (`Box` + `[String]` → `miri.Box$String`), as [`Symbol::function`]
-/// spells it. Instantiations are compared by their [`Symbol`], never by this
-/// spelling.
-pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
-    crate::mir::lowering::dispatch::mangle_instantiation_name(class_name, type_args)
-}
-
 impl<'a> FunctionTranslator<'a> {
     /// Address of the runtime decref helper for an element of `shape`, or
     /// `None` when the shape needs no decref (primitives, void, etc.).
@@ -138,7 +130,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Some(encoding) =
             crate::codegen::cranelift::structural_elements::structural_thunk_symbol(elem_kind)
         {
-            let thunk = Symbol::structural_thunk(ThunkKind::Decref, &encoding);
+            let thunk = Symbol::structural_thunk(ThunkKind::Decref, encoding);
             let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?;
             return Ok(Some(addr));
         }

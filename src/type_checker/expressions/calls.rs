@@ -52,7 +52,7 @@ use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
-use crate::type_checker::TypeChecker;
+use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
 
 impl TypeChecker {
@@ -260,7 +260,7 @@ impl TypeChecker {
     /// signature and a user module's `intrinsic fn` types like the standard
     /// library's.
     fn math_intrinsic_callee(&self, func: &Expression) -> Option<MathIntrinsic> {
-        if let ExpressionKind::Member(obj, _) = &func.node {
+        let callee = if let ExpressionKind::Member(obj, prop) = &func.node {
             let through_alias = matches!(
                 &obj.node,
                 ExpressionKind::Identifier(alias, _)
@@ -269,12 +269,16 @@ impl TypeChecker {
             if !through_alias {
                 return None;
             }
-        }
-        let name = Self::call_func_name(func)?;
-        if !self.is_intrinsic(name) {
+            &**prop
+        } else {
+            func
+        };
+        let ExpressionKind::Identifier(name, _) = &callee.node else {
             return None;
-        }
-        MathIntrinsic::from_name(name)
+        };
+        (self.callee_kind(callee.id) == CalleeKind::Intrinsic)
+            .then(|| MathIntrinsic::from_name(name))
+            .flatten()
     }
 
     /// Inside a GPU kernel, a math intrinsic declared to return `float` (f64)

@@ -2,11 +2,12 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::{Type, TypeKind};
+use miri::diagnostics::DiagnosticCode;
 use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::symbol::{
-    Claim, ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, SymbolCollision,
-    SymbolTable, ThunkKind,
+    Claim, ClaimRefusal, ClosureKind, GpuKernelKind, KernelDatum, Namespace, StringLiteralPart,
+    Symbol, SymbolCollision, SymbolTable, ThunkKind,
 };
 
 fn ty(kind: TypeKind) -> Type {
@@ -320,11 +321,12 @@ fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
     assert_eq!(table.claim(&existing), Ok(Claim::New));
     assert_eq!(
         table.claim(&incoming),
-        Err(Box::new(SymbolCollision {
+        Err(Box::new(ClaimRefusal::Collision(SymbolCollision {
             existing: existing.clone(),
             incoming: incoming.clone(),
-            link_name: "miri.A.b".to_string(),
-        }))
+            name: "miri.A.b".to_string(),
+            namespace: Namespace::Link,
+        })))
     );
     assert!(table.is_claimed(&existing));
     assert!(!table.is_claimed(&incoming));
@@ -336,13 +338,111 @@ fn a_collision_names_both_definitions_as_the_source_writes_them() {
     table
         .claim(&Symbol::function("pick$int", &[]))
         .expect("first claim is new");
-    let collision = table
+    let refusal = table
         .claim(&Symbol::function("pick", &[ty(TypeKind::Int)]))
         .expect_err("a second definition of `miri.pick$int` collides");
+    let ClaimRefusal::Collision(collision) = *refusal else {
+        panic!("expected a collision, got {refusal:?}");
+    };
     assert_eq!(
         collision.to_string(),
         "`pick$int` and `pick<int>` compile to the same symbol `miri.pick$int`"
     );
+}
+
+/// The refusal of a collision carries the collision's code, names both
+/// definitions and asks for one of them to be renamed.
+#[test]
+fn a_collision_is_refused_with_the_symbol_collision_code() {
+    let collision = SymbolCollision {
+        existing: Symbol::method("A", &[], "b_c", &[]),
+        incoming: Symbol::method("A_b", &[], "c", &[]),
+        name: "A_b_c".to_string(),
+        namespace: Namespace::Wgsl,
+    };
+    let properties = collision.refusal(Span::new(3, 9)).kind.properties();
+    assert_eq!(properties.code, DiagnosticCode::MirSymbolCollision);
+    assert_eq!(properties.code.to_string(), "MER_MIR_018");
+    assert_eq!(
+        properties.message.as_deref(),
+        Some(
+            "`A.b_c` and `A_b.c` are both reached from GPU code, \
+             where both are declared as `A_b_c`"
+        )
+    );
+    assert_eq!(
+        properties.help.as_deref(),
+        Some("rename one of the two definitions so that their compiled names differ")
+    );
+}
+
+/// Two methods whose link names differ can still share a WGSL spelling; a
+/// table keyed on that spelling refuses the second.
+#[test]
+fn a_wgsl_table_refuses_two_symbols_sharing_a_wgsl_name() {
+    let mut table = SymbolTable::new(Namespace::Wgsl);
+    let existing = Symbol::method("A", &[], "b_c", &[]);
+    let incoming = Symbol::method("A_b", &[], "c", &[]);
+    assert_ne!(existing.link_name(), incoming.link_name());
+    assert_eq!(table.claim(&existing), Ok(Claim::New));
+    assert_eq!(
+        table.claim(&incoming),
+        Err(Box::new(ClaimRefusal::Collision(SymbolCollision {
+            existing,
+            incoming,
+            name: "A_b_c".to_string(),
+            namespace: Namespace::Wgsl,
+        })))
+    );
+}
+
+/// `Option<Option<…<leaf>…>>` nested `depth` levels deep.
+fn nested_options(depth: usize, leaf: TypeKind) -> Type {
+    (0..depth).fold(ty(leaf), |inner, _| ty(TypeKind::Option(Box::new(inner))))
+}
+
+/// Every type nested past the depth types are named to spells alike, so a
+/// symbol built from one stands for all of them: it is refused on every
+/// claim, never found already lowered.
+#[test]
+fn a_symbol_with_an_unnameable_argument_is_never_claimed() {
+    let strings = Symbol::function("keep", &[nested_options(70, TypeKind::String)]);
+    let ints = Symbol::function("keep", &[nested_options(70, TypeKind::Int)]);
+    assert_eq!(strings, ints);
+    assert!(strings.has_an_unnameable_argument());
+    let mut table = SymbolTable::default();
+    for _ in 0..2 {
+        assert_eq!(
+            table.claim(&strings),
+            Err(Box::new(ClaimRefusal::Unnameable(strings.clone())))
+        );
+    }
+    assert!(!table.is_claimed(&strings));
+}
+
+/// The refusal of an unnameable symbol carries the instantiation code and
+/// shows the argument it has no name for as `…`.
+#[test]
+fn an_unnameable_symbol_is_refused_with_the_instantiation_code() {
+    let symbol = Symbol::method("W", &[nested_options(70, TypeKind::Int)], "get", &[]);
+    let refusal = ClaimRefusal::Unnameable(symbol);
+    let properties = refusal.refusal(Span::new(0, 0)).kind.properties();
+    assert_eq!(
+        properties.code,
+        DiagnosticCode::MirInvalidInstantiationArgument
+    );
+    assert_eq!(
+        properties.message.as_deref(),
+        Some("`W<…>.get` has a type argument with no name the compiler can compile a body at")
+    );
+}
+
+#[test]
+fn a_nameable_symbol_has_no_unnameable_argument() {
+    assert!(
+        !Symbol::function("keep", &[nested_options(3, TypeKind::Int)]).has_an_unnameable_argument()
+    );
+    assert!(!Symbol::entry().has_an_unnameable_argument());
 }
 
 #[test]
@@ -389,37 +489,61 @@ fn symbols_named_from(names: &[String], argument_lists: &[Vec<Type>]) -> Vec<Sym
             symbols.push(Symbol::vtable(name, args));
             symbols.push(Symbol::type_thunk(ThunkKind::Drop, name, args));
             symbols.push(Symbol::type_thunk(ThunkKind::Decref, name, args));
-            symbols.push(Symbol::function(name, args).with_residency(&[(0, DeviceHandleId(1))]));
-            symbols.push(Symbol::closure(
-                ClosureKind::NestedFunction(name.clone()),
-                1,
-                args,
-            ));
             let target = Symbol::function(name, args).link_name();
-            symbols.push(Symbol::closure(
-                ClosureKind::FunctionReference(target),
-                1,
-                &[],
+            let closures = [
+                Symbol::closure(ClosureKind::NestedFunction(name.clone()), 1, args),
+                Symbol::closure(ClosureKind::FunctionReference(target), 1, &[]),
+            ];
+            symbols.extend(with_and_without_residency(
+                std::iter::once(Symbol::function(name, args)).chain(closures),
             ));
         }
     }
     for id in [1, 11, 111] {
         for args in argument_lists {
-            symbols.push(Symbol::closure(ClosureKind::Lambda, id, args));
+            symbols.extend(with_and_without_residency([Symbol::closure(
+                ClosureKind::Lambda,
+                id,
+                args,
+            )]));
         }
     }
     let owners = names.iter().filter(|name| name.len() <= 3);
     for owner in owners {
         for method in names.iter().filter(|name| name.len() <= 3) {
             for args in argument_lists {
-                symbols.push(Symbol::method(owner, args, method, &[]));
-                symbols.push(Symbol::method(owner, &[], method, args));
+                symbols.extend(with_and_without_residency([
+                    Symbol::method(owner, args, method, &[]),
+                    Symbol::method(owner, &[], method, args),
+                ]));
             }
         }
     }
     symbols
 }
 
+/// Each of `symbols`, then each again specialized for one and for two
+/// gpu-resident buffers.
+fn with_and_without_residency(symbols: impl IntoIterator<Item = Symbol>) -> Vec<Symbol> {
+    let residencies: [&[(usize, DeviceHandleId)]; 2] = [
+        &[(0, DeviceHandleId(1))],
+        &[(0, DeviceHandleId(1)), (1, DeviceHandleId(11))],
+    ];
+    symbols
+        .into_iter()
+        .flat_map(|symbol| {
+            let specialized = residencies.map(|residency| symbol.clone().with_residency(residency));
+            std::iter::once(symbol).chain(specialized)
+        })
+        .collect()
+}
+
+/// A bounded regression sweep backing the injectivity argument in the
+/// module documentation of `miri::mir::symbol`: every symbol built from short
+/// identifiers over an alphabet of letters, digits and underscores — alone,
+/// as methods and closures, with and without gpu residency — spells a link
+/// name no other one does. It cannot prove the grammar injective; it keeps a
+/// change that breaks it from going unnoticed.
 #[test]
 fn distinct_symbols_never_spell_one_link_name() {
     let names = identifiers(&['a', '_', 'A', '1'], 4);

@@ -104,3 +104,22 @@ fn main()
         "x must be positive",
     );
 }
+
+/// A function declared inside a body under an assertion's name shadows the
+/// imported intrinsic there, so a call to it runs the function.
+#[test]
+fn test_nested_function_shadows_the_assert_intrinsic() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.testing
+
+fn main()
+    fn assert(condition bool)
+        println(f"checked {condition}")
+    assert(1 == 2)
+    println("done")
+"#,
+        "checked false\ndone",
+    );
+}

@@ -115,11 +115,21 @@ fn write_written_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> 
     }
 }
 
+/// Each argument between angle brackets; one with no name shows as `…`.
 fn write_type_arguments(f: &mut fmt::Formatter<'_>, args: &[Token]) -> fmt::Result {
     let Some((first, rest)) = args.split_first() else {
         return Ok(());
     };
-    write!(f, "<{first}")?;
-    rest.iter().try_for_each(|token| write!(f, ", {token}"))?;
+    write!(f, "<{}", shown(first))?;
+    rest.iter()
+        .try_for_each(|token| write!(f, ", {}", shown(token)))?;
     f.write_str(">")
+}
+
+fn shown(token: &Token) -> &str {
+    if super::token::is_nameless(token) {
+        "…"
+    } else {
+        token
+    }
 }

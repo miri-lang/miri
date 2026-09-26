@@ -14,6 +14,7 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
+use crate::type_checker::CalleeKind;
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::{
@@ -34,7 +35,7 @@ pub(super) struct CollectionIntrinsicCall<'a> {
 }
 
 // Re-export method dispatch functions from the specialized module.
-pub(crate) use super::method_dispatch::{mangle_instantiation_name, resolve_inherited_method};
+pub(crate) use super::method_dispatch::resolve_inherited_method;
 
 // Re-export kernel launch functions from the specialized module.
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
@@ -253,8 +254,9 @@ fn lower_static_method_impl(
     Ok(Some(result_op))
 }
 
-/// The math intrinsic a call to `callee` lowers to: the name must resolve to
-/// a declaration made `intrinsic` and carry the name of a [`MathIntrinsic`].
+/// The math intrinsic a call to `callee` lowers to: the name must resolve,
+/// where it is written, to a declaration made `intrinsic` and carry the name
+/// of a [`MathIntrinsic`].
 /// The declaration, not the module that holds it, decides — a plain function
 /// that happens to share an intrinsic's name stays an ordinary call, and a
 /// module body's call to its own intrinsic lowers as one even where the
@@ -266,9 +268,7 @@ pub(crate) fn math_intrinsic_callee(
     let ExpressionKind::Identifier(name, _) = &callee.node else {
         return None;
     };
-    let is_intrinsic =
-        ctx.type_checker.is_intrinsic_reference(callee.id) || ctx.type_checker.is_intrinsic(name);
-    is_intrinsic
+    (ctx.callee_kind(callee) == CalleeKind::Intrinsic)
         .then(|| MathIntrinsic::from_name(name))
         .flatten()
 }
@@ -306,7 +306,7 @@ fn lower_aliased_function_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mangled = generic_function_symbol(ctx, func_name, call_expr_id)
+    let mangled = generic_function_symbol(ctx, func_name, call_expr_id, *span)?
         .unwrap_or_else(|| Symbol::declared_function(func_name).link_name());
     let func_op = runtime_fn_operand(&mangled, *span);
 
@@ -545,6 +545,7 @@ pub(super) fn resolve_kernel_operand(
     };
 
     let type_args = ctx.instantiated_call_mapping(callee.id).unwrap_or_default();
+    refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
     let kernel_name = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty)).wgsl_name();
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
@@ -1326,7 +1327,7 @@ fn lower_direct_call(
     let callee = callee_name_expression(func);
     let mut func_op = lower_callee(ctx, callee)?;
 
-    apply_generic_mangling(ctx, &callee.node, call_expr_id, &mut func_op, callee.span);
+    apply_generic_mangling(ctx, &callee.node, call_expr_id, &mut func_op, callee.span)?;
 
     let is_generic_call = ctx
         .type_checker
@@ -1460,28 +1461,35 @@ fn apply_generic_mangling(
     call_expr_id: usize,
     func_op: &mut Operand,
     func_span: Span,
-) {
-    if let ExpressionKind::Identifier(func_name, _) = func_node {
-        if let Some(mangled) = generic_function_symbol(ctx, func_name, call_expr_id) {
-            *func_op = Operand::Constant(Box::new(crate::mir::Constant {
-                span: func_span,
-                ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
-                literal: crate::ast::literal::Literal::Identifier(mangled),
-            }));
-        }
+) -> Result<(), LoweringError> {
+    let ExpressionKind::Identifier(func_name, _) = func_node else {
+        return Ok(());
+    };
+    if let Some(mangled) = generic_function_symbol(ctx, func_name, call_expr_id, func_span)? {
+        *func_op = Operand::Constant(Box::new(crate::mir::Constant {
+            span: func_span,
+            ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
+            literal: crate::ast::literal::Literal::Identifier(mangled),
+        }));
     }
+    Ok(())
 }
 
 /// The symbol of the generic function instantiation a call targets, recorded
 /// on the body so the pipeline lowers that instantiation.
 ///
-/// `None` when the call pins no generic parameter.
+/// `None` when the call pins no generic parameter. A call pinning one to a
+/// type with no name to compile a body at is refused.
 fn generic_function_symbol(
     ctx: &mut LoweringContext,
     func_name: &str,
     call_expr_id: usize,
-) -> Option<String> {
-    let type_args = ctx.instantiated_call_mapping(call_expr_id)?;
+    span: Span,
+) -> Result<Option<String>, LoweringError> {
+    let Some(type_args) = ctx.instantiated_call_mapping(call_expr_id) else {
+        return Ok(None);
+    };
+    refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
     let symbol = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty));
     let link_name = symbol.link_name();
     ctx.body
@@ -1491,7 +1499,26 @@ fn generic_function_symbol(
             function: func_name.to_string(),
             type_args,
         });
-    Some(link_name)
+    Ok(Some(link_name))
+}
+
+/// Refuse the generic `func_name` pinned by a call to `type_args` when one of
+/// them has no name to compile a body at. Only a call written at such a type
+/// is refused here; one a body lowered for an instantiation computes from its
+/// substitution is recorded, left unlowered, and refused by the pipeline once
+/// the bounds on instantiations have had the chance to report the growth that
+/// reached it.
+fn refuse_unnameable_call_mapping(
+    ctx: &LoweringContext,
+    func_name: &str,
+    type_args: &[(String, Type)],
+    span: Span,
+) -> Result<(), LoweringError> {
+    if !ctx.generic_subs.is_empty() {
+        return Ok(());
+    }
+    let args: Vec<Type> = type_args.iter().map(|(_, ty)| ty.clone()).collect();
+    ctx.refuse_unnameable_type_arguments(func_name, &args, span)
 }
 
 fn resolve_param_types(
@@ -1640,8 +1667,7 @@ fn fill_default_args(
 /// runtime ones is what the declaration the name resolved to says, never how it
 /// is spelled: a Miri function may be named anything a runtime export is.
 pub(super) fn callee_takes_allocator(ctx: &LoweringContext, callee: &Expression) -> bool {
-    !ctx.type_checker.is_runtime_reference(callee.id)
-        && math_intrinsic_callee(ctx, callee).is_none()
+    ctx.callee_kind(callee) != CalleeKind::Runtime && math_intrinsic_callee(ctx, callee).is_none()
 }
 
 fn inject_allocator_arg(

@@ -281,3 +281,113 @@ fn main()
         "abcd\n506",
     );
 }
+
+/// Kernel-side names join a definition's parts with `_`, so two static
+/// methods whose owner and method names run together are declared under one
+/// WGSL name when both are called from GPU code: the program is refused at
+/// build time rather than at kernel launch.
+#[test]
+fn static_methods_spelled_alike_in_gpu_code_are_refused() {
+    assert_build_error(
+        r#"
+use system.gpu
+use system.collections.array
+
+class A
+    static fn b_c(x int) int
+        return x + 1
+
+class A_b
+    static fn c(x int) int
+        return x + 100
+
+fn main()
+    gpu let src = [1, 2, 3]
+    gpu var dst = [0, 0, 0]
+    gpu forall i in 0..3
+        dst[i] = A.b_c(src[i]) * 1000 + A_b.c(src[i])
+    let host = dst
+    println(f'{host[0]}')
+"#,
+        "`A.b_c` and `A_b.c` are both reached from GPU code, where both are declared as `A_b_c`",
+    );
+}
+
+/// A static method and a function spelled like its owner and name joined by
+/// `_` share a WGSL name when a kernel calls both.
+#[test]
+fn static_method_and_function_spelled_alike_in_gpu_code_are_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+class P
+    static fn norm(x int) int
+        return x + 1
+
+fn P_norm(x int) int
+    return x + 2
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        a[i] = P.norm(a[i]) + P_norm(a[i])
+    let h = a
+    println(f"{h[0]}")
+"#,
+        "MER_MIR_018",
+    );
+}
+
+/// The same two definitions stay apart when only one of them is reached from
+/// GPU code: the other is never declared under its WGSL name, and on the host
+/// their link names differ.
+#[test]
+fn static_method_and_function_spelled_alike_run_apart_when_one_stays_on_the_host() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class P
+    static fn norm(x int) int
+        return x + 1
+
+fn P_norm(x int) int
+    return x + 2
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        a[i] = P_norm(a[i])
+    let h = a
+    println(f"{h[0]} {P.norm(1)} {P_norm(1)}")
+"#,
+        "3 2 3",
+    );
+}
+
+/// A trait's default method and a free function spelled like the trait and
+/// method joined by `_` each keep their own body.
+#[test]
+fn trait_default_method_beside_a_function_spelled_alike() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Shape
+    fn area() int
+        return 1
+
+class Square implements Shape
+    side int
+
+fn Shape_area(s Square) int
+    return s.side * s.side
+
+fn main()
+    let s = Square(side: 3)
+    println(f"{s.area()} {Shape_area(s)}")
+"#,
+        "1 9",
+    );
+}

@@ -756,7 +756,7 @@ pub(crate) fn is_monomorphizable_type_argument(
 /// Whether a name that *has* a spelling also denotes a type worth
 /// monomorphizing is the table's answer, not this one's.
 pub(crate) fn has_a_monomorphized_spelling(kind: &TypeKind) -> bool {
-    method_dispatch::kind_has_a_mangled_token(kind)
+    crate::mir::symbol::token::kind_has_a_mangled_token(kind)
 }
 
 /// Whether a per-instantiation body can be named for a receiver typed `kind`.
@@ -770,7 +770,7 @@ pub(crate) fn can_be_monomorphized_at(kind: &TypeKind) -> bool {
         return false;
     };
     args.iter()
-        .all(method_dispatch::argument_has_a_mangled_token)
+        .all(crate::mir::symbol::token::argument_has_a_mangled_token)
 }
 
 /// Lower a generic function with concrete type substitutions to produce a

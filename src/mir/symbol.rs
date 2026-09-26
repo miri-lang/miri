@@ -45,7 +45,9 @@
 //!
 //! An identifier is `[A-Za-z_][A-Za-z0-9_]*`, and a type argument's token is
 //! made of `[A-Za-z0-9_-]` only (see [`type_kind_to_mangle_str`], under which
-//! two different types never share a token). Neither contains `.` or `$`, so
+//! two different types never share a token — except the types it has no name
+//! for, which all spell [`token::UNSPELLABLE_TYPE_TOKEN`] and are therefore
+//! never linked: see [`Symbol::has_an_unnameable_argument`]). Neither contains `.` or `$`, so
 //! within a Miri symbol every `.` ends a segment and every `$` starts an
 //! argument token or a marker the compiler synthesizes — and a marker can never
 //! be mistaken for an identifier, which never starts with `$`. Reading a
@@ -61,24 +63,33 @@
 //!
 //! Two symbols are still compared as values, never through their link names:
 //! [`SymbolTable`] refuses a second symbol that spells a name already claimed,
-//! as a guard over this grammar rather than a rule a program can meet.
+//! as a guard over this grammar rather than a rule a program can meet, and
+//! refuses outright a symbol carrying an argument with no name.
 //!
 //! Type arguments are held as the tokens [`type_kind_to_mangle_str`] gives
-//! them, so a symbol is hashable and comparable without comparing [`Type`]s,
-//! and two different types never compare equal.
+//! them, so a symbol is hashable and comparable without comparing [`Type`]s.
+//! Two different nameable types never compare equal; two symbols differing
+//! only in unnameable arguments do, which is why such a symbol is refused
+//! rather than claimed.
+//!
+//! This guarantee covers link names only. The identifier-only spelling a
+//! WGSL module declares a body under ([`Symbol::wgsl_name`]) is not injective,
+//! so the bodies GPU code reaches are claimed a second time under that
+//! spelling, in a table of their own.
 
 mod table;
+pub(crate) mod token;
 mod wgsl;
 mod written;
 
-pub use table::{Claim, SymbolCollision, SymbolTable};
+pub use table::{Claim, ClaimRefusal, Namespace, SymbolCollision, SymbolTable};
 
 use std::borrow::Cow;
 use std::fmt::{self, Write};
 
 use crate::ast::types::Type;
 use crate::mir::body::DeviceHandleId;
-use crate::mir::lowering::method_dispatch::type_kind_to_mangle_str;
+use token::type_kind_to_mangle_str;
 
 /// One type argument's token, as [`type_kind_to_mangle_str`] spells it.
 type Token = Cow<'static, str>;
@@ -323,10 +334,10 @@ impl Symbol {
     /// The `kind` function emitted for a structural type — a tuple, an option
     /// or a function value — identified by `encoding`, the spelling codegen
     /// gives its structure.
-    pub fn structural_thunk(kind: ThunkKind, encoding: &str) -> Self {
+    pub fn structural_thunk(kind: ThunkKind, encoding: impl Into<String>) -> Self {
         Self::of(SymbolKind::TypeThunk {
             kind,
-            subject: ThunkSubject::Structural(encoding.to_string()),
+            subject: ThunkSubject::Structural(encoding.into()),
         })
     }
 
@@ -374,6 +385,40 @@ impl Symbol {
             return None;
         };
         (own == owner && *own_args == tokens(owner_args)).then_some(method.as_str())
+    }
+
+    /// Whether one of this symbol's type arguments has no name of its own:
+    /// every type the token grammar cannot name spells alike, so such a symbol
+    /// stands for every instantiation at any of them and names none.
+    pub fn has_an_unnameable_argument(&self) -> bool {
+        let unnameable = |args: &[Token]| {
+            args.iter()
+                .any(|token| token == token::UNSPELLABLE_TYPE_TOKEN)
+        };
+        match &self.kind {
+            SymbolKind::Function { args, .. }
+            | SymbolKind::Vtable { args, .. }
+            | SymbolKind::TypeThunk {
+                subject: ThunkSubject::Named { args, .. },
+                ..
+            } => unnameable(args),
+            SymbolKind::Method {
+                owner_args,
+                method_args,
+                ..
+            } => unnameable(owner_args) || unnameable(method_args),
+            SymbolKind::Closure { context_args, .. } => unnameable(context_args),
+            SymbolKind::TypeThunk {
+                subject: ThunkSubject::Structural(_),
+                ..
+            }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Runtime(_)
+            | SymbolKind::Entry
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => false,
+        }
     }
 
     /// Whether the runtime library, not this compilation, provides the body.
