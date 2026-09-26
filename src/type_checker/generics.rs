@@ -14,10 +14,10 @@ use super::TypeChecker;
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
-use crate::ast::{Expression, ExpressionKind};
+use crate::ast::{BinaryOp, Expression, ExpressionKind, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Sentinel `TypeKind::Custom` name used to smuggle a value-generic argument
 /// (e.g. the `3` in `Foo<float, 3>`) through the existing
@@ -185,6 +185,175 @@ pub(crate) fn fold_value_generic_arithmetic(
     ))
 }
 
+/// Why a value argument whose every parameter is bound has no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnfoldableValue {
+    /// An operand that is neither an integer nor a value parameter of the
+    /// body: nothing the instantiation binds gives it a value.
+    NotConstant,
+    /// A division or remainder by an operand that is zero.
+    DivisionByZero,
+    /// An operator the folder does not evaluate (`<<`, `==`, …).
+    UnsupportedOperator,
+    /// A result, or an operand, outside the signed 128-bit range.
+    OutOfRange,
+}
+
+/// Why the value argument `expr` has no value once `mapping` binds every
+/// parameter it names. `None` when it folds, or when it names a parameter of
+/// `open` — one the body declares and `mapping` leaves unbound — since then it
+/// is not yet a value at all. An operand that is neither an integer, a
+/// parameter `mapping` binds to a value, nor one of `open` has no value
+/// whatever is bound, and is [`UnfoldableValue::NotConstant`].
+pub(crate) fn unfoldable_value_argument(
+    expr: &Expression,
+    mapping: &HashMap<String, Type>,
+    open: &HashSet<String>,
+) -> Option<UnfoldableValue> {
+    match value_operands(expr, mapping, open) {
+        ValueOperands::Foreign => return Some(UnfoldableValue::NotConstant),
+        ValueOperands::Open => return None,
+        ValueOperands::Bound => {}
+    }
+    let substituted = substitute_value_names(expr, mapping)?;
+    if TypeChecker::try_eval_const_int(&substituted).is_some() {
+        return None;
+    }
+    Some(if divides_by_zero(&substituted) {
+        UnfoldableValue::DivisionByZero
+    } else if has_unsupported_operator(&substituted) {
+        UnfoldableValue::UnsupportedOperator
+    } else {
+        UnfoldableValue::OutOfRange
+    })
+}
+
+/// What the operands of a value argument are, the worst of them deciding: an
+/// argument with one foreign operand is foreign however the rest are bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ValueOperands {
+    /// Every operand is an integer or a parameter bound to a value.
+    Bound,
+    /// Some operand is a parameter the body declares and leaves unbound.
+    Open,
+    /// Some operand is neither: it has no value at any instantiation.
+    Foreign,
+}
+
+/// Classify the operands of the value argument `expr` against the parameters
+/// `mapping` binds and the ones `open` leaves unbound.
+fn value_operands(
+    expr: &Expression,
+    mapping: &HashMap<String, Type>,
+    open: &HashSet<String>,
+) -> ValueOperands {
+    match &expr.node {
+        ExpressionKind::Binary(left, _, right) => {
+            value_operands(left, mapping, open).max(value_operands(right, mapping, open))
+        }
+        ExpressionKind::Unary(_, inner) => value_operands(inner, mapping, open),
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => ValueOperands::Bound,
+        _ => match written_name(expr) {
+            Some(name) if bound_value(name, mapping).is_some() => ValueOperands::Bound,
+            Some(name) if open.contains(name) => ValueOperands::Open,
+            Some(_) | None => ValueOperands::Foreign,
+        },
+    }
+}
+
+/// Whether `expr` divides, or takes a remainder, by an operand that folds to
+/// zero.
+fn divides_by_zero(expr: &Expression) -> bool {
+    if let ExpressionKind::Binary(left, op, right) = &expr.node {
+        let by_zero = matches!(op, BinaryOp::Div | BinaryOp::Mod)
+            && TypeChecker::try_eval_const_int(right) == Some(0);
+        return by_zero || divides_by_zero(left) || divides_by_zero(right);
+    }
+    if let ExpressionKind::Unary(_, inner) = &expr.node {
+        return divides_by_zero(inner);
+    }
+    false
+}
+
+/// Whether `expr` applies an operator [`TypeChecker::try_eval_const_int`]
+/// does not evaluate.
+fn has_unsupported_operator(expr: &Expression) -> bool {
+    if let ExpressionKind::Binary(left, op, right) = &expr.node {
+        return !is_folded_binary_operator(*op)
+            || has_unsupported_operator(left)
+            || has_unsupported_operator(right);
+    }
+    if let ExpressionKind::Unary(op, inner) = &expr.node {
+        return !is_folded_unary_operator(*op) || has_unsupported_operator(inner);
+    }
+    false
+}
+
+/// Whether the constant folder evaluates the binary operator `op`.
+fn is_folded_binary_operator(op: BinaryOp) -> bool {
+    match op {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => true,
+        BinaryOp::BitwiseOr
+        | BinaryOp::BitwiseAnd
+        | BinaryOp::BitwiseXor
+        | BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::LessThan
+        | BinaryOp::LessThanEqual
+        | BinaryOp::GreaterThan
+        | BinaryOp::GreaterThanEqual
+        | BinaryOp::Not
+        | BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Range
+        | BinaryOp::In
+        | BinaryOp::NullCoalesce => false,
+    }
+}
+
+/// Whether the constant folder evaluates the unary operator `op`.
+fn is_folded_unary_operator(op: UnaryOp) -> bool {
+    match op {
+        UnaryOp::Negate | UnaryOp::Plus => true,
+        UnaryOp::Not
+        | UnaryOp::BitwiseNot
+        | UnaryOp::Decrement
+        | UnaryOp::Increment
+        | UnaryOp::Await => false,
+    }
+}
+
+/// Each value parameter `expr` names that `mapping` binds, with the value it
+/// is bound to, in the order `expr` first names them.
+pub(crate) fn bound_value_names<'e>(
+    expr: &'e Expression,
+    mapping: &'e HashMap<String, Type>,
+) -> Vec<(&'e str, &'e Expression)> {
+    let mut found: Vec<(&str, &Expression)> = Vec::new();
+    collect_bound_value_names(expr, mapping, &mut found);
+    found
+}
+
+fn collect_bound_value_names<'e>(
+    expr: &'e Expression,
+    mapping: &'e HashMap<String, Type>,
+    found: &mut Vec<(&'e str, &'e Expression)>,
+) {
+    if let Some(name) = written_name(expr) {
+        let bound = mapping.get(name).and_then(extract_value_generic);
+        if let Some(value) = bound.filter(|_| found.iter().all(|(seen, _)| *seen != name)) {
+            found.push((name, value));
+        }
+        return;
+    }
+    if let ExpressionKind::Binary(left, _, right) = &expr.node {
+        collect_bound_value_names(left, mapping, found);
+        collect_bound_value_names(right, mapping, found);
+    } else if let ExpressionKind::Unary(_, inner) = &expr.node {
+        collect_bound_value_names(inner, mapping, found);
+    }
+}
+
 /// `expr` with each value parameter it names replaced by the value `mapping`
 /// binds it to; `None` when it names anything else, or is not arithmetic.
 fn substitute_value_names(
@@ -217,6 +386,104 @@ fn substitute_value_names(
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
     )
     .then(|| expr.clone())
+}
+
+/// A value argument written as arithmetic over value parameters and named
+/// constants — the `Size + K` in `Buf<T, Size + K>` — with every constant
+/// replaced by its value, so the argument folds to one instantiation once the
+/// parameters are bound. A value parameter in scope shadows a constant of its
+/// name and stays as written, as does anything that is not arithmetic.
+pub(crate) fn inline_value_constants(expr: &Expression, context: &Context) -> Expression {
+    let rebuilt = |node: ExpressionKind| Expression {
+        id: expr.id,
+        span: expr.span,
+        node,
+    };
+    if let ExpressionKind::Binary(left, op, right) = &expr.node {
+        return rebuilt(ExpressionKind::Binary(
+            Box::new(inline_value_constants(left, context)),
+            *op,
+            Box::new(inline_value_constants(right, context)),
+        ));
+    }
+    if let ExpressionKind::Unary(op, inner) = &expr.node {
+        return rebuilt(ExpressionKind::Unary(
+            *op,
+            Box::new(inline_value_constants(inner, context)),
+        ));
+    }
+    match written_name(expr).and_then(|name| constant_value(name, context)) {
+        Some(value) => crate::ast::factory::literal_with_span(
+            crate::ast::factory::int_literal(value),
+            expr.span,
+        ),
+        None => expr.clone(),
+    }
+}
+
+/// The first operand of the value argument `expr` that is not a compile-time
+/// constant, or `None` when every operand is one.
+///
+/// An operand is a compile-time constant when it is an integer literal, a name
+/// [`TypeChecker::resolve_const_int`] folds, or a generic parameter in scope —
+/// which the instantiation it runs at binds to a value. The operators are left
+/// to the fold that binds those parameters. Anything else — a binding computed
+/// while the program runs, a call, a field read — has no value until then, so
+/// an argument built from it names no single instantiation.
+pub(crate) fn non_constant_value_operand<'e>(
+    expr: &'e Expression,
+    context: &Context,
+) -> Option<&'e Expression> {
+    match &expr.node {
+        ExpressionKind::Binary(left, _, right) => non_constant_value_operand(left, context)
+            .or_else(|| non_constant_value_operand(right, context)),
+        ExpressionKind::Unary(_, inner) => non_constant_value_operand(inner, context),
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => None,
+        _ => match written_name(expr) {
+            Some(name) if is_constant_name(name, context) => None,
+            Some(_) | None => Some(expr),
+        },
+    }
+}
+
+/// Whether `name` is a generic parameter in scope or a name that folds to an
+/// integer constant.
+fn is_constant_name(name: &str, context: &Context) -> bool {
+    matches!(
+        context.resolve_type_definition(name),
+        Some(TypeDefinition::Generic(_))
+    ) || TypeChecker::resolve_const_int(name, Some(context)).is_some()
+}
+
+impl TypeChecker {
+    /// Report `operand`, part of the value argument of `class`, as not being a
+    /// compile-time constant.
+    pub(crate) fn report_non_constant_value_argument(&mut self, class: &str, operand: &Expression) {
+        self.report_error_with_help(
+            DiagnosticCode::TypNonConstantValueArgument,
+            format!(
+                "`{}` is not a compile-time constant, so the value argument of `{class}` names no instantiation",
+                crate::ast::formatter::expression_text(operand)
+            ),
+            operand.span,
+            NON_CONSTANT_VALUE_HELP.to_string(),
+        );
+    }
+}
+
+/// The help a non-constant value argument is reported with.
+const NON_CONSTANT_VALUE_HELP: &str = "build a value argument from integer literals, `const`s and the value parameters in scope; keep a value known only while the program runs in a field instead of in the type";
+
+/// The integer constant `name` binds in `context`, unless a generic parameter
+/// in scope shadows it.
+fn constant_value(name: &str, context: &Context) -> Option<i128> {
+    if matches!(
+        context.resolve_type_definition(name),
+        Some(TypeDefinition::Generic(_))
+    ) {
+        return None;
+    }
+    TypeChecker::resolve_const_int(name, Some(context))
 }
 
 /// The bare name `expr` writes, as an identifier or as a type argument
@@ -750,5 +1017,71 @@ mod substitution_depth_tests {
         // Reaching here without a stack overflow is the assertion; the result
         // is still an Option envelope (substitution stopped, did not corrupt).
         assert!(matches!(result.kind, TypeKind::Option(_)));
+    }
+}
+
+#[cfg(test)]
+mod value_argument_tests {
+    use super::*;
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::IdNode;
+
+    fn node(kind: ExpressionKind) -> Expression {
+        IdNode::new(0, kind, Span::new(0, 0))
+    }
+
+    fn integer(value: i64) -> Expression {
+        node(ExpressionKind::Literal(Literal::Integer(
+            IntegerLiteral::I64(value),
+        )))
+    }
+
+    fn name(name: &str) -> Expression {
+        node(ExpressionKind::Identifier(name.to_string(), None))
+    }
+
+    fn plus(left: Expression, right: Expression) -> Expression {
+        node(ExpressionKind::Binary(
+            Box::new(left),
+            BinaryOp::Add,
+            Box::new(right),
+        ))
+    }
+
+    fn size_bound_to(value: i64) -> HashMap<String, Type> {
+        HashMap::from([(
+            "Size".to_string(),
+            value_generic_marker_type(integer(value)),
+        )])
+    }
+
+    /// An operand bound to a value folds; one the body declares but leaves
+    /// unbound is not yet a value; one the body does not declare is never one.
+    #[test]
+    fn only_a_declared_parameter_keeps_a_value_argument_open() {
+        let bound = size_bound_to(2);
+        let open = HashSet::from(["Rest".to_string()]);
+        assert_eq!(
+            unfoldable_value_argument(&plus(name("Size"), integer(1)), &bound, &open),
+            None
+        );
+        assert_eq!(
+            unfoldable_value_argument(&plus(name("Size"), name("Rest")), &bound, &open),
+            None
+        );
+        assert_eq!(
+            unfoldable_value_argument(&plus(name("Size"), name("m")), &bound, &open),
+            Some(UnfoldableValue::NotConstant)
+        );
+    }
+
+    /// A foreign operand decides the answer even beside an open parameter.
+    #[test]
+    fn a_foreign_operand_beside_an_open_one_is_not_constant() {
+        let open = HashSet::from(["Rest".to_string()]);
+        assert_eq!(
+            unfoldable_value_argument(&plus(name("Rest"), name("m")), &HashMap::new(), &open),
+            Some(UnfoldableValue::NotConstant)
+        );
     }
 }

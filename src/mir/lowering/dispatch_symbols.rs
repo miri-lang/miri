@@ -235,14 +235,16 @@ impl VtableInstance {
     /// The arguments are read as a static call on the instance reads them,
     /// so the vtable and the call name one instantiation.
     ///
-    /// An instance whose arguments cannot be spelled where it is constructed
-    /// falls back to the bare vtable: one built at a closure type, one built
-    /// inside a body shared by every instantiation of its enclosing
-    /// declaration — `let o Op<T> = Impl<T>()` in a method of `class
-    /// Wrapper<T>`, or in a generic function whose parameter appears only in
-    /// its return type. Those enclosing bodies are not specialized per
-    /// instantiation, so the bare slots run the shared body, which reads a `T`
-    /// as an unmanaged word and double-frees a managed argument it overwrites.
+    /// Only an instance built at open arguments has none to spell, and it
+    /// points at the bare vtable: one built inside a body shared by every
+    /// instantiation of its enclosing declaration — `let o Op<T> = Impl<T>()`
+    /// in a method of `class Wrapper<T>`, or in a generic function whose
+    /// parameter appears only in its return type. An instance built in a body
+    /// lowered for one instantiation always spells its arguments, since
+    /// constructor lowering refuses one that does not
+    /// ([`LoweringContext::refuse_unnameable_instance`]).
+    ///
+    /// [`LoweringContext::refuse_unnameable_instance`]: super::context::LoweringContext::refuse_unnameable_instance
     pub fn of(instance_ty: &Type, type_defs: &HashMap<String, TypeDefinition>) -> Option<Self> {
         let TypeKind::Custom(class, arg_exprs) = &instance_ty.kind else {
             return None;

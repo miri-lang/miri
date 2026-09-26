@@ -445,7 +445,7 @@ impl TypeChecker {
                         let ty = self.resolve_type_expression(arg, context);
                         self.create_type_expression(ty)
                     } else {
-                        arg.clone()
+                        self.value_argument(name, arg, context)
                     }
                 })
                 .collect();
@@ -461,6 +461,18 @@ impl TypeChecker {
             );
             make_type(TypeKind::Error)
         }
+    }
+
+    /// The value argument `arg` of `class` with every named constant replaced
+    /// by its value, reporting an operand that is not a compile-time constant.
+    fn value_argument(&mut self, class: &str, arg: &Expression, context: &Context) -> Expression {
+        let inlined = crate::type_checker::generics::inline_value_constants(arg, context);
+        if let Some(operand) =
+            crate::type_checker::generics::non_constant_value_operand(&inlined, context)
+        {
+            self.report_non_constant_value_argument(class, operand);
+        }
+        inlined
     }
 
     /// Folds a const-foldable integer value-generic slot (`Array<T, SIZE>`,

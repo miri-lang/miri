@@ -16,11 +16,16 @@ use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, St
 
 use super::dispatch::resolve_inherited_method;
 use super::helpers::coerce_rvalue_in;
+use super::method_dispatch::{instantiated_callee, InstantiatedCallee};
 use super::variable::canonical_declared_type;
 use super::{
-    apply_generic_sub, build_class_generic_substitution, lower_expression, LoweringContext,
+    apply_generic_sub, build_class_generic_substitution, lower_expression, monomorphized_arguments,
+    LoweringContext,
 };
 use std::collections::HashMap;
+
+/// The method a class constructor runs on the instance it builds.
+const INIT_METHOD_NAME: &str = "init";
 
 /// Lowers a struct constructor call to an Aggregate rvalue.
 pub fn lower_struct_constructor(
@@ -222,6 +227,7 @@ pub fn lower_class_constructor(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     if let Some(ty) = resolved_ty {
+        ctx.refuse_unnameable_instance(ty, *span)?;
         ctx.record_class_instantiations(ty);
     }
     let field_subs = build_class_field_substitution(ctx, def, resolved_ty);
@@ -229,10 +235,10 @@ pub fn lower_class_constructor(
     // argument has to be brought to the type that body declares for it before
     // the call — the same thing a plain function call does.
     let init_site: Option<(String, Vec<(String, Type)>)> = {
-        if let Some(m) = def.methods.get("init").filter(|m| !m.is_abstract) {
+        if let Some(m) = def.methods.get(INIT_METHOD_NAME).filter(|m| !m.is_abstract) {
             Some((class_name.to_string(), m.params.clone()))
         } else if let Some(base) = &def.base_class {
-            resolve_inherited_method(ctx.type_checker.type_definitions(), base, "init")
+            resolve_inherited_method(ctx.type_checker.type_definitions(), base, INIT_METHOD_NAME)
                 .filter(|(_, m)| !m.is_abstract)
                 .map(|(c, m)| (c, m.params.clone()))
         } else {
@@ -253,12 +259,17 @@ pub fn lower_class_constructor(
 
     let instance_ty = constructed_instance_type(class_name, resolved_ty, span);
     if let Some((init_class, init_params)) = init_site {
-        let init_symbol = monomorphized_init_symbol(ctx, def, &init_class, class_name, &field_subs);
-        // A parameter spelled with one of the class's generic parameters is
-        // declared at the instantiation's argument, not at the bare name.
+        let callee = instantiated_init(ctx, def, class_name, resolved_ty);
+        // A parameter spelled with one of the declaring class's generic
+        // parameters is declared at the argument the instance reaches it at,
+        // not at the bare name.
+        let (init_symbol, param_subs) = match callee {
+            Some(callee) => (callee.symbol, callee.owner_subs),
+            None => (format!("{init_class}_init"), field_subs),
+        };
         let init_params: Vec<(String, Type)> = init_params
             .into_iter()
-            .map(|(name, ty)| (name, apply_generic_sub(&ty, &field_subs)))
+            .map(|(name, ty)| (name, apply_generic_sub(&ty, &param_subs)))
             .collect();
         lower_class_with_init(
             ctx,
@@ -309,44 +320,24 @@ fn build_class_field_substitution(
     }
 }
 
-/// Resolve the `init` symbol the constructor must call.
-///
-/// For a monomorphizable instantiation whose `init` is defined on the class
-/// itself, the field substitution pins every generic to a concrete scalar; the
-/// call is mangled to the per-instantiation body (`Box_init__float`) the pipeline
-/// emits, so the argument crosses the ABI at the concrete width instead of being
-/// reinterpreted through the bare-generic (`Box_init`) slot. Any other case —
-/// non-generic class, unresolved args, or an `init` inherited from a base — keeps
-/// the plain `Class_init` symbol.
-fn monomorphized_init_symbol(
+/// The per-instantiation `init` body a constructor of `class_name` at
+/// `resolved_ty` calls: the one a static call on the instance names, so an
+/// argument crosses into a body typed at the instance's own arguments — a
+/// value-generic instance included — rather than the body shared by every
+/// instantiation. `None` when the shared body serves: a class declaring no
+/// parameters, or arguments with no per-instantiation body.
+fn instantiated_init(
     ctx: &LoweringContext,
     def: &ClassDefinition,
-    init_class: &str,
     class_name: &str,
-    field_subs: &HashMap<String, Type>,
-) -> String {
-    let plain = format!("{init_class}_init");
-    let Some(generics) = def.generics.as_deref() else {
-        return plain;
+    resolved_ty: Option<&Type>,
+) -> Option<InstantiatedCallee> {
+    let TypeKind::Custom(_, Some(arg_exprs)) = &resolved_ty?.kind else {
+        return None;
     };
-    if init_class != class_name || generics.is_empty() {
-        return plain;
-    }
-    let mut mangle_args = Vec::with_capacity(generics.len());
-    for generic in generics {
-        match field_subs.get(&generic.name) {
-            Some(ty)
-                if super::is_monomorphizable_type_argument(
-                    &ty.kind,
-                    ctx.type_checker.type_definitions(),
-                ) =>
-            {
-                mangle_args.push((generic.name.clone(), ty.clone()))
-            }
-            _ => return plain,
-        }
-    }
-    super::dispatch::mangle_generic_name(&format!("{class_name}_init"), &mangle_args)
+    let defs = ctx.type_checker.type_definitions();
+    let resolved = monomorphized_arguments(arg_exprs, def.generics.as_ref()?.len(), defs)?;
+    instantiated_callee(defs, class_name, &resolved, INIT_METHOD_NAME)
 }
 
 /// The place a constructed class instance is built into: the caller's

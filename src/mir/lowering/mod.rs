@@ -328,7 +328,8 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
         },
         // A value argument computed from the parameters (`Size + 1`) names one
         // instantiation once they are bound; folded, it is spelled like any
-        // other value argument instead of leaving the instance unspellable.
+        // other value argument. One that does not fold stays as written, and
+        // constructor lowering refuses the instance it would build.
         ExpressionKind::Binary(..) | ExpressionKind::Unary(..) => {
             crate::type_checker::generics::fold_value_generic_arithmetic(expr, subs)
                 .unwrap_or_else(|| expr.clone())
@@ -749,8 +750,9 @@ pub(crate) fn is_monomorphizable_type_argument(
 /// Whether the symbol mangler has a spelling for `kind` at all.
 ///
 /// A necessary condition for [`is_monomorphizable_type_argument`], and the part
-/// of it that needs no type table: a closure type and an unresolved generic
-/// parameter have no token, and neither does anything built out of one.
+/// of it that needs no type table: an unresolved generic parameter and a
+/// closure type declaring type parameters of its own have no token, and
+/// neither does anything built out of one.
 /// Whether a name that *has* a spelling also denotes a type worth
 /// monomorphizing is the table's answer, not this one's.
 pub(crate) fn has_a_monomorphized_spelling(kind: &TypeKind) -> bool {

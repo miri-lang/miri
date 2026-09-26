@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (75 codes: 001-075)
+    // TYP — Type checker (76 codes: 001-076)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1019,6 +1019,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "TYP",
+    "076",
+    TypNonConstantValueArgument,
+    "Non-Constant Value Argument",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",
@@ -1055,7 +1062,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // MIR — MIR lowering (16 codes: 001-016)
+    // MIR — MIR lowering (17 codes: 001-017)
     "MIR",
     "001",
     MirUnsupportedExpression,
@@ -1165,6 +1172,13 @@ diagnostics!(
     "016",
     MirPolymorphicRecursion,
     "Polymorphic Recursion",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "MIR",
+    "017",
+    MirInvalidInstantiationArgument,
+    "Invalid Instantiation Argument",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

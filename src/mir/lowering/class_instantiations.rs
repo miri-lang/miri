@@ -20,16 +20,22 @@ use super::context::LoweringContext;
 use super::dispatch_symbols::constructed_class;
 use super::instantiation_argument;
 use super::instantiation_limits::{
-    exceeded_limit, has_value_argument, instance_type_depth, polymorphic_recursion, ExceededLimit,
-    Growth, MAX_INSTANCE_TYPE_DEPTH,
+    constructor_parts, exceeded_limit, has_value_argument, instance_type_depth,
+    invalid_value_argument, mentions_open_parameter, polymorphic_recursion,
+    unnameable_type_argument, value_growth_note, ExceededLimit, Growth,
 };
 use super::method_dispatch::mangle_instantiation_name;
+use crate::ast::expression::Expression;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::body::GenericClassInstantiation;
 use crate::mir::{Body, StatementKind};
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::generics::{
+    bound_value_names, extract_value_generic, fold_value_generic_arithmetic,
+    unfoldable_value_argument, UnfoldableValue,
+};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
@@ -312,19 +318,32 @@ fn spells_instance(ty: &Type, class: &str, args: &[Type]) -> bool {
 /// The instances of `instance`'s class whose methods built each next one on
 /// the way to it, outermost first, and the method of the last of them.
 ///
-/// A body lowered for a method runs at the instance its `self` is, so the
-/// instance that built another is the `self` of the first body naming it; the
-/// chain ends at an instance no lowered body names, the one the program wrote.
+/// A body lowered for a method, or for a generic function taking the class
+/// first, runs at the instance its first parameter is, so the instance that
+/// built another is the one the first body building it runs at: a body naming
+/// the instance other than through its own, or calling the function body that
+/// runs at it. The chain ends at an instance no lowered body builds, the one
+/// the program wrote. The walk takes at most one step per body, which is
+/// enough to reach back through every value instance a class may need.
 fn static_growth(
     instance: &Unregistered,
     bodies: &[(String, Body)],
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> (Vec<Vec<Type>>, Option<String>) {
     let class = instance.class.as_str();
+    let builder_of = |args: &[Type], running: Option<&str>| {
+        bodies.iter().position(|(symbol, body)| {
+            builds_instance(body, class, args)
+                || running.is_some_and(|callee| symbol != callee && calls(body, callee))
+        })
+    };
     let mut chain: Vec<Vec<Type>> = Vec::new();
     let mut method = None;
-    let mut builder = Some(instance.body);
-    while let Some(index) = builder.filter(|_| chain.len() <= MAX_INSTANCE_TYPE_DEPTH) {
+    let mut builder = builder_of(&instance.args, None).or(Some(instance.body));
+    for _ in 0..=bodies.len() {
+        let Some(index) = builder else {
+            break;
+        };
         let (symbol, body) = &bodies[index];
         let Some(owner) = self_instance(body, class) else {
             break;
@@ -332,15 +351,41 @@ fn static_growth(
         if method.is_none() {
             method = method_named(symbol, class, &owner, type_defs);
         }
-        builder = bodies.iter().position(|(_, body)| {
-            body.generic_class_instantiations
-                .iter()
-                .any(|named| named.class == class && same_arguments(&named.type_args, &owner))
-        });
-        chain.push(owner);
+        builder = builder_of(&owner, Some(symbol));
+        if !same_arguments(&owner, &instance.args) {
+            chain.push(owner);
+        }
     }
     chain.reverse();
     (chain, method)
+}
+
+/// Whether `body` calls the generic function instantiation `symbol`.
+fn calls(body: &Body, symbol: &str) -> bool {
+    body.generic_function_calls
+        .iter()
+        .any(|call| call.symbol == symbol)
+}
+
+/// Whether `body` names `class` at `args` other than through the instance it
+/// runs at: a body names its own instance, and every instance nested inside
+/// it, without having built any of them.
+fn builds_instance(body: &Body, class: &str, args: &[Type]) -> bool {
+    let names = body
+        .generic_class_instantiations
+        .iter()
+        .any(|named| named.class == class && same_arguments(&named.type_args, args));
+    names
+        && !self_instance(body, class).is_some_and(|own| {
+            same_arguments(&own, args) || own.iter().any(|arg| nests_instance(arg, class, args))
+        })
+}
+
+/// Whether `ty` is, or holds somewhere inside it, `class` at exactly `args`.
+fn nests_instance(ty: &Type, class: &str, args: &[Type]) -> bool {
+    let (head, parts) = constructor_parts(ty);
+    (head == class && same_arguments(&parts, args))
+        || parts.iter().any(|part| nests_instance(part, class, args))
 }
 
 /// The arguments of the `class` instance `body` runs at, read off its first
@@ -375,12 +420,128 @@ fn method_named(
         .cloned()
 }
 
+/// The type an argument of a generic-class reference stands for in a
+/// diagnostic: its type or value, or the expression it still is.
+fn spelled_argument(arg: &Expression) -> Type {
+    instantiation_argument(arg)
+        .unwrap_or_else(|| crate::type_checker::generics::value_generic_marker_type(arg.clone()))
+}
+
 /// Whether two instantiation tuples name one instantiation.
 fn same_arguments(left: &[Type], right: &[Type]) -> bool {
     left.len() == right.len() && left.iter().zip(right).all(|(a, b)| a.kind == b.kind)
 }
 
 impl LoweringContext<'_> {
+    /// Refuse an instance of a generic class at `ty`, built at `span`, whose
+    /// arguments name no single instantiation although the body building it
+    /// is lowered for one.
+    ///
+    /// Inside such a body every parameter is bound, so an argument computed
+    /// from them (`Size * 2`) that does not fold, or a type argument with no
+    /// name to compile a body at, would otherwise leave the instance running
+    /// the body shared by every instantiation, which reads its values at no
+    /// type in particular. An argument naming a parameter the substitution
+    /// leaves unbound — one the body declares — is not an instantiation yet
+    /// and passes, as does every instance in a body lowered without a
+    /// substitution. An operand that is neither bound nor declared has no
+    /// value at any instantiation and is refused.
+    // TODO: a body shared by every instantiation of its declaration — a
+    // method of `class Wrapper<T>` lowered once, or a generic function whose
+    // parameter appears only in its return type — builds its instances at
+    // open arguments and still runs them through shared bodies and the bare
+    // vtable. Closing that needs those bodies specialized per instantiation.
+    pub fn refuse_unnameable_instance(&self, ty: &Type, span: Span) -> Result<(), LoweringError> {
+        if self.generic_subs.is_empty() {
+            return Ok(());
+        }
+        let TypeKind::Custom(class, Some(arg_exprs)) = &ty.kind else {
+            return Ok(());
+        };
+        let type_defs = self.type_checker.type_definitions();
+        if type_defs
+            .get(class)
+            .and_then(TypeDefinition::generics)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let args: Vec<Type> = arg_exprs.iter().map(spelled_argument).collect();
+        for (position, (arg, arg_ty)) in arg_exprs.iter().zip(&args).enumerate() {
+            match super::type_argument(arg) {
+                Some(written) => {
+                    if !super::has_a_monomorphized_spelling(&written.kind)
+                        && !mentions_open_parameter(&written, type_defs)
+                    {
+                        return Err(unnameable_type_argument(class, &args, arg_ty, span));
+                    }
+                }
+                None => self.refuse_unfoldable_value(class, &args, (position, arg), span)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse the value argument `arg`, at `position` among the arguments of
+    /// `class` at `args`, when it has no value at the substitution this body is
+    /// lowered under.
+    ///
+    /// An argument that outgrows the integer range at the end of a chain of
+    /// instances each built from the last says so: the chain is what to
+    /// bound, not the one value.
+    fn refuse_unfoldable_value(
+        &self,
+        class: &str,
+        args: &[Type],
+        (position, arg): (usize, &Expression),
+        span: Span,
+    ) -> Result<(), LoweringError> {
+        let Some(cause) =
+            unfoldable_value_argument(arg, &self.generic_subs, &self.body.type_params)
+        else {
+            return Ok(());
+        };
+        let bindings = bound_value_names(arg, &self.generic_subs);
+        let error = invalid_value_argument(class, args, arg, &bindings, cause, span);
+        let grows =
+            cause == UnfoldableValue::OutOfRange && self.is_built_by_itself(class, arg, position);
+        Err(match bindings.first() {
+            Some((parameter, _)) if grows => error.with_note(value_growth_note(class, parameter)),
+            Some(_) | None => error,
+        })
+    }
+
+    /// Whether the registry holds an instance of `class` that builds the one
+    /// this body runs at through `arg` at `position`: the body is then a step
+    /// of a chain `arg` grows, not the first instance written.
+    fn is_built_by_itself(&self, class: &str, arg: &Expression, position: usize) -> bool {
+        let value_of =
+            |ty: &Type| extract_value_generic(ty).and_then(TypeChecker::try_eval_const_int);
+        let own = self_instance(&self.body, class);
+        let Some(own_value) = own
+            .as_ref()
+            .and_then(|own| own.get(position))
+            .and_then(value_of)
+        else {
+            return false;
+        };
+        let type_defs = self.type_checker.type_definitions();
+        let Some(generics) = type_defs.get(class).and_then(TypeDefinition::generics) else {
+            return false;
+        };
+        let registered = self.type_checker.generic_class_instantiations.get(class);
+        registered.into_iter().flatten().any(|earlier| {
+            let mapping: HashMap<String, Type> = generics
+                .iter()
+                .map(|generic| generic.name.clone())
+                .zip(earlier.iter().cloned())
+                .collect();
+            fold_value_generic_arithmetic(arg, &mapping)
+                .and_then(|folded| TypeChecker::try_eval_const_int(&folded))
+                == Some(own_value)
+        })
+    }
+
     /// Record on the body each generic-class instantiation `ty` spells that the
     /// registry does not hold yet.
     ///

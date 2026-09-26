@@ -1,0 +1,17 @@
+// summary: Accepted counterpart of MER_MIR_017: a value argument computed from the class's own folds to the instantiation it names.
+// expect-stdout: ab
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+    fn doubled() T
+        let b = Buf<T, Size * 2>(self.v)
+        return b.get()
+
+fn main()
+    let b = Buf<String, 4>("a" + "b")
+    println(b.doubled())

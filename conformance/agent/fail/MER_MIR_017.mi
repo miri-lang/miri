@@ -1,0 +1,20 @@
+// expect: MER_MIR_017
+// summary: Triggers MER_MIR_017: Invalid Instantiation Argument.
+// command: build
+// The argument is folded while lowering the method bodies a build reaches, a
+// stage `check` does not run.
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+    fn doubled() T
+        let b = Buf<T, Size * 2>(self.v)
+        return b.get()
+
+fn main()
+    let b = Buf<String, 85070591730234615865843651857942052864>("a" + "b")
+    println(b.doubled())

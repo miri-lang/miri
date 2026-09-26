@@ -1135,3 +1135,55 @@ fn main()
         &["nests its type argument 33 levels deep"],
     );
 }
+
+/// The chain a value-growth refusal shows starts at the instance the program
+/// wrote, not partway through the instances it grew.
+#[test]
+fn test_a_value_growth_note_starts_at_the_instance_the_program_wrote() {
+    assert_refused_within_budget(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn depth(n int) int
+        if n == 0
+            return 7
+        return Buf<T, Size + 1>(self.v).depth(n - 1)
+
+fn main()
+    let s = "hi" + "x"
+    let b = Buf<String, 1>(s)
+    println(f"{b.depth(3)}")
+"#,
+        "MER_MIR_016",
+        &["Buf<String, 1> → Buf<String, 2> → Buf<String, 3> → …"],
+    );
+}
+
+/// The steps of a type-growth note are told apart even where they nest past
+/// the levels a step is shown to.
+#[test]
+fn test_a_type_growth_note_never_shows_two_identical_steps() {
+    assert_refused_within_budget(
+        r#"
+use system.io
+
+struct S<T>
+    v T
+
+fn nest<T>(x T, n int) int
+    if n == 0
+        return 0
+    return 1 + nest(S(v: x), n - 1)
+
+fn main()
+    let s = "a" + "b"
+    println(f"{nest(s, 3)}")
+"#,
+        "MER_MIR_016",
+        &["S<String> → S<S<String>> → S<S<S<String>>> → …"],
+    );
+}
