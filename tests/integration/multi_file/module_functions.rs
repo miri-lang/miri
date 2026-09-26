@@ -193,12 +193,15 @@ fn test_function_reference_to_a_module_helper_forwards_to_its_own_body() {
     );
 }
 
-/// Two modules' helpers of one name keep distinct compiled bodies, but GPU
-/// code declares each under its bare name, so reaching both from one kernel
-/// is refused rather than running one body for both.
+/// Two modules' helpers of one name, and the program's own, each run their
+/// own body when one kernel reaches all three.
 #[test]
-fn test_same_named_helpers_of_two_modules_reached_from_gpu_code_are_refused() {
-    assert_project_compiler_error(
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_same_named_helpers_of_two_modules_reached_from_gpu_code_keep_their_bodies() {
+    assert_project_runs_with_output(
         &[
             (
                 "main.mi",
@@ -208,11 +211,14 @@ fn test_same_named_helpers_of_two_modules_reached_from_gpu_code_are_refused() {
                     "use local.k.a.{from_a}\n",
                     "use local.k.b.{from_b}\n",
                     "\n",
+                    "fn helper(x int) int\n",
+                    "    return x * 10000\n",
+                    "\n",
                     "fn main()\n",
                     "    gpu let src = [1, 2, 3]\n",
                     "    gpu var dst = [0, 0, 0]\n",
                     "    gpu forall i in 0..3\n",
-                    "        dst[i] = from_a(src[i]) * 1000 + from_b(src[i])\n",
+                    "        dst[i] = helper(src[i]) + from_a(src[i]) * 1000 + from_b(src[i])\n",
                     "    let host = dst\n",
                     "    println(f'{host[0]} {host[1]} {host[2]}')\n",
                 ),
@@ -238,7 +244,7 @@ fn test_same_named_helpers_of_two_modules_reached_from_gpu_code_are_refused() {
                 ),
             ),
         ],
-        "`local.k.a.helper` and `local.k.b.helper` are both reached from GPU code",
+        "12101 23102 34103",
     );
 }
 

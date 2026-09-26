@@ -8,9 +8,33 @@
 //! WGSL identifiers admit neither `.` nor `$`, so this spelling joins the
 //! parts of a symbol with `_` and `__`. A user identifier may contain those
 //! too, so two symbols can share this spelling; the link name, not this one,
-//! is what keeps every compiled body apart. A function's module is left out of
-//! it, so the functions of one name two modules declare share it too, and
-//! reaching both from GPU code is refused where these names are claimed.
+//! is what keeps every compiled body apart, and the GPU name table refuses two
+//! definitions that share it.
+//!
+//! A top-level function is spelled by its declaring module and its name,
+//! followed by `__` and each argument token:
+//!
+//! ```text
+//! function  = program | escaped | imported
+//! program   = name                          (name does not begin with `m__`)
+//! escaped   = "m__0_" name                  (name begins with `m__`)
+//! imported  = "m__" { length ident }+ "_" name
+//! length    = decimal length of the ident, no leading zero
+//! ```
+//!
+//! The program's own `helper` is spelled `helper`, its `m__x` is `m__0_m__x`,
+//! and the `helper` of `system.math` is `m__6system4math_helper`.
+//!
+//! Without argument tokens this is injective. Only `program` spellings lack
+//! the `m__` prefix, and on them the spelling is the name itself. After the
+//! prefix, `escaped` continues with `0` while `imported` continues with the
+//! first digit of a non-empty identifier's length, never `0`. An `imported`
+//! spelling decodes one way: an identifier never begins with a digit, so each
+//! length ends where its identifier begins, the identifier is exactly that
+//! many bytes, and the path ends at the first `_` found where a length would
+//! begin. Argument tokens are appended after `__`, which a name may itself
+//! contain, and other kinds of symbol share this identifier space; the GPU
+//! name table is the backstop for both.
 
 use std::fmt;
 
@@ -18,9 +42,18 @@ use super::{
     ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, SymbolKind, ThunkKind,
     ThunkSubject, Token, ENTRY_NAME,
 };
+use crate::type_checker::ModuleId;
 
 /// The separator between a name and each of its argument tokens.
 const ARGUMENT_SEPARATOR: &str = "__";
+
+/// Begins the spelling of a function an imported module declares.
+const MODULE_PREFIX: &str = "m__";
+
+/// Follows [`MODULE_PREFIX`] in the spelling of a program function whose name
+/// begins with that prefix; a module path identifier's length never begins
+/// with `0`.
+const PROGRAM_ESCAPE: &str = "0_";
 
 /// A [`Symbol`] displayed in its identifier-only spelling.
 pub(super) struct Wgsl<'s>(pub(super) &'s Symbol);
@@ -35,8 +68,8 @@ impl fmt::Display for Wgsl<'_> {
 /// The identifier-only spelling of `kind`, without its residency.
 pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Result {
     match kind {
-        SymbolKind::Function { name, args, .. } => {
-            f.write_str(name)?;
+        SymbolKind::Function { module, name, args } => {
+            write_function_name(f, module, name)?;
             write_arguments(f, args)
         }
         SymbolKind::Method {
@@ -71,6 +104,23 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
         SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
         SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
         SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
+    }
+}
+
+/// The spelling of the function `name` that `module` declares, before its
+/// argument tokens.
+fn write_function_name(f: &mut fmt::Formatter<'_>, module: &ModuleId, name: &str) -> fmt::Result {
+    match module {
+        ModuleId::Program if name.starts_with(MODULE_PREFIX) => {
+            write!(f, "{MODULE_PREFIX}{PROGRAM_ESCAPE}{name}")
+        }
+        ModuleId::Program => f.write_str(name),
+        ModuleId::Imported(path) => {
+            f.write_str(MODULE_PREFIX)?;
+            path.iter()
+                .try_for_each(|segment| write!(f, "{}{segment}", segment.len()))?;
+            write!(f, "_{name}")
+        }
     }
 }
 

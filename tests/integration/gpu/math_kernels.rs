@@ -209,6 +209,58 @@ fn main()
     );
 }
 
+/// A program function may share its name with a helper `system.math` keeps
+/// private: one kernel reaching both declares each under its own name.
+#[test]
+fn gpu_function_named_like_a_math_private_helper_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.collections.array
+use system.math.{value_noise}
+
+fn lattice_unit(a float, b float) float
+    return 1000.0
+
+fn main()
+    gpu let src = [0.1, 0.2, 0.3]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = value_noise(src[i], 0.5) + lattice_unit(0.0, 0.0)
+",
+    );
+}
+
+/// The program's `lattice_unit` and the one `value_noise` calls each run
+/// their own body on the GPU: the noise stays in [0, 1), which the program's
+/// `1000.0` would push it out of.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_function_named_like_a_math_private_helper_runs_its_own_body() {
+    let source = "
+use system.gpu
+use system.collections.array
+use system.math.{value_noise}
+
+fn lattice_unit(a float, b float) float
+    return 1000.0
+
+fn in_unit(v float) float: 1.0 if v >= 0.0 and v < 1.0 else 0.0
+
+fn main()
+    gpu let src = [0.1, 0.2, 0.3]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = in_unit(value_noise(src[i], 0.5)) + lattice_unit(0.0, 0.0)
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]}')
+";
+    assert_gpu_runs_with_output(source, "1001.0 1001.0 1001.0");
+}
+
 /// `fbm` and the `curl_noise_*` field compose multiple noise octaves and emit
 /// naga-valid WGSL.
 #[test]
