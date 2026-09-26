@@ -24,6 +24,7 @@ use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
+use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::AbiParam;
@@ -467,28 +468,26 @@ impl CraneliftBackend {
     fn define_string_literals(
         module: &mut ObjectModule,
         isa: &Arc<dyn TargetIsa>,
-        string_literals: BTreeMap<String, String>,
+        string_literals: BTreeMap<String, usize>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let ptr_size = ptr_type.bytes();
-        for (literal, symbol_name) in string_literals {
-            Self::define_one_string_literal(module, &literal, &symbol_name, ptr_size)?;
+        for (literal, index) in string_literals {
+            Self::define_one_string_literal(module, &literal, index, ptr_size)?;
         }
         Ok(())
     }
 
-    /// Emit the byte data + MiriString struct for one string literal.
+    /// Emit the byte data + MiriString struct for the `index`-th string literal.
     fn define_one_string_literal(
         module: &mut ObjectModule,
         literal: &str,
-        symbol_name: &str,
+        index: usize,
         ptr_size: u32,
     ) -> Result<(), CodegenError> {
-        let bytes_id = Self::define_string_bytes(module, literal, symbol_name)?;
+        let bytes_id = Self::define_string_bytes(module, literal, index)?;
 
-        let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
-        struct_symbol.push_str(symbol_name);
-        struct_symbol.push_str("_struct");
+        let struct_symbol = Symbol::string_literal(index, StringLiteralPart::Object).link_name();
         let struct_id = module
             .declare_data(&struct_symbol, Linkage::Export, false, false)
             .map_err(|e| CodegenError::Module(e.to_string()))?;
@@ -508,16 +507,14 @@ impl CraneliftBackend {
             .map_err(|e| CodegenError::Module(e.to_string()))
     }
 
-    /// Define the raw byte data for a string literal as
-    /// `{symbol_name}_bytes`; return the `DataId` of the byte array.
+    /// Define the raw byte data of the `index`-th string literal; return the
+    /// `DataId` of the byte array.
     fn define_string_bytes(
         module: &mut ObjectModule,
         literal: &str,
-        symbol_name: &str,
+        index: usize,
     ) -> Result<cranelift_module::DataId, CodegenError> {
-        let mut bytes_symbol = String::with_capacity(symbol_name.len() + 6);
-        bytes_symbol.push_str(symbol_name);
-        bytes_symbol.push_str("_bytes");
+        let bytes_symbol = Symbol::string_literal(index, StringLiteralPart::Bytes).link_name();
         let bytes_id = module
             .declare_data(&bytes_symbol, Linkage::Export, false, false)
             .map_err(|e| CodegenError::Module(e.to_string()))?;
@@ -586,7 +583,7 @@ impl CraneliftBackend {
         name: &str,
         body: &Body,
         isa: &Arc<dyn TargetIsa>,
-        string_literals: &mut BTreeMap<String, String>,
+        string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         // Create function translator
@@ -870,7 +867,7 @@ impl CraneliftBackend {
             // per-instantiation drop thunk so the concrete managed field is
             // released. The bare `__decref_Box` would reach only `__drop_Box`,
             // which skips the unresolved generic field.
-            FunctionTranslator::generate_decref_function(module, ctx, isa, &mangled)?;
+            FunctionTranslator::generate_decref_function(module, ctx, isa, type_name, args)?;
             emitted.push(mangled);
         }
         Ok(())

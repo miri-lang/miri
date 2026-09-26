@@ -1080,6 +1080,12 @@ fn local_display_name(body: &Body, local: Local) -> String {
 /// body the concrete element makes both sides agree, and the per-instantiation
 /// symbol is what says it has one.
 ///
+/// `shared_collection_methods` names the symbols the rule is about: the shared
+/// body of every method compiled under a built-in collection's name. A call to any other
+/// symbol — a per-instantiation body, a runtime function, a user function — is
+/// outside it. The caller spells that set from the collections' declarations,
+/// so a call is recognised by what it names, never by how its name reads.
+///
 /// The rule reads the *receiver*: a method that builds tuples of its own
 /// (`zip`, `enumerate`) returns a reference-counted element from a sequence of
 /// plain integers, and the shared body owns those tuples correctly because it
@@ -1092,6 +1098,7 @@ fn local_display_name(body: &Body, local: Local) -> String {
 /// reference over), and none of that is visible as an RC operation in MIR.
 pub fn verify_collection_element_ownership(
     body: &Body,
+    shared_collection_methods: &HashSet<String>,
     intrinsic_backed: &HashSet<String>,
 ) -> Vec<VerificationViolation> {
     let mut violations = Vec::new();
@@ -1105,10 +1112,7 @@ pub fn verify_collection_element_ownership(
         let Some(symbol) = called_symbol(func) else {
             continue;
         };
-        if intrinsic_backed.contains(symbol) || symbol.contains(GENERIC_MANGLE_SEPARATOR) {
-            continue;
-        }
-        if !symbol_belongs_to_a_builtin_collection(symbol) {
+        if !shared_collection_methods.contains(symbol) || intrinsic_backed.contains(symbol) {
             continue;
         }
         let Some(receiver) = args.first().and_then(bare_local_read) else {
@@ -1275,10 +1279,6 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
     }
 }
 
-/// The separator [`crate::mir::lowering::dispatch::mangle_generic_name`] puts
-/// between a symbol and each concrete type argument.
-const GENERIC_MANGLE_SEPARATOR: &str = "__";
-
 /// The identifier a `Call` names, or `None` for an indirect call.
 fn called_symbol(func: &Operand) -> Option<&str> {
     let Operand::Constant(constant) = func else {
@@ -1316,13 +1316,6 @@ fn holds_reference_counted_elements(kind: &crate::ast::types::TypeKind) -> bool 
             matches!(&arg.node, ExpressionKind::Type(ty, _) if crate::mir::rc::is_field_managed(&ty.kind))
         })
         && crate::mir::lowering::can_be_monomorphized_at(kind)
-}
-
-/// Whether `symbol` is a `{Collection}_{method}` method of a built-in collection.
-fn symbol_belongs_to_a_builtin_collection(symbol: &str) -> bool {
-    symbol
-        .split_once('_')
-        .is_some_and(|(class, _)| BuiltinCollectionKind::from_name(class).is_some())
 }
 
 /// Report every read of a `gpu`-resident binding's host value that no readback

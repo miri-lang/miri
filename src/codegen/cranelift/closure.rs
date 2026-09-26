@@ -12,6 +12,7 @@ use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
 use crate::mir::rc::is_word_slot_managed;
+use crate::mir::symbol::Symbol;
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
 
@@ -97,7 +98,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let dtor_name = format!("__dtor_{}", lambda_name);
+        let dtor_name = Symbol::closure_destructor(lambda_name).link_name();
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
 

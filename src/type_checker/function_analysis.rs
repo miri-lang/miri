@@ -11,7 +11,7 @@
 
 use super::FnResidency;
 use crate::ast::Statement;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Function metadata tracking for GPU analysis and call site validation.
@@ -32,6 +32,11 @@ pub(crate) struct FunctionAnalysis {
     /// Populated during function declaration checking; used at call sites to
     /// determine if gpu-resident args are allowed.
     pub(crate) fn_residencies: HashMap<String, FnResidency>,
+    /// Every function declared with the `runtime` keyword, by the C name the
+    /// runtime library exports it under — in any module, visible to the
+    /// program or not, since a stdlib body calls its own private runtime
+    /// functions.
+    pub(crate) runtime_functions: HashSet<String>,
 }
 
 impl FunctionAnalysis {
@@ -41,6 +46,7 @@ impl FunctionAnalysis {
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
             fn_residencies: HashMap::new(),
+            runtime_functions: HashSet::new(),
         }
     }
 }

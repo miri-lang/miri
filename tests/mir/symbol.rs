@@ -4,7 +4,9 @@
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
-use miri::mir::symbol::{ClosureKind, GpuKernelKind, Symbol};
+use miri::mir::symbol::{
+    ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, ThunkKind,
+};
 
 fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
@@ -141,4 +143,83 @@ fn symbols_that_differ_in_structure_are_distinct_values() {
 fn symbols_display_as_their_link_name() {
     let symbol = Symbol::function("pick", &[ty(TypeKind::Int)]);
     assert_eq!(symbol.to_string(), symbol.link_name());
+}
+
+#[test]
+fn a_type_thunk_prefixes_its_kind_to_the_type_and_its_arguments() {
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Drop, "Box", &[]).link_name(),
+        "__drop_Box"
+    );
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Decref, "Box", &[ty(TypeKind::String)]).link_name(),
+        "__decref_Box__String"
+    );
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Clone, "Point", &[]).link_name(),
+        "__clone_Point"
+    );
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Compare, "Box", &[ty(TypeKind::Int)]).link_name(),
+        "__compare_Box__int"
+    );
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Equals, "Point", &[]).link_name(),
+        "__equals_Point"
+    );
+}
+
+#[test]
+fn a_structural_thunk_appends_the_encoding_of_its_structure() {
+    assert_eq!(
+        Symbol::structural_thunk(ThunkKind::Decref, ".T2_int_String").link_name(),
+        "__decref_.T2_int_String"
+    );
+}
+
+#[test]
+fn a_closure_destructor_names_the_closure_body() {
+    assert_eq!(
+        Symbol::closure_destructor("__lambda_7").link_name(),
+        "__dtor___lambda_7"
+    );
+}
+
+#[test]
+fn kernel_data_are_named_by_the_kernel_entry_point() {
+    let kernel = Symbol::gpu_kernel(GpuKernelKind::Forall, 0).wgsl_name();
+    assert_eq!(
+        Symbol::kernel_datum(&kernel, KernelDatum::Wgsl).link_name(),
+        "__miri_kernel_miri_gpu_forall_0_wgsl"
+    );
+    assert_eq!(
+        Symbol::kernel_datum(&kernel, KernelDatum::Name).link_name(),
+        "__miri_kernel_miri_gpu_forall_0_name"
+    );
+}
+
+#[test]
+fn string_literal_data_are_numbered_per_module() {
+    assert_eq!(
+        Symbol::string_literal(3, StringLiteralPart::Bytes).link_name(),
+        ".miri_str_3_bytes"
+    );
+    assert_eq!(
+        Symbol::string_literal(3, StringLiteralPart::Object).link_name(),
+        ".miri_str_3_struct"
+    );
+}
+
+#[test]
+fn thunks_of_different_kinds_or_types_are_distinct_values() {
+    let drop_box = Symbol::type_thunk(ThunkKind::Drop, "Box", &[]);
+    assert_ne!(drop_box, Symbol::type_thunk(ThunkKind::Decref, "Box", &[]));
+    assert_ne!(
+        drop_box,
+        Symbol::type_thunk(ThunkKind::Drop, "Box", &[ty(TypeKind::Int)])
+    );
+    assert_ne!(
+        Symbol::type_thunk(ThunkKind::Drop, "Box__int", &[]),
+        Symbol::type_thunk(ThunkKind::Drop, "Box", &[ty(TypeKind::Int)])
+    );
 }

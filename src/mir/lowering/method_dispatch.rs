@@ -346,7 +346,8 @@ fn gpu_resident_call_args(
 }
 
 /// If a direct call passes gpu-resident buffers into a `GpuLaunchSafe` callee,
-/// retarget `func_op` to the residency-specialized body and return the per-arg
+/// retarget `func_op` to the residency-specialized body, record the
+/// specialization on the body for the pipeline to lower, and return the per-arg
 /// device handles (positional, sized to `arg_ops`). Otherwise leaves `func_op`
 /// untouched and returns an empty vector (an ordinary host call).
 ///
@@ -354,7 +355,7 @@ fn gpu_resident_call_args(
 /// inside `forall` (device) context, so the passed buffer is never read on the
 /// host — the very property the type checker's residency gate enforces.
 pub(crate) fn residency_specialize_call(
-    ctx: &LoweringContext,
+    ctx: &mut LoweringContext,
     func: &Expression,
     args: &[Expression],
     func_op: &mut Operand,
@@ -374,19 +375,26 @@ pub(crate) fn residency_specialize_call(
         return Vec::new();
     }
 
+    let mut handles = vec![None; arg_ops.len()];
+    for &(idx, handle) in &gpu_args {
+        if idx < handles.len() {
+            handles[idx] = Some(handle);
+        }
+    }
+
     if let Operand::Constant(constant) = &*func_op {
         if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
             let mangled = Symbol::function(base, &[])
                 .with_residency(&gpu_args)
                 .link_name();
             *func_op = super::dispatch::runtime_fn_operand(&mangled, func.span);
-        }
-    }
-
-    let mut handles = vec![None; arg_ops.len()];
-    for (idx, handle) in gpu_args {
-        if idx < handles.len() {
-            handles[idx] = Some(handle);
+            ctx.body
+                .residency_function_calls
+                .push(crate::mir::body::ResidencyFunctionCall {
+                    symbol: mangled,
+                    function: func_name.clone(),
+                    arg_handles: handles.clone(),
+                });
         }
     }
     handles

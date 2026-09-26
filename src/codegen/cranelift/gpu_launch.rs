@@ -20,6 +20,7 @@ use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::CodegenError;
 use crate::mir::body::DeviceHandleId;
+use crate::mir::symbol::{KernelDatum, Symbol};
 use crate::mir::{Body, ExecutionModel, GpuLaunchArgs, Local, Operand, Place};
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
@@ -76,12 +77,12 @@ pub(crate) fn build_kernel_registry(
         })?;
         let wgsl_data = define_bytes(
             module,
-            &format!("__miri_kernel_{name}_wgsl"),
+            &Symbol::kernel_datum(name, KernelDatum::Wgsl).link_name(),
             wgsl_text.as_bytes(),
         )?;
         let name_data = define_bytes(
             module,
-            &format!("__miri_kernel_{name}_name"),
+            &Symbol::kernel_datum(name, KernelDatum::Name).link_name(),
             name.as_bytes(),
         )?;
 

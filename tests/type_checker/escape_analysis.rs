@@ -71,7 +71,7 @@ fn load_ffi_summaries_parses_without_panic() {
 fn list_push_escapes_element() {
     let summaries = load_ffi_summaries();
     let s = summaries
-        .get("miri_rt_list_push")
+        .get(&FunctionId::free("miri_rt_list_push"))
         .expect("miri_rt_list_push must have a summary");
     // param 1 (val) escapes into the list
     assert!(s.directly_escapes(1), "val (param 1) must escape");
@@ -85,7 +85,7 @@ fn list_push_escapes_element() {
 fn map_set_escapes_key_and_value() {
     let summaries = load_ffi_summaries();
     let s = summaries
-        .get("miri_rt_map_set")
+        .get(&FunctionId::free("miri_rt_map_set"))
         .expect("miri_rt_map_set must have a summary");
     assert!(s.directly_escapes(1), "key (param 1) must escape");
     assert!(s.directly_escapes(2), "value (param 2) must escape");
@@ -96,7 +96,7 @@ fn map_set_escapes_key_and_value() {
 fn set_add_escapes_element() {
     let summaries = load_ffi_summaries();
     let s = summaries
-        .get("miri_rt_set_add")
+        .get(&FunctionId::free("miri_rt_set_add"))
         .expect("miri_rt_set_add must have a summary");
     assert!(s.directly_escapes(1), "elem (param 1) must escape");
     assert!(!s.directly_escapes(0));
@@ -112,7 +112,7 @@ fn io_sinks_have_no_escapes() {
         "miri_rt_eprintln",
     ] {
         let s = summaries
-            .get(*name)
+            .get(&FunctionId::free(name))
             .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
         assert!(
             s.is_empty(),
@@ -126,7 +126,7 @@ fn list_insert_and_set_escape_element() {
     let summaries = load_ffi_summaries();
     for name in &["miri_rt_list_insert", "miri_rt_list_set"] {
         let s = summaries
-            .get(*name)
+            .get(&FunctionId::free(name))
             .unwrap_or_else(|| panic!("{name} must have a summary"));
         assert!(s.directly_escapes(2), "{name}: val (param 2) must escape");
     }
@@ -136,7 +136,7 @@ fn list_insert_and_set_escape_element() {
 fn array_set_val_escapes_element() {
     let summaries = load_ffi_summaries();
     let s = summaries
-        .get("miri_rt_array_set_val")
+        .get(&FunctionId::free("miri_rt_array_set_val"))
         .expect("miri_rt_array_set_val must have a summary");
     assert!(s.directly_escapes(2), "val (param 2) must escape");
     assert!(!s.directly_escapes(0));
@@ -152,7 +152,7 @@ fn map_read_only_accessors_have_no_escapes() {
         "miri_rt_map_remove",
     ] {
         let s = summaries
-            .get(*name)
+            .get(&FunctionId::free(name))
             .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
         assert!(
             s.is_empty(),
@@ -166,7 +166,7 @@ fn set_read_only_accessors_have_no_escapes() {
     let summaries = load_ffi_summaries();
     for name in &["miri_rt_set_contains", "miri_rt_set_remove"] {
         let s = summaries
-            .get(*name)
+            .get(&FunctionId::free(name))
             .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
         assert!(
             s.is_empty(),
@@ -439,7 +439,7 @@ fn rule5_call_consumes_param_via_sink_chain() {
     let p = ident("p", managed_type(), &mut types);
     let mut summaries: HashMap<FunctionId, EscapeSummary> = HashMap::new();
     summaries.insert(
-        "store".to_string(),
+        FunctionId::free("store"),
         EscapeSummary {
             direct_escapes: BTreeSet::from([0_usize]),
             ..EscapeSummary::default()
@@ -468,7 +468,7 @@ fn rule6_call_neither_consumes_nor_aliases() {
     let params = vec![param("p")];
     let p = ident("p", managed_type(), &mut types);
     let mut summaries: HashMap<FunctionId, EscapeSummary> = HashMap::new();
-    summaries.insert("length_of".to_string(), EscapeSummary::default());
+    summaries.insert(FunctionId::free("length_of"), EscapeSummary::default());
     let ret = call("length_of", vec![p], primitive_type(), &mut types);
 
     let flow = analyze_return_value(&ret, &params, &types, &HashMap::new(), &summaries);
@@ -489,7 +489,7 @@ fn rule7_call_return_aliases_param_propagates_alias() {
     let p = ident("p", managed_type(), &mut types);
     let mut summaries: HashMap<FunctionId, EscapeSummary> = HashMap::new();
     summaries.insert(
-        "identity".to_string(),
+        FunctionId::free("identity"),
         EscapeSummary {
             return_aliases: BTreeSet::from([0_usize]),
             ..EscapeSummary::default()
@@ -516,7 +516,7 @@ fn rule7_call_return_aliases_only_when_outer_return_alias_holds() {
     let p = ident("p", managed_type(), &mut types);
     let mut summaries: HashMap<FunctionId, EscapeSummary> = HashMap::new();
     summaries.insert(
-        "identity".to_string(),
+        FunctionId::free("identity"),
         EscapeSummary {
             return_aliases: BTreeSet::from([0_usize]),
             ..EscapeSummary::default()
@@ -728,7 +728,7 @@ fn method_call_consumes_receiver_via_class_method_key() {
 
     let mut summaries: HashMap<FunctionId, EscapeSummary> = HashMap::new();
     summaries.insert(
-        "Cache_store".to_string(),
+        FunctionId::method("Cache", "store"),
         EscapeSummary {
             direct_escapes: BTreeSet::from([0_usize, 1_usize]),
             ..EscapeSummary::default()

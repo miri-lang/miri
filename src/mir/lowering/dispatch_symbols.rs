@@ -103,6 +103,21 @@ pub fn instantiation_substitution<'s>(
     }
 }
 
+/// Every method whose shared body can be compiled under `class_name`'s own
+/// name: the ones it or an ancestor declares — an abstract ancestor's are
+/// re-lowered per concrete class — and the trait defaults it inherits.
+pub fn methods_compiled_under<'td>(
+    type_defs: &'td HashMap<String, TypeDefinition>,
+    class_name: &str,
+) -> impl Iterator<Item = &'td str> {
+    let declared = class_chain(type_defs, class_name)
+        .flat_map(|(_, class)| class.methods.keys().map(String::as_str));
+    let defaulted = inherited_trait_defaults(type_defs, class_name)
+        .into_iter()
+        .map(|(method, _)| method);
+    declared.chain(defaulted)
+}
+
 /// Every method a trait anywhere in `class_name`'s chain gives a default body
 /// that no class in the chain declares, each paired with the trait
 /// [`inherited_trait_default`] chooses, sorted by method name.

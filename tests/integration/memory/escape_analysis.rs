@@ -808,3 +808,40 @@ fn main()
         "3 2",
     );
 }
+
+#[test]
+fn test_method_summary_is_not_shared_with_a_method_spelled_alike() {
+    // `A.b_keep` and `A_b.keep` would both spell `A_b_keep`; only the second
+    // stores its argument, so a call to the first must not consume it.
+    assert_runs_with_output(
+        r#"
+
+class Tag
+    var name String
+    fn init(n String)
+        self.name = n
+
+class A
+    var count int
+    fn init()
+        self.count = 0
+    fn b_keep(_t Tag)
+        self.count = self.count + 1
+
+class A_b
+    var held Tag
+    fn init()
+        self.held = Tag("none")
+    fn keep(t Tag)
+        self.held = t
+
+fn run(a A, t Tag)
+    a.b_keep(t)
+    println(t.name)
+
+let a = A()
+run(a, Tag("kept"))
+"#,
+        "kept",
+    );
+}

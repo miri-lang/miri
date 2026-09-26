@@ -1894,8 +1894,22 @@ impl Pipeline {
         method_name == equals && class_method_declaration(class_name, equals, definitions).is_some()
     }
 
-    /// The `{Collection}_{method}` symbols a built-in collection declares itself
-    /// and settles element ownership for by calling the runtime.
+    /// The shared body of every method a built-in collection is compiled with:
+    /// the symbols [`mir::verify::verify_collection_element_ownership`] holds to its
+    /// rule, spelled from the declarations rather than recognised by reading a
+    /// call's name.
+    fn shared_collection_methods(result: &PipelineResult) -> std::collections::HashSet<String> {
+        let definitions = result.type_checker.type_definitions();
+        Self::builtin_collection_classes(result)
+            .flat_map(|(class_name, _)| {
+                mir::lowering::dispatch_symbols::methods_compiled_under(definitions, class_name)
+                    .map(move |method_name| Self::mangle_method_name(class_name, method_name))
+            })
+            .collect()
+    }
+
+    /// The shared collection method symbols whose bodies settle element
+    /// ownership by calling the runtime.
     ///
     /// Those bodies do it through the runtime rather than by any RC operation MIR
     /// can see, so the shared generic one is correct at every element type and
@@ -1907,24 +1921,40 @@ impl Pipeline {
     fn collection_methods_backed_by_intrinsics(
         result: &PipelineResult,
     ) -> std::collections::HashSet<String> {
+        Self::builtin_collection_classes(result)
+            .flat_map(|(class_name, class_def)| {
+                class_def
+                    .methods
+                    .keys()
+                    .filter(|method_name| {
+                        mir::lowering::method_dispatch::is_settled_by_the_runtime(
+                            class_def,
+                            method_name,
+                        )
+                    })
+                    .map(move |method_name| Self::mangle_method_name(class_name, method_name))
+            })
+            .collect()
+    }
+
+    /// Every built-in collection the program's type table declares as a class.
+    fn builtin_collection_classes(
+        result: &PipelineResult,
+    ) -> impl Iterator<Item = (&str, &crate::type_checker::context::ClassDefinition)> {
         use crate::type_checker::context::TypeDefinition;
-        let definitions = result.type_checker.type_definitions();
-        let mut symbols = std::collections::HashSet::new();
-        for (class_name, definition) in definitions {
-            if BuiltinCollectionKind::from_name(class_name.as_str()).is_none() {
-                continue;
-            }
-            let TypeDefinition::Class(class_def) = definition else {
-                continue;
-            };
-            for method_name in class_def.methods.keys() {
-                if mir::lowering::method_dispatch::is_settled_by_the_runtime(class_def, method_name)
-                {
-                    symbols.insert(Self::mangle_method_name(class_name, method_name));
-                }
-            }
-        }
-        symbols
+        result
+            .type_checker
+            .type_definitions()
+            .iter()
+            .filter(|(class_name, _)| BuiltinCollectionKind::from_name(class_name).is_some())
+            .filter_map(|(class_name, definition)| match definition {
+                TypeDefinition::Class(class_def) => Some((class_name.as_str(), class_def)),
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_)
+                | TypeDefinition::Trait(_) => None,
+            })
     }
 
     /// Lower every body the program needs.
@@ -2159,6 +2189,7 @@ impl Pipeline {
         bodies: &[(String, mir::Body)],
         mode: &str,
     ) -> Result<(), CompilerError> {
+        let shared_collection_methods = Self::shared_collection_methods(result);
         let intrinsic_backed = Self::collection_methods_backed_by_intrinsics(result);
         let mut all_violations = Vec::new();
         let mut functions_with_violations = 0;
@@ -2166,6 +2197,7 @@ impl Pipeline {
             let mut violations = mir::verify::verify_body(body);
             violations.extend(mir::verify::verify_collection_element_ownership(
                 body,
+                &shared_collection_methods,
                 &intrinsic_backed,
             ));
             violations.extend(mir::verify::verify_cross_residency_readback(body));
@@ -2898,31 +2930,22 @@ impl Pipeline {
         }
     }
 
-    /// The residency-specialized calls (`base__gpu_p…h…`) in `bodies` that have
-    /// no body yet, keyed by symbol, each with the original function and the
-    /// per-argument device handles read straight off the call terminator.
+    /// The residency-specialized calls in `bodies` that have no body yet, keyed
+    /// by symbol, each with the function it specializes and the per-argument
+    /// device handles, as the call's lowering recorded them.
     fn residency_specializations_called(
         bodies: &[(String, mir::Body)],
         lowered_names: &std::collections::HashSet<String>,
     ) -> std::collections::BTreeMap<String, (String, Vec<Option<mir::body::DeviceHandleId>>)> {
         bodies
             .iter()
-            .flat_map(|(_, body)| body.basic_blocks.iter())
-            .filter_map(|block| match &block.terminator.as_ref()?.kind {
-                mir::TerminatorKind::Call {
-                    func: mir::Operand::Constant(c),
-                    arg_handles,
-                    ..
-                } => match &c.literal {
-                    crate::ast::literal::Literal::Identifier(fname)
-                        if fname.contains("__gpu_p") && !lowered_names.contains(fname) =>
-                    {
-                        let original = fname.split("__").next().unwrap_or("").to_string();
-                        Some((fname.clone(), (original, arg_handles.clone())))
-                    }
-                    _ => None,
-                },
-                _ => None,
+            .flat_map(|(_, body)| body.residency_function_calls.iter())
+            .filter(|call| !lowered_names.contains(&call.symbol))
+            .map(|call| {
+                (
+                    call.symbol.clone(),
+                    (call.function.clone(), call.arg_handles.clone()),
+                )
             })
             .collect()
     }

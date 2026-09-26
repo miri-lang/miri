@@ -15,6 +15,7 @@ use crate::codegen::cranelift::translator::{
 };
 use crate::error::CodegenError;
 use crate::mir::rc::{is_field_managed, is_word_slot_managed};
+use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{EnumDefinition, TypeDefinition};
 
@@ -75,11 +76,11 @@ struct EnumDropSite {
     slot_size: i32,
 }
 
-/// Mangle a generic class name with a concrete instantiation's type arguments,
-/// producing the per-instantiation drop-thunk suffix (`Box` + `[String]` →
-/// `Box__String`). Shares `mangle_generic_name`'s scheme so the drop call site
-/// and the thunk-generation site agree byte-for-byte; the parameter names are
-/// irrelevant to the mangling, so an empty placeholder name is used.
+/// The link spelling of a generic class at a concrete instantiation's type
+/// arguments (`Box` + `[String]` → `Box__String`), as [`Symbol::function`]
+/// spells it. Codegen compares instantiations by it — whether one is recorded,
+/// and which per-instantiation thunks were already emitted — so two argument
+/// lists that spell one name are never defined twice.
 pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
     crate::mir::lowering::dispatch::mangle_instantiation_name(class_name, type_args)
 }
@@ -110,7 +111,8 @@ impl<'a> FunctionTranslator<'a> {
                 Self::get_rt_map_decref_element_addr(builder, ctx, ptr_type)?
             }
             ElementShape::UserClass(name) => {
-                Self::get_custom_decref_thunk_addr(builder, ctx, name, ptr_type)?
+                let thunk = Symbol::type_thunk(ThunkKind::Decref, name, &[]);
+                Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?
             }
             ElementShape::Other => return Ok(None),
         };
@@ -134,10 +136,11 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
-        if let Some(symbol) =
+        if let Some(encoding) =
             crate::codegen::cranelift::structural_elements::structural_thunk_symbol(elem_kind)
         {
-            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &symbol, ptr_type)?;
+            let thunk = Symbol::structural_thunk(ThunkKind::Decref, &encoding);
+            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?;
             return Ok(Some(addr));
         }
         let shape = Self::classify_element_shape(elem_kind);
@@ -154,12 +157,14 @@ impl<'a> FunctionTranslator<'a> {
                      type is not yet concrete, as the others do"
                 )));
             }
-            let symbol = Self::generic_drop_thunk_name_part(
+            let recorded = Self::recorded_instantiation(
                 class_name,
                 Self::custom_type_args(elem_kind),
                 type_ctx,
             );
-            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &symbol, ptr_type)?;
+            let thunk =
+                Symbol::type_thunk(ThunkKind::Decref, class_name, recorded.iter().flatten());
+            let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?;
             return Ok(Some(addr));
         }
         Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)
@@ -212,8 +217,9 @@ impl<'a> FunctionTranslator<'a> {
         if !Self::class_implements_cloneable(name, type_definitions) {
             return Ok(None);
         }
+        let thunk = Symbol::type_thunk(ThunkKind::Clone, name, &[]);
         Ok(Some(Self::get_custom_clone_thunk_addr(
-            builder, ctx, name, ptr_type,
+            builder, ctx, &thunk, ptr_type,
         )?))
     }
 
@@ -322,12 +328,13 @@ impl<'a> FunctionTranslator<'a> {
         if !ElementMethod::Compare.is_answered_by(name, type_ctx.type_definitions) {
             return Ok(None);
         }
-        let symbol =
-            Self::element_method_thunk_name_part(name, Self::custom_type_args(elem_kind), type_ctx);
+        let recorded =
+            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        let thunk = Symbol::type_thunk(ThunkKind::Compare, name, recorded.iter().flatten());
         Ok(Some(Self::get_custom_compare_thunk_addr(
             builder,
             ctx,
-            &symbol,
+            &thunk,
             type_ctx.ptr_type,
         )?))
     }
@@ -351,12 +358,13 @@ impl<'a> FunctionTranslator<'a> {
         if !ElementMethod::Equals.is_answered_by(name, type_ctx.type_definitions) {
             return Ok(None);
         }
-        let symbol =
-            Self::element_method_thunk_name_part(name, Self::custom_type_args(elem_kind), type_ctx);
+        let recorded =
+            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        let thunk = Symbol::type_thunk(ThunkKind::Equals, name, recorded.iter().flatten());
         Ok(Some(Self::get_custom_equals_thunk_addr(
             builder,
             ctx,
-            &symbol,
+            &thunk,
             type_ctx.ptr_type,
         )?))
     }
@@ -920,18 +928,18 @@ impl<'a> FunctionTranslator<'a> {
         // so a managed field is DecRef'd and a scalar field skipped, each per
         // instantiation. Non-generic types and unrecorded instantiations use
         // the bare `__drop_Name` thunk.
-        let thunk_target = Self::generic_drop_thunk_name_part(name, type_args, type_ctx);
+        let recorded = Self::recorded_instantiation(name, type_args, type_ctx);
         // A recorded generic instantiation always routes through its thunk: the
         // class's declared field kinds see only the bare generic `T` (never
         // managed), so `has_managed_fields` cannot detect a managed field that
         // exists only after substitution (`Box<String>`). The per-instantiation
         // thunk resolves the concrete field and frees the block either way.
-        let is_per_instantiation = thunk_target != name;
-        let needs_thunk = is_per_instantiation
+        let needs_thunk = recorded.is_some()
             || Self::has_managed_fields(name, type_ctx.type_definitions)
             || Self::type_has_user_drop(name, type_ctx.type_definitions);
         if needs_thunk {
-            Self::call_drop_thunk(builder, ctx, &thunk_target, ptr, type_ctx.ptr_type)
+            let thunk = Symbol::type_thunk(ThunkKind::Drop, name, recorded.iter().flatten());
+            Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type)
         } else if concrete_args.is_some() {
             // For generic enums (concrete_args available) without a thunk, emit field
             // drops inline using resolved type arguments so that generic variant
@@ -952,9 +960,10 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// The suffix of the element-method thunk to register for elements of
-    /// `class_name`: the recorded instantiation's, as the drop path names it,
-    /// when codegen emitted a thunk for that instantiation, else the shared one.
+    /// The instantiation of `class_name` whose element-method thunk to
+    /// register for its elements: the recorded one, as the drop path names it,
+    /// when codegen emitted a thunk for that instantiation, else `None` for the
+    /// shared one.
     ///
     /// Thunks exist only for instantiations the pipeline monomorphizes, since
     /// each calls a method body lowered for its arguments. A body still written
@@ -967,22 +976,19 @@ impl<'a> FunctionTranslator<'a> {
     /// caller establishes that first, by asking whether the type answers the
     /// method at all, so nothing re-checks it here. A kind that starts
     /// answering one must gain its per-instantiation thunks in the same pass,
-    /// or the name built below will reference a symbol nothing defines.
-    fn element_method_thunk_name_part(
+    /// or the name built from this will reference a symbol nothing defines.
+    fn element_method_instantiation(
         class_name: &str,
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
-    ) -> String {
+    ) -> Option<Vec<Type>> {
         // Every argument has to be a written type: a body is monomorphized for
         // types, so an instantiation carrying a value — the size of a value
         // generic — gets no per-instantiation method body and must be named at
         // the shared one.
         let written = match type_args {
             None => Vec::new(),
-            Some(args) => match Self::extract_type_args_from_exprs(Some(args)) {
-                Some(written) => written,
-                None => return class_name.to_string(),
-            },
+            Some(args) => Self::extract_type_args_from_exprs(Some(args))?,
         };
         let monomorphized = written.iter().all(|arg| {
             crate::mir::lowering::is_monomorphizable_type_argument(
@@ -991,9 +997,9 @@ impl<'a> FunctionTranslator<'a> {
             )
         });
         if !monomorphized {
-            return class_name.to_string();
+            return None;
         }
-        Self::generic_drop_thunk_name_part(class_name, type_args, type_ctx)
+        Self::recorded_instantiation(class_name, type_args, type_ctx)
     }
 
     /// Extract Type arguments from Expression type arguments.
@@ -1012,58 +1018,43 @@ impl<'a> FunctionTranslator<'a> {
         Some(concrete)
     }
 
-    /// The `__drop_` suffix to call for a Custom type: the mangled
-    /// `Box__String` for a generic type whose instantiation is recorded, else
-    /// the bare `Box`.
+    /// The type arguments of the per-instantiation drop thunk to call for a
+    /// Custom type — `[String]` for a `Box<String>` whose instantiation is
+    /// recorded — or `None` when the shared thunk of the bare `Box` applies.
     ///
-    /// A generic struct and a generic enum mangle exactly as a generic class
-    /// does. All three declare fields whose types are written in their own
-    /// parameters, so the field a given instantiation stores is known only once
-    /// the arguments are substituted, and each gets its own thunk.
+    /// A generic struct and a generic enum are instantiated exactly as a
+    /// generic class is. All three declare fields whose types are written in
+    /// their own parameters, so the field a given instantiation stores is known
+    /// only once the arguments are substituted, and each gets its own thunk.
     ///
     /// Gated on the instantiation registry so the emitted call always targets a
-    /// thunk `generate_type_drop_functions` actually defined — both sides mangle
-    /// through the same `mangle_generic_name`, so a registry hit guarantees the
-    /// symbol exists.
-    fn generic_drop_thunk_name_part(
+    /// thunk `generate_type_drop_functions` actually defined — both sides name
+    /// it through the same [`Symbol`], so a registry hit guarantees the symbol
+    /// exists.
+    fn recorded_instantiation(
         class_name: &str,
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
-    ) -> String {
-        let Some(definition) = type_ctx.type_definitions.get(class_name) else {
-            return class_name.to_string();
-        };
-        if definition.generics().is_none() {
-            return class_name.to_string();
-        }
-        let Some(args) = type_args else {
-            return class_name.to_string();
-        };
+    ) -> Option<Vec<Type>> {
+        type_ctx.type_definitions.get(class_name)?.generics()?;
         // A value-generic class is recorded at arguments that include the size,
         // wrapped in a marker type; skipping it would name a thunk nothing
         // generated and fall back to the shared one, which leaves a managed
         // field still written at a parameter unreleased.
-        let Some(concrete) = args
+        let concrete = type_args?
             .iter()
             .map(crate::mir::lowering::instantiation_argument)
-            .collect::<Option<Vec<Type>>>()
-        else {
-            return class_name.to_string();
-        };
+            .collect::<Option<Vec<Type>>>()?;
+        if concrete.is_empty() {
+            return None;
+        }
         let want = mangle_class_instantiation(class_name, &concrete);
         let recorded = type_ctx
             .generic_class_instantiations
-            .get(class_name)
-            .is_some_and(|tuples| {
-                tuples
-                    .iter()
-                    .any(|tuple| mangle_class_instantiation(class_name, tuple) == want)
-            });
-        if recorded {
-            want
-        } else {
-            class_name.to_string()
-        }
+            .get(class_name)?
+            .iter()
+            .any(|tuple| mangle_class_instantiation(class_name, tuple) == want);
+        recorded.then_some(concrete)
     }
 
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
@@ -1494,14 +1485,14 @@ impl<'a> FunctionTranslator<'a> {
             // it emits wrappers for structs, classes and enums only, so such a
             // collection does not link. Its release has to dispatch through the
             // element's vtable to the concrete class's drop.
-            let symbol = Self::generic_drop_thunk_name_part(
+            let recorded = Self::recorded_instantiation(
                 class_name,
                 Self::custom_type_args(elem_type_kind),
                 type_ctx,
             );
-            let mut decref_name = String::with_capacity(9 + symbol.len());
-            decref_name.push_str("__decref_");
-            decref_name.push_str(&symbol);
+            let decref_name =
+                Symbol::type_thunk(ThunkKind::Decref, class_name, recorded.iter().flatten())
+                    .link_name();
             let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
             let sig = Signature {
                 params: vec![AbiParam::new(ptr_type)],
@@ -1527,7 +1518,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emits a call to the type-specific drop thunk `__drop_{type_name}(ptr)`.
+    /// Emits a call to the type-specific drop thunk `thunk(ptr)`.
     ///
     /// This is the sole call site for dropping a Custom type once RC reaches zero.
     /// The thunk function is declared as `Import` here and must be defined elsewhere
@@ -1535,13 +1526,11 @@ impl<'a> FunctionTranslator<'a> {
     fn call_drop_thunk(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        type_name: &str,
+        thunk: &Symbol,
         ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
-        let mut thunk_name = String::with_capacity(7 + type_name.len());
-        thunk_name.push_str("__drop_");
-        thunk_name.push_str(type_name);
+        let thunk_name = thunk.link_name();
         let mut sig = Signature::new(builder.func.signature.call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = ctx
@@ -1661,13 +1650,9 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let mangled = match type_args {
-            Some(args) => mangle_class_instantiation(type_name, args),
-            None => type_name.to_string(),
-        };
-        let mut func_name = String::with_capacity(7 + mangled.len());
-        func_name.push_str("__drop_");
-        func_name.push_str(&mangled);
+        let func_name =
+            Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default())
+                .link_name();
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1703,7 +1688,7 @@ impl<'a> FunctionTranslator<'a> {
         }
         // Generate __decref_TypeName: the RC-decrement wrapper used as
         // elem_drop_fn for collections holding custom-type elements.
-        Self::generate_decref_function(module, ctx, isa, type_name)
+        Self::generate_decref_function(module, ctx, isa, type_name, &[])
     }
 
     /// Emit the body of `__drop_TypeName(ptr)`:
@@ -1800,13 +1785,14 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Generates `__decref_{type_name}(ptr)` in the given module.
+    /// Generates the decref thunk of `type_name` at `type_args` — empty for the
+    /// shared one — in the given module.
     ///
     /// Emits the RC-decrement pattern:
     ///   1. Guard: skip if ptr is null.
     ///   2. Guard: skip if RC < 0 (immortal).
     ///   3. Decrement RC.
-    ///   4. If RC reaches zero, call `__drop_{type_name}(ptr)`.
+    ///   4. If RC reaches zero, call the drop thunk of the same instantiation.
     ///
     /// Used as `elem_drop_fn` for List/Set/Map holding custom-type elements so
     /// that mutation operations (clear, remove_at, remove) properly DecRef
@@ -1816,13 +1802,13 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
+        type_args: &[Type],
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let mut decref_name = String::with_capacity(9 + type_name.len());
-        decref_name.push_str("__decref_");
-        decref_name.push_str(type_name);
+        let decref_name = Symbol::type_thunk(ThunkKind::Decref, type_name, type_args).link_name();
+        let drop_thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, type_args);
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1835,7 +1821,7 @@ impl<'a> FunctionTranslator<'a> {
         );
 
         let mut builder_ctx = FunctionBuilderContext::new();
-        Self::emit_decref_body(module, ctx, &mut builder_ctx, type_name, ptr_type, &sig)?;
+        Self::emit_decref_body(module, ctx, &mut builder_ctx, &drop_thunk, ptr_type, &sig)?;
 
         module
             .define_function(func_id, ctx)
@@ -1844,10 +1830,10 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Generates `__decref_{symbol}(ptr)` for a structural type — a tuple, an
-    /// option or a function value, which carries managed payload but has no
-    /// declaration whose name could be mangled into a symbol. `symbol` comes from
-    /// [`crate::codegen::cranelift::structural_keys::structural_thunk_symbol`],
+    /// Generates the decref thunk of a structural type — a tuple, an option or
+    /// a function value, which carries managed payload but has no declaration
+    /// whose name could be mangled into a symbol. `encoding` comes from
+    /// [`crate::codegen::cranelift::structural_elements::structural_thunk_symbol`],
     /// which encodes the type's structure so distinct types get distinct thunks.
     ///
     /// The body is the same inline decref-and-drop sequence a direct release
@@ -1858,15 +1844,13 @@ impl<'a> FunctionTranslator<'a> {
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
-        symbol: &str,
+        encoding: &str,
         kind: &TypeKind,
         type_definitions: &HashMap<String, TypeDefinition>,
         generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
-        let mut decref_name = String::with_capacity(9 + symbol.len());
-        decref_name.push_str("__decref_");
-        decref_name.push_str(symbol);
+        let decref_name = Symbol::structural_thunk(ThunkKind::Decref, encoding).link_name();
         let mut sig = Signature::new(isa.default_call_conv());
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1934,14 +1918,14 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit the body of `__decref_TypeName`: null guard → heap-guard release
-    /// check → immortal guard → decrement RC → when RC hits zero call
-    /// `__drop_TypeName(ptr)` → return.
+    /// Emit the body of a decref thunk: null guard → heap-guard release check →
+    /// immortal guard → decrement RC → when RC hits zero call `drop_thunk(ptr)`
+    /// → return.
     fn emit_decref_body(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
-        type_name: &str,
+        drop_thunk: &Symbol,
         ptr_type: cl_types::Type,
         sig: &Signature,
     ) -> Result<(), CodegenError> {
@@ -2001,7 +1985,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(free_block);
         builder.seal_block(free_block);
-        Self::call_type_drop(&mut builder, module_ctx.module, type_name, sig, ptr)?;
+        Self::call_type_drop(&mut builder, module_ctx.module, drop_thunk, sig, ptr)?;
         builder.ins().jump(merge_block, &[]);
 
         builder.switch_to_block(merge_block);
@@ -2011,19 +1995,17 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Emit the call `__drop_{type_name}(ptr)`, which runs the type's drop hook,
+    /// Emit the call `drop_thunk(ptr)`, which runs the type's drop hook,
     /// releases its managed fields and frees it. `sig` is the drop thunk's
     /// `(ptr) -> void` signature.
     fn call_type_drop(
         builder: &mut FunctionBuilder,
         module: &mut ObjectModule,
-        type_name: &str,
+        drop_thunk: &Symbol,
         sig: &Signature,
         ptr: Value,
     ) -> Result<(), CodegenError> {
-        let mut drop_name = String::with_capacity(7 + type_name.len());
-        drop_name.push_str("__drop_");
-        drop_name.push_str(type_name);
+        let drop_name = drop_thunk.link_name();
         let drop_func_id = module
             .declare_function(&drop_name, Linkage::Import, sig)
             .map_err(|e| CodegenError::declare_function(drop_name.clone(), e.to_string()))?;
@@ -2069,9 +2051,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let mut clone_name = String::with_capacity(9 + type_name.len());
-        clone_name.push_str("__clone_");
-        clone_name.push_str(type_name);
+        let clone_name = Symbol::type_thunk(ThunkKind::Clone, type_name, &[]).link_name();
 
         // Signature: (ptr: *TypeName) -> *TypeName
         let mut sig = Signature::new(call_conv);

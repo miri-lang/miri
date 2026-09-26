@@ -305,6 +305,12 @@ impl TypeChecker {
             .unwrap_or(false)
     }
 
+    /// Whether `name` is a function the runtime library exports, declared with
+    /// the `runtime` keyword, rather than one this compilation lowers.
+    pub fn is_runtime_function(&self, name: &str) -> bool {
+        self.fn_analysis.runtime_functions.contains(name)
+    }
+
     /// Returns the global type definitions.
     pub fn type_definitions(&self) -> &HashMap<String, TypeDefinition> {
         &self.type_table.global_type_definitions

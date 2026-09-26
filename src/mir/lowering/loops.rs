@@ -543,11 +543,11 @@ fn emit_loop_length(
         ty: Type::new(TypeKind::Identifier, *span),
         literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
     }));
+    // A class method is a body this compilation lowers, never a runtime export,
+    // so it always takes the implicit trailing allocator.
     let mut args = vec![Operand::Copy(Place::new(list_local))];
-    if !length_symbol.starts_with("miri_") {
-        if let Some(&allocator) = ctx.variable_map.get("allocator") {
-            args.push(Operand::Copy(Place::new(allocator)));
-        }
+    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+        args.push(Operand::Copy(Place::new(allocator)));
     }
     let after_len_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -627,10 +627,9 @@ fn emit_element_at_call(
                     Operand::Copy(Place::new(list_local)),
                     Operand::Copy(Place::new(idx_var)),
                 ];
-                if !element_at_symbol.starts_with("miri_") {
-                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                        args.push(Operand::Copy(Place::new(allocator)));
-                    }
+                // A class method body, which takes the implicit allocator.
+                if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                    args.push(Operand::Copy(Place::new(allocator)));
                 }
                 args
             },

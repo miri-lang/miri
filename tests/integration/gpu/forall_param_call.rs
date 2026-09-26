@@ -268,3 +268,24 @@ fn main()
         "4 4",
     );
 }
+
+#[test]
+fn a_gpu_param_function_whose_name_holds_a_double_underscore_builds() {
+    // The specialization is lowered from the function the call names, not from
+    // the text of the specialized symbol, so a name holding `__` still gets its
+    // residency-specialized body.
+    assert_builds(
+        "
+use system.gpu
+use system.collections.array
+
+fn scale__twice(a out Array<int,8>)
+    forall i in 0..a.length()
+        a[i] = a[i] * 2
+
+fn main()
+    gpu var data = [1, 2, 3, 4, 5, 6, 7, 8]
+    scale__twice(data)
+",
+    );
+}

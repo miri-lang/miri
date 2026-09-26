@@ -1633,12 +1633,11 @@ fn fill_default_args(
 ///
 /// Runtime C functions and math intrinsics are declared without it: the first is
 /// a foreign symbol with a fixed signature, the second never reaches a call at
-/// all because it lowers to a `MathIntrinsic` rvalue.
+/// all because it lowers to a `MathIntrinsic` rvalue. Which functions are
+/// runtime ones is what their declarations say, never how they are spelled: a
+/// Miri function may be named anything a runtime export is.
 pub(super) fn callee_takes_allocator(ctx: &LoweringContext, name: &str) -> bool {
-    if name.starts_with("miri_") {
-        return false;
-    }
-    math_intrinsic_callee(ctx, name).is_none()
+    !ctx.type_checker.is_runtime_function(name) && math_intrinsic_callee(ctx, name).is_none()
 }
 
 fn inject_allocator_arg(

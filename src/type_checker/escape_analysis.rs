@@ -23,10 +23,11 @@
 //!
 //! # Key used in [`super::context::Context::escape_summaries`]
 //!
-//! Functions are keyed by their *qualified name*: a plain name for free
-//! functions (e.g. `"save"`) and `ClassName_method` for methods (e.g.
-//! `"Cache_store"`).  This matches the mangling convention used throughout
-//! MIR lowering.
+//! Functions are keyed by a [`FunctionId`]: a free function by its name
+//! (`save`), a method by the type that declares it together with its name
+//! (`Cache` and `store`). The two parts of a method key stay apart, so a
+//! method `c` of a type `A_b` and a method `b_c` of a type `A` never share a
+//! summary.
 //!
 //! # FFI summaries
 //!
@@ -61,6 +62,7 @@
 //! style dispatch — this strategy may need revisiting.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt;
 
 use serde::Deserialize;
 
@@ -75,11 +77,42 @@ use super::utils::is_auto_copy;
 /// Zero-based index of a parameter in a function's parameter list.
 pub type ParamIndex = usize;
 
-/// Qualified function name used as the key in [`super::context::Context::escape_summaries`].
-///
-/// - Free function `save` → `"save"`
-/// - Method `Cache::store` → `"Cache_store"`
-pub type FunctionId = String;
+/// The function an escape summary describes: the key of
+/// [`super::context::Context::escape_summaries`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FunctionId {
+    /// A free function — or a runtime function, whose summary is hand-authored
+    /// — by its declared name.
+    Free(String),
+    /// A method, by the type that declares it and its own name.
+    Method { owner: String, method: String },
+}
+
+impl FunctionId {
+    /// The free function `name`.
+    pub fn free(name: &str) -> Self {
+        Self::Free(name.to_string())
+    }
+
+    /// The method `method` declared by `owner`.
+    pub fn method(owner: &str, method: &str) -> Self {
+        Self::Method {
+            owner: owner.to_string(),
+            method: method.to_string(),
+        }
+    }
+}
+
+/// How a diagnostic names the function: a free function by its name, a method
+/// as `{owner}_{method}`.
+impl fmt::Display for FunctionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FunctionId::Free(name) => f.write_str(name),
+            FunctionId::Method { owner, method } => write!(f, "{owner}_{method}"),
+        }
+    }
+}
 
 /// Describes a single conditional escape: parameter `param` escapes iff the
 /// fn-typed parameter at `via_fn_param` has `callee_param` in its own escape
@@ -107,7 +140,10 @@ pub struct ConditionalEscape {
 pub enum EscapeNextHop {
     /// The parameter is passed to `callee` at `param_slot`, and that callee
     /// escapes `param_slot`.  Follow the callee's summary to continue the chain.
-    Call { callee: String, param_slot: usize },
+    Call {
+        callee: FunctionId,
+        param_slot: usize,
+    },
     /// The parameter is returned directly from this function.
     Return,
     /// The parameter flows into an aggregate (list, tuple, struct constructor)
@@ -710,7 +746,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     fn resolve_callee_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
         match &callee.node {
             ExpressionKind::Identifier(name, _) => {
-                self.escape_summaries.get(name.as_str()).cloned()
+                self.escape_summaries.get(&FunctionId::free(name)).cloned()
             }
             ExpressionKind::Member(obj, method_expr) => {
                 let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
@@ -720,7 +756,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
                     return None;
                 };
-                let key = format!("{type_name}_{method_name}");
+                let key = FunctionId::method(type_name, method_name);
                 self.escape_summaries.get(&key).cloned()
             }
             _ => None,
@@ -763,8 +799,11 @@ impl From<TomlSummaryEntry> for EscapeSummary {
 pub fn load_ffi_summaries() -> HashMap<FunctionId, EscapeSummary> {
     const TOML_SRC: &str = include_str!("../runtime/core/escape_summaries.toml");
 
-    match toml::from_str::<HashMap<FunctionId, TomlSummaryEntry>>(TOML_SRC) {
-        Ok(raw) => raw.into_iter().map(|(k, v)| (k, v.into())).collect(),
+    match toml::from_str::<HashMap<String, TomlSummaryEntry>>(TOML_SRC) {
+        Ok(raw) => raw
+            .into_iter()
+            .map(|(name, entry)| (FunctionId::Free(name), entry.into()))
+            .collect(),
         Err(e) => {
             // Unreachable in normal builds — the TOML is embedded and tested.
             // In debug mode, surface the error so it is caught early.
@@ -816,12 +855,12 @@ pub fn compute_escape_summaries(
         loop {
             let mut changed = false;
             for fn_id in scc {
-                let Some(def) = fn_defs.get(fn_id.as_str()) else {
+                let Some(def) = fn_defs.get(fn_id) else {
                     continue;
                 };
                 let new_summary =
                     compute_one_summary(&def.params, def.body, types, type_definitions, &summaries);
-                let old = summaries.get(fn_id.as_str()).cloned().unwrap_or_default();
+                let old = summaries.get(fn_id).cloned().unwrap_or_default();
                 if new_summary != old {
                     summaries.insert(fn_id.clone(), new_summary);
                     changed = true;
@@ -839,8 +878,8 @@ pub fn compute_escape_summaries(
         .iter()
         .flat_map(|scc| scc.iter())
         .filter_map(|fn_id| {
-            let def = fn_defs.get(fn_id.as_str())?;
-            let summary = summaries.get(fn_id.as_str())?;
+            let def = fn_defs.get(fn_id)?;
+            let summary = summaries.get(fn_id)?;
             if summary.direct_escapes.is_empty() {
                 return None;
             }
@@ -876,8 +915,8 @@ fn collect_function_defs<'a>(
                     continue;
                 };
                 let fn_id = match class_name {
-                    Some(cls) => format!("{cls}_{}", decl.name),
-                    None => decl.name.clone(),
+                    Some(cls) => FunctionId::method(cls, &decl.name),
+                    None => FunctionId::free(&decl.name),
                 };
                 let params = match class_name {
                     Some(_) => {
@@ -950,7 +989,7 @@ fn build_call_graph<'a>(
     fn_defs: &HashMap<FunctionId, FunctionDef<'a>>,
     types: &HashMap<usize, Type>,
 ) -> HashMap<FunctionId, Vec<FunctionId>> {
-    let known: HashSet<&str> = fn_defs.keys().map(String::as_str).collect();
+    let known: HashSet<&FunctionId> = fn_defs.keys().collect();
     let mut graph: HashMap<FunctionId, Vec<FunctionId>> = HashMap::new();
 
     for (fn_id, def) in fn_defs {
@@ -968,7 +1007,7 @@ fn build_call_graph<'a>(
 fn collect_callees_from_stmt(
     stmt: &Statement,
     types: &HashMap<usize, Type>,
-    known: &HashSet<&str>,
+    known: &HashSet<&FunctionId>,
     out: &mut Vec<FunctionId>,
 ) {
     match &stmt.node {
@@ -1035,7 +1074,7 @@ fn collect_callees_from_stmt(
 fn collect_callees_from_expr(
     expr: &Expression,
     types: &HashMap<usize, Type>,
-    known: &HashSet<&str>,
+    known: &HashSet<&FunctionId>,
     out: &mut Vec<FunctionId>,
 ) {
     match &expr.node {
@@ -1117,7 +1156,7 @@ fn collect_callees_from_expr(
 fn collect_callees_from_elems(
     elems: &[Expression],
     types: &HashMap<usize, Type>,
-    known: &HashSet<&str>,
+    known: &HashSet<&FunctionId>,
     out: &mut Vec<FunctionId>,
 ) {
     for e in elems {
@@ -1128,7 +1167,7 @@ fn collect_callees_from_elems(
 fn collect_callees_from_pairs(
     pairs: &[(Expression, Expression)],
     types: &HashMap<usize, Type>,
-    known: &HashSet<&str>,
+    known: &HashSet<&FunctionId>,
     out: &mut Vec<FunctionId>,
 ) {
     for (k, v) in pairs {
@@ -1141,19 +1180,22 @@ fn collect_callees_call(
     callee: &Expression,
     args: &[Expression],
     types: &HashMap<usize, Type>,
-    known: &HashSet<&str>,
+    known: &HashSet<&FunctionId>,
     out: &mut Vec<FunctionId>,
 ) {
     match &callee.node {
-        ExpressionKind::Identifier(name, _) if known.contains(name.as_str()) => {
-            out.push(name.clone());
+        ExpressionKind::Identifier(name, _) => {
+            let id = FunctionId::free(name);
+            if known.contains(&id) {
+                out.push(id);
+            }
         }
         ExpressionKind::Member(obj, method_expr) => {
             if let ExpressionKind::Identifier(method, _) = &method_expr.node {
                 if let Some(ty) = types.get(&obj.id) {
                     if let TypeKind::Custom(class, _) = &ty.kind {
-                        let key = format!("{class}_{method}");
-                        if known.contains(key.as_str()) {
+                        let key = FunctionId::method(class, method);
+                        if known.contains(&key) {
                             out.push(key);
                         }
                     }
@@ -1660,7 +1702,7 @@ fn walk_call_for_rule4(
     direct_escapes: &mut BTreeSet<ParamIndex>,
 ) {
     if let ExpressionKind::Identifier(name, _) = &callee.node {
-        if let Some(summary) = summaries.get(name.as_str()) {
+        if let Some(summary) = summaries.get(&FunctionId::free(name)) {
             for (i, arg) in args.iter().enumerate() {
                 if summary.directly_escapes(i) {
                     apply_rule4_to_arg(arg, i, params, direct_escapes);
@@ -1946,10 +1988,11 @@ fn find_hop_in_call_expr(
             let arg_pos = args
                 .iter()
                 .position(|a| expr_contains_param(a, param_name))?;
-            let summary = summaries.get(fn_name.as_str())?;
+            let callee = FunctionId::free(fn_name);
+            let summary = summaries.get(&callee)?;
             if summary.directly_escapes(arg_pos) {
                 Some(EscapeNextHop::Call {
-                    callee: fn_name.clone(),
+                    callee,
                     param_slot: arg_pos,
                 })
             } else {
@@ -1965,7 +2008,7 @@ fn find_hop_in_call_expr(
             let TypeKind::Custom(class_name, _) = &receiver_ty.kind else {
                 return None;
             };
-            let callee_key = format!("{class_name}_{method_name}");
+            let callee_key = FunctionId::method(class_name, method_name);
             let summary = summaries.get(&callee_key)?;
 
             // Is `param_name` the receiver itself?
