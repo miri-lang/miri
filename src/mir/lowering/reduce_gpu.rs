@@ -18,6 +18,7 @@ use crate::error::syntax::Span;
 use crate::mir::backend::{BackendMetadata, GpuBodyMetadata};
 use crate::mir::body::BindingResidency;
 use crate::mir::lambda::LambdaInfo;
+use crate::mir::symbol::{GpuKernelKind, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
     GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
@@ -71,7 +72,8 @@ pub(crate) fn try_lower_gpu_reduce(
     let array_length = extract_array_length_from_type(obj_ty, *span)?;
 
     // Build the reduction kernel.
-    let kernel_name = format!("miri_gpu_reduce_{}", ctx.kernel_index(call_expr_id));
+    let kernel_name =
+        Symbol::gpu_kernel(GpuKernelKind::Reduce, ctx.kernel_index(call_expr_id)).link_name();
     let kernel_body = build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {

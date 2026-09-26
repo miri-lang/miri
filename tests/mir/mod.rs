@@ -11,6 +11,7 @@ pub mod optimizations;
 pub mod rc;
 pub mod residency;
 pub mod ssa;
+pub mod symbol;
 pub mod terminator;
 pub mod utils;
 pub mod verify;

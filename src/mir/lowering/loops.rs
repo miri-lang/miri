@@ -13,6 +13,7 @@ use crate::ast::{
 };
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind, Terminator,
     TerminatorKind,
@@ -515,7 +516,7 @@ fn iterable_method_symbol(
             )
             .0
         }
-        None => format!("{class_name}_{method_name}"),
+        None => Symbol::method(class_name, &[], method_name, &[]).link_name(),
     }
 }
 

@@ -37,6 +37,7 @@ use crate::error::syntax::Span;
 use crate::mir::backend::{BackendConfig, BackendMetadata, GpuBodyMetadata};
 use crate::mir::body::{BindingResidency, DeviceHandleId, LaunchUniform};
 use crate::mir::lambda::LambdaInfo;
+use crate::mir::symbol::{GpuKernelKind, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
     GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
@@ -187,7 +188,8 @@ pub fn lower_forall_gpu(
     let axes = extract_axes(decls, &folded_iterable, span, rank)?;
     let captures = collect_capture_infos(ctx, body, decls, *span)?;
 
-    let kernel_name = format!("miri_gpu_forall_{}", ctx.kernel_index(stmt_id));
+    let kernel_name =
+        Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id)).link_name();
 
     let kernel_body = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
 

@@ -30,6 +30,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::body::GenericClassInstantiation;
+use crate::mir::symbol::Symbol;
 use crate::mir::{Body, StatementKind};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::generics::{
@@ -404,6 +405,11 @@ fn self_instance(body: &Body, class: &str) -> Option<Vec<Type>> {
 }
 
 /// The method of `class` whose body at `args` is emitted as `symbol`.
+///
+/// TODO: this recovers the method by re-spelling every candidate and comparing
+/// link names, so two distinct symbols that spell one name are confused. The
+/// lowered bodies are keyed by their link name; once they carry their
+/// [`Symbol`], read the method off it instead.
 fn method_named(
     symbol: &str,
     class: &str,
@@ -416,7 +422,7 @@ fn method_named(
     definition
         .methods
         .keys()
-        .find(|method| mangle_instantiation_name(&format!("{class}_{method}"), args) == symbol)
+        .find(|method| Symbol::method(class, args, method, &[]).link_name() == symbol)
         .cloned()
 }
 

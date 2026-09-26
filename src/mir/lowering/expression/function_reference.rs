@@ -26,6 +26,7 @@ use crate::ast::expression::Expression;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::rvalue::AggregateKind;
+use crate::mir::symbol::ClosureKind;
 use crate::mir::{
     Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
@@ -72,7 +73,8 @@ fn lower_function_reference(
 ) -> Operand {
     // The reference site's expression id keeps two references to the same
     // function from claiming one symbol, the way a lambda's id does.
-    let thunk_name = ctx.closure_symbol(format!("__fnref_{}_{}", symbol, expr.id));
+    let thunk_name =
+        ctx.closure_symbol(ClosureKind::FunctionReference(symbol.to_string()), expr.id);
     let forwarded_allocator = forwarded_allocator(ctx, symbol);
     let thunk = build_forwarding_thunk(
         ctx,

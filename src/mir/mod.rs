@@ -30,6 +30,7 @@ pub mod residency;
 pub mod rvalue;
 pub mod ssa;
 pub mod statement;
+pub mod symbol;
 pub mod terminator;
 pub mod types;
 pub mod verify;

@@ -19,14 +19,13 @@
 //! not yet: it asks only the class chain for `equals`, so an `equals` a class
 //! inherits from a trait default is not what a set or map matches by.
 
-use super::method_dispatch::{
-    instantiated_callee, mangle_instantiation_name, resolve_inherited_method,
-};
+use super::method_dispatch::{instantiated_callee, resolve_inherited_method};
 use super::monomorphized_arguments;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{
     Type, TypeKind, CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME,
 };
+use crate::mir::symbol::Symbol;
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use crate::type_checker::context::{
     class_needs_vtable, find_trait_default_method, ClassDefinition, MethodInfo, TraitDefinition,
@@ -279,7 +278,7 @@ impl VtableInstance {
     /// The data symbol of this vtable: `__vtable_{class}`, mangled by the
     /// instantiation's arguments as every other per-instantiation symbol is.
     pub fn symbol(&self) -> String {
-        mangle_instantiation_name(&format!("__vtable_{}", self.class), &self.args)
+        Symbol::vtable(&self.class, &self.args).link_name()
     }
 
     /// Every method this vtable has a slot for, with the symbol the slot names
@@ -537,7 +536,7 @@ pub fn resolve_vtable_method(
     for (name, class) in class_chain(type_defs, class_name) {
         if let Some(method) = class.methods.get(method_name) {
             if !method.is_abstract {
-                return Some(format!("{name}_{method_name}"));
+                return Some(Symbol::method(name, &[], method_name, &[]).link_name());
             }
             is_declared_in_chain = true;
         }
@@ -552,7 +551,7 @@ pub fn resolve_vtable_method(
     } else {
         class_name
     };
-    Some(format!("{owner}_{method_name}"))
+    Some(Symbol::method(owner, &[], method_name, &[]).link_name())
 }
 
 /// The symbol of the body a call to `method_name` on a `type_name` receiver
@@ -564,7 +563,7 @@ pub fn inherited_method_symbol(
     method_name: &str,
 ) -> Option<String> {
     resolve_inherited_method(type_defs, type_name, method_name)
-        .map(|(owner, _)| format!("{owner}_{method_name}"))
+        .map(|(owner, _)| Symbol::method(&owner, &[], method_name, &[]).link_name())
 }
 
 /// The symbol a call to `method_name` on a `type_name` receiver names:
@@ -576,7 +575,7 @@ pub fn method_symbol(
     method_name: &str,
 ) -> String {
     inherited_method_symbol(type_defs, type_name, method_name)
-        .unwrap_or_else(|| format!("{type_name}_{method_name}"))
+        .unwrap_or_else(|| Symbol::method(type_name, &[], method_name, &[]).link_name())
 }
 
 /// The symbol of the drop hook releasing a `type_name` value runs, or `None`
