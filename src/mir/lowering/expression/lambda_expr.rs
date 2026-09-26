@@ -28,7 +28,7 @@ use crate::error::syntax::Span;
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::place::PlaceContext;
 use crate::mir::rvalue::AggregateKind;
-use crate::mir::symbol::ClosureKind;
+use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, Body, Local, LocalDecl, Operand, Place, Rvalue, StatementKind as MirStatementKind,
@@ -110,7 +110,7 @@ pub(crate) fn lower_lambda_expr(
         unreachable!()
     };
     let closure = ClosureSource {
-        name: ctx.closure_symbol(ClosureKind::Lambda, expr.id),
+        symbol: ctx.closure_symbol(ClosureKind::Lambda, expr.id),
         self_name: None,
         params: &lambda.params,
         return_type: lambda.return_type.as_deref(),
@@ -126,7 +126,7 @@ pub(crate) fn lower_lambda_expr(
 /// declared inside another function's body.
 pub(crate) struct ClosureSource<'a> {
     /// The symbol the closure's body is emitted under; unique per compilation.
-    pub name: Rc<str>,
+    pub symbol: Symbol,
     /// The name the body calls itself by, for a named nested function.
     pub self_name: Option<&'a str>,
     pub params: &'a [Parameter],
@@ -151,7 +151,7 @@ pub(crate) fn lower_closure(
 ) -> Result<Operand, LoweringError> {
     let (body, captures) = lower_closure_body(ctx, closure)?;
     ctx.lambda_bodies.push(LambdaInfo {
-        name: closure.name.to_string(),
+        symbol: closure.symbol.clone(),
         body,
         captures: captures.clone(),
     });
@@ -390,7 +390,7 @@ fn emit_closure_aggregate(
         kind: MirStatementKind::Assign(
             target.clone(),
             Rvalue::Aggregate(
-                AggregateKind::Closure(closure.name.clone(), closure.ty.clone()),
+                AggregateKind::Closure(closure.symbol.link_name().into(), closure.ty.clone()),
                 capture_operands,
             ),
         ),

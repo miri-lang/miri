@@ -24,6 +24,11 @@
 //! comparable without comparing [`Type`]s, and two different types never
 //! compare equal.
 
+mod table;
+mod written;
+
+pub use table::{Claim, SymbolCollision, SymbolTable};
+
 use std::borrow::Cow;
 use std::fmt;
 
@@ -59,6 +64,9 @@ pub enum GpuKernelKind {
     Forall,
     /// The fold of a gpu-resident array's `reduce`.
     Reduce,
+    /// One pass of a frame statement; every pass of one statement shares the
+    /// statement's index.
+    FramePass { pass: usize },
 }
 
 /// A function codegen emits for one type, which a release site or the runtime
@@ -270,6 +278,25 @@ impl Symbol {
         self
     }
 
+    /// The method this symbol names when it is a method of `owner` at the
+    /// type arguments `owner_args`.
+    pub fn method_of<'t>(
+        &self,
+        owner: &str,
+        owner_args: impl IntoIterator<Item = &'t Type>,
+    ) -> Option<&str> {
+        let SymbolKind::Method {
+            owner: own,
+            owner_args: own_args,
+            method,
+            ..
+        } = &self.kind
+        else {
+            return None;
+        };
+        (own == owner && *own_args == tokens(owner_args)).then_some(method.as_str())
+    }
+
     /// Whether the runtime library, not this compilation, provides the body.
     pub fn is_runtime(&self) -> bool {
         matches!(self.kind, SymbolKind::Runtime(_))
@@ -392,6 +419,7 @@ fn write_gpu_kernel(f: &mut fmt::Formatter<'_>, kind: GpuKernelKind, index: usiz
     match kind {
         GpuKernelKind::Forall => write!(f, "miri_gpu_forall_{index}"),
         GpuKernelKind::Reduce => write!(f, "miri_gpu_reduce_{index}"),
+        GpuKernelKind::FramePass { pass } => write!(f, "miri_gpu_for_{index}_{pass}"),
     }
 }
 

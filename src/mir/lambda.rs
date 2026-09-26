@@ -8,14 +8,15 @@
 
 use crate::mir::body::Body;
 use crate::mir::place::Local;
+use crate::mir::symbol::Symbol;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Represents a lowered lambda function.
 #[derive(Debug, Clone)]
 pub struct LambdaInfo {
-    /// The unique name of this lambda (e.g., `__lambda_42`)
-    pub name: String,
+    /// What this body is emitted as; its link name is unique per compilation.
+    pub symbol: Symbol,
     /// The MIR body for this lambda
     pub body: Body,
     /// Variables captured from the enclosing scope.
@@ -46,7 +47,7 @@ impl LambdaRegistry {
     }
 
     pub fn register(&mut self, info: LambdaInfo) {
-        self.lambdas.insert(info.name.clone(), info);
+        self.lambdas.insert(info.symbol.link_name(), info);
     }
 
     pub fn get(&self, name: &str) -> Option<&LambdaInfo> {

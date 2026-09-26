@@ -78,9 +78,8 @@ struct EnumDropSite {
 
 /// The link spelling of a generic class at a concrete instantiation's type
 /// arguments (`Box` + `[String]` → `Box__String`), as [`Symbol::function`]
-/// spells it. Codegen compares instantiations by it — whether one is recorded,
-/// and which per-instantiation thunks were already emitted — so two argument
-/// lists that spell one name are never defined twice.
+/// spells it. Instantiations are compared by their [`Symbol`], never by this
+/// spelling, which two different argument lists can share.
 pub fn mangle_class_instantiation(class_name: &str, type_args: &[Type]) -> String {
     crate::mir::lowering::dispatch::mangle_instantiation_name(class_name, type_args)
 }
@@ -1048,12 +1047,12 @@ impl<'a> FunctionTranslator<'a> {
         if concrete.is_empty() {
             return None;
         }
-        let want = mangle_class_instantiation(class_name, &concrete);
+        let want = Symbol::type_thunk(ThunkKind::Drop, class_name, &concrete);
         let recorded = type_ctx
             .generic_class_instantiations
             .get(class_name)?
             .iter()
-            .any(|tuple| mangle_class_instantiation(class_name, tuple) == want);
+            .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, class_name, tuple) == want);
         recorded.then_some(concrete)
     }
 

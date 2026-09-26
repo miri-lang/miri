@@ -1062,7 +1062,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
-    // MIR — MIR lowering (17 codes: 001-017)
+    // MIR — MIR lowering (18 codes: 001-018)
     "MIR",
     "001",
     MirUnsupportedExpression,
@@ -1179,6 +1179,13 @@ diagnostics!(
     "017",
     MirInvalidInstantiationArgument,
     "Invalid Instantiation Argument",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "MIR",
+    "018",
+    MirSymbolCollision,
+    "Symbol Name Collision",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

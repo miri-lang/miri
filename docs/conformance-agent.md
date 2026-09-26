@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 92
+## Error fixtures (`fail/`) — 93
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -26,6 +26,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_LEX_012 | Triggers MER_LEX_012: Invalid Formatted String Expression. |
 | MER_MIR_016 | Triggers MER_MIR_016: Polymorphic Recursion. |
 | MER_MIR_017 | Triggers MER_MIR_017: Invalid Instantiation Argument. |
+| MER_MIR_018 | Triggers MER_MIR_018: Symbol Name Collision. |
 | MER_NAM_002 | Triggers MER_NAM_002: Module Not Found. |
 | MER_OWN_003 | Triggers MER_OWN_003: Use of Moved Value. |
 | MER_OWN_004 | Triggers MER_OWN_004: Unused Value. |
@@ -126,7 +127,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 103
+## Accepted fixtures (`pass/`) — 104
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -153,6 +154,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_MIR_012 | Accepted counterpart of MER_MIR_012: Missing Struct Field does not fire. |
 | MER_MIR_016 | Accepted counterpart of MER_MIR_016: a class that calls itself through a trait at its own type argument is compiled once. |
 | MER_MIR_017 | Accepted counterpart of MER_MIR_017: a value argument computed from the class's own folds to the instantiation it names. |
+| MER_MIR_018 | Accepted counterpart of MER_MIR_018: a function named apart from the method compiles beside it. |
 | MER_NAM_001 | Accepted counterpart of MER_NAM_001: Deprecated Kernel Context Identifier does not fire. |
 | MER_NAM_002 | Accepted counterpart of MER_NAM_002: Module Not Found does not fire. |
 | MER_NAM_003 | Accepted counterpart of MER_NAM_003: Invalid Import Path does not fire. |

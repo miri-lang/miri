@@ -72,12 +72,12 @@ pub(crate) fn try_lower_gpu_reduce(
     let array_length = extract_array_length_from_type(obj_ty, *span)?;
 
     // Build the reduction kernel.
-    let kernel_name =
-        Symbol::gpu_kernel(GpuKernelKind::Reduce, ctx.kernel_index(call_expr_id)).link_name();
+    let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Reduce, ctx.kernel_index(call_expr_id));
+    let kernel_name = kernel_symbol.link_name();
     let kernel_body = build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
-        name: kernel_name.clone(),
+        symbol: kernel_symbol,
         body: kernel_body,
         captures: Vec::new(),
     });

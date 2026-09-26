@@ -8,6 +8,7 @@ use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
 };
@@ -230,11 +231,7 @@ fn lower_static_method_impl(
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
 
-    // Construct the mangled function name: DefiningType_method_name
-    let mut mangled = String::with_capacity(defining_type_name.len() + 1 + method_name.len());
-    mangled.push_str(defining_type_name);
-    mangled.push('_');
-    mangled.push_str(method_name);
+    let mangled = Symbol::method(defining_type_name, &[], method_name, &[]).link_name();
 
     let func_op = Operand::Constant(Box::new(crate::mir::Constant {
         span: *span,
@@ -1480,15 +1477,16 @@ fn generic_function_symbol(
     call_expr_id: usize,
 ) -> Option<String> {
     let type_args = ctx.instantiated_call_mapping(call_expr_id)?;
-    let symbol = mangle_generic_name(func_name, &type_args);
+    let symbol = Symbol::function(func_name, type_args.iter().map(|(_, ty)| ty));
+    let link_name = symbol.link_name();
     ctx.body
         .generic_function_calls
         .push(crate::mir::body::GenericFunctionCall {
-            symbol: symbol.clone(),
+            symbol,
             function: func_name.to_string(),
             type_args,
         });
-    Some(symbol)
+    Some(link_name)
 }
 
 fn resolve_param_types(

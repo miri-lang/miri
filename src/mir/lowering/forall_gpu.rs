@@ -188,13 +188,13 @@ pub fn lower_forall_gpu(
     let axes = extract_axes(decls, &folded_iterable, span, rank)?;
     let captures = collect_capture_infos(ctx, body, decls, *span)?;
 
-    let kernel_name =
-        Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id)).link_name();
+    let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id));
+    let kernel_name = kernel_symbol.link_name();
 
     let kernel_body = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
-        name: kernel_name.clone(),
+        symbol: kernel_symbol,
         body: kernel_body,
         captures: Vec::new(),
     });

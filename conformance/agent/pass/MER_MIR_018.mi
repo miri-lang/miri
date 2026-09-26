@@ -1,0 +1,15 @@
+// summary: Accepted counterpart of MER_MIR_018: a function named apart from the method compiles beside it.
+// expect-stdout: 1 2
+use system.io
+
+class Point
+    x int
+    fn norm() int
+        return self.x
+
+fn doubled_norm(p Point) int
+    return p.x * 2
+
+fn main()
+    let p = Point(x: 1)
+    println(f"{p.norm()} {doubled_norm(p)}")

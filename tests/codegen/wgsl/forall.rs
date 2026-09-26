@@ -31,7 +31,7 @@ fn synthesize_gpu_for_kernel(source: &str) -> Vec<u8> {
 
     let artifact = WgslBackend
         .compile(
-            &[(kernel.name.as_str(), &kernel.body)],
+            &[(kernel.symbol.link_name().as_str(), &kernel.body)],
             &WgslOptions::default(),
         )
         .expect("wgsl backend should succeed for synthesized kernel");
