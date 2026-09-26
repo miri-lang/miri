@@ -29,7 +29,7 @@ use std::process::Command;
 use crate::ast::BuiltinCollectionKind;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::pins_of;
-use crate::type_checker::{DeclaredFunction, TypeChecker};
+use crate::type_checker::{DeclaredFunction, ModuleId, TypeChecker};
 
 /// One generic-class instantiation's substitution: the generic-name→concrete-type
 /// map used to substitute a method body, paired with the ordered name/type pairs
@@ -649,11 +649,35 @@ fn declared_function(
     result: &PipelineResult,
     stmt: &Statement,
     decl: &FunctionDeclarationData,
-) -> DeclaredFunction {
-    DeclaredFunction {
-        module: result.type_checker.declaring_module(stmt.id).clone(),
+) -> Result<DeclaredFunction, CompilerError> {
+    Ok(DeclaredFunction {
+        module: declaring_module(result, stmt, &decl.name)?.clone(),
         name: decl.name.clone(),
-    }
+    })
+}
+
+/// The module the top-level function `name`, declared by `stmt`, is written
+/// in, as the type checker recorded it.
+///
+/// Every top-level function this compilation lowers was recorded where it was
+/// checked, so a declaration with no recorded module was never checked;
+/// guessing a module for it would link it under some other function's name,
+/// so it is refused as an internal error instead.
+fn declaring_module<'r>(
+    result: &'r PipelineResult,
+    stmt: &Statement,
+    name: &str,
+) -> Result<&'r ModuleId, CompilerError> {
+    result
+        .type_checker
+        .declaring_module(stmt.id)
+        .ok_or_else(|| {
+            CompilerError::Lowering(LoweringError::internal(
+                DiagnosticCode::MirUndefinedVariable,
+                format!("no declaring module was recorded for the function `{name}`"),
+                stmt.span,
+            ))
+        })
 }
 
 /// Every top-level function declaration `keep` selects, by the function it
@@ -674,7 +698,7 @@ fn function_declarations(
         if !keep(decl) {
             continue;
         }
-        match declarations.entry(declared_function(result, stmt, decl)) {
+        match declarations.entry(declared_function(result, stmt, decl)?) {
             std::collections::hash_map::Entry::Vacant(slot) => {
                 slot.insert(site);
             }
@@ -3042,7 +3066,7 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let module = result.type_checker.declaring_module(stmt.id);
+        let module = declaring_module(result, stmt, name)?;
         let symbol = Symbol::declared_function(module, name);
         if !symbols
             .claim_definition(&symbol, stmt.id, stmt.span)

@@ -434,16 +434,22 @@ impl TypeChecker {
         self.modules.current_source_override = old_source_override;
         self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
-        self.record_declaring_modules(path_str, module_ast);
+        self.record_declaring_modules(
+            crate::type_checker::ModuleId::imported(path_str),
+            module_ast,
+        );
         self.imported_statements.extend(module_ast.body.clone());
         self.modules.current_module = old_module;
     }
 
-    /// Records the module each top-level function of `module_ast`, loaded as
-    /// `path_str`, is declared in, which the symbol its body is compiled under
-    /// carries.
-    fn record_declaring_modules(&mut self, path_str: &str, module_ast: &Program) {
-        let module = crate::type_checker::ModuleId::imported(path_str);
+    /// Records `module` as the module each top-level function of
+    /// `module_ast` is declared in, which the symbol its body is compiled
+    /// under carries.
+    pub(crate) fn record_declaring_modules(
+        &mut self,
+        module: crate::type_checker::ModuleId,
+        module_ast: &Program,
+    ) {
         let declarations = module_ast.body.iter().flat_map(|stmt| {
             if let StatementKind::Block(stmts) = &stmt.node {
                 stmts.as_slice()

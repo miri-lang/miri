@@ -99,3 +99,24 @@ fn main()
 ",
     );
 }
+
+/// A plain `fn` whose name begins with `__` is a valid host identifier, and
+/// GPU code may still call it: its WGSL helper is spelled without the
+/// reserved prefix, so the kernel module compiles.
+#[test]
+fn plain_fn_double_underscore_name_called_from_gpu_code_is_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.collections.array
+
+fn __h(x int) int
+    return x + 1
+
+fn main()
+    gpu let src = [1, 2, 3]
+    gpu var dst = [0, 0, 0]
+    gpu forall i in 0..3
+        dst[i] = __h(src[i])
+",
+    );
+}
