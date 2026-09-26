@@ -41,7 +41,7 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
             insert_rc(&mut body);
             bodies.push((decl.name.clone(), body));
             for lambda in lambdas {
-                bodies.push((lambda.name, lambda.body));
+                bodies.push((lambda.symbol.link_name(), lambda.body));
             }
         }
     }

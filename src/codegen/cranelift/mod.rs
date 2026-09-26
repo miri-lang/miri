@@ -24,7 +24,7 @@ use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
-use crate::mir::symbol::{StringLiteralPart, Symbol};
+use crate::mir::symbol::{StringLiteralPart, Symbol, ThunkKind};
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::AbiParam;
@@ -744,8 +744,8 @@ impl CraneliftBackend {
     }
 
     /// Generate the `method` thunk for each recorded instantiation of a generic
-    /// class that answers it, deduplicated by mangled name so the same symbol is
-    /// never defined twice.
+    /// class that answers it, once per thunk symbol so the same symbol is never
+    /// defined twice.
     ///
     /// A thunk calls a method body the pipeline lowered for that instantiation,
     /// so an instantiation whose arguments the pipeline does not monomorphize —
@@ -768,7 +768,7 @@ impl CraneliftBackend {
         let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
             return Ok(());
         };
-        let mut emitted: Vec<String> = Vec::new();
+        let mut emitted = std::collections::HashSet::new();
         for args in tuples {
             let monomorphized = args.iter().all(|arg| {
                 crate::mir::lowering::is_monomorphizable_type_argument(
@@ -776,9 +776,10 @@ impl CraneliftBackend {
                     &self.type_definitions,
                 )
             });
-            let mangled =
-                crate::codegen::cranelift::rc::mangle_class_instantiation(type_name, args);
-            if !monomorphized || emitted.contains(&mangled) {
+            if !monomorphized {
+                continue;
+            }
+            if !emitted.insert(Symbol::type_thunk(method.thunk_kind(), type_name, args)) {
                 continue;
             }
             FunctionTranslator::generate_element_method_thunk(
@@ -790,7 +791,6 @@ impl CraneliftBackend {
                 Some(args),
                 &self.type_definitions,
             )?;
-            emitted.push(mangled);
         }
         Ok(())
     }
@@ -828,8 +828,8 @@ impl CraneliftBackend {
     /// recorded instantiation of a generic struct, class or enum, so a managed
     /// field is DecRef'd and a scalar field skipped, each per instantiation.
     /// Non-generic types and types with no recorded instantiations produce
-    /// nothing here (the bare thunk suffices). Instantiations are deduplicated
-    /// by mangled name so the same symbol is never defined twice.
+    /// nothing here (the bare thunk suffices). Each drop thunk symbol is
+    /// generated once, so the same symbol is never defined twice.
     fn generate_instantiation_drop_functions(
         &self,
         module: &mut ObjectModule,
@@ -846,11 +846,9 @@ impl CraneliftBackend {
         let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
             return Ok(());
         };
-        let mut emitted: Vec<String> = Vec::new();
+        let mut emitted = std::collections::HashSet::new();
         for args in tuples {
-            let mangled =
-                crate::codegen::cranelift::rc::mangle_class_instantiation(type_name, args);
-            if emitted.contains(&mangled) {
+            if !emitted.insert(Symbol::type_thunk(ThunkKind::Drop, type_name, args)) {
                 continue;
             }
             FunctionTranslator::generate_drop_function(
@@ -868,7 +866,6 @@ impl CraneliftBackend {
             // released. The bare `__decref_Box` would reach only `__drop_Box`,
             // which skips the unresolved generic field.
             FunctionTranslator::generate_decref_function(module, ctx, isa, type_name, args)?;
-            emitted.push(mangled);
         }
         Ok(())
     }

@@ -384,14 +384,12 @@ pub(crate) fn residency_specialize_call(
 
     if let Operand::Constant(constant) = &*func_op {
         if let crate::ast::literal::Literal::Identifier(base) = &constant.literal {
-            let mangled = Symbol::function(base, &[])
-                .with_residency(&gpu_args)
-                .link_name();
-            *func_op = super::dispatch::runtime_fn_operand(&mangled, func.span);
+            let symbol = Symbol::function(base, &[]).with_residency(&gpu_args);
+            *func_op = super::dispatch::runtime_fn_operand(&symbol.link_name(), func.span);
             ctx.body
                 .residency_function_calls
                 .push(crate::mir::body::ResidencyFunctionCall {
-                    symbol: mangled,
+                    symbol,
                     function: func_name.clone(),
                     arg_handles: handles.clone(),
                 });
@@ -808,14 +806,7 @@ fn emit_resolved_method_call(
     }
     let symbol = match mono {
         Some((mangled, _)) => mangled,
-        None => {
-            // Optimization: avoid format! overhead in symbol mangling on hot method-dispatch paths.
-            let mut s = String::with_capacity(m.defining_class.len() + 1 + m.method_name.len());
-            s.push_str(m.defining_class);
-            s.push('_');
-            s.push_str(m.method_name);
-            s
-        }
+        None => Symbol::method(m.defining_class, &[], m.method_name, &[]).link_name(),
     };
     emit_static_method_call(
         ctx,
@@ -999,14 +990,10 @@ pub(crate) fn operator_method_callee(
             ctx.record_class_instantiations(receiver_ty);
             callee
         }
-        None => {
-            // Optimization: pre-allocate exact capacity for static method symbol to eliminate format! parsing overhead.
-            let mut s = String::with_capacity(owner.len() + 1 + method_name.len());
-            s.push_str(owner);
-            s.push('_');
-            s.push_str(method_name);
-            (s, method.return_type.clone())
-        }
+        None => (
+            Symbol::method(owner, &[], method_name, &[]).link_name(),
+            method.return_type.clone(),
+        ),
     }
 }
 

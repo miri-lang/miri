@@ -1,0 +1,18 @@
+// expect: MER_MIR_018
+// summary: Triggers MER_MIR_018: Symbol Name Collision.
+// command: build
+// Bodies claim their compiled names while a build lowers them, a stage
+// `check` does not run.
+use system.io
+
+class Point
+    x int
+    fn norm() int
+        return self.x
+
+fn Point_norm(p Point) int
+    return p.x * 2
+
+fn main()
+    let p = Point(x: 1)
+    println(f"{p.norm()} {Point_norm(p)}")

@@ -8,6 +8,7 @@ use crate::ast::types;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     AggregateKind, Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
 };
@@ -265,7 +266,10 @@ pub fn lower_class_constructor(
         // not at the bare name.
         let (init_symbol, param_subs) = match callee {
             Some(callee) => (callee.symbol, callee.owner_subs),
-            None => (format!("{init_class}_init"), field_subs),
+            None => (
+                Symbol::method(&init_class, &[], INIT_METHOD_NAME, &[]).link_name(),
+                field_subs,
+            ),
         };
         let init_params: Vec<(String, Type)> = init_params
             .into_iter()

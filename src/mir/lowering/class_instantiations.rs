@@ -24,7 +24,6 @@ use super::instantiation_limits::{
     invalid_value_argument, mentions_open_parameter, polymorphic_recursion,
     unnameable_type_argument, value_growth_note, ExceededLimit, Growth,
 };
-use super::method_dispatch::mangle_instantiation_name;
 use crate::ast::expression::Expression;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -132,14 +131,14 @@ pub struct Unregistered {
 /// once, in the order the bodies first name them.
 pub fn unregistered_instantiations(
     type_checker: &TypeChecker,
-    bodies: &[(String, Body)],
+    bodies: &[(Symbol, Body)],
 ) -> Vec<Unregistered> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
     for (index, (_, body)) in bodies.iter().enumerate() {
         for named in &body.generic_class_instantiations {
             if is_registered_instantiation(type_checker, &named.class, &named.type_args)
-                || !seen.insert(mangle_instantiation_name(&named.class, &named.type_args))
+                || !seen.insert(Symbol::function(&named.class, &named.type_args))
             {
                 continue;
             }
@@ -159,7 +158,7 @@ pub fn unregistered_instantiations(
 pub fn refuse_past_limits(
     type_checker: &TypeChecker,
     found: &[Unregistered],
-    bodies: &[(String, Body)],
+    bodies: &[(Symbol, Body)],
 ) -> Result<(), LoweringError> {
     let type_defs = type_checker.type_definitions();
     let mut value_instances: HashMap<&str, usize> = HashMap::new();
@@ -185,7 +184,7 @@ pub fn refuse_past_limits(
 fn refusal_of(
     instance: &Unregistered,
     limit: &ExceededLimit,
-    bodies: &[(String, Body)],
+    bodies: &[(Symbol, Body)],
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> LoweringError {
     let (chain, method) = static_growth(instance, bodies, type_defs);
@@ -328,11 +327,11 @@ fn spells_instance(ty: &Type, class: &str, args: &[Type]) -> bool {
 /// enough to reach back through every value instance a class may need.
 fn static_growth(
     instance: &Unregistered,
-    bodies: &[(String, Body)],
+    bodies: &[(Symbol, Body)],
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> (Vec<Vec<Type>>, Option<String>) {
     let class = instance.class.as_str();
-    let builder_of = |args: &[Type], running: Option<&str>| {
+    let builder_of = |args: &[Type], running: Option<&Symbol>| {
         bodies.iter().position(|(symbol, body)| {
             builds_instance(body, class, args)
                 || running.is_some_and(|callee| symbol != callee && calls(body, callee))
@@ -362,10 +361,10 @@ fn static_growth(
 }
 
 /// Whether `body` calls the generic function instantiation `symbol`.
-fn calls(body: &Body, symbol: &str) -> bool {
+fn calls(body: &Body, symbol: &Symbol) -> bool {
     body.generic_function_calls
         .iter()
-        .any(|call| call.symbol == symbol)
+        .any(|call| call.symbol == *symbol)
 }
 
 /// Whether `body` names `class` at `args` other than through the instance it
@@ -405,13 +404,8 @@ fn self_instance(body: &Body, class: &str) -> Option<Vec<Type>> {
 }
 
 /// The method of `class` whose body at `args` is emitted as `symbol`.
-///
-/// TODO: this recovers the method by re-spelling every candidate and comparing
-/// link names, so two distinct symbols that spell one name are confused. The
-/// lowered bodies are keyed by their link name; once they carry their
-/// [`Symbol`], read the method off it instead.
 fn method_named(
-    symbol: &str,
+    symbol: &Symbol,
     class: &str,
     args: &[Type],
     type_defs: &HashMap<String, TypeDefinition>,
@@ -419,11 +413,10 @@ fn method_named(
     let Some(TypeDefinition::Class(definition)) = type_defs.get(class) else {
         return None;
     };
-    definition
-        .methods
-        .keys()
-        .find(|method| Symbol::method(class, args, method, &[]).link_name() == symbol)
-        .cloned()
+    symbol
+        .method_of(class, args)
+        .filter(|method| definition.methods.contains_key(*method))
+        .map(str::to_string)
 }
 
 /// The type an argument of a generic-class reference stands for in a

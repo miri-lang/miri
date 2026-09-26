@@ -490,7 +490,7 @@ fn lower_nested_function_decl(
     );
     let ty = super::apply_generic_sub(&written_ty, &ctx.generic_subs);
     let closure = ClosureSource {
-        name: ctx.closure_symbol(ClosureKind::NestedFunction(decl.name.clone()), stmt.id),
+        symbol: ctx.closure_symbol(ClosureKind::NestedFunction(decl.name.clone()), stmt.id),
         self_name: Some(&decl.name),
         params: &decl.params,
         return_type: decl.return_type.as_deref(),

@@ -235,17 +235,14 @@ impl<'a> LoweringContext<'a> {
     /// symbol stays stable across builds; then by the residency this body is
     /// specialized for, the same suffix the specialized function itself
     /// carries.
-    pub fn closure_symbol(&self, kind: ClosureKind, id: usize) -> Rc<str> {
+    pub fn closure_symbol(&self, kind: ClosureKind, id: usize) -> Symbol {
         let mut substitution: Vec<(&String, &Type)> = self.generic_subs.iter().collect();
         substitution.sort_unstable_by(|a, b| a.0.cmp(b.0));
         let context_args = self
             .self_type
             .iter()
             .chain(substitution.into_iter().map(|(_, ty)| ty));
-        Symbol::closure(kind, id, context_args)
-            .with_residency(&self.residency_handles)
-            .link_name()
-            .into()
+        Symbol::closure(kind, id, context_args).with_residency(&self.residency_handles)
     }
 
     /// Resolve the `Self` keyword in `ty` against the enclosing class.

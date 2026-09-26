@@ -6,6 +6,7 @@ use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
 use crate::mir::place::Local;
+use crate::mir::symbol::Symbol;
 use crate::mir::types::MirType;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -142,8 +143,8 @@ pub struct GenericClassInstantiation {
 /// One call to a generic function at concrete type arguments.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericFunctionCall {
-    /// The mangled symbol the call targets, e.g. `smaller__String`.
-    pub symbol: String,
+    /// The instantiation the call targets, e.g. `smaller` at `String`.
+    pub symbol: Symbol,
     /// The generic function's declared name.
     pub function: String,
     /// Each of the callee's generic parameters, paired with the type it is
@@ -155,7 +156,7 @@ pub struct GenericFunctionCall {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResidencyFunctionCall {
     /// The residency-specialized symbol the call targets.
-    pub symbol: String,
+    pub symbol: Symbol,
     /// The declared name of the function the specialization is lowered from.
     pub function: String,
     /// The device handle each positional argument carries, `None` for an

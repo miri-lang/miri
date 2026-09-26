@@ -24,6 +24,7 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::BackendConfig;
 use crate::mir::body::LaunchUniform;
+use crate::mir::symbol::{GpuKernelKind, Symbol};
 use crate::mir::{
     BackendMetadata, BinOp, Body, Dimension, ExecutionModel, GpuBodyMetadata, GpuLaunchArgs,
     LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
@@ -193,18 +194,18 @@ fn emit_frame_pass(
     // Distinct kernel name to avoid runtime cache collision. Every pass of one
     // frame statement shares its compilation-local index; `pass_idx` keeps the
     // passes distinct.
-    let kernel_name = format!(
-        "miri_gpu_for_{}_{}",
+    let kernel_symbol = Symbol::gpu_kernel(
+        GpuKernelKind::FramePass { pass: pass_idx },
         ctx.kernel_index(frame_stmt_id),
-        pass_idx
     );
+    let kernel_name = kernel_symbol.link_name();
 
     if is_literal_end {
         let range = literal_frame_range(loop_var_name, start_lit, end, range_type.clone(), *span)?;
         let kernel_body =
             build_frame_kernel_literal(ctx, captures, &range, body, *span, uses_frame)?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
-            name: kernel_name.clone(),
+            symbol: kernel_symbol,
             body: kernel_body,
             captures: Vec::new(),
         });
@@ -220,7 +221,7 @@ fn emit_frame_pass(
             uses_frame,
         )?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
-            name: kernel_name.clone(),
+            symbol: kernel_symbol,
             body: kernel_body,
             captures: Vec::new(),
         });

@@ -5,7 +5,8 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::symbol::{
-    ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, ThunkKind,
+    Claim, ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, SymbolCollision,
+    SymbolTable, ThunkKind,
 };
 
 fn ty(kind: TypeKind) -> Type {
@@ -221,5 +222,77 @@ fn thunks_of_different_kinds_or_types_are_distinct_values() {
     assert_ne!(
         Symbol::type_thunk(ThunkKind::Drop, "Box__int", &[]),
         Symbol::type_thunk(ThunkKind::Drop, "Box", &[ty(TypeKind::Int)])
+    );
+}
+
+#[test]
+fn a_frame_pass_kernel_is_numbered_by_its_statement_and_pass() {
+    assert_eq!(
+        Symbol::gpu_kernel(GpuKernelKind::FramePass { pass: 2 }, 5).link_name(),
+        "miri_gpu_for_5_2"
+    );
+}
+
+#[test]
+fn claiming_a_symbol_for_the_first_time_is_new() {
+    let mut table = SymbolTable::default();
+    assert_eq!(
+        table.claim(&Symbol::method("A", &[], "b_c", &[])),
+        Ok(Claim::New)
+    );
+}
+
+#[test]
+fn claiming_a_symbol_again_finds_it_already_lowered() {
+    let mut table = SymbolTable::default();
+    let symbol = Symbol::function("pick", &[ty(TypeKind::Int)]);
+    assert_eq!(table.claim(&symbol), Ok(Claim::New));
+    assert_eq!(table.claim(&symbol), Ok(Claim::AlreadyLowered));
+    assert!(table.is_claimed(&symbol));
+}
+
+#[test]
+fn a_distinct_symbol_spelling_a_claimed_link_name_collides() {
+    let mut table = SymbolTable::default();
+    let existing = Symbol::method("A_b", &[], "c", &[]);
+    let incoming = Symbol::method("A", &[], "b_c", &[]);
+    assert_eq!(table.claim(&existing), Ok(Claim::New));
+    assert_eq!(
+        table.claim(&incoming),
+        Err(Box::new(SymbolCollision {
+            existing: existing.clone(),
+            incoming: incoming.clone(),
+            link_name: "A_b_c".to_string(),
+        }))
+    );
+    assert!(table.is_claimed(&existing));
+    assert!(!table.is_claimed(&incoming));
+}
+
+#[test]
+fn a_collision_names_both_definitions_as_the_source_writes_them() {
+    let mut table = SymbolTable::default();
+    table
+        .claim(&Symbol::function("pick__int", &[]))
+        .expect("first claim is new");
+    let collision = table
+        .claim(&Symbol::function("pick", &[ty(TypeKind::Int)]))
+        .expect_err("a second definition of `pick__int` collides");
+    assert_eq!(
+        collision.to_string(),
+        "`pick__int` and `pick<int>` compile to the same symbol `pick__int`"
+    );
+}
+
+#[test]
+fn a_method_symbol_answers_which_method_of_its_owner_it_is() {
+    let at_int = [ty(TypeKind::Int)];
+    let symbol = Symbol::method("Box", &at_int, "get", &[]);
+    assert_eq!(symbol.method_of("Box", &at_int), Some("get"));
+    assert_eq!(symbol.method_of("Box", &[]), None);
+    assert_eq!(symbol.method_of("Bo", &at_int), None);
+    assert_eq!(
+        Symbol::function("Box_get", &at_int).method_of("Box", &at_int),
+        None
     );
 }

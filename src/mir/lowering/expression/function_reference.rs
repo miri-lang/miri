@@ -26,7 +26,7 @@ use crate::ast::expression::Expression;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::rvalue::AggregateKind;
-use crate::mir::symbol::ClosureKind;
+use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{
     Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
@@ -73,14 +73,15 @@ fn lower_function_reference(
 ) -> Operand {
     // The reference site's expression id keeps two references to the same
     // function from claiming one symbol, the way a lambda's id does.
-    let thunk_name =
+    let thunk_symbol =
         ctx.closure_symbol(ClosureKind::FunctionReference(symbol.to_string()), expr.id);
+    let thunk_name: std::rc::Rc<str> = thunk_symbol.link_name().into();
     let forwarded_allocator = forwarded_allocator(ctx, symbol);
     let thunk = build_forwarding_thunk(
         ctx,
         expr,
         symbol,
-        &thunk_name,
+        thunk_symbol,
         func_data,
         forwarded_allocator.as_ref(),
     );
@@ -139,7 +140,7 @@ fn build_forwarding_thunk(
     ctx: &LoweringContext,
     expr: &Expression,
     symbol: &str,
-    thunk_name: &str,
+    thunk_symbol: Symbol,
     func_data: &FunctionTypeData,
     allocator: Option<&AllocatorCapture>,
 ) -> LambdaInfo {
@@ -186,7 +187,7 @@ fn build_forwarding_thunk(
     thunk_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
 
     LambdaInfo {
-        name: thunk_name.to_string(),
+        symbol: thunk_symbol,
         body: thunk_ctx.body,
         captures,
     }

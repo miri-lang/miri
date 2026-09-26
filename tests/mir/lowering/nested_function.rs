@@ -66,7 +66,7 @@ fn outer(a int) int
     );
     let helper = lambdas
         .iter()
-        .find(|info| info.name.contains("helper"))
+        .find(|info| info.symbol.link_name().contains("helper"))
         .expect("nested body not emitted");
 
     let args = args_of_call_to(&helper.body, "base");

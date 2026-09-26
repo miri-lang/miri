@@ -16,6 +16,7 @@ use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
+use crate::mir::symbol::{Claim, Symbol, SymbolTable};
 use crate::parser::Parser;
 use std::collections::BTreeSet;
 use std::fs;
@@ -537,7 +538,7 @@ impl Default for Pipeline {
 /// one it needs past a bound — is reported as the diagnostic it is; anything
 /// else is a failure of the compiler's own, reported against the body.
 fn monomorphized_lowering_failure(
-    symbol: &str,
+    symbol: &Symbol,
     error: crate::error::lowering::LoweringError,
 ) -> CompilerError {
     let refuses_the_program = matches!(
@@ -550,7 +551,22 @@ fn monomorphized_lowering_failure(
     CompilerError::Codegen(format!("MIR lowering failed for {}: {}", symbol, error))
 }
 
-fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::HashSet<String> {
+/// Claim `symbol` for the body of the definition at `span`: whether that body
+/// is still to be lowered. A different definition already holding the link
+/// name `symbol` spells refuses the program.
+fn is_first_claim(
+    symbols: &mut SymbolTable,
+    symbol: &Symbol,
+    span: Span,
+) -> Result<bool, CompilerError> {
+    match symbols.claim(symbol) {
+        Ok(Claim::New) => Ok(true),
+        Ok(Claim::AlreadyLowered) => Ok(false),
+        Err(collision) => Err(CompilerError::Lowering(collision.refusal(span))),
+    }
+}
+
+fn called_function_names(bodies: &[(Symbol, mir::Body)]) -> std::collections::HashSet<String> {
     let mut called = std::collections::HashSet::new();
     for (_, body) in bodies {
         for block in &body.basic_blocks {
@@ -603,15 +619,22 @@ impl CalledNames {
     /// an instance past the bounds on instantiations.
     fn refresh(
         &mut self,
-        bodies: &[(String, mir::Body)],
+        bodies: &[(Symbol, mir::Body)],
         result: &PipelineResult,
         reach: &ReachTables,
     ) -> Result<(), CompilerError> {
         let unscanned = bodies.get(self.scanned..).unwrap_or_default();
         self.names.extend(called_function_names(unscanned));
+        let link_names: Vec<String> = unscanned
+            .iter()
+            .map(|(symbol, _)| symbol.link_name())
+            .collect();
         self.vtables
             .record(
-                unscanned.iter().map(|(name, body)| (name.as_str(), body)),
+                link_names
+                    .iter()
+                    .zip(unscanned)
+                    .map(|(name, (_, body))| (name.as_str(), body)),
                 mir::lowering::vtable_demand::DemandTables {
                     type_checker: &result.type_checker,
                     layout: &reach.vtable_layout,
@@ -663,7 +686,7 @@ fn statements_with_sites(
 /// `{Trait}_{method}` symbol and where the declaring trait sits.
 struct TraitDefaultBody {
     trait_name: String,
-    symbol: String,
+    symbol: Symbol,
     trait_site: StatementSite,
     member: usize,
 }
@@ -726,7 +749,7 @@ impl TraitDefaultBodies {
         methods.insert(method_name.to_string(), self.bodies.len());
         self.bodies.push(TraitDefaultBody {
             trait_name: trait_name.to_string(),
-            symbol: Pipeline::mangle_method_name(trait_name, method_name),
+            symbol: Symbol::method(trait_name, &[], method_name, &[]),
             trait_site,
             member,
         });
@@ -885,7 +908,7 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
 /// still to emit, and those bodies can reach further ones.
 fn register_lowered_class_instantiations(
     type_checker: &mut TypeChecker,
-    bodies: &[(String, mir::Body)],
+    bodies: &[(Symbol, mir::Body)],
     ast: &Program,
 ) -> Result<bool, CompilerError> {
     use mir::lowering::class_instantiations as instantiations;
@@ -1473,13 +1496,13 @@ impl Pipeline {
 
     /// The symbol of `method_name` of the generic class `class_name` at the
     /// instantiation `class_args` spells.
-    fn instantiated_method_name(
+    fn instantiated_method_symbol(
         class_name: &str,
         method_name: &str,
         class_args: &[(String, Type)],
-    ) -> String {
+    ) -> Symbol {
         let class_args = class_args.iter().map(|(_, ty)| ty);
-        mir::symbol::Symbol::method(class_name, class_args, method_name, &[]).link_name()
+        Symbol::method(class_name, class_args, method_name, &[])
     }
 
     /// Emit a monomorphized method body for each recorded instantiation of a
@@ -1503,8 +1526,8 @@ impl Pipeline {
         class_name: &str,
         class_data: &ClassData,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // A builtin collection's methods are emitted on demand after the main
@@ -1523,7 +1546,7 @@ impl Pipeline {
                 &subs,
                 &mangle_args,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
         }
@@ -1606,8 +1629,8 @@ impl Pipeline {
         is_release: bool,
         subs: &std::collections::HashMap<String, Type>,
         mangle_args: &[(String, Type)],
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         for method_stmt in &class_data.body {
@@ -1626,7 +1649,7 @@ impl Pipeline {
                 subs,
                 mangle_args,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
         }
@@ -1654,12 +1677,12 @@ impl Pipeline {
         is_release: bool,
         class_subs: &std::collections::HashMap<String, Type>,
         mangle_args: &[(String, Type)],
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let mangled = Self::instantiated_method_name(class_name, method_name, mangle_args);
-        if lowered_names.contains(&mangled) {
+        let symbol = Self::instantiated_method_symbol(class_name, method_name, mangle_args);
+        if !is_first_claim(symbols, &symbol, method_stmt.span)? {
             return Ok(());
         }
         let self_type = mir::lowering::monomorphized_self_type(
@@ -1682,9 +1705,8 @@ impl Pipeline {
             &subs,
             compilation_ids.clone(),
         )
-        .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-        Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
-        Ok(())
+        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+        Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)
     }
 
     /// Emit a per-instantiation monomorphized copy of an inherited trait-default
@@ -1704,8 +1726,8 @@ impl Pipeline {
         method_stmt: &Statement,
         method_name: &str,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // A builtin collection's methods are emitted on demand after the main
@@ -1725,7 +1747,7 @@ impl Pipeline {
                 &class_subs,
                 &mangle_args,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
         }
@@ -1750,8 +1772,8 @@ impl Pipeline {
         reach: &ReachTables,
         called: &mut CalledNames,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         loop {
@@ -1768,7 +1790,7 @@ impl Pipeline {
                     class_data,
                     is_release,
                     bodies,
-                    lowered_names,
+                    symbols,
                     compilation_ids,
                 )?;
             }
@@ -1789,8 +1811,8 @@ impl Pipeline {
         called: &CalledNames,
         class_data: &ClassData,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<bool, CompilerError> {
         let Some(class_name) = Self::identifier_name(&class_data.name) else {
@@ -1807,10 +1829,11 @@ impl Pipeline {
             Self::monomorphizable_instantiation_subs(result, class_name)
         {
             for &(method_stmt, method_name) in &methods {
-                let mangled = Self::instantiated_method_name(class_name, method_name, &mangle_args);
-                let reached = called.contains(&mangled)
+                let symbol =
+                    Self::instantiated_method_symbol(class_name, method_name, &mangle_args);
+                let reached = called.contains(&symbol.link_name())
                     || Self::is_element_method_body(result, class_name, method_name);
-                if lowered_names.contains(&mangled) || !reached {
+                if symbols.is_claimed(&symbol) || !reached {
                     continue;
                 }
                 let first_new = bodies.len();
@@ -1823,7 +1846,7 @@ impl Pipeline {
                     &class_subs,
                     &mangle_args,
                     bodies,
-                    lowered_names,
+                    symbols,
                     compilation_ids,
                 )?;
                 Self::lower_generic_functions_reached_from(
@@ -1832,7 +1855,7 @@ impl Pipeline {
                     first_new,
                     &reach.generic_functions,
                     bodies,
-                    lowered_names,
+                    symbols,
                     compilation_ids,
                 )?;
                 emitted = true;
@@ -1957,18 +1980,16 @@ impl Pipeline {
             })
     }
 
-    /// Lower every body the program needs.
-    ///
-    /// Takes the result mutably because lowering an instantiation can reach a
-    /// generic-class instantiation the registry does not hold yet, which is
-    /// added before its methods are emitted and before codegen reads it.
-    fn lower_to_mir(
+    /// Lower every body the program reaches, each under the symbol it is
+    /// linked as. A symbol whose link name another already holds refuses the
+    /// program.
+    fn lower_program(
         &self,
         result: &mut PipelineResult,
         is_release: bool,
-    ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
-        let mut bodies = Vec::new();
-        let mut lowered_names = std::collections::HashSet::new();
+    ) -> Result<Vec<(Symbol, mir::Body)>, CompilerError> {
+        let mut lowered = Vec::new();
+        let mut symbols = SymbolTable::default();
 
         // One kernel-name allocator per compilation, shared across every body so
         // GPU kernel names are unique within this build and reproduced identically
@@ -1980,34 +2001,34 @@ impl Pipeline {
         self.lower_program_bodies(
             result,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
         self.lower_imported_bodies(
             result,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
         self.lower_inherited_methods(
             result,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
         Self::lower_trait_default_methods(
             result,
             &reach.trait_defaults,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
 
-        if bodies.is_empty() {
+        if lowered.is_empty() {
             return Err(CompilerError::Codegen(
                 "No functions found to compile".to_string(),
             ));
@@ -2017,8 +2038,8 @@ impl Pipeline {
             result,
             &reach.generic_functions,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
 
@@ -2026,10 +2047,29 @@ impl Pipeline {
             result,
             &reach,
             is_release,
-            &mut bodies,
-            &mut lowered_names,
+            &mut lowered,
+            &mut symbols,
             &compilation_ids,
         )?;
+
+        Ok(lowered)
+    }
+
+    /// Lower every body the program needs.
+    ///
+    /// Takes the result mutably because lowering an instantiation can reach a
+    /// generic-class instantiation the registry does not hold yet, which is
+    /// added before its methods are emitted and before codegen reads it.
+    fn lower_to_mir(
+        &self,
+        result: &mut PipelineResult,
+        is_release: bool,
+    ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
+        let mut bodies: Vec<(String, mir::Body)> = self
+            .lower_program(result, is_release)?
+            .into_iter()
+            .map(|(symbol, body)| (symbol.link_name(), body))
+            .collect();
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
@@ -2086,8 +2126,8 @@ impl Pipeline {
         result: &mut PipelineResult,
         reach: &ReachTables,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let mut called = CalledNames::new(reach);
@@ -2099,7 +2139,7 @@ impl Pipeline {
                 &mut called,
                 is_release,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
             let first_default = bodies.len();
@@ -2110,7 +2150,7 @@ impl Pipeline {
                 &called,
                 is_release,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
             Self::lower_generic_functions_reached_from(
@@ -2119,7 +2159,7 @@ impl Pipeline {
                 first_default,
                 &reach.generic_functions,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
             let registered = register_lowered_class_instantiations(
@@ -2152,19 +2192,23 @@ impl Pipeline {
         reach: &ReachTables,
         called: &CalledNames,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         for default in &reach.trait_defaults.bodies {
             let symbol = &default.symbol;
-            let is_named = called.contains(symbol) || reach.synthesized.contains(symbol);
-            if lowered_names.contains(symbol) || !is_named {
+            let link_name = symbol.link_name();
+            let is_named = called.contains(&link_name) || reach.synthesized.contains(&link_name);
+            if symbols.is_claimed(symbol) || !is_named {
                 continue;
             }
             let Some((trait_stmt, method_stmt)) = default.statements(result) else {
                 continue;
             };
+            if !is_first_claim(symbols, symbol, method_stmt.span)? {
+                continue;
+            }
             let self_type = Type::new(
                 TypeKind::Custom(default.trait_name.clone(), None),
                 trait_stmt.span,
@@ -2177,7 +2221,7 @@ impl Pipeline {
                 compilation_ids.clone(),
             )
             .map_err(|e| monomorphized_lowering_failure(symbol, e))?;
-            Self::push_lowered_body(bodies, lowered_names, symbol.clone(), body, lambdas);
+            Self::push_lowered_body(bodies, symbols, symbol.clone(), body, lambdas)?;
         }
         Ok(())
     }
@@ -2231,28 +2275,23 @@ impl Pipeline {
         &self,
         result: &PipelineResult,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
-                    let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
+                    Self::lower_top_level_function(
+                        result,
                         stmt,
-                        &result.type_checker,
+                        &decl.name,
                         is_release,
-                        true,
-                        compilation_ids.clone(),
-                    )
-                    .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
-                    lowered_names.insert(decl.name.clone());
-                    bodies.push((decl.name.clone(), body));
-                    for lambda in lambdas {
-                        lowered_names.insert(lambda.name.clone());
-                        bodies.push((lambda.name, lambda.body));
-                    }
+                        bodies,
+                        symbols,
+                        compilation_ids,
+                    )?;
                 }
                 StatementKind::Class(class_data) => {
                     let Some(class_name) = Self::identifier_name(&class_data.name) else {
@@ -2290,8 +2329,8 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mangled = Self::mangle_method_name(class_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
+                            let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
+                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                 continue;
                             }
 
@@ -2303,14 +2342,8 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
+                                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
 
@@ -2320,7 +2353,7 @@ impl Pipeline {
                         class_data,
                         is_release,
                         bodies,
-                        lowered_names,
+                        symbols,
                         compilation_ids,
                     )?;
                 }
@@ -2340,8 +2373,8 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mangled = Self::mangle_method_name(struct_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
+                            let symbol = Symbol::method(struct_name, &[], &method_decl.name, &[]);
+                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                 continue;
                             }
 
@@ -2351,14 +2384,8 @@ impl Pipeline {
                                 is_release,
                                 true,
                             )
-                            .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
+                            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
                 }
@@ -2387,8 +2414,8 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mangled = Self::mangle_method_name(enum_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
+                            let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
+                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                 continue;
                             }
 
@@ -2400,14 +2427,8 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
+                                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
                 }
@@ -2423,28 +2444,23 @@ impl Pipeline {
         &self,
         result: &PipelineResult,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
-                StatementKind::FunctionDeclaration(decl) if !lowered_names.contains(&decl.name) => {
-                    let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
+                StatementKind::FunctionDeclaration(decl) => {
+                    Self::lower_top_level_function(
+                        result,
                         stmt,
-                        &result.type_checker,
+                        &decl.name,
                         is_release,
-                        true,
-                        compilation_ids.clone(),
-                    )
-                    .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
-                    lowered_names.insert(decl.name.clone());
-                    bodies.push((decl.name.clone(), body));
-                    for lambda in lambdas {
-                        lowered_names.insert(lambda.name.clone());
-                        bodies.push((lambda.name, lambda.body));
-                    }
+                        bodies,
+                        symbols,
+                        compilation_ids,
+                    )?;
                 }
                 StatementKind::Class(class_data) => {
                     // Extract the class name string
@@ -2485,8 +2501,8 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mangled = Self::mangle_method_name(class_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
+                            let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
+                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                 continue;
                             }
 
@@ -2498,14 +2514,8 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
+                                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
 
@@ -2515,7 +2525,7 @@ impl Pipeline {
                         class_data,
                         is_release,
                         bodies,
-                        lowered_names,
+                        symbols,
                         compilation_ids,
                     )?;
                 }
@@ -2540,8 +2550,8 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mangled = Self::mangle_method_name(enum_name, &method_decl.name);
-                            if lowered_names.contains(&mangled) {
+                            let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
+                            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                 continue;
                             }
 
@@ -2553,14 +2563,8 @@ impl Pipeline {
                                     is_release,
                                     compilation_ids.clone(),
                                 )
-                                .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-
-                            lowered_names.insert(mangled.clone());
-                            bodies.push((mangled, mir_body));
-                            for lambda in lambdas {
-                                lowered_names.insert(lambda.name.clone());
-                                bodies.push((lambda.name, lambda.body));
-                            }
+                                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
                 }
@@ -2582,8 +2586,8 @@ impl Pipeline {
         &self,
         result: &PipelineResult,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         {
@@ -2678,12 +2682,8 @@ impl Pipeline {
                                     if cd.methods.contains_key(md.name.as_str()) {
                                         continue;
                                     }
-                                    let mut mangled =
-                                        String::with_capacity(class_name.len() + 1 + md.name.len());
-                                    mangled.push_str(class_name);
-                                    mangled.push('_');
-                                    mangled.push_str(&md.name);
-                                    if lowered_names.contains(&mangled) {
+                                    let symbol = Symbol::method(class_name, &[], &md.name, &[]);
+                                    if !is_first_claim(symbols, &symbol, method_stmt.span)? {
                                         continue;
                                     }
                                     let (mir_body, lambdas) =
@@ -2694,13 +2694,10 @@ impl Pipeline {
                                             is_release,
                                             compilation_ids.clone(),
                                         )
-                                        .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-                                    lowered_names.insert(mangled.clone());
-                                    bodies.push((mangled, mir_body));
-                                    for lambda in lambdas {
-                                        lowered_names.insert(lambda.name.clone());
-                                        bodies.push((lambda.name, lambda.body));
-                                    }
+                                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                                    Self::push_lowered_body(
+                                        bodies, symbols, symbol, mir_body, lambdas,
+                                    )?;
                                 }
                             }
                         }
@@ -2729,8 +2726,8 @@ impl Pipeline {
         result: &PipelineResult,
         trait_defaults: &TraitDefaultBodies,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let definitions = result.type_checker.type_definitions();
@@ -2764,7 +2761,7 @@ impl Pipeline {
                 trait_defaults,
                 is_release,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
         }
@@ -2784,8 +2781,8 @@ impl Pipeline {
         class: &InheritingClass,
         trait_defaults: &TraitDefaultBodies,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let definitions = result.type_checker.type_definitions();
@@ -2793,13 +2790,13 @@ impl Pipeline {
         for (method_name, trait_name) in
             mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class.name)
         {
-            let mangled = Self::mangle_method_name(class.name, method_name);
-            if lowered_names.contains(&mangled) {
-                continue;
-            }
             let Some(method_stmt) = trait_defaults.method(result, trait_name, method_name) else {
                 continue;
             };
+            let symbol = Symbol::method(class.name, &[], method_name, &[]);
+            if !is_first_claim(symbols, &symbol, method_stmt.span)? {
+                continue;
+            }
             let pinned = pins_of(&class.supertypes, trait_name).unwrap_or(&unpinned);
             let (mir_body, lambdas) = mir::lowering::lower_class_method_at_with_compilation_ids(
                 method_stmt,
@@ -2809,8 +2806,8 @@ impl Pipeline {
                 pinned,
                 compilation_ids.clone(),
             )
-            .map_err(|e| monomorphized_lowering_failure(&mangled, e))?;
-            Self::push_lowered_body(bodies, lowered_names, mangled, mir_body, lambdas);
+            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
 
             // A generic class inheriting this default also needs a mangled
             // copy per concrete-scalar instantiation so a `Box<float>` receiver
@@ -2823,7 +2820,7 @@ impl Pipeline {
                 method_name,
                 is_release,
                 bodies,
-                lowered_names,
+                symbols,
                 compilation_ids,
             )?;
         }
@@ -2843,15 +2840,15 @@ impl Pipeline {
         result: &PipelineResult,
         generic_functions: &std::collections::HashMap<String, StatementSite>,
         is_release: bool,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Residency specialization is scanned over the bodies lowered so far
         // only: a specialized body cannot itself reach another specialization,
         // because forwarding a buffer parameter to a further call is
         // buffer-touching and the type checker rejects it.
-        let needed_residency = Self::residency_specializations_called(bodies, lowered_names);
+        let needed_residency = Self::residency_specializations_called(bodies, symbols);
 
         Self::lower_generic_functions_reached_from(
             result,
@@ -2859,7 +2856,7 @@ impl Pipeline {
             0,
             generic_functions,
             bodies,
-            lowered_names,
+            symbols,
             compilation_ids,
         )?;
 
@@ -2868,7 +2865,7 @@ impl Pipeline {
             is_release,
             needed_residency,
             bodies,
-            lowered_names,
+            symbols,
             compilation_ids,
         )
     }
@@ -2881,22 +2878,22 @@ impl Pipeline {
         is_release: bool,
         first_new: usize,
         generic_functions: &std::collections::HashMap<String, StatementSite>,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let mut pending = std::collections::VecDeque::new();
-        Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
+        Self::queue_generic_instantiations(&bodies[first_new..], symbols, &mut pending);
         while let Some(call) = pending.pop_front() {
-            if lowered_names.contains(&call.symbol) {
-                continue;
-            }
             let Some(ast_stmt) = generic_functions
                 .get(call.function.as_str())
                 .and_then(|site| site.statement(result))
             else {
                 continue;
             };
+            if !is_first_claim(symbols, &call.symbol, ast_stmt.span)? {
+                continue;
+            }
             let subs = call.type_args.into_iter().collect();
             let (body, lambdas) = mir::lowering::lower_generic_instantiation_with_compilation_ids(
                 ast_stmt,
@@ -2908,46 +2905,75 @@ impl Pipeline {
             )
             .map_err(|e| monomorphized_lowering_failure(&call.symbol, e))?;
             let first_new = bodies.len();
-            Self::push_lowered_body(bodies, lowered_names, call.symbol, body, lambdas);
-            Self::queue_generic_instantiations(&bodies[first_new..], lowered_names, &mut pending);
+            Self::push_lowered_body(bodies, symbols, call.symbol, body, lambdas)?;
+            Self::queue_generic_instantiations(&bodies[first_new..], symbols, &mut pending);
         }
         Ok(())
     }
 
-    /// Record a lowered body and the lambdas lowered with it.
-    fn push_lowered_body(
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
-        name: String,
-        body: mir::Body,
-        lambdas: Vec<mir::lambda::LambdaInfo>,
-    ) {
-        lowered_names.insert(name.clone());
-        bodies.push((name, body));
-        for lambda in lambdas {
-            lowered_names.insert(lambda.name.clone());
-            bodies.push((lambda.name, lambda.body));
+    /// Lower the top-level function `name`, declared by `stmt`, unless a body
+    /// already holds its symbol: a program function shadows an imported one
+    /// of the same name.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_top_level_function(
+        result: &PipelineResult,
+        stmt: &Statement,
+        name: &str,
+        is_release: bool,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        let symbol = Symbol::function(name, &[]);
+        if !is_first_claim(symbols, &symbol, stmt.span)? {
+            return Ok(());
         }
+        let (body, lambdas) = mir::lowering::lower_function_with_compilation_ids(
+            stmt,
+            &result.type_checker,
+            is_release,
+            true,
+            compilation_ids.clone(),
+        )
+        .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
+        Self::push_lowered_body(bodies, symbols, symbol, body, lambdas)
     }
 
-    /// The residency-specialized calls in `bodies` that have no body yet, keyed
-    /// by symbol, each with the function it specializes and the per-argument
-    /// device handles, as the call's lowering recorded them.
+    /// Record a lowered body under `symbol`, which the caller has claimed,
+    /// and each lambda lowered with it under the symbol it claims now.
+    fn push_lowered_body(
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+        symbol: Symbol,
+        body: mir::Body,
+        lambdas: Vec<mir::lambda::LambdaInfo>,
+    ) -> Result<(), CompilerError> {
+        bodies.push((symbol, body));
+        for lambda in lambdas {
+            if is_first_claim(symbols, &lambda.symbol, lambda.body.span)? {
+                bodies.push((lambda.symbol, lambda.body));
+            }
+        }
+        Ok(())
+    }
+
+    /// The residency-specialized calls in `bodies` that have no body yet, one
+    /// per symbol, ordered by link name, each with the function it specializes
+    /// and the per-argument device handles, as the call's lowering recorded
+    /// them.
     fn residency_specializations_called(
-        bodies: &[(String, mir::Body)],
-        lowered_names: &std::collections::HashSet<String>,
-    ) -> std::collections::BTreeMap<String, (String, Vec<Option<mir::body::DeviceHandleId>>)> {
-        bodies
+        bodies: &[(Symbol, mir::Body)],
+        symbols: &SymbolTable,
+    ) -> Vec<mir::body::ResidencyFunctionCall> {
+        let mut needed: Vec<mir::body::ResidencyFunctionCall> = bodies
             .iter()
             .flat_map(|(_, body)| body.residency_function_calls.iter())
-            .filter(|call| !lowered_names.contains(&call.symbol))
-            .map(|call| {
-                (
-                    call.symbol.clone(),
-                    (call.function.clone(), call.arg_handles.clone()),
-                )
-            })
-            .collect()
+            .filter(|call| !symbols.is_claimed(&call.symbol))
+            .cloned()
+            .collect();
+        needed.sort_by_cached_key(|call| call.symbol.link_name());
+        needed.dedup_by(|later, earlier| later.symbol == earlier.symbol);
+        needed
     }
 
     /// Queue every generic function instantiation `bodies` call that has no
@@ -2957,8 +2983,8 @@ impl Pipeline {
     /// with the calling body's substitution applied, so a call inside an
     /// instantiation names its callee at that instantiation's types.
     fn queue_generic_instantiations(
-        bodies: &[(String, mir::Body)],
-        lowered_names: &std::collections::HashSet<String>,
+        bodies: &[(Symbol, mir::Body)],
+        symbols: &SymbolTable,
         pending: &mut std::collections::VecDeque<mir::body::GenericFunctionCall>,
     ) {
         let calls = bodies
@@ -2966,7 +2992,7 @@ impl Pipeline {
             .flat_map(|(_, body)| body.generic_function_calls.iter());
         for call in calls {
             let already_queued = pending.iter().any(|queued| queued.symbol == call.symbol);
-            if !lowered_names.contains(&call.symbol) && !already_queued {
+            if !symbols.is_claimed(&call.symbol) && !already_queued {
                 pending.push_back(call.clone());
             }
         }
@@ -2979,12 +3005,9 @@ impl Pipeline {
         &self,
         result: &PipelineResult,
         is_release: bool,
-        needed: std::collections::BTreeMap<
-            String,
-            (String, Vec<Option<mir::body::DeviceHandleId>>),
-        >,
-        bodies: &mut Vec<(String, mir::Body)>,
-        lowered_names: &mut std::collections::HashSet<String>,
+        needed: Vec<mir::body::ResidencyFunctionCall>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         // Residency specialization applies to any function (generic or not),
@@ -3002,24 +3025,24 @@ impl Pipeline {
                 decls.entry(decl.name.as_str()).or_insert(stmt);
             }
         }
-        for (mangled_name, (original_name, param_handles)) in needed {
-            if lowered_names.contains(&mangled_name) {
-                continue;
-            }
-            let Some(&ast_stmt) = decls.get(original_name.as_str()) else {
+        for call in needed {
+            let Some(&ast_stmt) = decls.get(call.function.as_str()) else {
                 continue;
             };
+            if !is_first_claim(symbols, &call.symbol, ast_stmt.span)? {
+                continue;
+            }
             let (body, lambdas) =
                 mir::lowering::lower_residency_instantiation_with_compilation_ids(
                     ast_stmt,
                     &result.type_checker,
                     is_release,
                     true,
-                    &param_handles,
+                    &call.arg_handles,
                     compilation_ids.clone(),
                 )
-                .map_err(|e| monomorphized_lowering_failure(&mangled_name, e))?;
-            Self::push_lowered_body(bodies, lowered_names, mangled_name, body, lambdas);
+                .map_err(|e| monomorphized_lowering_failure(&call.symbol, e))?;
+            Self::push_lowered_body(bodies, symbols, call.symbol, body, lambdas)?;
         }
         Ok(())
     }

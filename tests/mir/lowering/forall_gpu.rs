@@ -50,7 +50,7 @@ fn synthesize_kernel_names(source: &str) -> Vec<String> {
     lambdas
         .into_iter()
         .filter(|l| l.body.execution_model == ExecutionModel::GpuKernel)
-        .map(|l| l.name)
+        .map(|l| l.symbol.link_name())
         .collect()
 }
 
@@ -329,7 +329,7 @@ fn b()
             lambdas
                 .into_iter()
                 .filter(|l| l.body.execution_model == ExecutionModel::GpuKernel)
-                .map(|l| l.name),
+                .map(|l| l.symbol.link_name()),
         );
     }
     assert_eq!(names.len(), 2, "expected one kernel per function");

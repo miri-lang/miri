@@ -45,6 +45,7 @@ pub mod set;
 pub mod stack;
 pub mod strings;
 pub mod structs;
+pub mod symbols;
 pub mod testing;
 pub mod text;
 pub mod time;

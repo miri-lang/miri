@@ -9,6 +9,7 @@ use crate::ast::types::{
     GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
 };
 use crate::error::lowering::LoweringError;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, Operand, Place, PlaceElem, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
@@ -158,10 +159,7 @@ fn lower_zero_arg_method_as_property(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let mut mangled_name = String::with_capacity(class_name.len() + 1 + method_name.len());
-    mangled_name.push_str(class_name);
-    mangled_name.push('_');
-    mangled_name.push_str(method_name);
+    let mangled_name = Symbol::method(class_name, &[], method_name, &[]).link_name();
 
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
