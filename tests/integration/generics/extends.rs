@@ -289,10 +289,8 @@ fn main()
     );
 }
 
-/// The clause that pins the trait's `T` can sit on a base class: `Sub`'s copy
-/// of the default is lowered at the `float` its `extends` clause passes up.
-/// `Base` is abstract because a concrete generic base gets a vtable whose slot
-/// still names the trait's shared body at a bare `T`, an open defect.
+/// The clause that pins the trait's `T` can sit on a base class: the default
+/// runs at the `float` `Sub`'s `extends` clause passes up to its concrete base.
 #[test]
 fn test_a_trait_default_runs_at_the_type_a_base_class_binds() {
     assert_runs_with_output(
@@ -302,7 +300,7 @@ trait Op<T>
         var x T = a
         return x
 
-abstract class Base<U> implements Op<U>
+class Base<U> implements Op<U>
 
 class Sub extends Base<float>
 
@@ -356,10 +354,8 @@ fn main()
 }
 
 /// A call through a trait-typed parameter reaches the default through the
-/// implementor's vtable, whose slot names the implementor's own copy lowered at
-/// `String` — not the trait's shared body at a bare `T`. `Base` is abstract
-/// because a concrete generic base's own slot would still name that shared
-/// body, an open defect.
+/// implementor's vtable, whose slot names the copy lowered at the `String` the
+/// `extends` clause pins — not the trait's shared body at a bare `T`.
 #[test]
 fn test_a_trait_default_reached_through_a_vtable_runs_at_the_bound_type() {
     assert_runs_with_output(
@@ -370,7 +366,7 @@ trait Op<T>
         x = b
         return x
 
-abstract class Base<U> implements Op<U>
+class Base<U> implements Op<U>
 
 class Words extends Base<String>
 

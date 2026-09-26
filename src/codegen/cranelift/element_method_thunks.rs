@@ -131,31 +131,27 @@ impl ElementMethod {
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> String {
         let method_name = self.method_name();
-        // The owner and the arguments must come from one answer: naming a class
-        // from one resolution and arguments from another spells a symbol that
-        // belongs to neither, and nothing defines it.
-        if let Some((owner, owner_args)) = inst_args.and_then(|args| {
-            crate::mir::lowering::inherited_instantiation::declaring_class_instantiation(
-                type_definitions,
-                type_name,
-                args,
-                method_name,
-            )
-        }) {
-            return crate::codegen::cranelift::rc::mangle_class_instantiation(
-                &format!("{owner}_{method_name}"),
-                &owner_args,
-            );
-        }
-        // No declaring instantiation means no per-instantiation body was
-        // compiled — a non-generic ancestor declares the method, or the element
-        // is not a generic instantiation at all — and the shared symbol is what
-        // the call sites name too.
-        crate::mir::lowering::dispatch_symbols::method_symbol(
-            type_definitions,
-            type_name,
-            method_name,
-        )
+        // The per-instantiation body is the one a static call names, from the
+        // one answer static dispatch reads. Where none applies — a non-generic
+        // ancestor declares the method, or the element is not a generic
+        // instantiation at all — the shared symbol is what the call sites name.
+        inst_args
+            .and_then(|args| {
+                crate::mir::lowering::method_dispatch::instantiated_callee(
+                    type_definitions,
+                    type_name,
+                    args,
+                    method_name,
+                )
+            })
+            .map(|callee| callee.symbol)
+            .unwrap_or_else(|| {
+                crate::mir::lowering::dispatch_symbols::method_symbol(
+                    type_definitions,
+                    type_name,
+                    method_name,
+                )
+            })
     }
 }
 

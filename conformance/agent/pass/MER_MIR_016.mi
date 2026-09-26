@@ -1,0 +1,17 @@
+// summary: Accepted counterpart of MER_MIR_016: a class that calls itself through a trait at its own type argument is compiled once.
+// expect-stdout: 3
+use system.io
+
+trait Op<T>
+    fn depth(n int) int
+
+class Impl<T> implements Op<T>
+    fn depth(n int) int
+        if n == 0
+            return 0
+        let inner Op<T> = Impl<T>()
+        return 1 + inner.depth(n - 1)
+
+fn main()
+    let o Op<int> = Impl<int>()
+    println(f"{o.depth(3)}")

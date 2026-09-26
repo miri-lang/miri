@@ -1,0 +1,25 @@
+// expect: MER_MIR_016
+// summary: Triggers MER_MIR_016: Polymorphic Recursion.
+// command: build
+// The growth is found while lowering the method bodies a build reaches, a
+// stage `check` does not run.
+use system.io
+
+trait Op<T>
+    fn depth(n int) int
+
+class Wrap<T>
+    v T
+    fn init(v T)
+        self.v = v
+
+class Impl<T> implements Op<T>
+    fn depth(n int) int
+        if n == 0
+            return 0
+        let inner Op<Wrap<T>> = Impl<Wrap<T>>()
+        return 1 + inner.depth(n - 1)
+
+fn main()
+    let o Op<int> = Impl<int>()
+    println(f"{o.depth(3)}")

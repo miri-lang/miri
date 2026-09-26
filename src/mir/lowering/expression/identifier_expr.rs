@@ -191,6 +191,7 @@ fn module_binding_without_value(name: &str, expr: &Expression) -> LoweringError 
                 "initialize '{name}' with a literal or a constant expression, or read it through \
                  a function that computes the value."
             )),
+            notes: Vec::new(),
         },
         expr.span,
     )

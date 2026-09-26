@@ -317,10 +317,13 @@ fn main()
 }
 
 #[test]
-fn test_a_body_that_calls_itself_at_a_deeper_type_still_compiles() {
+fn test_a_body_that_calls_itself_at_a_deeper_type_is_refused() {
     // Each level instantiates `nest` at a type one list deeper than its own, so
-    // following instantiations transitively has to stop somewhere.
-    assert_runs_with_output(
+    // the program needs `List` nested without end. Following instantiations
+    // transitively stops at the depth one instance may nest to, and the program
+    // is refused there rather than run the levels past it on a body shared by
+    // every type.
+    assert_build_error(
         r#"
 use system.collections.list
 
@@ -334,6 +337,6 @@ fn nest<T>(a T, n int) int
 fn main()
     println(f"{nest(1, 3)}")
 "#,
-        "3",
+        "nests its type argument 33 levels deep",
     );
 }

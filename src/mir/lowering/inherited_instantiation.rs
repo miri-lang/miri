@@ -147,25 +147,60 @@ pub(crate) fn declared_field_types(
 
 /// `class_name`'s own type parameters, spelled as the type arguments an
 /// instance of it at itself would carry. Empty for a class declaring none.
-fn own_parameters_as_arguments(
+pub(crate) fn own_parameters_as_arguments(
     type_definitions: &HashMap<String, TypeDefinition>,
     class_name: &str,
 ) -> Vec<Type> {
-    let Some(TypeDefinition::Class(class_def)) = type_definitions.get(class_name) else {
-        return Vec::new();
-    };
-    let Some(generics) = class_def.generics.as_ref() else {
-        return Vec::new();
-    };
-    generics
+    own_parameters(type_definitions, class_name)
         .iter()
-        .map(|param| {
-            Type::new(
-                crate::ast::types::TypeKind::Generic(param.name.clone(), None, param.kind),
-                crate::error::syntax::Span::new(0, 0),
-            )
-        })
+        .map(open_parameter)
         .collect()
+}
+
+/// `class_name`'s own type parameters, each bound to itself as an open
+/// parameter. Empty for a class declaring none.
+///
+/// A generic class's bare copy of an inherited default reads the trait's
+/// parameters through the class's clauses: `class Base<U> implements Op<U>`
+/// binds the trait's `T` to the class's open `U`. Left unbound instead, `T`
+/// names no parameter of the class, and a local declared at it is lowered as a
+/// value of an unknown named type that owns a reference.
+pub(crate) fn own_parameters_left_open(
+    type_definitions: &HashMap<String, TypeDefinition>,
+    class_name: &str,
+) -> HashMap<String, Type> {
+    own_parameters(type_definitions, class_name)
+        .iter()
+        .map(|param| (param.name.clone(), open_parameter(param)))
+        .collect()
+}
+
+/// The type parameters `class_name` declares, none for a class declaring none.
+fn own_parameters<'td>(
+    type_definitions: &'td HashMap<String, TypeDefinition>,
+    class_name: &str,
+) -> &'td [crate::type_checker::context::GenericDefinition] {
+    match type_definitions.get(class_name) {
+        Some(TypeDefinition::Class(class_def)) => class_def.generics.as_deref().unwrap_or_default(),
+        Some(
+            TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => &[],
+    }
+}
+
+/// `param` as the open type it stands for inside its class, carrying the
+/// bound it is declared with.
+fn open_parameter(param: &crate::type_checker::context::GenericDefinition) -> Type {
+    let bound = param.constraint.clone().map(Box::new);
+    Type::new(
+        crate::ast::types::TypeKind::Generic(param.name.clone(), bound, param.kind),
+        crate::error::syntax::Span::new(0, 0),
+    )
 }
 
 /// Whether a body for `method_name` is compiled under `class_def`'s own name.

@@ -9,6 +9,7 @@ MIR (Mid-level Intermediate Representation) is the compiler's internal represent
 - Undefined variables in MIR generation (should not occur if type checker passed)
 - Invalid GPU launch arguments or metadata
 - Type mismatches that survived type checking (validation failures)
+- A generic class instance whose type arguments nest more than 32 type constructors deep, or a class needed at more than 256 value arguments — the marks of polymorphic recursion, an argument that grows on every call, which no finite set of compiled bodies covers
 
 ## Key Concepts
 

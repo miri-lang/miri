@@ -4,7 +4,9 @@
 //! Error types for MIR lowering.
 
 use crate::diagnostics::DiagnosticCode;
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, BUG_REPORT_URL};
+use crate::error::diagnostic::{
+    Diagnostic, ErrorProperties, RelatedNote, Reportable, BUG_REPORT_URL,
+};
 use crate::error::syntax::Span;
 
 /// An error produced during MIR lowering, with its source location.
@@ -56,6 +58,8 @@ pub enum LoweringErrorKind {
         code: DiagnosticCode,
         message: String,
         help: Option<String>,
+        /// Further context shown beneath the message, one line each.
+        notes: Vec<String>,
     },
 }
 
@@ -143,6 +147,7 @@ impl LoweringErrorKind {
                 code,
                 message,
                 help,
+                notes: _,
             } => crate::error::diagnostic::coded_properties(*code, message, help),
         }
     }
@@ -161,9 +166,19 @@ impl LoweringError {
                 code,
                 message,
                 help,
+                notes: Vec::new(),
             },
             span,
         }
+    }
+
+    /// This error with `note` shown beneath its message. Only a coded error
+    /// carries notes; any other kind is returned as it was.
+    pub fn with_note(mut self, note: String) -> Self {
+        if let LoweringErrorKind::Coded { notes, .. } = &mut self.kind {
+            notes.push(note);
+        }
+        self
     }
 
     /// Creates a lowering error for a broken *internal* invariant.
@@ -282,7 +297,16 @@ impl LoweringError {
 
 impl Reportable for LoweringError {
     fn to_diagnostic(&self) -> Diagnostic {
-        Diagnostic::from_props(self.kind.properties(), Some(self.span), None)
+        let mut diagnostic = Diagnostic::from_props(self.kind.properties(), Some(self.span), None);
+        if let LoweringErrorKind::Coded { notes, .. } = &self.kind {
+            diagnostic
+                .notes
+                .extend(notes.iter().map(|note| RelatedNote {
+                    message: note.clone(),
+                    span: None,
+                }));
+        }
+        diagnostic
     }
 }
 

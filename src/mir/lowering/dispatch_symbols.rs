@@ -7,6 +7,11 @@
 //! elements. Codegen emits those references and the pipeline compiles every
 //! body they name, so both read them from here.
 //!
+//! A vtable belongs to one instantiation of a class: the one a constructor
+//! builds the instance at, which [`VtableInstance`] names. Its slots name what
+//! a static call on that instantiation names, so a call through a trait
+//! receiver reaches the body compiled at the instance's own type arguments.
+//!
 //! This is also where the rule for which trait default a class inherits
 //! lives, and what a copy of one compiled under the class's name is typed at:
 //! static dispatch, vtable slots and the per-class copies the pipeline lowers
@@ -14,9 +19,15 @@
 //! not yet: it asks only the class chain for `equals`, so an `equals` a class
 //! inherits from a trait default is not what a set or map matches by.
 
-use super::method_dispatch::resolve_inherited_method;
+use super::method_dispatch::{
+    instantiated_callee, mangle_instantiation_name, resolve_inherited_method,
+};
+use super::monomorphized_arguments;
 use crate::ast::statement::DROP_HOOK_NAME;
-use crate::ast::types::{Type, CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
+use crate::ast::types::{
+    Type, TypeKind, CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME,
+};
+use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use crate::type_checker::context::{
     class_needs_vtable, find_trait_default_method, ClassDefinition, MethodInfo, TraitDefinition,
     TypeDefinition,
@@ -204,24 +215,130 @@ fn class_entry<'td>(
     Some((name.as_str(), class))
 }
 
-/// The concrete (non-abstract) classes that participate in virtual dispatch,
-/// sorted by name so codegen emits their vtables in one order. Generic classes
-/// are included: their slots name bodies shared by every instantiation.
-pub fn collect_classes_needing_vtable(
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> Vec<(&str, &ClassDefinition)> {
-    let mut classes: Vec<(&str, &ClassDefinition)> = type_defs
-        .iter()
-        .filter_map(|(name, def)| {
-            let TypeDefinition::Class(class) = def else {
-                return None;
-            };
-            (!class.is_abstract && class_needs_vtable(name, type_defs))
-                .then_some((name.as_str(), class))
+/// The vtable one constructed class instance points at: the class, and the
+/// type arguments it is built at when they have a monomorphized spelling.
+///
+/// A generic class constructed where its arguments have no spelling carries
+/// none, and its vtable is the class's bare one, whose slots name the bodies
+/// shared by every instantiation, as a static call at those open arguments
+/// does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VtableInstance {
+    class: String,
+    args: Vec<Type>,
+}
+
+impl VtableInstance {
+    /// The vtable an instance built at `instance_ty` points at, or `None` when
+    /// the type names no class that takes part in virtual dispatch.
+    ///
+    /// The arguments are read as a static call on the instance reads them,
+    /// so the vtable and the call name one instantiation.
+    ///
+    /// An instance whose arguments cannot be spelled where it is constructed
+    /// falls back to the bare vtable: one built at a closure type, one built
+    /// inside a body shared by every instantiation of its enclosing
+    /// declaration — `let o Op<T> = Impl<T>()` in a method of `class
+    /// Wrapper<T>`, or in a generic function whose parameter appears only in
+    /// its return type. Those enclosing bodies are not specialized per
+    /// instantiation, so the bare slots run the shared body, which reads a `T`
+    /// as an unmanaged word and double-frees a managed argument it overwrites.
+    pub fn of(instance_ty: &Type, type_defs: &HashMap<String, TypeDefinition>) -> Option<Self> {
+        let TypeKind::Custom(class, arg_exprs) = &instance_ty.kind else {
+            return None;
+        };
+        let Some(TypeDefinition::Class(class_def)) = type_defs.get(class.as_str()) else {
+            return None;
+        };
+        if !class_needs_vtable(class, type_defs) {
+            return None;
+        }
+        let arity = class_def.generics.as_ref().map_or(0, Vec::len);
+        let args = arg_exprs
+            .as_deref()
+            .and_then(|exprs| monomorphized_arguments(exprs, arity, type_defs))
+            .unwrap_or_default();
+        Some(Self {
+            class: class.clone(),
+            args,
         })
-        .collect();
-    classes.sort_unstable_by_key(|(name, _)| *name);
-    classes
+    }
+
+    /// The class the instance is built of.
+    pub fn class(&self) -> &str {
+        &self.class
+    }
+
+    /// The type arguments the instance is built at, none for the bare vtable.
+    pub fn args(&self) -> &[Type] {
+        &self.args
+    }
+
+    /// The data symbol of this vtable: `__vtable_{class}`, mangled by the
+    /// instantiation's arguments as every other per-instantiation symbol is.
+    pub fn symbol(&self) -> String {
+        mangle_instantiation_name(&format!("__vtable_{}", self.class), &self.args)
+    }
+
+    /// Every method this vtable has a slot for, with the symbol the slot names
+    /// when it is filled, in the order [`collect_vtable_methods`] lists them.
+    pub fn slot_targets<'td>(
+        &self,
+        type_defs: &'td HashMap<String, TypeDefinition>,
+    ) -> Vec<(&'td str, Option<String>)> {
+        collect_vtable_methods(&self.class, type_defs)
+            .into_iter()
+            .map(|method| (method, self.slot_target(method, type_defs)))
+            .collect()
+    }
+
+    /// The symbol this vtable's slot for `method_name` names: the body a
+    /// static call on the instantiation names where one is compiled per
+    /// instantiation, else what [`resolve_vtable_method`] resolves for the
+    /// class. `None` when nothing in the chain gives the method a body.
+    fn slot_target(
+        &self,
+        method_name: &str,
+        type_defs: &HashMap<String, TypeDefinition>,
+    ) -> Option<String> {
+        instantiated_callee(type_defs, &self.class, &self.args, method_name)
+            .map(|callee| callee.symbol)
+            .or_else(|| resolve_vtable_method(&self.class, method_name, type_defs))
+    }
+}
+
+/// The symbol of every vtable an instance constructed in `bodies` points at,
+/// in order.
+pub fn constructed_vtable_symbols<'b>(
+    bodies: impl IntoIterator<Item = &'b Body>,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> BTreeSet<String> {
+    bodies
+        .into_iter()
+        .flat_map(|body| &body.basic_blocks)
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
+                constructed_class(rvalue)
+            }
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::Nop
+            | StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_) => None,
+        })
+        .filter_map(|ty| VtableInstance::of(ty, type_defs))
+        .map(|instance| instance.symbol())
+        .collect()
+}
+
+/// The type of the class instance `rvalue` constructs, if it constructs one.
+pub(crate) fn constructed_class(rvalue: &Rvalue) -> Option<&Type> {
+    let Rvalue::Aggregate(AggregateKind::Class(ty), _) = rvalue else {
+        return None;
+    };
+    Some(ty)
 }
 
 /// The method names of `class_name`'s filled vtable slots: every method its
@@ -381,18 +498,34 @@ fn takes_vtable_slot(info: &MethodInfo) -> bool {
     !info.is_constructor && !info.is_static
 }
 
-/// The symbol `class_name`'s vtable slot for `method_name` names: the nearest
-/// class in its chain that gives the method a body, else the trait default
-/// [`inherited_trait_default`] chooses.
+/// The symbol the slot for `method_name` names in `class_name`'s vtable where
+/// no per-instantiation body applies: the nearest class in its chain that
+/// gives the method a body, else the trait default [`inherited_trait_default`]
+/// chooses.
 ///
 /// A default a class without type parameters of its own inherits resolves to
 /// the class's own copy, `"{class_name}_{method_name}"`: the pipeline lowers
 /// one for every concrete class that declares the method nowhere in its chain,
 /// typed at what its clauses pin the trait's parameters to, and a static call
-/// on the class names the same body. A generic class's copy leaves its own
-/// parameters open and is called at their width rather than the trait's, so
-/// its slot — like one whose chain declares the method abstractly — names the
-/// trait's shared `"{Trait}_{method_name}"`.
+/// on the class names the same body. A generic class reaches this only through
+/// its bare vtable; its own copy there leaves its parameters open, so its slot
+/// — like one whose chain declares the method abstractly — names the trait's
+/// shared `"{Trait}_{method_name}"`.
+///
+/// A generic class's bare slots are what an instance runs when its arguments
+/// could not be spelled where it was built, as [`VtableInstance::of`] lists.
+/// The shared body they name reads a type parameter as an unmanaged word, so a
+/// default
+/// that overwrites a managed `T` local double-frees it: a construction inside
+/// a body shared by every instantiation of its enclosing declaration is not
+/// specialized per instantiation, and neither is its instance's vtable.
+// TODO: an instance constructed inside a shared generic body — a method of
+// `class Wrapper<T>` doing `let o Op<T> = Impl<T>()`, a closure building
+// `Impl<T>`, a generic function whose parameter appears only in its return
+// type — reaches these bare slots at every instantiation, and a trait default
+// reassigning a `var x T` there double-frees a managed argument. Settling it
+// needs the enclosing body compiled per instantiation, so the construction
+// inside it spells its arguments.
 pub fn resolve_vtable_method(
     class_name: &str,
     method_name: &str,
@@ -408,14 +541,6 @@ pub fn resolve_vtable_method(
         }
     }
     let defining_trait = inherited_trait_default(type_defs, class_name, method_name)?;
-    // TODO: a generic class's slot names the trait's shared body, compiled at
-    // the trait's bare parameters, so a default holding a managed local at such
-    // a parameter releases it as an opaque value. MIR verification is opt-in,
-    // so the program compiles and misbehaves at runtime: `class Impl<T>
-    // implements Op<T>` whose default `keep(a T, b T) T` reassigns a local
-    // `var x T`, called through an `Op<String>` parameter, double-frees and
-    // prints nothing. Settling it needs each instantiation's slot to name a
-    // body specialized to that instantiation's types.
     let is_generic_class = matches!(
         type_defs.get(class_name),
         Some(TypeDefinition::Class(class)) if class.generics.is_some()
@@ -426,18 +551,6 @@ pub fn resolve_vtable_method(
         class_name
     };
     Some(format!("{owner}_{method_name}"))
-}
-
-/// Every function symbol some vtable slot names.
-pub fn vtable_slot_symbols(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<String> {
-    collect_classes_needing_vtable(type_defs)
-        .into_iter()
-        .flat_map(|(class_name, _)| {
-            collect_vtable_methods(class_name, type_defs)
-                .into_iter()
-                .filter_map(move |method| resolve_vtable_method(class_name, method, type_defs))
-        })
-        .collect()
 }
 
 /// The symbol of the body a call to `method_name` on a `type_name` receiver
@@ -482,15 +595,17 @@ pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefi
     method_symbol(type_defs, type_name, CLONE_METHOD_NAME)
 }
 
-/// Every function symbol codegen names without a MIR call carrying it: each
-/// vtable slot, and for every class the drop hook, `clone` and element
-/// methods its runtime thunks call.
+/// Every function symbol codegen names without a MIR call carrying it, for
+/// every class: the drop hook and the `clone` and element methods its runtime
+/// thunks call. A vtable slot is named only where a reached body constructs an
+/// instance and a reached virtual call reads it, so
+/// [`super::vtable_demand::VtableDemand`] reads those off the lowered bodies.
 ///
 /// A thunk's own predicate can still skip a class, so this may name a body no
 /// thunk ends up calling; that costs one body compiled needlessly, never one
 /// missing at link time.
 pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<String> {
-    let mut symbols = vtable_slot_symbols(type_defs);
+    let mut symbols = HashSet::new();
     for (type_name, definition) in type_defs {
         let TypeDefinition::Class(_) = definition else {
             continue;

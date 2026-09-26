@@ -487,6 +487,9 @@ pub struct PipelineResult {
     pub ast: Program,
     /// The type checker state after analysis (contains inferred types and warnings).
     pub type_checker: TypeChecker,
+    /// The slots each vtable fills, settled once lowering has reached every
+    /// body; empty until then.
+    pub vtable_fills: mir::lowering::vtable_demand::VtableFills,
 }
 
 /// Options controlling the build process.
@@ -551,17 +554,54 @@ fn called_function_names(bodies: &[(String, mir::Body)]) -> std::collections::Ha
 
 /// The names the lowered bodies call, gathered as they grow: each refresh
 /// scans only the bodies lowered since the one before.
-#[derive(Default)]
+///
+/// A body that constructs a class instance calls, through the instance's
+/// vtable, the body each slot of it a virtual call reads names, so those count
+/// as called too; the vtable demand says which, from the reached bodies alone.
 struct CalledNames {
     names: std::collections::HashSet<String>,
+    vtables: mir::lowering::vtable_demand::VtableDemand,
     scanned: usize,
 }
 
 impl CalledNames {
-    fn refresh(&mut self, bodies: &[(String, mir::Body)]) {
+    /// Nothing called yet, with the program's entry point and the bodies
+    /// codegen names outside any call counted as reached.
+    fn new(reach: &ReachTables) -> Self {
+        let roots = reach
+            .synthesized
+            .iter()
+            .cloned()
+            .chain(std::iter::once("main".to_string()));
+        CalledNames {
+            names: std::collections::HashSet::new(),
+            vtables: mir::lowering::vtable_demand::VtableDemand::rooted_at(roots),
+            scanned: 0,
+        }
+    }
+
+    /// Scan the bodies lowered since the last refresh; fails where they reach
+    /// an instance past the bounds on instantiations.
+    fn refresh(
+        &mut self,
+        bodies: &[(String, mir::Body)],
+        result: &PipelineResult,
+        reach: &ReachTables,
+    ) -> Result<(), CompilerError> {
         let unscanned = bodies.get(self.scanned..).unwrap_or_default();
         self.names.extend(called_function_names(unscanned));
+        self.vtables
+            .record(
+                unscanned.iter().map(|(name, body)| (name.as_str(), body)),
+                mir::lowering::vtable_demand::DemandTables {
+                    type_checker: &result.type_checker,
+                    layout: &reach.vtable_layout,
+                },
+            )
+            .map_err(CompilerError::Lowering)?;
+        self.names.extend(self.vtables.take_named_slot_symbols());
         self.scanned = bodies.len();
+        Ok(())
     }
 
     fn contains(&self, name: &str) -> bool {
@@ -695,6 +735,8 @@ struct ReachTables {
     generic_functions: std::collections::HashMap<String, StatementSite>,
     trait_defaults: TraitDefaultBodies,
     synthesized: std::collections::HashSet<String>,
+    /// The slot numbering the lowered virtual calls index by.
+    vtable_layout: mir::lowering::dispatch_symbols::VtableLayout,
 }
 
 impl ReachTables {
@@ -713,6 +755,9 @@ impl ReachTables {
             synthesized: mir::lowering::dispatch_symbols::synthesized_references(
                 result.type_checker.type_definitions(),
             ),
+            vtable_layout: mir::lowering::dispatch_symbols::VtableLayout::of(
+                result.type_checker.type_definitions(),
+            ),
         }
     }
 }
@@ -728,10 +773,16 @@ struct InheritingClass<'a> {
 
 /// Fill the generic-class instantiation registry with everything the program
 /// needs a per-instantiation body for, whether or not it names it.
-fn complete_generic_instantiation_registry(type_checker: &mut TypeChecker) {
+///
+/// Fails where a class's fields nest an instantiation past the bounds on
+/// instantiations.
+fn complete_generic_instantiation_registry(
+    type_checker: &mut TypeChecker,
+    ast: &Program,
+) -> Result<(), CompilerError> {
     record_inferred_generic_instantiations(type_checker);
     record_pinned_base_class_instantiations(type_checker);
-    expand_nested_generic_instantiations(type_checker);
+    expand_nested_generic_instantiations(type_checker, ast)
 }
 
 /// Record the instantiation each class that declares no parameters of its own
@@ -802,34 +853,34 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
     }
 }
 
-/// Add to the registry every instantiation a lowered body recorded that it
-/// does not hold yet, with the instantiations those reach through their fields.
+/// Add to the registry the instantiations lowered bodies recorded that it does
+/// not hold yet, with the instantiations those reach through their fields.
+///
+/// Every one of them is held to the bounds on instantiations first, and a
+/// chain that nests deeper than anything registered is followed one
+/// instantiation per round (see
+/// [`mir::lowering::class_instantiations::admitted_this_round`]), so a program
+/// that grows without end is refused after one round per level.
 ///
 /// Returns whether the registry grew: a new instantiation has method bodies
 /// still to emit, and those bodies can reach further ones.
 fn register_lowered_class_instantiations(
     type_checker: &mut TypeChecker,
     bodies: &[(String, mir::Body)],
-) -> bool {
-    let unregistered: Vec<&mir::body::GenericClassInstantiation> = bodies
-        .iter()
-        .flat_map(|(_, body)| body.generic_class_instantiations.iter())
-        .filter(|found| {
-            !mir::lowering::class_instantiations::is_registered_instantiation(
-                type_checker,
-                &found.class,
-                &found.type_args,
-            )
-        })
-        .collect();
-    if unregistered.is_empty() {
-        return false;
+    ast: &Program,
+) -> Result<bool, CompilerError> {
+    use mir::lowering::class_instantiations as instantiations;
+    let found = instantiations::unregistered_instantiations(type_checker, bodies);
+    if found.is_empty() {
+        return Ok(false);
     }
-    for found in unregistered {
-        type_checker.record_generic_class_instantiation(&found.class, found.type_args.clone());
+    instantiations::refuse_past_limits(type_checker, &found, bodies)
+        .map_err(CompilerError::Lowering)?;
+    for admitted in instantiations::admitted_this_round(type_checker, found) {
+        type_checker.record_generic_class_instantiation(&admitted.class, admitted.args);
     }
-    expand_nested_generic_instantiations(type_checker);
-    true
+    expand_nested_generic_instantiations(type_checker, ast)?;
+    Ok(true)
 }
 
 /// Register the instantiation each recorded generic class's base is reached at,
@@ -841,14 +892,14 @@ fn register_lowered_class_instantiations(
 /// Registering the derived instantiation is what gives those bodies an
 /// instantiation to be lowered for. The loop carries the derivation up a longer
 /// chain one link per round.
-fn register_base_class_instantiations(type_checker: &mut TypeChecker) {
+fn register_base_class_instantiations(type_checker: &mut TypeChecker) -> Result<(), CompilerError> {
     loop {
         let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
             .generic_class_instantiations
             .iter()
             .map(|(name, tuples)| (name.clone(), tuples.clone()))
             .collect();
-        let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
+        let mut discovered: Vec<DerivedInstantiation> = Vec::new();
 
         for (class_name, tuples) in &recorded {
             for args in tuples {
@@ -857,18 +908,53 @@ fn register_base_class_instantiations(type_checker: &mut TypeChecker) {
                     class_name,
                     args,
                 );
-                discovered.extend(base);
+                discovered.extend(base.map(|(name, args)| {
+                    let span = args.first().map_or_else(Span::default, |arg| arg.span);
+                    (name, args, span)
+                }));
             }
         }
 
-        let before = recorded_instantiation_count(type_checker);
-        for (name, args) in discovered {
-            type_checker.record_generic_class_instantiation(&name, args);
-        }
-        if recorded_instantiation_count(type_checker) == before {
-            return;
+        if !record_derived_instantiations(type_checker, discovered)? {
+            return Ok(());
         }
     }
+}
+
+/// Where the program declares `class`; the start of the file for a class it
+/// imports or does not declare.
+fn class_declaration_span(ast: &Program, class: &str) -> Span {
+    ast.body
+        .iter()
+        .find(|stmt| {
+            matches!(&stmt.node, StatementKind::Class(class_data)
+                if Pipeline::identifier_name(&class_data.name) == Some(class))
+        })
+        .map_or_else(Span::default, |stmt| stmt.span)
+}
+
+/// An instantiation derived from a registered one — the base it extends, the
+/// type of a field — with where the declaration deriving it is written.
+type DerivedInstantiation = (String, Vec<Type>, Span);
+
+/// Record each of `discovered` the registry does not hold yet, refusing one
+/// past the bounds on instantiations. Returns whether the registry grew.
+fn record_derived_instantiations(
+    type_checker: &mut TypeChecker,
+    discovered: Vec<DerivedInstantiation>,
+) -> Result<bool, CompilerError> {
+    let before = recorded_instantiation_count(type_checker);
+    for (name, args, span) in discovered {
+        mir::lowering::class_instantiations::refuse_derived_past_limits(
+            type_checker,
+            &name,
+            &args,
+            span,
+        )
+        .map_err(CompilerError::Lowering)?;
+        type_checker.record_generic_class_instantiation(&name, args);
+    }
+    Ok(recorded_instantiation_count(type_checker) != before)
 }
 
 /// How many instantiation tuples the registry holds, across every class.
@@ -888,14 +974,20 @@ fn recorded_instantiation_count(type_checker: &TypeChecker) -> usize {
 /// into its class's field types and record every nested generic-class type the
 /// substitution makes concrete, repeating until a pass discovers nothing new so
 /// a chain of nested containers is covered.
-fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
+///
+/// A field that nests its own class deeper on every instantiation is refused
+/// at the declaration of the class it belongs to.
+fn expand_nested_generic_instantiations(
+    type_checker: &mut TypeChecker,
+    ast: &Program,
+) -> Result<(), CompilerError> {
     loop {
         let recorded: Vec<(String, Vec<Vec<Type>>)> = type_checker
             .generic_class_instantiations
             .iter()
             .map(|(name, tuples)| (name.clone(), tuples.clone()))
             .collect();
-        let mut discovered: Vec<(String, Vec<Type>)> = Vec::new();
+        let mut discovered: Vec<DerivedInstantiation> = Vec::new();
 
         for (class_name, tuples) in &recorded {
             let Some(TypeDefinition::Class(def)) =
@@ -936,18 +1028,15 @@ fn expand_nested_generic_instantiations(type_checker: &mut TypeChecker) {
                         resolved.push(concrete_arg);
                     }
                     if resolved.len() == nested_args.len() && !resolved.is_empty() {
-                        discovered.push((nested_name.clone(), resolved));
+                        let declared = class_declaration_span(ast, class_name);
+                        discovered.push((nested_name.clone(), resolved, declared));
                     }
                 }
             }
         }
 
-        let before = recorded_instantiation_count(type_checker);
-        for (name, args) in discovered {
-            type_checker.record_generic_class_instantiation(&name, args);
-        }
-        if recorded_instantiation_count(type_checker) == before {
-            return;
+        if !record_derived_instantiations(type_checker, discovered)? {
+            return Ok(());
         }
     }
 }
@@ -1009,9 +1098,13 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
-        complete_generic_instantiation_registry(&mut type_checker);
+        complete_generic_instantiation_registry(&mut type_checker, &ast)?;
 
-        Ok(PipelineResult { ast, type_checker })
+        Ok(PipelineResult {
+            ast,
+            type_checker,
+            vtable_fills: Default::default(),
+        })
     }
 
     /// Run the frontend with script-mode wrapping: simple programs without function
@@ -1036,7 +1129,7 @@ impl Pipeline {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
             })?;
-        complete_generic_instantiation_registry(&mut type_checker);
+        complete_generic_instantiation_registry(&mut type_checker, &ast)?;
 
         // Reported after checking, so a file that also has real errors reports
         // those instead: a module whose imports collide should say so, not that
@@ -1070,7 +1163,11 @@ impl Pipeline {
             );
         }
 
-        Ok(PipelineResult { ast, type_checker })
+        Ok(PipelineResult {
+            ast,
+            type_checker,
+            vtable_fills: Default::default(),
+        })
     }
 
     /// Compile and execute the source, capturing and returning output.
@@ -1286,6 +1383,7 @@ impl Pipeline {
                             .generic_class_instantiations
                             .clone(),
                     );
+                    backend.set_vtable_fills(pipeline_result.vtable_fills.clone());
 
                     let ptr_ty = backend.pointer_type();
                     let runtime_info = collect_runtime_info(
@@ -1634,7 +1732,7 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         loop {
-            called.refresh(bodies);
+            called.refresh(bodies, result, reach)?;
             let mut emitted = false;
             for (_, stmt) in statements_with_sites(result) {
                 let StatementKind::Class(class_data) = &stmt.node else {
@@ -1940,9 +2038,9 @@ impl Pipeline {
         lowered_names: &mut std::collections::HashSet<String>,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let mut called = CalledNames::default();
+        let mut called = CalledNames::new(reach);
         loop {
-            register_base_class_instantiations(&mut result.type_checker);
+            register_base_class_instantiations(&mut result.type_checker)?;
             Self::lower_called_generic_class_methods(
                 result,
                 reach,
@@ -1953,7 +2051,7 @@ impl Pipeline {
                 compilation_ids,
             )?;
             let first_default = bodies.len();
-            called.refresh(bodies);
+            called.refresh(bodies, result, reach)?;
             Self::lower_called_trait_defaults(
                 result,
                 reach,
@@ -1972,9 +2070,13 @@ impl Pipeline {
                 lowered_names,
                 compilation_ids,
             )?;
-            let registered =
-                register_lowered_class_instantiations(&mut result.type_checker, bodies);
+            let registered = register_lowered_class_instantiations(
+                &mut result.type_checker,
+                bodies,
+                &result.ast,
+            )?;
             if !registered && bodies.len() == first_default {
+                result.vtable_fills = called.vtables.fills();
                 return Ok(());
             }
         }
@@ -1986,10 +2088,12 @@ impl Pipeline {
     /// The shared body is written in the trait's own parameters and leaves them
     /// bare, so a local at `T` is a value of no known type. A concrete
     /// implementor has its own copy typed at what its clauses pin, which its
-    /// static calls name, and so does its vtable slot unless the class is
-    /// generic. What still names the shared body — a generic implementor's
-    /// slot, a caller whose `self` is abstract, an abstract class's drop hook —
-    /// is found here; one nothing names is never compiled.
+    /// static calls and its vtable slots name; a generic implementor's vtable
+    /// names the copy compiled for the instantiation it was built at. What
+    /// still names the shared body — the bare vtable of a generic implementor
+    /// built at arguments with no spelling, a caller whose `self` is abstract,
+    /// an abstract class's drop hook — is found here; one nothing names is
+    /// never compiled.
     #[allow(clippy::too_many_arguments)]
     fn lower_called_trait_defaults(
         result: &PipelineResult,
@@ -2624,9 +2728,13 @@ impl Pipeline {
             let class = InheritingClass {
                 name: class_name,
                 self_type: Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span),
-                supertypes: result
-                    .type_checker
-                    .declaring_types_above(class_name, &std::collections::HashMap::new()),
+                supertypes: result.type_checker.declaring_types_above(
+                    class_name,
+                    &mir::lowering::inherited_instantiation::own_parameters_left_open(
+                        definitions,
+                        class_name,
+                    ),
+                ),
             };
             Self::lower_class_trait_defaults(
                 result,
