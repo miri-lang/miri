@@ -20,9 +20,9 @@ use crate::codegen::wgsl::{compile_module, WgslOptions};
 use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
+use crate::mir::backend::GpuBufferInit;
 use crate::mir::body::DeviceHandleId;
 use crate::mir::{Body, ExecutionModel, LocalDecl};
-use crate::type_checker::GpuBufferInit;
 use buffers::{BufferTable, HostProgram};
 use manifest::{
     BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest, SourceMapEntry,

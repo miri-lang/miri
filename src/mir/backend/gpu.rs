@@ -10,6 +10,18 @@ use crate::mir::Operand;
 use std::fmt;
 
 pub use crate::gpu_target::GpuAtomicOp;
+/// How the type checker settled a `gpu` binding's device buffer from its
+/// initializer — data the WebGPU backend reads to size and fill the buffer.
+pub use crate::type_checker::GpuBufferInit;
+
+/// The value of the constant integer expression `size` — the extent of a
+/// fixed-size array a kernel declares — or `None` when it is not a constant.
+///
+/// Folded by the same evaluator the type checker requires such an extent to
+/// satisfy, so a size the checker accepted is the size the backend declares.
+pub fn fixed_array_extent(size: &crate::ast::expression::Expression) -> Option<i128> {
+    crate::type_checker::TypeChecker::try_eval_const_int(size)
+}
 
 /// Largest non-negative value representable as a signed 32-bit GPU index.
 ///

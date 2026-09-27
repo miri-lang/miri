@@ -22,9 +22,9 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::compiler::CompilerError;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::backend::GpuBufferInit;
 use crate::mir::body::DeviceHandleId;
 use crate::mir::{Body, ExecutionModel, LocalDecl, Operand, StorageClass, TerminatorKind};
-use crate::type_checker::GpuBufferInit;
 
 /// Where the host launches one kernel: the device buffer passed for each of
 /// the kernel's storage bindings, in binding order.

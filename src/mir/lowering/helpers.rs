@@ -370,6 +370,12 @@ fn substitute_variant_field_types(
     declared
         .iter()
         .map(|ty| {
+            // TODO: this substitutes only a bare parameter and ignores a nullable
+            // argument, while codegen reads the same payload through
+            // `mir::instantiation::member_type_at`, which substitutes the whole
+            // type and folds `T` at `int?` into an optional. A payload bound here
+            // at `int` is laid out and released by codegen as `Option<int>`; the
+            // two must use one rule.
             let substituted = crate::type_checker::generics::substitute_generic_field_kind(
                 &ty.kind,
                 type_args,

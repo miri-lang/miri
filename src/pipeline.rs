@@ -1523,7 +1523,12 @@ impl Pipeline {
                             .generic_class_instantiations
                             .clone(),
                         pipeline_result.vtable_fills.clone(),
-                        mir_bodies.iter().map(|(_, body)| body),
+                        // Drop thunks run on the host only; a kernel body
+                        // holds no value a host thunk releases.
+                        mir_bodies
+                            .iter()
+                            .map(|(_, body)| body)
+                            .filter(|body| !body.is_gpu()),
                     ));
 
                     let ptr_ty = backend.pointer_type();

@@ -128,6 +128,14 @@ audit:
 		| awk -F: '{print "  "$$1":"$$2}' | sort -u ); \
 	if [ -n "$$found" ]; then echo "$$found"; echo "  ✗ width authority violated"; exit 1; fi
 	@echo
+	@echo "§1.1 — codegen naming the type checker or MIR lowering (fails the audit):"
+	@echo "        a backend reads MIR and mir::type_facts; comments are not code."
+	@found=$$( grep -rEn --include='*.rs' 'type_checker|mir::lowering' src/codegen/ 2>/dev/null \
+		| awk '{ split($$0, part, ":"); code = substr($$0, length(part[1]) + length(part[2]) + 3); \
+			sub(/\/\/.*/, "", code); \
+			if (code ~ /type_checker|mir::lowering/) print "  " part[1] ":" part[2] }' ); \
+	if [ -n "$$found" ]; then echo "$$found"; echo "  ✗ codegen layer boundary violated"; exit 1; fi
+	@echo
 	@echo "§3.5 — broad '_ =>' arms in Miri-defined match sites:"
 	@grep -rn --include='*.rs' --exclude-dir=target '_ =>' \
 		src/mir/ src/type_checker/ src/codegen/ 2>/dev/null \

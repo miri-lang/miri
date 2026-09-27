@@ -3,5 +3,6 @@
 
 pub mod backend;
 pub mod cranelift;
+pub mod layer_boundary;
 pub mod llvm;
 pub mod wgsl;
