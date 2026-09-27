@@ -1523,6 +1523,7 @@ impl Pipeline {
                             .generic_class_instantiations
                             .clone(),
                         pipeline_result.vtable_fills.clone(),
+                        mir_bodies.iter().map(|(_, body)| body),
                     ));
 
                     let ptr_ty = backend.pointer_type();

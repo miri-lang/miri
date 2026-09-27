@@ -9,13 +9,9 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
-use crate::mir::lowering::inherited_instantiation::instantiated_field_types;
-use crate::mir::lowering::type_arguments;
-use crate::type_checker::context::{
-    class_needs_vtable, collect_class_fields_all, ClassDefinition, EnumDefinition,
-    StructDefinition, TypeDefinition,
-};
-use crate::type_checker::generics::substitute_generic_field_kind;
+use crate::mir::dispatch::class_needs_vtable;
+use crate::mir::instantiation::{field_types, member_type_at};
+use crate::mir::type_facts::{EnumDefinition, StructDefinition, TypeDefinition};
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
 
@@ -202,14 +198,9 @@ fn custom_field_layout(
             type_definitions,
             ptr_ty,
         ),
-        TypeDefinition::Class(class_def) => class_field_layout(
-            name,
-            class_def,
-            type_args,
-            field_idx,
-            type_definitions,
-            ptr_ty,
-        ),
+        TypeDefinition::Class(_) => {
+            class_field_layout(name, type_args, field_idx, type_definitions, ptr_ty)
+        }
         TypeDefinition::Generic(_) | TypeDefinition::Trait(_) => {
             ((field_idx as i32) * ptr_size, ptr_ty)
         }
@@ -228,9 +219,8 @@ fn struct_field_type(
     type_args: Option<&[Expression]>,
     ptr_ty: CraneliftType,
 ) -> CraneliftType {
-    let kind =
-        substitute_generic_field_kind(&field_ty.kind, type_args, struct_def.generics.as_ref());
-    translate_type_kind(&kind, ptr_ty)
+    let stored = member_type_at(struct_def.generics.as_deref(), type_args, field_ty);
+    translate_type_kind(&stored.kind, ptr_ty)
 }
 
 fn struct_field_layout(
@@ -321,7 +311,9 @@ pub fn enum_payload_field_kind(
     declared: &TypeKind,
     type_args: Option<&[Expression]>,
 ) -> TypeKind {
-    substitute_generic_field_kind(declared, type_args, enum_def.generics.as_ref())
+    let declared =
+        crate::ast::types::Type::new(declared.clone(), crate::error::syntax::Span::default());
+    member_type_at(enum_def.generics.as_deref(), type_args, &declared).kind
 }
 
 /// Where each field of a class instance sits, and how much memory the fields
@@ -334,7 +326,7 @@ pub fn enum_payload_field_kind(
 /// in whatever the allocator put next.
 pub struct ClassPayloadLayout {
     /// Offset and Cranelift type of each field, in the order
-    /// [`collect_class_fields_all`] lists them.
+    /// [`field_types`] lists them.
     pub fields: Vec<(i32, CraneliftType)>,
     /// Bytes the payload occupies, counting the vtable slot a dispatching
     /// class carries ahead of its first field.
@@ -344,7 +336,6 @@ pub struct ClassPayloadLayout {
 /// Lay out one class instance's payload. See [`ClassPayloadLayout`].
 pub fn class_payload_layout(
     name: &str,
-    class_def: &ClassDefinition,
     type_args: Option<&[Expression]>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
@@ -353,7 +344,7 @@ pub fn class_payload_layout(
     // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
     // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
     // User-declared fields start after the vtable pointer.
-    let field_kinds = class_field_kinds(name, class_def, type_args, type_definitions);
+    let field_kinds = class_field_kinds(name, type_args, type_definitions);
     let vtable_offset = if class_needs_vtable(name, type_definitions) {
         ptr_size
     } else {
@@ -377,48 +368,27 @@ pub fn class_payload_layout(
 }
 
 /// The kind each field of an instance of `name` at `type_args` stores, in the
-/// order [`collect_class_fields_all`] lists them.
-///
-/// An inherited field is written in the parameters of the ancestor that
-/// declares it, and bound to the child's arguments by the `extends` clause, so
-/// it is resolved through that clause: matching the ancestor's parameter names
-/// against the child's finds nothing when the child renames them, and a 128-bit
-/// argument then lays out at pointer width. A value argument is a literal
-/// rather than a type, so the chain cannot be walked in types alone; such a
-/// class binds its own parameters directly.
+/// order the class lays them out, as [`field_types`] answers it.
 fn class_field_kinds(
     name: &str,
-    class_def: &ClassDefinition,
     type_args: Option<&[Expression]>,
     type_definitions: &HashMap<String, TypeDefinition>,
 ) -> Vec<TypeKind> {
-    if let Some(args) = type_args.and_then(type_arguments) {
-        return instantiated_field_types(type_definitions, name, &args)
-            .into_iter()
-            .map(|ty| ty.kind)
-            .collect();
-    }
-    collect_class_fields_all(class_def, type_definitions)
-        .iter()
-        .map(|(_, field_info)| {
-            substitute_generic_field_kind(
-                &field_info.ty.kind,
-                type_args,
-                class_def.generics.as_ref(),
-            )
-        })
+    field_types(type_definitions, name, type_args)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ty| ty.kind)
         .collect()
 }
 
 fn class_field_layout(
     name: &str,
-    class_def: &ClassDefinition,
     type_args: Option<&[Expression]>,
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> (i32, CraneliftType) {
-    let layout = class_payload_layout(name, class_def, type_args, type_definitions, ptr_ty);
+    let layout = class_payload_layout(name, type_args, type_definitions, ptr_ty);
     match layout.fields.get(field_idx) {
         Some(&placed) => placed,
         // An index past the last field belongs to no declared field. The slot

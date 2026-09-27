@@ -9,7 +9,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator};
-use crate::type_checker::context::TypeDefinition;
+use crate::mir::type_facts::TypeDefinition;
 
 use std::collections::HashMap;
 
@@ -612,19 +612,6 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Returns true if a named Custom type has at least one managed field.
-    ///
-    /// Used to decide whether to call `miri.TypeName.$drop` (when there are managed
-    /// fields to clean up) or just `libc::free` (when all fields are primitives).
-    /// Returns true if releasing the type runs a `fn drop(self)` hook, declared
-    /// on the type itself or inherited from a base class.
-    pub(crate) fn type_has_user_drop(
-        name: &str,
-        type_defs: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        crate::type_checker::utils::has_drop_hook(name, type_defs)
-    }
-
     /// Whether releasing an instance of `name` has a reference to give up.
     ///
     /// A class is asked about every field it stores, the ones it inherits
@@ -638,18 +625,11 @@ impl<'a> FunctionTranslator<'a> {
         type_defs: &HashMap<String, TypeDefinition>,
     ) -> bool {
         match type_defs.get(name) {
-            Some(TypeDefinition::Struct(def)) => def
-                .fields
-                .iter()
-                .any(|(_, ty, _)| crate::mir::rc::is_word_slot_managed(&ty.kind)),
-            Some(TypeDefinition::Class(_)) => {
-                crate::mir::lowering::inherited_instantiation::instantiated_field_types(
-                    type_defs,
-                    name,
-                    &[],
-                )
-                .iter()
-                .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
+            Some(TypeDefinition::Struct(_) | TypeDefinition::Class(_)) => {
+                crate::mir::instantiation::field_types(type_defs, name, Some(&[]))
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
             }
             Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
                 fields

@@ -98,6 +98,11 @@ fn defs<const N: usize>(entries: [(&str, TypeDefinition); N]) -> HashMap<String,
         .collect()
 }
 
+/// The settled facts over `table`, with no instantiations and no bodies.
+fn facts_of(table: HashMap<String, TypeDefinition>) -> TypeFacts {
+    TypeFacts::new(table, HashMap::new(), Default::default(), [])
+}
+
 fn enum_def<const N: usize>(variants: [(&str, Vec<TypeKind>); N]) -> EnumDefinition {
     EnumDefinition {
         variants: variants
@@ -515,7 +520,7 @@ fn test_clone_resolves_to_the_class_that_defines_it() {
     let table = defs([("Widget", TypeDefinition::Class(widget))]);
 
     assert_eq!(
-        FunctionTranslator::resolve_clone_method_name("Widget", &table),
+        FunctionTranslator::resolve_clone_method_name("Widget", &facts_of(table)),
         Symbol::method("Widget", &[], "clone", &[]).link_name()
     );
 }
@@ -532,7 +537,7 @@ fn test_clone_inherited_from_a_concrete_base_uses_the_base_name() {
     ]);
 
     assert_eq!(
-        FunctionTranslator::resolve_clone_method_name("Derived", &table),
+        FunctionTranslator::resolve_clone_method_name("Derived", &facts_of(table)),
         Symbol::method("Base", &[], "clone", &[]).link_name()
     );
 }
@@ -552,7 +557,7 @@ fn test_clone_inherited_from_an_abstract_base_uses_the_caller_name() {
     ]);
 
     assert_eq!(
-        FunctionTranslator::resolve_clone_method_name("Derived", &table),
+        FunctionTranslator::resolve_clone_method_name("Derived", &facts_of(table)),
         Symbol::method("Derived", &[], "clone", &[]).link_name()
     );
 }
@@ -561,7 +566,7 @@ fn test_clone_inherited_from_an_abstract_base_uses_the_caller_name() {
 fn test_clone_falls_back_to_the_requested_type_name() {
     let table = defs([("Widget", TypeDefinition::Class(class("Widget")))]);
     assert_eq!(
-        FunctionTranslator::resolve_clone_method_name("Widget", &table),
+        FunctionTranslator::resolve_clone_method_name("Widget", &facts_of(table)),
         Symbol::method("Widget", &[], "clone", &[]).link_name()
     );
 }
@@ -571,9 +576,10 @@ fn test_class_listing_the_cloneable_trait_implements_it() {
     let mut widget = class("Widget");
     widget.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
     let table = defs([("Widget", TypeDefinition::Class(widget))]);
+    let facts = facts_of(table);
 
     assert!(FunctionTranslator::class_implements_cloneable(
-        "Widget", &table
+        "Widget", &facts
     ));
 }
 
@@ -586,9 +592,10 @@ fn test_class_with_multiple_traits_implements_cloneable() {
         "Equatable".to_string(),
     ];
     let table = defs([("Widget", TypeDefinition::Class(widget))]);
+    let facts = facts_of(table);
 
     assert!(FunctionTranslator::class_implements_cloneable(
-        "Widget", &table
+        "Widget", &facts
     ));
 }
 
@@ -605,9 +612,10 @@ fn test_cloneable_is_inherited_through_the_base_chain() {
         ("Middle", TypeDefinition::Class(middle)),
         ("Leaf", TypeDefinition::Class(leaf)),
     ]);
+    let facts = facts_of(table);
 
     assert!(FunctionTranslator::class_implements_cloneable(
-        "Leaf", &table
+        "Leaf", &facts
     ));
 }
 
@@ -621,9 +629,10 @@ fn test_class_without_the_cloneable_trait_does_not_implement_it() {
         ("Base", TypeDefinition::Class(base)),
         ("Derived", TypeDefinition::Class(derived)),
     ]);
+    let facts = facts_of(table);
 
     assert!(!FunctionTranslator::class_implements_cloneable(
-        "Derived", &table
+        "Derived", &facts
     ));
 }
 
@@ -642,15 +651,16 @@ fn test_non_class_definitions_do_not_implement_cloneable() {
         ),
         ("Shape", TypeDefinition::Enum(enum_def([("A", vec![])]))),
     ]);
+    let facts = facts_of(table);
 
     assert!(!FunctionTranslator::class_implements_cloneable(
-        "Point", &table
+        "Point", &facts
     ));
     assert!(!FunctionTranslator::class_implements_cloneable(
-        "Shape", &table
+        "Shape", &facts
     ));
     assert!(!FunctionTranslator::class_implements_cloneable(
-        "Missing", &table
+        "Missing", &facts
     ));
 }
 

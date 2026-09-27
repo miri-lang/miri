@@ -17,8 +17,8 @@ use crate::error::CodegenError;
 use crate::mir::rc::{is_field_managed, is_word_slot_managed};
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
+use crate::mir::type_facts::{EnumDefinition, TypeDefinition};
 use crate::runtime_fns::rt;
-use crate::type_checker::context::{EnumDefinition, TypeDefinition};
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
@@ -75,6 +75,41 @@ struct EnumDropSite {
     payload_ptr: Value,
     /// Width of each slot, from [`layout::enum_payload_slot_size`].
     slot_size: i32,
+}
+
+/// The drop thunk a value of a named type is released through.
+#[derive(Debug, Clone, PartialEq)]
+enum DropThunk {
+    /// A type that declares no parameters: its one bare thunk.
+    Shared,
+    /// A generic type reached where its arguments are still open — no
+    /// arguments at all, or ones naming a parameter of the body it is held in
+    /// (`Box<T>` inside a shared generic body). The bare thunk skips every
+    /// field written at a parameter.
+    SharedBody,
+    /// A concrete instantiation, released by the thunk emitted for these
+    /// arguments.
+    PerInstantiation(Vec<Type>),
+}
+
+impl DropThunk {
+    /// The arguments of the per-instantiation thunk, or `None` for the bare one.
+    fn per_instantiation(self) -> Option<Vec<Type>> {
+        match self {
+            DropThunk::PerInstantiation(args) => Some(args),
+            DropThunk::Shared | DropThunk::SharedBody => None,
+        }
+    }
+}
+
+/// Whether `arg` is a value argument not yet folded to a constant — the size
+/// parameter a shared body of a value-generic type spells by name (`Size`), or
+/// arithmetic over it — which names no single instantiation.
+fn is_open_value_argument(arg: &Expression) -> bool {
+    matches!(
+        arg.node,
+        ExpressionKind::Identifier(..) | ExpressionKind::Binary(..) | ExpressionKind::Unary(..)
+    )
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -149,13 +184,14 @@ impl<'a> FunctionTranslator<'a> {
                      type is not yet concrete, as the others do"
                 )));
             }
-            let recorded = Self::recorded_instantiation(
+            let per_instantiation =
+                Self::drop_thunk(class_name, Self::custom_type_args(elem_kind), type_ctx)?
+                    .per_instantiation();
+            let thunk = Symbol::type_thunk(
+                ThunkKind::Decref,
                 class_name,
-                Self::custom_type_args(elem_kind),
-                type_ctx,
+                per_instantiation.iter().flatten(),
             );
-            let thunk =
-                Symbol::type_thunk(ThunkKind::Decref, class_name, recorded.iter().flatten());
             let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?;
             return Ok(Some(addr));
         }
@@ -200,13 +236,13 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         shape: ElementShape,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<Option<Value>, CodegenError> {
         let ElementShape::UserClass(name) = shape else {
             return Ok(None);
         };
-        if !Self::class_implements_cloneable(name, type_definitions) {
+        if !Self::class_implements_cloneable(name, facts) {
             return Ok(None);
         }
         let thunk = Symbol::type_thunk(ThunkKind::Clone, name, &[]);
@@ -317,7 +353,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::UserClass(name) => name,
             ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
         };
-        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts.definitions()) {
+        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts) {
             return Ok(None);
         }
         let recorded =
@@ -347,7 +383,7 @@ impl<'a> FunctionTranslator<'a> {
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
-        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts.definitions()) {
+        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts) {
             return Ok(None);
         }
         let recorded =
@@ -485,15 +521,13 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         list_ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
             return Ok(());
         }
         let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) =
-            Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
-        {
+        if let Some(addr) = Self::elem_clone_addr_for_shape(builder, ctx, shape, facts, ptr_type)? {
             Self::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
@@ -545,15 +579,13 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         set_ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
             return Ok(());
         }
         let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) =
-            Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
-        {
+        if let Some(addr) = Self::elem_clone_addr_for_shape(builder, ctx, shape, facts, ptr_type)? {
             Self::call_rt_set_set_elem_clone_fn(builder, ctx, set_ptr, addr)?;
         }
         Ok(())
@@ -913,24 +945,21 @@ impl<'a> FunctionTranslator<'a> {
         // Extract Type arguments from Expression arguments for generic enums.
         // This enables resolution of generic variant fields to their concrete
         // kinds so managed fields are correctly identified.
-        let concrete_args = type_args.and_then(crate::mir::lowering::type_arguments);
+        let concrete_args = type_args.and_then(crate::mir::instantiation::type_arguments);
 
-        // A generic class instantiated at a recorded set of type arguments
-        // dispatches to its per-instantiation drop thunk (`miri.Box$String.$drop`)
-        // so a managed field is DecRef'd and a scalar field skipped, each per
-        // instantiation. Non-generic types and unrecorded instantiations use
-        // the bare `miri.Name.$drop` thunk.
-        let recorded = Self::recorded_instantiation(name, type_args, type_ctx);
-        // A recorded generic instantiation always routes through its thunk: the
-        // class's declared field kinds see only the bare generic `T` (never
-        // managed), so `has_managed_fields` cannot detect a managed field that
-        // exists only after substitution (`Box<String>`). The per-instantiation
-        // thunk resolves the concrete field and frees the block either way.
-        let needs_thunk = recorded.is_some()
+        // A generic instantiation dispatches to its per-instantiation drop
+        // thunk (`miri.Box$String.$drop`) so a managed field is DecRef'd and a
+        // scalar field skipped, each per instantiation. It always routes
+        // through that thunk: the declared field kinds see only the bare
+        // generic `T` (never managed), so `has_managed_fields` cannot detect a
+        // managed field that exists only after substitution (`Box<String>`).
+        let per_instantiation = Self::drop_thunk(name, type_args, type_ctx)?.per_instantiation();
+        let needs_thunk = per_instantiation.is_some()
             || Self::has_managed_fields(name, type_ctx.facts.definitions())
-            || Self::type_has_user_drop(name, type_ctx.facts.definitions());
+            || type_ctx.facts.has_drop_hook(name);
         if needs_thunk {
-            let thunk = Symbol::type_thunk(ThunkKind::Drop, name, recorded.iter().flatten());
+            let thunk =
+                Symbol::type_thunk(ThunkKind::Drop, name, per_instantiation.iter().flatten());
             Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type)
         } else if concrete_args.is_some() {
             // For generic enums (concrete_args available) without a thunk, emit field
@@ -980,10 +1009,10 @@ impl<'a> FunctionTranslator<'a> {
         // the shared one.
         let written = match type_args {
             None => Vec::new(),
-            Some(args) => crate::mir::lowering::type_arguments(args)?,
+            Some(args) => crate::mir::instantiation::type_arguments(args)?,
         };
         let monomorphized = written.iter().all(|arg| {
-            crate::mir::lowering::is_monomorphizable_type_argument(
+            crate::mir::instantiation::is_monomorphizable_type_argument(
                 &arg.kind,
                 type_ctx.facts.definitions(),
             )
@@ -991,35 +1020,27 @@ impl<'a> FunctionTranslator<'a> {
         if !monomorphized {
             return None;
         }
-        Self::recorded_instantiation(class_name, type_args, type_ctx)
+        Self::lowered_instantiation(class_name, type_args, type_ctx)
     }
 
-    /// The type arguments of the per-instantiation drop thunk to call for a
-    /// Custom type — `[String]` for a `Box<String>` whose instantiation is
-    /// recorded — or `None` when the shared thunk of the bare `Box` applies.
+    /// The type arguments of `class_name`'s per-instantiation method bodies
+    /// matching `type_args`, or `None` when no body was lowered at them and
+    /// the shared one applies.
     ///
-    /// A generic struct and a generic enum are instantiated exactly as a
-    /// generic class is. All three declare fields whose types are written in
-    /// their own parameters, so the field a given instantiation stores is known
-    /// only once the arguments are substituted, and each gets its own thunk.
-    ///
-    /// Gated on the instantiation registry so the emitted call always targets a
-    /// thunk `generate_type_drop_functions` actually defined — both sides name
-    /// it through the same [`Symbol`], so a registry hit guarantees the symbol
-    /// exists.
-    fn recorded_instantiation(
+    /// Asked of the method-body registry, not of the drop instantiations: an
+    /// element-method thunk calls a lowered body, and one named for an
+    /// instantiation no body was lowered at references a symbol nothing
+    /// defines. A value-generic class is recorded at arguments that include
+    /// the size, wrapped in a marker type, and is matched at them.
+    fn lowered_instantiation(
         class_name: &str,
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> Option<Vec<Type>> {
         type_ctx.facts.definitions().get(class_name)?.generics()?;
-        // A value-generic class is recorded at arguments that include the size,
-        // wrapped in a marker type; skipping it would name a thunk nothing
-        // generated and fall back to the shared one, which leaves a managed
-        // field still written at a parameter unreleased.
         let concrete = type_args?
             .iter()
-            .map(crate::mir::lowering::instantiation_argument)
+            .map(crate::mir::instantiation::instantiation_argument)
             .collect::<Option<Vec<Type>>>()?;
         if concrete.is_empty() {
             return None;
@@ -1032,6 +1053,67 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, class_name, tuple) == want);
         recorded.then_some(concrete)
+    }
+
+    /// Which drop thunk releases a value of `name` carrying `type_args`.
+    ///
+    /// A generic struct, class and enum declare fields written in their own
+    /// parameters, so the field an instantiation stores is known only once the
+    /// arguments are substituted, and each concrete instantiation a value is
+    /// held at gets its own thunk ([`TypeFacts::drop_instantiations_of`]).
+    ///
+    /// A concrete instantiation missing from that set would fall back to the
+    /// shared thunk, which skips every field written at a parameter and leaks
+    /// what it holds, so it is reported instead. So is an argument that is
+    /// neither a type nor a value expression, which names no instantiation.
+    ///
+    /// [`TypeFacts::drop_instantiations_of`]: crate::mir::type_facts::TypeFacts::drop_instantiations_of
+    fn drop_thunk(
+        name: &str,
+        type_args: Option<&[Expression]>,
+        type_ctx: &TypeCtx,
+    ) -> Result<DropThunk, CodegenError> {
+        let facts = type_ctx.facts;
+        let is_generic = facts
+            .definitions()
+            .get(name)
+            .and_then(TypeDefinition::generics)
+            .is_some();
+        if !is_generic {
+            return Ok(DropThunk::Shared);
+        }
+        let Some(arg_exprs) = type_args.filter(|args| !args.is_empty()) else {
+            return Ok(DropThunk::SharedBody);
+        };
+        let mut args = Vec::with_capacity(arg_exprs.len());
+        for arg in arg_exprs {
+            match crate::mir::instantiation::instantiation_argument(arg) {
+                Some(ty) => args.push(ty),
+                None if is_open_value_argument(arg) => return Ok(DropThunk::SharedBody),
+                None => {
+                    return Err(CodegenError::Internal(format!(
+                        "a `{name}` value carries a type argument that is neither a type nor \
+                         a value: {:?}",
+                        arg.node
+                    )))
+                }
+            }
+        }
+        if facts.is_drop_instantiation(name, &args) {
+            return Ok(DropThunk::PerInstantiation(args));
+        }
+        // TODO: the shared method body of a value-generic class
+        // (`Buf<T, Size>`) drops its own type here, through the bare thunk,
+        // which skips the fields written at `T`; that is the likely root of the
+        // leak a value-generic class holding `Array<T, Size>` beside a bare `T`
+        // shows at a managed instantiation.
+        if args.iter().any(|arg| facts.mentions_open_parameter(arg)) {
+            return Ok(DropThunk::SharedBody);
+        }
+        Err(CodegenError::Internal(format!(
+            "a `{name}` value is released at {}, an instantiation no drop thunk is emitted for",
+            Symbol::type_thunk(ThunkKind::Drop, name, &args).written()
+        )))
     }
 
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
@@ -1115,12 +1197,8 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         };
         match def {
-            TypeDefinition::Struct(struct_def) => {
-                let managed_fields = Self::managed_struct_fields(
-                    struct_def,
-                    inst_args,
-                    type_ctx.facts.definitions(),
-                );
+            TypeDefinition::Struct(_) => {
+                let managed_fields = Self::managed_instance_fields(type_name, inst_args, type_ctx);
                 Self::emit_struct_like_field_decrefs(
                     builder,
                     ctx,
@@ -1134,39 +1212,8 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Enum(enum_def) => {
                 Self::emit_enum_drop(builder, ctx, enum_def, inst_args, payload_ptr, type_ctx)
             }
-            TypeDefinition::Class(class_def) => {
-                // A field of a generic class is written in the type parameters
-                // of the class that declares it (`value T`, `items List<T>`),
-                // which name nothing concrete on their own. The
-                // per-instantiation drop thunk (`miri.Box$String.$drop`) supplies
-                // `inst_args`, and the `extends` chain carries them on to every
-                // ancestor, so each field resolves to the kind this instance
-                // actually stores: a managed one joins the DecRef set at that
-                // kind, a scalar one is a genuine no-op and is skipped.
-                // Substituting the whole field type rather than only a bare
-                // parameter is what reaches an element type nested inside a
-                // collection field. The shared bare-name thunk (`inst_args =
-                // None`) is only reached as a collection element's decref
-                // helper; there the direct drop already routed through the
-                // mangled thunk, so an unresolvable generic field is skipped.
-                let resolved =
-                    crate::mir::lowering::inherited_instantiation::instantiated_field_types(
-                        type_ctx.facts.definitions(),
-                        type_name,
-                        inst_args.unwrap_or_default(),
-                    );
-                let mut managed_fields: Vec<(usize, TypeKind)> = Vec::new();
-                for (idx, field_ty) in resolved.iter().enumerate() {
-                    let kind = &field_ty.kind;
-                    if class_def.generics.is_some()
-                        && Self::is_unresolved_generic_elem(kind, type_ctx.facts.definitions())
-                    {
-                        continue;
-                    }
-                    if is_word_slot_managed(kind) {
-                        managed_fields.push((idx, kind.clone()));
-                    }
-                }
+            TypeDefinition::Class(_) => {
+                let managed_fields = Self::managed_instance_fields(type_name, inst_args, type_ctx);
                 Self::emit_struct_like_field_decrefs(
                     builder,
                     ctx,
@@ -1189,61 +1236,52 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// The index and resolved kind of every field of `struct_def` the drop path
-    /// must DecRef.
+    /// The index and resolved kind of every field of the struct or class
+    /// `type_name` the drop path must DecRef.
     ///
-    /// A field of a generic struct is written in the struct's own parameters
+    /// A field is written in the parameters of the type that declares it
     /// (`value T`, `items List<T>`), which name nothing concrete on their own.
-    /// The per-instantiation thunk supplies `inst_args`, so each field resolves
-    /// to the kind this instance actually stores: a managed one joins the DecRef
-    /// set at that kind, a scalar one is a genuine no-op and is skipped. The
-    /// shared bare-name thunk passes no arguments and is only reached as a
-    /// collection element's decref helper, where the direct drop already routed
-    /// through the mangled thunk — so a field still written at a parameter is
-    /// skipped rather than released at a type it may not have.
-    fn managed_struct_fields(
-        struct_def: &crate::type_checker::context::StructDefinition,
+    /// The per-instantiation thunk supplies `inst_args`, and
+    /// [`TypeFacts::field_types`] resolves each field — an inherited one through
+    /// the `extends` chain — to the kind this instance actually stores: a
+    /// managed one joins the DecRef set at that kind, a scalar one is a genuine
+    /// no-op and is skipped. Substituting the whole field type rather than only
+    /// a bare parameter is what reaches an element type nested inside a
+    /// collection field. The shared bare-name thunk passes no arguments and is
+    /// only reached as a collection element's decref helper, where the direct
+    /// drop already routed through the mangled thunk — so a field of a generic
+    /// type still written at a parameter is skipped rather than released at a
+    /// type it may not have.
+    ///
+    /// [`TypeFacts::field_types`]: crate::mir::type_facts::TypeFacts::field_types
+    fn managed_instance_fields(
+        type_name: &str,
         inst_args: Option<&[Type]>,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Vec<(usize, TypeKind)> {
-        let subs = Self::generic_substitution(struct_def.generics.as_deref(), inst_args);
-        let mut managed = Vec::new();
-        for (idx, (_, declared, _)) in struct_def.fields.iter().enumerate() {
-            let resolved = match &subs {
-                Some(subs) => crate::mir::lowering::apply_generic_sub(declared, subs),
-                None => declared.clone(),
-            };
-            if struct_def.generics.is_some()
-                && Self::is_unresolved_generic_elem(&resolved.kind, type_definitions)
-            {
-                continue;
-            }
-            if is_word_slot_managed(&resolved.kind) {
-                managed.push((idx, resolved.kind));
-            }
-        }
-        managed
-    }
-
-    /// Map each declared type parameter to the argument at its position, or
-    /// `None` when there are no parameters, no arguments, or the two disagree
-    /// about how many there are.
-    fn generic_substitution(
-        generics: Option<&[crate::type_checker::context::GenericDefinition]>,
-        inst_args: Option<&[Type]>,
-    ) -> Option<HashMap<String, Type>> {
-        let generics = generics?;
-        let args = inst_args?;
-        if generics.len() != args.len() {
-            return None;
-        }
-        Some(
-            generics
-                .iter()
-                .zip(args)
-                .map(|(param, arg)| (param.name.clone(), arg.clone()))
-                .collect(),
-        )
+        let definitions = type_ctx.facts.definitions();
+        let is_generic = definitions
+            .get(type_name)
+            .and_then(TypeDefinition::generics)
+            .is_some();
+        let arg_exprs: Vec<Expression> = inst_args
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .map(type_expr_non_null)
+            .collect();
+        type_ctx
+            .facts
+            .field_types(type_name, Some(&arg_exprs))
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                !(is_generic && Self::is_unresolved_generic_elem(&field.kind, definitions))
+            })
+            .filter(|(_, field)| is_word_slot_managed(&field.kind))
+            .map(|(idx, field)| (idx, field.kind))
+            .collect()
     }
 
     /// Emit `DecRef` for every managed field of a struct- or class-shaped
@@ -1475,14 +1513,15 @@ impl<'a> FunctionTranslator<'a> {
             // it emits wrappers for structs, classes and enums only, so such a
             // collection does not link. Its release has to dispatch through the
             // element's vtable to the concrete class's drop.
-            let recorded = Self::recorded_instantiation(
+            let per_instantiation =
+                Self::drop_thunk(class_name, Self::custom_type_args(elem_type_kind), type_ctx)?
+                    .per_instantiation();
+            let decref_name = Symbol::type_thunk(
+                ThunkKind::Decref,
                 class_name,
-                Self::custom_type_args(elem_type_kind),
-                type_ctx,
-            );
-            let decref_name =
-                Symbol::type_thunk(ThunkKind::Decref, class_name, recorded.iter().flatten())
-                    .link_name();
+                per_instantiation.iter().flatten(),
+            )
+            .link_name();
             let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
             let sig = Signature {
                 params: vec![AbiParam::new(ptr_type)],
@@ -1715,7 +1754,7 @@ impl<'a> FunctionTranslator<'a> {
             out_param_ptr_vars: &empty_out_ptr_vars,
         };
 
-        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts.definitions()) {
+        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,
@@ -2004,12 +2043,12 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
         // Only generate for concrete classes that implement Cloneable somewhere in their
         // hierarchy. Abstract classes may have an abstract clone() with no compiled body;
         // generating a thunk for them would reference an undefined symbol at link time.
-        match type_definitions.get(type_name) {
+        match facts.definitions().get(type_name) {
             Some(TypeDefinition::Class(cd)) if cd.is_abstract => return Ok(()),
             None
             | Some(TypeDefinition::Class(_))
@@ -2019,7 +2058,7 @@ impl<'a> FunctionTranslator<'a> {
             | Some(TypeDefinition::Alias(_))
             | Some(TypeDefinition::Trait(_)) => {}
         }
-        if !Self::class_implements_cloneable(type_name, type_definitions) {
+        if !Self::class_implements_cloneable(type_name, facts) {
             return Ok(());
         }
 
@@ -2048,7 +2087,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx,
             &mut builder_ctx,
             type_name,
-            type_definitions,
+            facts,
             ptr_type,
             call_conv,
         )?;
@@ -2069,7 +2108,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
         type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
@@ -2100,7 +2139,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(call_block);
 
         // Resolve clone() through inheritance (applies concrete-caller / abstract-definer rule).
-        let clone_method_name = Self::resolve_clone_method_name(type_name, type_definitions);
+        let clone_method_name = Self::resolve_clone_method_name(type_name, facts);
         let mut user_clone_sig = Signature::new(call_conv);
         user_clone_sig.params.push(AbiParam::new(ptr_type)); // self
         user_clone_sig.params.push(AbiParam::new(ptr_type)); // allocator
@@ -2140,11 +2179,8 @@ impl<'a> FunctionTranslator<'a> {
     /// (`let c Closable = Handle(id: 1)`, or a temporary passed as a `Closable`
     /// argument) never runs its hook, and `x.drop()` on a trait-typed receiver
     /// calls the hook as a method and lets the owner's release run it again.
-    pub fn resolve_drop_hook_name(
-        type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> Option<String> {
-        crate::mir::lowering::dispatch_symbols::drop_hook_symbol(type_name, type_definitions)
+    pub fn resolve_drop_hook_name(type_name: &str, facts: &TypeFacts) -> Option<String> {
+        facts.drop_hook_symbol(type_name)
     }
 
     /// Resolves the mangled name of the `clone()` method for `type_name`.
@@ -2153,37 +2189,175 @@ impl<'a> FunctionTranslator<'a> {
     /// concrete-caller / abstract-definer rule is applied: if the defining class
     /// is abstract, the caller's name is used instead (matching how
     /// `resolve_inherited_method` in `mir::lowering::dispatch` mangles the call).
-    pub fn resolve_clone_method_name(
-        type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> String {
-        crate::mir::lowering::dispatch_symbols::clone_method_symbol(type_name, type_definitions)
+    pub fn resolve_clone_method_name(type_name: &str, facts: &TypeFacts) -> String {
+        facts.clone_symbol(type_name)
     }
 
     /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,
     /// directly or through a trait that extends it.
-    pub fn class_implements_cloneable(
-        type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        Self::class_implements(
-            type_name,
-            crate::ast::types::CLONEABLE_TRAIT_NAME,
-            type_definitions,
-        )
+    pub fn class_implements_cloneable(type_name: &str, facts: &TypeFacts) -> bool {
+        facts.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
+    }
+}
+
+#[cfg(test)]
+mod drop_thunk_tests {
+    use super::*;
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::literal::Literal;
+    use crate::ast::types::TypeDeclarationKind;
+    use crate::ast::{IdNode, MemberVisibility};
+    use crate::error::syntax::Span;
+    use crate::type_checker::context::{ClassDefinition, FieldInfo, GenericDefinition};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, Span::default())
     }
 
-    /// Returns true if `type_name` or any class it extends implements
-    /// `trait_name`, directly or through a trait that extends it.
-    pub fn class_implements(
-        type_name: &str,
-        trait_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        crate::type_checker::context::class_implements_trait(
-            type_name,
-            trait_name,
-            type_definitions,
-        )
+    fn class(name: &str, generic: bool) -> TypeDefinition {
+        let parameter = ty(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
+        TypeDefinition::Class(ClassDefinition {
+            name: name.to_string(),
+            generics: generic.then(|| {
+                vec![GenericDefinition {
+                    name: "T".to_string(),
+                    constraint: None,
+                    kind: TypeDeclarationKind::None,
+                }]
+            }),
+            base_class: None,
+            base_class_args: None,
+            traits: Vec::new(),
+            trait_args: HashMap::new(),
+            fields: vec![(
+                "value".to_string(),
+                FieldInfo {
+                    ty: if generic {
+                        parameter
+                    } else {
+                        ty(TypeKind::Int)
+                    },
+                    mutable: true,
+                    visibility: MemberVisibility::Public,
+                },
+            )],
+            methods: BTreeMap::new(),
+            module: String::new(),
+            is_abstract: false,
+            has_drop: false,
+            runtime_settled_methods: BTreeSet::new(),
+        })
+    }
+
+    /// Facts over a generic `Box<T>` and a plain `Plain`, where `Box<String>`
+    /// is the one instantiation a value is released at.
+    fn facts() -> TypeFacts {
+        let definitions = HashMap::from([
+            ("Box".to_string(), class("Box", true)),
+            ("Plain".to_string(), class("Plain", false)),
+        ]);
+        let registry = HashMap::from([("Box".to_string(), vec![vec![ty(TypeKind::String)]])]);
+        TypeFacts::new(definitions, registry, Default::default(), [])
+    }
+
+    fn choose(
+        facts: &TypeFacts,
+        name: &str,
+        args: Option<&[Expression]>,
+    ) -> Result<DropThunk, CodegenError> {
+        let captures = HashMap::new();
+        let out_ptrs = HashMap::new();
+        let type_ctx = TypeCtx {
+            local_types: &[],
+            facts,
+            ptr_type: cl_types::I64,
+            closure_capture_ast_types: &captures,
+            out_param_ptr_vars: &out_ptrs,
+        };
+        FunctionTranslator::drop_thunk(name, args, &type_ctx)
+    }
+
+    fn type_arg(kind: TypeKind) -> Expression {
+        type_expr_non_null(ty(kind))
+    }
+
+    fn expression(node: ExpressionKind) -> Expression {
+        IdNode::new(0, node, Span::default())
+    }
+
+    #[test]
+    fn a_type_without_parameters_is_released_by_its_one_thunk() {
+        assert_eq!(
+            choose(&facts(), "Plain", None).ok(),
+            Some(DropThunk::Shared)
+        );
+    }
+
+    #[test]
+    fn a_generic_type_without_arguments_is_released_by_the_shared_body_thunk() {
+        assert_eq!(
+            choose(&facts(), "Box", None).ok(),
+            Some(DropThunk::SharedBody)
+        );
+    }
+
+    #[test]
+    fn a_recorded_instantiation_is_released_by_its_own_thunk() {
+        let args = [type_arg(TypeKind::String)];
+        assert_eq!(
+            choose(&facts(), "Box", Some(&args)).ok(),
+            Some(DropThunk::PerInstantiation(vec![ty(TypeKind::String)]))
+        );
+    }
+
+    #[test]
+    fn an_instantiation_at_an_open_parameter_is_released_by_the_shared_body_thunk() {
+        let args = [type_arg(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ))];
+        assert_eq!(
+            choose(&facts(), "Box", Some(&args)).ok(),
+            Some(DropThunk::SharedBody)
+        );
+    }
+
+    #[test]
+    fn an_unfolded_size_argument_is_released_by_the_shared_body_thunk() {
+        let args = [expression(ExpressionKind::Identifier(
+            "Size".to_string(),
+            None,
+        ))];
+        assert_eq!(
+            choose(&facts(), "Box", Some(&args)).ok(),
+            Some(DropThunk::SharedBody)
+        );
+    }
+
+    #[test]
+    fn a_concrete_instantiation_no_thunk_is_emitted_for_is_refused() {
+        let args = [type_arg(TypeKind::Float)];
+        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
+            panic!("an unrecorded concrete instantiation must be reported");
+        };
+        assert!(
+            message.contains("no drop thunk is emitted for"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_argument_that_is_neither_a_type_nor_a_value_is_refused() {
+        let args = [expression(ExpressionKind::Literal(Literal::Boolean(true)))];
+        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
+            panic!("an argument naming no instantiation must be reported");
+        };
+        assert!(message.contains("neither a type nor a value"), "{message}");
     }
 }

@@ -17,7 +17,7 @@ use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
 use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::symbol::{Symbol, ThunkKind};
-use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
+use crate::mir::type_facts::{MethodInfo, TypeDefinition, TypeFacts};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
@@ -26,7 +26,6 @@ use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A question a container asks two of its elements, answered by a method the
@@ -82,36 +81,25 @@ impl ElementMethod {
     /// every instantiation today, while the name built for a recorded one is
     /// mangled, so a bare widening emits a symbol nothing defines and turns a
     /// wrong answer into a link failure.
-    pub(crate) fn is_answered_by(
-        self,
-        type_name: &str,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        let Some(TypeDefinition::Class(_)) = type_definitions.get(type_name) else {
+    pub(crate) fn is_answered_by(self, type_name: &str, facts: &TypeFacts) -> bool {
+        let Some(TypeDefinition::Class(_)) = facts.definitions().get(type_name) else {
             return false;
         };
         match self {
             ElementMethod::Compare => {
-                FunctionTranslator::class_implements(
-                    type_name,
-                    ORDERING_TRAIT_NAME,
-                    type_definitions,
-                ) && crate::mir::lowering::dispatch::resolve_inherited_method(
-                    type_definitions,
-                    type_name,
-                    self.method_name(),
-                )
-                .is_some_and(|(_, method)| !method.is_abstract)
+                facts.implements(type_name, ORDERING_TRAIT_NAME)
+                    && facts
+                        .inherited_method(type_name, self.method_name())
+                        .is_some_and(|method| !method.is_abstract)
             }
             // TODO: `equals` is looked up along the class chain only, so a set or
             // map holding a class whose `equals` is a trait default it inherits
             // matches those elements by their bytes, not by the default.
             // Resolving it needs the rule `dispatch_symbols::trait_default_among`
             // states, and the per-class copy of the default the pipeline lowers.
-            ElementMethod::Equals => {
-                class_method_declaration(type_name, self.method_name(), type_definitions)
-                    .is_some_and(|(declaring, method)| is_element_equality(declaring, method))
-            }
+            ElementMethod::Equals => facts
+                .class_method(type_name, self.method_name())
+                .is_some_and(|(declaring, method)| is_element_equality(declaring, method)),
         }
     }
 
@@ -128,30 +116,13 @@ impl ElementMethod {
         self,
         type_name: &str,
         inst_args: Option<&[Type]>,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
     ) -> String {
-        let method_name = self.method_name();
         // The per-instantiation body is the one a static call names, from the
         // one answer static dispatch reads. Where none applies — a non-generic
         // ancestor declares the method, or the element is not a generic
         // instantiation at all — the shared symbol is what the call sites name.
-        inst_args
-            .and_then(|args| {
-                crate::mir::lowering::method_dispatch::instantiated_callee(
-                    type_definitions,
-                    type_name,
-                    args,
-                    method_name,
-                )
-            })
-            .map(|callee| callee.symbol)
-            .unwrap_or_else(|| {
-                crate::mir::lowering::dispatch_symbols::method_symbol(
-                    type_definitions,
-                    type_name,
-                    method_name,
-                )
-            })
+        facts.element_method_symbol(type_name, self.method_name(), inst_args)
     }
 }
 
@@ -191,9 +162,9 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
         inst_args: Option<&[Type]>,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if !method.is_answered_by(type_name, type_definitions) {
+        if !method.is_answered_by(type_name, facts) {
             return Ok(());
         }
         let ptr_type = isa.pointer_type();
@@ -221,7 +192,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let callee = MethodCallee {
             method,
-            symbol: method.method_symbol(type_name, inst_args, type_definitions),
+            symbol: method.method_symbol(type_name, inst_args, facts),
             ptr_type,
             call_conv,
         };

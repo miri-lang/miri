@@ -17,4 +17,5 @@ pub mod operator_dispatch;
 pub mod structs;
 pub mod trait_bounded_parameters;
 pub mod unary_and_cast;
+pub mod unregistered_drop_instantiations;
 pub mod written_local_types;

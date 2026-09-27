@@ -16,6 +16,8 @@ pub use vtable::{
     constructed_vtable_symbols, FilledSlot, VtableFills, VtableInstance, VtableLayout,
 };
 
+pub use crate::type_checker::context::class_needs_vtable;
+
 use crate::ast::types::{EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
 
 /// The methods a container's runtime thunk asks of two class elements: the
