@@ -15,7 +15,7 @@ pub(crate) mod inherited;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
-use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::context::{ClassDefinition, GenericDefinition, TypeDefinition};
 use std::collections::HashMap;
 
 /// Apply a generic substitution mapping to an Expression that contains a type,
@@ -69,9 +69,10 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
 // TODO: a class declaring both a value parameter and a type parameter — a
 // `Buf<T, Size>` holding `Array<T, Size>` alongside a bare `T` — leaks the bare
 // field's value at a managed instantiation, while either field alone is
-// balanced. Whether the value argument being dropped here misaligns the pairing
-// for the parameters that follow it is unproven; the codegen drop thunk zips the
-// same parameters against resolved types of its own and must agree.
+// balanced. Lowering reaches this rule with the value argument written as a
+// literal, which leaves its parameter unbound, while a drop thunk reaches it
+// with the value carried as its marker type, which binds it; whether that
+// difference is what misaligns the release is unproven.
 pub(crate) fn instantiated_member_type<'a>(
     params: impl IntoIterator<Item = &'a str>,
     args: &[Expression],
@@ -83,6 +84,90 @@ pub(crate) fn instantiated_member_type<'a>(
         .filter_map(|(param, arg)| Some((param.to_string(), type_argument(arg)?)))
         .collect();
     apply_generic_sub(field_ty, &subs)
+}
+
+/// The type a member declared as `declared` has in an instance carrying
+/// `args` of an owner declaring `generics` — the one substitution rule every
+/// field and payload read goes through (see [`instantiated_member_type`]).
+///
+/// An owner that declares no parameters, or an instance that carries no
+/// arguments, leaves the member as declared.
+pub(crate) fn member_type_at(
+    generics: Option<&[GenericDefinition]>,
+    args: Option<&[Expression]>,
+    declared: &Type,
+) -> Type {
+    let (Some(generics), Some(args)) = (generics, args) else {
+        return declared.clone();
+    };
+    instantiated_member_type(
+        generics.iter().map(|generic| generic.name.as_str()),
+        args,
+        declared,
+    )
+}
+
+/// Whether `kind` is still one of `generics` itself: a member whose parameter
+/// no argument bound, so it has no known width.
+pub(crate) fn is_open_parameter(
+    kind: &TypeKind,
+    generics: Option<&Vec<GenericDefinition>>,
+) -> bool {
+    crate::type_checker::generics::is_generic_parameter_kind(kind, generics)
+}
+
+/// The type each field of the struct or class `name` is stored at in an
+/// instance carrying `args`, in the order the instance lays them out — a
+/// class's inherited fields first, as [`collect_class_fields_all`] lists them.
+/// `None` when `name` names no struct or class.
+///
+/// A struct's fields are written in its own parameters. A class's are written
+/// in the parameters of whichever ancestor declares each, and reached through
+/// the `extends` clauses that bind them ([`inherited::instantiated_field_types`]);
+/// an instance carrying no arguments — a class that declares none, or the
+/// shared body of a generic one — still follows those clauses, so a field a
+/// plain child pins through `extends Base<i128>` is stored at `i128`. An
+/// instance carrying a value argument cannot walk the chain in types alone and
+/// binds the class's own parameters directly.
+///
+/// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
+pub(crate) fn field_types(
+    definitions: &HashMap<String, TypeDefinition>,
+    name: &str,
+    args: Option<&[Expression]>,
+) -> Option<Vec<Type>> {
+    match definitions.get(name)? {
+        TypeDefinition::Struct(def) => Some(
+            def.fields
+                .iter()
+                .map(|(_, declared, _)| member_type_at(def.generics.as_deref(), args, declared))
+                .collect(),
+        ),
+        TypeDefinition::Class(def) => Some(class_field_types(definitions, name, def, args)),
+        TypeDefinition::Enum(_)
+        | TypeDefinition::Generic(_)
+        | TypeDefinition::Alias(_)
+        | TypeDefinition::Trait(_) => None,
+    }
+}
+
+/// [`field_types`] for the class `name`.
+fn class_field_types(
+    definitions: &HashMap<String, TypeDefinition>,
+    name: &str,
+    def: &ClassDefinition,
+    args: Option<&[Expression]>,
+) -> Vec<Type> {
+    let Some(args) = args else {
+        return inherited::declared_field_types(definitions, name);
+    };
+    if let Some(written) = type_arguments(args) {
+        return inherited::instantiated_field_types(definitions, name, &written);
+    }
+    crate::type_checker::context::collect_class_fields_all(def, definitions)
+        .iter()
+        .map(|(_, field)| member_type_at(def.generics.as_deref(), Some(args), &field.ty))
+        .collect()
 }
 
 /// The type a type argument denotes, or `None` when the argument is a value

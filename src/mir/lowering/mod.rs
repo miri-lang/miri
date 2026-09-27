@@ -52,7 +52,7 @@ use std::collections::HashMap;
 pub(crate) use crate::mir::instantiation::{
     apply_generic_sub, has_a_monomorphized_spelling, instantiated_member_type,
     instantiation_argument, is_monomorphizable_type_argument, is_monomorphized_instantiation,
-    monomorphized_arguments, type_argument, type_arguments,
+    monomorphized_arguments, type_argument,
 };
 pub use compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 pub use context::LoweringContext;

@@ -13,5 +13,6 @@ pub mod residency;
 pub mod ssa;
 pub mod symbol;
 pub mod terminator;
+pub mod type_facts;
 pub mod utils;
 pub mod verify;

@@ -14,6 +14,7 @@ use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
+use crate::mir::type_facts::{StructDefinition, TypeDefinition};
 use crate::mir::{
     AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue, UnOp,
 };
@@ -144,7 +145,7 @@ impl<'a> FunctionTranslator<'a> {
                 // type of what it reaches: judging by the base local reports a
                 // class or a list, which is not an integer at all, and the cast
                 // then falls back to signed and widens `200` in a `u8` to `-56`.
-                let src_kind = Self::operand_projected_kind(operand, type_ctx);
+                let src_kind = Self::operand_projected_kind(operand, type_ctx)?;
                 let is_unsigned = if Self::is_integer_kind(&src_kind) {
                     Self::is_unsigned_type_kind(&src_kind)
                 } else {
@@ -215,7 +216,7 @@ impl<'a> FunctionTranslator<'a> {
         let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
         let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
         let is_unsigned =
-            Self::operand_is_unsigned(lhs, type_ctx) || Self::operand_is_unsigned(rhs, type_ctx);
+            Self::operand_is_unsigned(lhs, type_ctx)? || Self::operand_is_unsigned(rhs, type_ctx)?;
         Self::translate_binop(builder, ctx, op, lhs_val, rhs_val, is_unsigned)
     }
 
@@ -245,8 +246,7 @@ impl<'a> FunctionTranslator<'a> {
                 )?))
             }
             TypeKind::Custom(name, _) => {
-                let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
-                    type_ctx.facts.definitions().get(name)
+                let Some(TypeDefinition::Struct(def)) = type_ctx.facts.definitions().get(name)
                 else {
                     return Ok(None);
                 };
@@ -606,13 +606,9 @@ impl<'a> FunctionTranslator<'a> {
             (setters.set_drop)(builder, ctx, container_ptr, addr)?;
         }
         let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_clone_addr_for_shape(
-            builder,
-            ctx,
-            shape,
-            type_ctx.facts.definitions(),
-            ptr_type,
-        )? {
+        if let Some(addr) =
+            Self::elem_clone_addr_for_shape(builder, ctx, shape, type_ctx.facts, ptr_type)?
+        {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
         }
         if let Some(order) = setters.order {
@@ -747,18 +743,18 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let declared_slot = match type_ctx.facts.definitions().get(enum_name) {
-            Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) => {
+            Some(TypeDefinition::Enum(enum_def)) => {
                 let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
                 enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type)
             }
             // Not a known enum definition: keep the pointer-sized slot every
             // payload used before slots were sized from the variants.
             Some(
-                crate::type_checker::context::TypeDefinition::Struct(_)
-                | crate::type_checker::context::TypeDefinition::Generic(_)
-                | crate::type_checker::context::TypeDefinition::Alias(_)
-                | crate::type_checker::context::TypeDefinition::Class(_)
-                | crate::type_checker::context::TypeDefinition::Trait(_),
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_)
+                | TypeDefinition::Class(_)
+                | TypeDefinition::Trait(_),
             )
             | None => ptr_type.bytes(),
         };
@@ -827,14 +823,12 @@ impl<'a> FunctionTranslator<'a> {
         let TypeKind::Custom(class_name, type_args) = &ty.kind else {
             return None;
         };
-        let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
-            type_ctx.facts.definitions().get(class_name.as_str())
+        let Some(TypeDefinition::Class(_)) = type_ctx.facts.definitions().get(class_name.as_str())
         else {
             return None;
         };
         Some(class_payload_layout(
             class_name,
-            class_def,
             type_args.as_deref(),
             type_ctx.facts.definitions(),
             type_ctx.ptr_type,
@@ -895,7 +889,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Option<Vec<Option<crate::ast::types::Type>>> {
         match kind {
             AggregateKind::Enum(enum_name, variant_name) => {
-                let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                let Some(TypeDefinition::Enum(enum_def)) =
                     type_ctx.facts.definitions().get(enum_name.as_ref())
                 else {
                     return None;
@@ -909,17 +903,17 @@ impl<'a> FunctionTranslator<'a> {
                     declared
                         .iter()
                         .map(|ty| {
-                            let kind = crate::type_checker::generics::substitute_generic_field_kind(
+                            let kind = crate::codegen::cranelift::layout::enum_payload_field_kind(
+                                enum_def,
                                 &ty.kind,
                                 type_args.as_deref(),
-                                enum_def.generics.as_ref(),
                             );
                             // A payload with no bound type argument has no known
                             // width, and a reference-counted one is
                             // pointer-sized whatever it is named. Both keep the
                             // value's own representation, matching the width
                             // the match arm reads them back at.
-                            if crate::type_checker::generics::is_generic_parameter_kind(
+                            if crate::mir::instantiation::is_open_parameter(
                                 &kind,
                                 enum_def.generics.as_ref(),
                             ) || crate::mir::rc::is_field_managed(&kind)
@@ -2540,18 +2534,26 @@ impl<'a> FunctionTranslator<'a> {
     /// by the base local instead treats every projected read as signed, so an
     /// unsigned value with its top bit set becomes a negative number — `200`
     /// held in a `u8` field reads back as `-56`.
-    pub(crate) fn operand_is_unsigned(operand: &Operand, type_ctx: &TypeCtx) -> bool {
-        Self::is_unsigned_type_kind(&Self::operand_projected_kind(operand, type_ctx))
+    pub(crate) fn operand_is_unsigned(
+        operand: &Operand,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        Ok(Self::is_unsigned_type_kind(&Self::operand_projected_kind(
+            operand, type_ctx,
+        )?))
     }
 
     /// The type an operand's value actually has, resolving field and index
     /// projections rather than reporting the base local's type.
-    pub(crate) fn operand_projected_kind(operand: &Operand, type_ctx: &TypeCtx) -> TypeKind {
+    pub(crate) fn operand_projected_kind(
+        operand: &Operand,
+        type_ctx: &TypeCtx,
+    ) -> Result<TypeKind, CodegenError> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
                 Self::resolve_projected_type_kind(place, type_ctx)
             }
-            Operand::Constant(constant) => constant.ty.kind.clone(),
+            Operand::Constant(constant) => Ok(constant.ty.kind.clone()),
         }
     }
 
@@ -2622,7 +2624,7 @@ impl<'a> FunctionTranslator<'a> {
         lhs_ptr: Value,
         rhs_ptr: Value,
         struct_type: &TypeKind,
-        def: &crate::type_checker::context::StructDefinition,
+        def: &StructDefinition,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;

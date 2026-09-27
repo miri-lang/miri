@@ -748,3 +748,35 @@ fn main()
         "5 xy 7 1.5 7 pq",
     );
 }
+
+#[test]
+fn a_wide_field_a_plain_child_pins_through_extends_reads_back_intact() {
+    // The child declares no parameters, so its instances carry no type
+    // arguments; the base's `value T` is still stored at the 128-bit width the
+    // clause binds, and every field after it sits past that width.
+    assert_runs_with_output(
+        r#"
+class Base<T>
+    var value T
+    var tag i32
+
+    fn init(value T, tag i32)
+        self.value = value
+        self.tag = tag
+
+class Child extends Base<i128>
+    var extra i32
+
+    fn init(value i128, extra i32)
+        super.init(value, 3)
+        self.extra = extra
+
+fn main()
+    let big i128 = 9223372036854775807
+    let c = Child(big * 1000, 9)
+    let v = c.value
+    println(f"{v == big * 1000} {c.tag} {c.extra}")
+"#,
+        "true 3 9",
+    );
+}

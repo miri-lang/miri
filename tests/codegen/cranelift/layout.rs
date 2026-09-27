@@ -909,10 +909,7 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
         )),
     );
 
-    let TypeDefinition::Class(child) = &type_defs["Child"] else {
-        panic!("Child should be registered as a class");
-    };
-    let layout = class_payload_layout("Child", child, None, &type_defs, ptr);
+    let layout = class_payload_layout("Child", None, &type_defs, ptr);
 
     assert_eq!(
         layout.fields.len(),

@@ -191,7 +191,7 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let place_kind = Self::resolve_projected_type_kind(place, type_ctx);
+        let place_kind = Self::resolve_projected_type_kind(place, type_ctx)?;
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
         Self::emit_decref_value(builder, ctx, &place_kind, ptr, type_ctx)
     }
@@ -208,7 +208,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i64;
-        let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
+        let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx)?;
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
@@ -267,7 +267,7 @@ impl<'a> FunctionTranslator<'a> {
         let dest_kind_to_cast = if place.projection.is_empty() {
             dest_ty.kind.clone()
         } else {
-            Self::resolve_projected_type_kind(place, type_ctx)
+            Self::resolve_projected_type_kind(place, type_ctx)?
         };
 
         // Pass the destination type when translating Rvalue::Use and Rvalue::Aggregate
@@ -339,7 +339,7 @@ impl<'a> FunctionTranslator<'a> {
         if !matches!(source.projection.last(), Some(PlaceElem::Index(_))) {
             return Ok(value);
         }
-        let element_kind = Self::resolve_projected_type_kind(source, type_ctx);
+        let element_kind = Self::resolve_projected_type_kind(source, type_ctx)?;
         let Some((stride, dim, component)) =
             crate::codegen::cranelift::translator::inline_vec_element_layout(
                 &element_kind,
@@ -468,7 +468,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx,
             shape,
-            type_ctx.facts.definitions(),
+            type_ctx.facts,
             ptr_type,
         )? {
             FunctionTranslator::call_rt_map_set_val_clone_fn(builder, ctx, map_ptr, clone_addr)?;
@@ -517,7 +517,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             set_ptr,
             ptr_type,
-            type_ctx.facts.definitions(),
+            type_ctx.facts,
         )?;
         Ok(())
     }
@@ -849,7 +849,7 @@ impl<'a> FunctionTranslator<'a> {
                 out_arg_slots.push((addr, local));
                 addr
             } else {
-                let is_unsigned = Self::operand_is_unsigned(arg, type_ctx);
+                let is_unsigned = Self::operand_is_unsigned(arg, type_ctx)?;
                 Self::cast_arg_to_predeclared(
                     builder,
                     val,
@@ -1083,7 +1083,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx,
             shape,
-            type_ctx.facts.definitions(),
+            type_ctx.facts,
             ptr_type,
         )? {
             FunctionTranslator::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
@@ -1210,7 +1210,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             list_ptr,
             ptr_type,
-            type_ctx.facts.definitions(),
+            type_ctx.facts,
         )?;
         FunctionTranslator::emit_element_order(
             builder,
@@ -1306,41 +1306,25 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Resolve the `TypeKind` of a place after following its `Field` projections.
+    /// Resolve the `TypeKind` of a place after following its projections.
     ///
-    /// For an unprojected local, returns the local's type kind directly.
-    /// For a `Field(i)` projection on a `Custom` type, looks up the field type from
-    /// `type_definitions` so that callers like `emit_type_drop` receive the correct
-    /// kind (e.g. `List([int])`) instead of the container's kind (e.g. `Custom("Holder")`).
-    /// For generic custom types (e.g. `Vec3<f32>`), substitutes the type arguments into
-    /// the field type so that accessing a field returns the concrete type, not a generic.
-    fn substitute_first_generic(
-        field_type: &TypeKind,
-        type_args: Option<&Vec<Expression>>,
-        def_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
-    ) -> TypeKind {
-        if let (TypeKind::Generic(param_name, _, _), Some(args)) = (field_type, type_args) {
-            let is_first_param = def_generics
-                .and_then(|g| g.first())
-                .map(|g| &g.name == param_name)
-                .unwrap_or(false);
-
-            if is_first_param && !args.is_empty() {
-                if let ExpressionKind::Type(ty, _) = &args[0].node {
-                    return ty.kind.clone();
-                }
-            }
-        }
-        field_type.clone()
-    }
-
-    pub(crate) fn resolve_projected_type_kind(place: &Place, type_ctx: &TypeCtx) -> TypeKind {
+    /// For an unprojected local, returns the local's type kind directly. A
+    /// `Field(i)` projection on a struct or class reads the field's type at
+    /// the instance's own type arguments through [`TypeFacts::field_types`],
+    /// so callers like `emit_type_drop` receive the kind the field actually
+    /// stores (e.g. `List([int])`) instead of the container's kind.
+    ///
+    /// [`TypeFacts::field_types`]: crate::mir::type_facts::TypeFacts::field_types
+    pub(crate) fn resolve_projected_type_kind(
+        place: &Place,
+        type_ctx: &TypeCtx,
+    ) -> Result<TypeKind, CodegenError> {
         let mut current = type_ctx.local_types[place.local.0].kind.clone();
 
         for proj in &place.projection {
             match proj {
                 PlaceElem::Field(idx) => {
-                    current = Self::projected_field_kind(&current, *idx, place, type_ctx);
+                    current = Self::projected_field_kind(&current, *idx, place, type_ctx)?;
                 }
                 PlaceElem::Index(_) => {
                     current = Self::extract_collection_elem_type_kind(&current);
@@ -1349,33 +1333,40 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
 
-        current
+        Ok(current)
     }
 
     /// The kind of field `idx` of a value of kind `container`.
     ///
     /// Only the two kinds that carry named fields answer: a declared type and a
     /// closure, whose captures are held in the per-closure table rather than in
-    /// any declaration. Everything else has no field to reach, so the place is
-    /// malformed and resolves to `Error`.
+    /// any declaration. The rest — a tuple element, an optional's or a
+    /// result's payload — have no declared field to read, and resolve to
+    /// `Error`: their reader loads at the width of the binding it fills.
+    ///
+    /// A closure local missing from the capture table, or a capture index past
+    /// the ones recorded, is a lowering invariant broken and is reported.
     fn projected_field_kind(
         container: &TypeKind,
         idx: usize,
         place: &Place,
         type_ctx: &TypeCtx,
-    ) -> TypeKind {
+    ) -> Result<TypeKind, CodegenError> {
         match container {
             TypeKind::Custom(name, type_args) => {
-                Self::declared_field_kind(container, name, type_args.as_ref(), idx, type_ctx)
+                Self::declared_field_kind(name, type_args.as_deref(), idx, type_ctx)
             }
-            // Closure env field: capture `idx` is looked up in the
-            // per-closure capture-type table stored in the TypeCtx.
             TypeKind::Function(_) => type_ctx
                 .closure_capture_ast_types
                 .get(&place.local)
                 .and_then(|caps| caps.get(idx))
                 .map(|ty| ty.kind.clone())
-                .unwrap_or(TypeKind::Error),
+                .ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "closure local {:?} records no captured value at field {idx}",
+                        place.local
+                    ))
+                }),
             TypeKind::Int
             | TypeKind::I8
             | TypeKind::I16
@@ -1407,7 +1398,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Option(_)
             | TypeKind::Void
             | TypeKind::Error
-            | TypeKind::Linear(_) => TypeKind::Error,
+            | TypeKind::Linear(_) => Ok(TypeKind::Error),
         }
     }
 
@@ -1417,125 +1408,29 @@ impl<'a> FunctionTranslator<'a> {
     /// A struct and a class both read their field at the instance's arguments:
     /// `value T` at a scalar stores at that scalar's width, and `items List<T>`
     /// at `String` holds managed elements, so a store through the field
-    /// releases what it replaces. An enum reaches its payload by matching, not
-    /// by field index, and the remaining kinds declare no fields at all.
-    fn declared_field_kind(
-        container: &TypeKind,
-        name: &str,
-        type_args: Option<&Vec<Expression>>,
-        idx: usize,
-        type_ctx: &TypeCtx,
-    ) -> TypeKind {
-        use crate::type_checker::context::TypeDefinition;
-        match type_ctx.facts.definitions().get(name) {
-            Some(TypeDefinition::Struct(def)) => {
-                // A vector's component is named by its first parameter alone and
-                // its layout is the compiler's, not the declaration's, so it
-                // keeps the narrower substitution it has always used.
-                if crate::ast::types::vec_type_dim(container).is_some() {
-                    let field_type = def
-                        .fields
-                        .get(idx)
-                        .map(|(_, ty, _)| ty.kind.clone())
-                        .unwrap_or(TypeKind::Error);
-                    return Self::substitute_first_generic(
-                        &field_type,
-                        type_args,
-                        def.generics.as_ref(),
-                    );
-                }
-                Self::field_kind_at_instantiation(
-                    def.fields.get(idx).map(|(_, ty, _)| ty),
-                    type_args,
-                    def.generics.as_deref(),
-                )
-            }
-            Some(TypeDefinition::Class(def)) => {
-                Self::inherited_field_kind(def, name, type_args, idx, type_ctx)
-            }
-            None
-            | Some(TypeDefinition::Enum(_))
-            | Some(TypeDefinition::Generic(_))
-            | Some(TypeDefinition::Alias(_))
-            | Some(TypeDefinition::Trait(_)) => TypeKind::Error,
-        }
-    }
-
-    /// The kind of field `idx` of class `name`, with every ancestor's field
-    /// type followed through the `extends` clause that binds it.
+    /// releases what it replaces. An inherited field is read at the type the
+    /// `extends` chain binds it to.
     ///
-    /// A class does not declare the fields it inherits; the ancestor does, in
-    /// the ancestor's own parameters. Matching those against the child's
-    /// parameters finds nothing when the clause renames or reorders them, and
-    /// the field is then read at a name that stands for no type — so a managed
-    /// one is released by the wrong rule, or by none.
-    fn inherited_field_kind(
-        def: &crate::type_checker::context::ClassDefinition,
+    /// An enum reaches its payload by matching, not by field index, and its
+    /// reader loads at the width of the binding it fills; a name declaring no
+    /// fields at all answers the same way, with `Error`. A field index past the
+    /// fields a struct or class stores means MIR and the definition disagree
+    /// about the type, and is reported rather than read at a guessed width.
+    fn declared_field_kind(
         name: &str,
-        type_args: Option<&Vec<Expression>>,
+        type_args: Option<&[Expression]>,
         idx: usize,
         type_ctx: &TypeCtx,
-    ) -> TypeKind {
-        let fields = match type_args {
-            Some(args) => match crate::mir::lowering::type_arguments(args) {
-                Some(written) => {
-                    crate::mir::lowering::inherited_instantiation::instantiated_field_types(
-                        type_ctx.facts.definitions(),
-                        name,
-                        &written,
-                    )
-                }
-                // A value-generic argument is a literal rather than a type, so
-                // the chain cannot be walked in types alone. Such a class binds
-                // its own parameters directly, which the expression-based
-                // substitution resolves.
-                None => {
-                    let all_fields = crate::type_checker::context::collect_class_fields_all(
-                        def,
-                        type_ctx.facts.definitions(),
-                    );
-                    return Self::field_kind_at_instantiation(
-                        all_fields.get(idx).map(|(_, info)| &info.ty),
-                        type_args,
-                        def.generics.as_deref(),
-                    );
-                }
-            },
-            // Inside the shared body of a generic class the arguments are the
-            // class's own parameters, and the binding still has to be followed.
-            None => crate::mir::lowering::inherited_instantiation::declared_field_types(
-                type_ctx.facts.definitions(),
-                name,
-            ),
+    ) -> Result<TypeKind, CodegenError> {
+        let Some(fields) = type_ctx.facts.field_types(name, type_args) else {
+            return Ok(TypeKind::Error);
         };
-        fields
-            .get(idx)
-            .map(|ty| ty.kind.clone())
-            .unwrap_or(TypeKind::Error)
-    }
-
-    /// The declared field type with the type parameters it is written in
-    /// replaced by the instance's arguments, or the declared kind unchanged
-    /// when the type declares no parameters or the value carries no arguments.
-    fn field_kind_at_instantiation(
-        declared: Option<&crate::ast::types::Type>,
-        type_args: Option<&Vec<Expression>>,
-        generics: Option<&[crate::type_checker::context::GenericDefinition]>,
-    ) -> TypeKind {
-        let Some(declared) = declared else {
-            return TypeKind::Error;
-        };
-        match (type_args, generics) {
-            (Some(args), Some(generics)) => {
-                crate::mir::lowering::instantiated_member_type(
-                    generics.iter().map(|g| g.name.as_str()),
-                    args,
-                    declared,
-                )
-                .kind
-            }
-            _ => declared.kind.clone(),
-        }
+        fields.get(idx).map(|ty| ty.kind.clone()).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "field {idx} is projected from `{name}`, which stores {} fields",
+                fields.len()
+            ))
+        })
     }
 
     /// Resolves the element type of a collection kind, returning an owned

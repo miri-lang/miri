@@ -25,9 +25,9 @@ use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
 use crate::mir::symbol::{StringLiteralPart, Symbol, ThunkKind};
+use crate::mir::type_facts::TypeDefinition;
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
-use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::Signature;
 use cranelift_codegen::isa::TargetIsa;
@@ -663,13 +663,7 @@ impl CraneliftBackend {
                 None,
                 &self.facts,
             )?;
-            FunctionTranslator::generate_clone_function(
-                module,
-                ctx,
-                isa,
-                type_name,
-                self.facts.definitions(),
-            )?;
+            FunctionTranslator::generate_clone_function(module, ctx, isa, type_name, &self.facts)?;
             self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
         }
         Ok(())
@@ -711,7 +705,7 @@ impl CraneliftBackend {
                     isa,
                     type_name,
                     None,
-                    self.facts.definitions(),
+                    &self.facts,
                 )?;
                 self.generate_instantiation_method_thunks(method, module, ctx, isa, type_name)?;
             }
@@ -747,7 +741,7 @@ impl CraneliftBackend {
         let mut emitted = std::collections::HashSet::new();
         for args in tuples {
             let monomorphized = args.iter().all(|arg| {
-                crate::mir::lowering::is_monomorphizable_type_argument(
+                crate::mir::instantiation::is_monomorphizable_type_argument(
                     &arg.kind,
                     self.facts.definitions(),
                 )
@@ -765,7 +759,7 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 Some(args),
-                self.facts.definitions(),
+                &self.facts,
             )?;
         }
         Ok(())
@@ -800,10 +794,11 @@ impl CraneliftBackend {
     }
 
     /// Generate a per-instantiation `miri.TypeName$Args.$drop` thunk for each
-    /// recorded instantiation of a generic struct, class or enum, so a managed
-    /// field is DecRef'd and a scalar field skipped, each per instantiation.
-    /// Non-generic types and types with no recorded instantiations produce
-    /// nothing here (the bare thunk suffices). Each drop thunk symbol is
+    /// instantiation of a generic struct, class or enum a value is released at
+    /// ([`TypeFacts::drop_instantiations_of`]), so a managed field is DecRef'd
+    /// and a scalar field skipped, each per instantiation. Non-generic types
+    /// and types no value is held at produce nothing here (the bare thunk
+    /// suffices). Each drop thunk symbol is
     /// generated once, so the same symbol is never defined twice; two
     /// instantiations meeting in one symbol only because their arguments have
     /// no name are refused rather than merged.
@@ -820,11 +815,8 @@ impl CraneliftBackend {
         if definition.generics().is_none() {
             return Ok(());
         }
-        let Some(tuples) = self.facts.generic_class_instantiations().get(type_name) else {
-            return Ok(());
-        };
         let mut emitted = std::collections::HashSet::new();
-        for args in tuples {
+        for args in self.facts.drop_instantiations_of(type_name) {
             let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, args);
             if thunk.has_an_unnameable_argument() && emitted.contains(&thunk) {
                 return Err(CodegenError::Internal(format!(

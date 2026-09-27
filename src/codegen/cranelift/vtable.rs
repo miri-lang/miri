@@ -12,7 +12,7 @@
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
 use crate::mir::dispatch::{FilledSlot, VtableLayout};
-use crate::type_checker::context::TypeDefinition;
+use crate::mir::type_facts::TypeDefinition;
 
 use cranelift_module::Module;
 use cranelift_object::ObjectModule;

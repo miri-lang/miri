@@ -12,7 +12,7 @@ use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
-use crate::mir::type_facts::TypeFacts;
+use crate::mir::type_facts::{TypeDefinition, TypeFacts};
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
 
@@ -466,7 +466,7 @@ impl<'a> FunctionTranslator<'a> {
                         ),
                     };
                     current_type =
-                        Self::type_after_projection(place, depth, &current_type, type_ctx);
+                        Self::type_after_projection(place, depth, &current_type, type_ctx)?;
                 }
                 PlaceElem::Index(local) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
@@ -571,7 +571,7 @@ impl<'a> FunctionTranslator<'a> {
                 .facts
                 .definitions()
                 .get(name)
-                .map(|def| matches!(def, crate::type_checker::context::TypeDefinition::Enum(_)))
+                .map(|def| matches!(def, TypeDefinition::Enum(_)))
                 .unwrap_or(false),
             TypeKind::Generic(_, _, _) => true,
             TypeKind::Int
@@ -729,7 +729,7 @@ impl<'a> FunctionTranslator<'a> {
                         layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type);
                     addr = builder.ins().iadd_imm(addr, offset as i64);
                     current_type =
-                        Self::type_after_projection(place, depth, &current_type, type_ctx);
+                        Self::type_after_projection(place, depth, &current_type, type_ctx)?;
                     // A field that owns its own allocation stores a *pointer* to
                     // it, so reaching what lives inside that field means loading
                     // the pointer rather than adding another offset to the
@@ -775,16 +775,16 @@ impl<'a> FunctionTranslator<'a> {
         depth: usize,
         fallback: &Type,
         type_ctx: &TypeCtx,
-    ) -> Type {
+    ) -> Result<Type, CodegenError> {
         let prefix = Place {
             local: place.local,
             projection: place.projection[..=depth].to_vec(),
         };
-        let kind = Self::resolve_projected_type_kind(&prefix, type_ctx);
+        let kind = Self::resolve_projected_type_kind(&prefix, type_ctx)?;
         if matches!(kind, TypeKind::Error) {
-            return fallback.clone();
+            return Ok(fallback.clone());
         }
-        Type::new(kind, fallback.span)
+        Ok(Type::new(kind, fallback.span))
     }
 
     /// Apply the final projection on `place` as a store of `value`.

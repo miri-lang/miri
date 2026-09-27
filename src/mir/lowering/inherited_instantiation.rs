@@ -9,5 +9,5 @@
 
 pub(crate) use crate::mir::instantiation::inherited::{
     base_class_instantiation, declared_field_types, declaring_class_instantiation,
-    instantiated_field_types, own_parameters_left_open,
+    own_parameters_left_open,
 };
