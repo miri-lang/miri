@@ -658,15 +658,8 @@ impl<'a> FunctionTranslator<'a> {
         let translated =
             Self::coerce_payload_values(builder, kind, translated, type_ctx, expected_ty)?;
 
-        let (field_offsets, total_size) = Self::payload_layout(
-            builder,
-            kind,
-            &translated,
-            type_ctx,
-            expected_ty,
-            needs_vtable_alloc,
-            is_tuple,
-        )?;
+        let (field_offsets, total_size) =
+            Self::payload_layout(builder, kind, &translated, type_ctx, expected_ty, is_tuple)?;
 
         let payload_ptr =
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
@@ -706,22 +699,28 @@ impl<'a> FunctionTranslator<'a> {
         translated: &[Value],
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-        needs_vtable_alloc: bool,
         is_tuple: bool,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         if let Some(layout) = Self::declared_class_layout(kind, type_ctx) {
             return Self::class_field_offsets(layout, translated.len());
+        }
+        if let AggregateKind::Class(ty) = kind {
+            // Every class instance is laid out from its declaration, vtable
+            // word first; a guessed layout would put a field where the word goes.
+            return Err(CodegenError::Internal(format!(
+                "class constructor names no registered class: {:?}",
+                ty.kind
+            )));
         }
         if let AggregateKind::Enum(enum_name, _) = kind {
             return Self::enum_value_layout(builder, enum_name, translated, type_ctx, expected_ty);
         }
         let ptr_size = type_ctx.ptr_type.bytes();
         let tuple_header = if is_tuple { ptr_size } else { 0 };
-        let vtable_header_size = if needs_vtable_alloc { ptr_size } else { 0 };
         Self::compute_aggregate_layout(
             builder,
             translated,
-            tuple_header + vtable_header_size,
+            tuple_header,
             is_tuple,
             matches!(kind, AggregateKind::Option),
             ptr_size,

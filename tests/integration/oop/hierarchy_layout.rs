@@ -145,3 +145,30 @@ fn main()
         "named other 4\nnamed other 6",
     );
 }
+
+#[test]
+fn test_trait_default_calls_a_base_method_reading_a_managed_field() {
+    assert_heap_guard_output(
+        r#"
+trait Named
+    fn other() String
+
+    fn name() String
+        return f"named {self.other()}"
+
+class Base
+    public var label String
+
+    public fn other() String
+        return f"other {self.label}"
+
+class Child extends Base implements Named
+    public var extra int
+
+fn main()
+    var c = Child(label: f"l{4}", extra: 5)
+    println(c.name())
+"#,
+        "named other l4",
+    );
+}

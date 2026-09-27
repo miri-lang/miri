@@ -25,8 +25,8 @@ use crate::ast::types::{Type, CLONE_METHOD_NAME};
 use crate::mir::dispatch::{dispatched_method_names, takes_vtable_slot};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
-    class_ancestry, resolve_method_source, ClassDefinition, MethodInfo, MethodSource,
-    TraitDefinition, TypeDefinition,
+    class_ancestry, resolve_method_source, trait_lineage, ClassDefinition, MethodInfo,
+    MethodSource, TraitDefinition, TypeDefinition,
 };
 use crate::type_checker::utils::has_drop_hook;
 use crate::type_checker::TypeChecker;
@@ -148,28 +148,17 @@ fn defaulted_method_names<'td>(
         .collect()
 }
 
-/// Every trait `roots` name and every parent trait they extend, each once.
-/// A name that registers no trait is passed over.
+/// Every trait `roots` name and every parent trait they extend, by
+/// [`trait_lineage`]. A trait two roots share is listed once per root, which
+/// no caller here — each asks for a set or for any match — can tell apart.
 fn trait_hierarchy<'td, 'n>(
     type_defs: &'td HashMap<String, TypeDefinition>,
     roots: impl Iterator<Item = &'n str>,
 ) -> impl Iterator<Item = &'td TraitDefinition> {
-    let mut pending: Vec<&'td str> = roots
-        .filter_map(|name| type_defs.get_key_value(name))
-        .map(|(name, _)| name.as_str())
+    let traits: Vec<&'td TraitDefinition> = roots
+        .flat_map(|root| trait_lineage(type_defs, root).map(|(_, trait_def)| trait_def))
         .collect();
-    let mut visited = HashSet::new();
-    std::iter::from_fn(move || loop {
-        let trait_name = pending.pop()?;
-        if !visited.insert(trait_name) {
-            continue;
-        }
-        let Some(TypeDefinition::Trait(trait_def)) = type_defs.get(trait_name) else {
-            continue;
-        };
-        pending.extend(trait_def.parent_traits.iter().map(String::as_str));
-        return Some(trait_def);
-    })
+    traits.into_iter()
 }
 
 /// The slots of an instance's vtable. They name what a static call on the

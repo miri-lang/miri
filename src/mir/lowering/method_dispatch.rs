@@ -12,7 +12,8 @@ use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{
-    class_needs_vtable, resolve_method_source, MethodInfo, MethodSource, TypeDefinition,
+    class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
+    TypeDefinition,
 };
 
 use super::class_instantiations::is_registered_instantiation;
@@ -175,27 +176,20 @@ fn is_abstract_class(
     matches!(type_defs.get(name), Some(TypeDefinition::Class(class)) if class.is_abstract)
 }
 
-/// Walk the trait hierarchy to find `method_name`. Returns the defining trait
-/// name and method info (abstract or concrete).
+/// The nearest trait in `trait_name`'s hierarchy, in [`trait_lineage`] order,
+/// that declares `method_name` — abstract or with a default — with a clone of
+/// its signature.
 fn resolve_in_trait_hierarchy(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     trait_name: &str,
     method_name: &str,
 ) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name];
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            if let Some(method_info) = td.methods.get(method_name) {
-                return Some((t_name.to_string(), method_info.clone()));
-            }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-        }
-    }
-    None
+    trait_lineage(type_defs, trait_name).find_map(|(name, trait_def)| {
+        trait_def
+            .methods
+            .get(method_name)
+            .map(|method| (name.to_string(), method.clone()))
+    })
 }
 
 /// Emit a virtual method call through a vtable slot.
