@@ -1933,7 +1933,7 @@ fn fixed_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
             )))
         }
     };
-    crate::type_checker::TypeChecker::try_eval_const_int(size_expr).ok_or_else(|| {
+    crate::mir::backend::fixed_array_extent(size_expr).ok_or_else(|| {
         CodegenError::Internal(
             "WGSL backend: array size must be a compile-time constant".to_string(),
         )

@@ -270,6 +270,12 @@ fn emit_enum_variant_blocks(
             payload_types
                 .iter()
                 .map(|ty| {
+                    // TODO: a bare-parameter-only substitution, while codegen
+                    // reads payloads through `mir::instantiation::member_type_at`,
+                    // which also reaches a parameter nested in the payload type
+                    // and folds a nullable argument into an optional. A payload
+                    // printed here at `int` is stored by codegen as `Option<int>`;
+                    // the two must use one rule.
                     let substituted = crate::type_checker::generics::substitute_generic_field_kind(
                         &ty.kind,
                         Some(args),

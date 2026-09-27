@@ -23,7 +23,7 @@ use crate::mir::Body;
 use std::collections::HashMap;
 
 pub use crate::type_checker::context::{
-    ClassDefinition, EnumDefinition, GenericDefinition, MethodInfo, StructDefinition,
+    ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition,
     TypeDefinition,
 };
 

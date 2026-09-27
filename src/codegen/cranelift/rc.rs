@@ -2208,7 +2208,7 @@ mod drop_thunk_tests {
     use crate::ast::types::TypeDeclarationKind;
     use crate::ast::{IdNode, MemberVisibility};
     use crate::error::syntax::Span;
-    use crate::type_checker::context::{ClassDefinition, FieldInfo, GenericDefinition};
+    use crate::mir::type_facts::{ClassDefinition, FieldInfo, GenericDefinition};
     use std::collections::{BTreeMap, BTreeSet};
 
     fn ty(kind: TypeKind) -> Type {
