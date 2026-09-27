@@ -29,7 +29,8 @@
 //! admitted rather than through a second opinion about which types have it.
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
-use super::operators::missing_ordering_at_instantiation_message;
+use super::function_analysis::ModuleId;
+use super::operators::{is_ordering_op, missing_ordering_at_instantiation_message};
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
@@ -39,12 +40,21 @@ use crate::error::syntax::Span;
 use std::collections::HashMap;
 
 /// The declaration a requirement was recorded against: the type that declares
-/// the method, or [`FREE_FUNCTION_OWNER`] for a plain function, paired with the
-/// function's own name.
+/// the method, or the [`free_function_owner`] of the module declaring a plain
+/// function, paired with the function's own name — the name it is declared
+/// under, which an import alias does not change.
 pub(crate) type GenericBodyId = (String, String);
 
-/// The owner half of a [`GenericBodyId`] for a function that no type declares.
-pub(crate) const FREE_FUNCTION_OWNER: &str = "";
+/// The owner half of a [`GenericBodyId`] for a function that no type declares:
+/// the module declaring it, so two modules' functions of one name are two
+/// bodies. The program's own file is the empty owner, and a loaded module's
+/// path is bracketed so that it can never spell a type's name.
+pub(crate) fn free_function_owner(module: &ModuleId) -> String {
+    match module {
+        ModuleId::Program => String::new(),
+        ModuleId::Imported(path) => format!("<{}>", path.join(".")),
+    }
+}
 
 /// Every requirement recorded across the program, keyed by the body that stated
 /// it.
@@ -71,9 +81,9 @@ fn state_obligation(stated: &mut Vec<Obligation>, obligation: Obligation) -> boo
 pub(crate) enum Obligation {
     /// The body compares values of this parameter.
     Ordering { parameter: String },
-    /// The body applies an arithmetic operator to operands at least one of
-    /// which spells one of its own parameters.
-    Arithmetic(WrittenArithmetic),
+    /// The body applies an arithmetic or comparison operator to operands at
+    /// least one of which spells one of its own parameters.
+    Binary(WrittenBinary),
     /// The body applies a unary operator to an operand that spells one of its
     /// own parameters.
     Unary(WrittenUnary),
@@ -101,21 +111,28 @@ pub(crate) struct WrittenCast {
     target: Type,
 }
 
-/// An arithmetic operator a body applied, with both operands as that body
-/// wrote them.
+/// An arithmetic or comparison operator a body applied, with both operands as
+/// that body wrote them.
 ///
 /// Both types are carried because the operator's meaning is not a property of
 /// one of them: an operand written as a literal of another type, a parameter
-/// wrapped in a vector, and the two sides of a mixed integer-and-float
-/// operation are all invisible to a requirement that named a parameter alone.
+/// wrapped in a vector, a parameter compared with a second one, and the two
+/// sides of a mixed integer-and-float operation are all invisible to a
+/// requirement that named a parameter alone.
+///
+/// The type the body gave the operation is carried too: the body typed the
+/// expression before either operand was known, so a site whose operands give a
+/// different result would run code compiled for one type over a value laid out
+/// as another.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct WrittenArithmetic {
+pub(crate) struct WrittenBinary {
     left: Type,
     op: BinaryOp,
     right: Type,
+    result: Type,
 }
 
-impl WrittenArithmetic {
+impl WrittenBinary {
     /// The same operation restated in the pinning body's own parameter names.
     ///
     /// An operand is restated only when it is a bare parameter the site pins,
@@ -128,14 +145,15 @@ impl WrittenArithmetic {
     ///
     /// An operation whose parameters the site all pins to concrete types is
     /// answered at the site itself, so it too hands nothing on.
-    fn delegated_through(&self, pins: &HashMap<String, Pin>) -> Option<WrittenArithmetic> {
+    fn delegated_through(&self, pins: &HashMap<String, Pin>) -> Option<WrittenBinary> {
         if !hands_on_a_parameter(&self.left, pins) && !hands_on_a_parameter(&self.right, pins) {
             return None;
         }
-        Some(WrittenArithmetic {
+        Some(WrittenBinary {
             left: delegated_operand(&self.left, pins)?,
             op: self.op,
             right: delegated_operand(&self.right, pins)?,
+            result: delegated_operand(&self.result, pins)?,
         })
     }
 }
@@ -205,9 +223,7 @@ impl Obligation {
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
-            Obligation::Arithmetic(written) => {
-                written.delegated_through(pins).map(Obligation::Arithmetic)
-            }
+            Obligation::Binary(written) => written.delegated_through(pins).map(Obligation::Binary),
             Obligation::Unary(written) => {
                 delegated_operand_of(&written.operand, pins).map(|operand| {
                     Obligation::Unary(WrittenUnary {
@@ -269,7 +285,7 @@ pub(crate) struct PinningSite {
 /// A requirement can only be added, and the obligations that can be added form
 /// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
 /// body it is recorded against, and the program declares finitely many. The
-/// three that carry types — [`Obligation::Arithmetic`], [`Obligation::Unary`]
+/// three that carry types — [`Obligation::Binary`], [`Obligation::Unary`]
 /// and [`Obligation::Cast`] — carry operands that could grow around a
 /// delegation cycle; every one of them hands an operand on through
 /// [`delegated_operand`], which passes only a bare parameter name or a type
@@ -298,17 +314,6 @@ fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[Pi
             return;
         }
     }
-}
-
-/// The body identifier for the declaration currently being checked, or `None`
-/// outside a function body.
-fn current_body(context: &Context) -> Option<GenericBodyId> {
-    let function = context.current_function.clone()?;
-    let owner = context
-        .current_class
-        .clone()
-        .unwrap_or_else(|| FREE_FUNCTION_OWNER.to_string());
-    Some((owner, function))
 }
 
 /// The generic-parameter name `ty` spells, when that name is in scope as a
@@ -398,7 +403,7 @@ impl TypeChecker {
         let Some(parameter) = generic_parameter_in_scope(ty, context) else {
             return;
         };
-        let Some(body) = current_body(context) else {
+        let Some(body) = self.current_body(context) else {
             return;
         };
         state_obligation(
@@ -417,11 +422,12 @@ impl TypeChecker {
     /// parameter it admits on the grounds that the type is decided elsewhere.
     /// Recording what was admitted is what makes "elsewhere" a place: an
     /// operation the body already refused is not restated at every site.
-    pub(crate) fn record_arithmetic_requirement(
+    pub(crate) fn record_binary_requirement(
         &mut self,
         left: &Type,
         op: &BinaryOp,
         right: &Type,
+        result: &Type,
         context: &Context,
     ) {
         let spells_a_parameter = |ty: &Type| {
@@ -432,15 +438,16 @@ impl TypeChecker {
         if !spells_a_parameter(left) && !spells_a_parameter(right) {
             return;
         }
-        let Some(body) = current_body(context) else {
+        let Some(body) = self.current_body(context) else {
             return;
         };
         state_obligation(
             self.instantiation_requirements.entry(body).or_default(),
-            Obligation::Arithmetic(WrittenArithmetic {
+            Obligation::Binary(WrittenBinary {
                 left: left.clone(),
                 op: *op,
                 right: right.clone(),
+                result: result.clone(),
             }),
         );
     }
@@ -500,7 +507,19 @@ impl TypeChecker {
         let spells_a_parameter = spells_a_type(&ty.kind, &|kind| {
             parameter_in_scope(kind, context).is_some()
         });
-        spells_a_parameter.then(|| current_body(context)).flatten()
+        spells_a_parameter
+            .then(|| self.current_body(context))
+            .flatten()
+    }
+
+    /// The body identifier for the declaration currently being checked, or
+    /// `None` outside a function body.
+    fn current_body(&self, context: &Context) -> Option<GenericBodyId> {
+        let function = context.current_function.clone()?;
+        let owner = context.current_class.clone().unwrap_or_else(|| {
+            free_function_owner(&ModuleId::checked_as(&self.modules.current_module))
+        });
+        Some((owner, function))
     }
 
     /// Record that the body being checked hands a container to a call that
@@ -587,7 +606,7 @@ impl TypeChecker {
             })
             .collect();
         self.pinning_sites.push(PinningSite {
-            caller: current_body(context),
+            caller: self.current_body(context),
             callee: body,
             pins,
             span,
@@ -660,7 +679,7 @@ impl TypeChecker {
         for obligation in stated {
             match obligation {
                 Obligation::Ordering { parameter } => self.answer_ordering(parameter, site),
-                Obligation::Arithmetic(written) => self.answer_arithmetic(written, site, context),
+                Obligation::Binary(written) => self.answer_binary(written, site, context),
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
             }
@@ -671,7 +690,7 @@ impl TypeChecker {
     /// the type the site pins its operand to.
     ///
     /// The judgment is the body's own unary check, replayed against the pinned
-    /// operand, for the reason [`answer_arithmetic`](Self::answer_arithmetic)
+    /// operand, for the reason [`answer_binary`](Self::answer_binary)
     /// replays the arithmetic one: a second opinion about which types a unary
     /// operator applies to would have to reproduce every ground on which it is
     /// admitted, and would refuse working programs on the ones it missed.
@@ -728,24 +747,24 @@ impl TypeChecker {
     /// Report `site` when the operator the body wrote has no meaning at the
     /// types the site pins its operands to.
     ///
-    /// The judgment is the body's own arithmetic check, replayed against the
+    /// The judgment is the body's own operator check, replayed against the
     /// pinned operands. Asking the same question a second way would have to
-    /// reproduce every ground on which arithmetic is admitted — a trait the
+    /// reproduce every ground on which an operator is admitted — a trait the
     /// operand's class implements, a vector broadcast over a scalar — and
-    /// would refuse working programs on the ones it missed.
-    fn answer_arithmetic(
-        &mut self,
-        written: &WrittenArithmetic,
-        site: &PinningSite,
-        context: &Context,
-    ) {
+    /// would refuse working programs on the ones it missed. An ordering the
+    /// pinned type lacks is left to [`Obligation::Ordering`], which names
+    /// that capability.
+    fn answer_binary(&mut self, written: &WrittenBinary, site: &PinningSite, context: &Context) {
         let pinned = concretely_pinned(&site.pins);
         let left = self.substitute_type(&written.left, &pinned);
         let right = self.substitute_type(&written.right, &pinned);
         if self.is_unsettled(&left) || self.is_unsettled(&right) {
             return;
         }
-        let Err(message) = self.check_arithmetic_op(&left, &written.op, &right, context) else {
+        if self.ordering_answered_elsewhere(written, &left, &right) {
+            return;
+        }
+        let Some(message) = self.binary_refusal(written, &left, &right, &pinned, context) else {
             return;
         };
         let Some(parameter) =
@@ -761,6 +780,68 @@ impl TypeChecker {
             parameter
         );
         self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, site.span, help);
+    }
+
+    /// Whether an ordering operator is refused at these pinned operands because
+    /// an operand the body wrote as a bare parameter is bound to a type with
+    /// no ordering. The body recorded an [`Obligation::Ordering`] for every
+    /// such operand, and that obligation names the missing capability, so the
+    /// operator is not reported a second time.
+    fn ordering_answered_elsewhere(
+        &self,
+        written: &WrittenBinary,
+        left: &Type,
+        right: &Type,
+    ) -> bool {
+        is_ordering_op(&written.op)
+            && [(&written.left, left), (&written.right, right)]
+                .into_iter()
+                .any(|(as_written, pinned)| {
+                    matches!(as_written.kind, TypeKind::Generic(..))
+                        && !self.orders_its_values(pinned)
+                })
+    }
+
+    /// Why the operator the body wrote is refused at these pinned operands:
+    /// it has no meaning at them, or it gives a type other than the one the
+    /// body read the expression at. `None` when the site answers it.
+    fn binary_refusal(
+        &mut self,
+        written: &WrittenBinary,
+        left: &Type,
+        right: &Type,
+        pinned: &HashMap<String, Type>,
+        context: &Context,
+    ) -> Option<String> {
+        let given = match self.check_binary_op_types(left, &written.op, right, context) {
+            Ok(given) => given,
+            Err(message) => return Some(message),
+        };
+        let read = self.substitute_type(&written.result, pinned);
+        if self.is_unsettled(&read) || self.names_the_same_type(&given, &read, context) {
+            return None;
+        }
+        Some(format!(
+            "'{}' applied to {} and {} gives {}, but the generic body reads the result as {}",
+            crate::ast::formatter::helpers::binary_operator(written.op),
+            left,
+            right,
+            given,
+            read
+        ))
+    }
+
+    /// Whether two settled types are one type. Two numeric types are one only
+    /// when they are the same width and kind; compatibility between numbers
+    /// is a conversion, not an identity.
+    fn names_the_same_type(&self, first: &Type, second: &Type, context: &Context) -> bool {
+        if first.kind == second.kind {
+            return true;
+        }
+        if self.is_numeric(first) || self.is_numeric(second) {
+            return false;
+        }
+        self.type_arguments_agree(first, second, context)
     }
 
     /// True when `ty` still spells something this site did not settle: a

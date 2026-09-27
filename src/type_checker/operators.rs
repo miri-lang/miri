@@ -32,6 +32,15 @@ pub(crate) fn is_ordering_op(op: &BinaryOp) -> bool {
     )
 }
 
+/// Whether either operand of a binary operator is one of the body's type
+/// parameters, whose pairing with the other operand each instantiation of the
+/// body judges rather than the body itself.
+fn has_parameter_operand(left: &Type, right: &Type) -> bool {
+    [left, right]
+        .iter()
+        .any(|operand| matches!(operand.kind, TypeKind::Generic(..)))
+}
+
 /// The message reported when an ordering operator is applied to a type that
 /// defines no ordering.
 pub(crate) fn missing_ordering_message(ty: &Type, op: &BinaryOp) -> String {
@@ -141,8 +150,14 @@ impl TypeChecker {
 
         // A parameter has no type to judge here. The body states what it applies
         // to the parameter, and every site that pins it answers for the type it
-        // pins it to — see `instantiation_requirements`.
-        if matches!(left.kind, TypeKind::Generic(..)) && self.are_compatible(left, right, context) {
+        // pins it to — see `instantiation_requirements`. The requirement carries
+        // both operands, so the one beside the parameter — a literal, a
+        // concrete value, a second parameter — is judged with it there.
+        //
+        // The result is the left operand's type, as it is for two numbers: `k *
+        // a` with `k int` is an `int` whatever the call binds `a` to. Each site
+        // also checks that the operator it judges gives the type the body read.
+        if has_parameter_operand(left, right) {
             return Ok(left.clone());
         }
 
@@ -228,6 +243,10 @@ impl TypeChecker {
             return Ok(bool_type());
         }
 
+        if has_parameter_operand(left, right) {
+            return Ok(bool_type());
+        }
+
         // Allow comparison between compatible types
         if self.are_compatible(left, right, context) {
             self.check_type_structurally_comparable(left)?;
@@ -277,7 +296,7 @@ impl TypeChecker {
             return Ok(bool_type());
         }
 
-        if !self.are_compatible(left, right, context) {
+        if !has_parameter_operand(left, right) && !self.are_compatible(left, right, context) {
             return Err(format!(
                 "Type mismatch: cannot compare {} and {}",
                 left, right
@@ -301,7 +320,19 @@ impl TypeChecker {
         right: &Type,
         context: &Context,
     ) -> Option<String> {
-        if !is_ordering_op(op) || self.orders_its_values(left) {
+        if !is_ordering_op(op) {
+            return None;
+        }
+        // Beside a parameter, whose ordering is answered where it is bound,
+        // the other operand's type is already known and must order itself:
+        // `b < a` with `b Dog` has no ordering at any binding of `a`.
+        if has_parameter_operand(left, right) {
+            return [left, right]
+                .into_iter()
+                .find(|operand| !self.orders_its_values(operand))
+                .map(|unordered| missing_ordering_message(unordered, op));
+        }
+        if self.orders_its_values(left) {
             return None;
         }
         if !self.are_compatible(left, right, context) {

@@ -860,6 +860,14 @@ take(make())                    // T = the parameter type of `take`
 
 A call whose type parameters are still unbound once its statement has been checked is refused (`MER_TYP_048`): no body can be compiled for it. That includes `let b = make()`, where nothing names the type, and a type parameter that appears nowhere in the signature (`fn noop<T>(x int) int`), which must always be written out: `noop<int>(5)`. Each bound a function declares on a type parameter (`T implements Named`) is checked against the type the call binds it to, however it was bound.
 
+#### Distinct type parameters are distinct types
+
+Inside a generic body, each type parameter the body declares is its own type. `fn cast<T, U>(a T) U` cannot `return a`, and `let x B = seed` is refused when `seed` is an `A` (`MER_TYP_002`): each parameter is bound by the caller, and nothing the body can see makes them the same. A parameter bounded by another is that other parameter — with `U extends T`, a `U` may be returned as a `T` — but two parameters sharing a bound are not: with `T extends Animal, U extends Animal`, a `U` is not a `T`, since a caller may bind `T` to a class `U` is not.
+
+An arithmetic or comparison operator with a parameter operand — `a + 1`, `a * k`, `a < 10`, `a == 0`, `a + b` with `a T` and `b U` — is not decided by the body: each call answers for the pair of types it binds the operands to, and is refused there when the operator has no meaning at them (`inc("ab")` for `fn inc<T>(a T) T: return a + 1`). The pair is judged by the same rule as concrete operands, so `a * k` with `T = i8` and `k int` behaves as it does for an `i8` and an `int` written out. The body types the operation by its left operand, as for concrete operands: `a * k` is a `T`, and `k * a` is an `int` whatever `T` is bound to. A call whose operands give the operator another result — `s * v` with `s f32` and `v` bound to a vector — is refused. This holds however the call names the function: bare, through a module alias (`C.lt(x)`), or under an import alias (`use m.{lt as L}`).
+
+The same holds through `super`: it names the parent at the arguments the `extends` clause gives it. With `class Child<X, Y, Z> extends Base<Z, X, Y>`, `super.init` takes a `Z`, an `X` and a `Y`, in that order, and `class Child extends Base<String>` reads `super.first` as a `String`.
+
 #### Type arguments are invariant
 
 A generic type's arguments must match exactly: a `Box<Dog>` is not a `Box<Animal>`, and a class implementing `Sink<Dog>` is not a `Sink<Animal>`, even though a `Dog` is an `Animal`. An instance's argument is both read and written through it, so accepting a subtype would let an `Animal` be stored where `Dog` readers expect a `Dog`.

@@ -39,6 +39,13 @@ impl TypeChecker {
             return true;
         }
 
+        if let Some(parameter) = Self::written_parameter(t1, context) {
+            return self.are_compatible(&parameter, t2, context);
+        }
+        if let Some(parameter) = Self::written_parameter(t2, context) {
+            return self.are_compatible(t1, &parameter, context);
+        }
+
         // Handle optional types
         if let Some(result) = self.check_option_compatibility(t1, t2, context) {
             return result;
@@ -693,7 +700,12 @@ impl TypeChecker {
         None
     }
 
-    /// Checks compatibility when t1 is a generic type.
+    /// Checks whether a value of type `t2` may be stored where the generic
+    /// `t1` is expected.
+    ///
+    /// A parameter a declaration in scope introduces accepts only itself, or a
+    /// parameter whose `extends` bounds lead to it. A name nothing declares is
+    /// an inference slot a call fills in, and accepts what meets its bound.
     fn check_generic_in_t1(
         &self,
         name1: &str,
@@ -702,29 +714,103 @@ impl TypeChecker {
         t2: &Type,
         context: &Context,
     ) -> bool {
-        if let TypeKind::Generic(name2, _, _) = &t2.kind {
-            if name1 == name2 {
+        if let TypeKind::Generic(name2, constraint2, kind2) = &t2.kind {
+            if name1 == name2 || Self::bound_reaches(name1, constraint2, kind2) {
                 return true;
             }
-            // TODO: two distinct unconstrained parameters are accepted as one
-            // another here, so `fn cast<T, U>(a T) U: return a` type-checks and
-            // reinterprets whatever it is handed, and a `super.init` passing an
-            // `X` where the `extends` clause binds a `Z` builds an instance
-            // that crashes. Refusing the pair needs the inherited-call argument
-            // check to substitute through the clause first.
-            if constraint.is_none()
-                && !matches!(
-                    context.resolve_type_definition(name2),
-                    Some(TypeDefinition::Generic(_))
-                )
+            if Self::is_declared_parameter(name1, context)
+                && Self::is_declared_parameter(name2, context)
             {
+                return false;
+            }
+            if constraint.is_none() && !Self::is_declared_parameter(name2, context) {
                 return true;
             }
+        } else if Self::is_declared_parameter(name1, context) {
+            // Every caller binds the parameter to a type of its own choosing,
+            // so no type the body can name is one — not even one that meets
+            // the parameter's bound.
+            return false;
         }
         if let Some(c) = constraint {
             return self.satisfies_constraint(t2, c, kind, context);
         }
         true
+    }
+
+    /// Whether a parameter bounded by `constraint` is, through its chain of
+    /// `extends` bounds, the parameter `target`.
+    ///
+    /// `U extends T` is a `T`; `U extends Animal` is not a `T extends Animal`,
+    /// since a caller binds `T` to a class `U` need not be. The chain is read
+    /// off the bound types themselves, each resolved where its parameter was
+    /// declared, never by looking a name up again: while a call is checked the
+    /// callee's parameters are in scope too, and a caller's `U` looked up by
+    /// name would find the callee's `U` and its bound.
+    fn bound_reaches(
+        target: &str,
+        constraint: &Option<Box<Type>>,
+        kind: &TypeDeclarationKind,
+    ) -> bool {
+        std::iter::successors(Self::extends_bound(kind, constraint), |bound| {
+            let TypeKind::Generic(_, next, next_kind) = &bound.kind else {
+                return None;
+            };
+            Self::extends_bound(next_kind, next)
+        })
+        .any(|bound| matches!(&bound.kind, TypeKind::Generic(name, _, _) if name == target))
+    }
+
+    /// The type an `extends` bound names, when the declaration has one.
+    fn extends_bound<'t>(
+        kind: &TypeDeclarationKind,
+        constraint: &'t Option<Box<Type>>,
+    ) -> Option<&'t Type> {
+        match kind {
+            TypeDeclarationKind::Extends => constraint.as_deref(),
+            TypeDeclarationKind::None
+            | TypeDeclarationKind::Is
+            | TypeDeclarationKind::Implements
+            | TypeDeclarationKind::Includes => None,
+        }
+    }
+
+    /// The parameter a type written as a bare name stands for, when a
+    /// declaration in scope introduces a type parameter of that name.
+    ///
+    /// A function or tuple type keeps its parts as written, so the `T` in a
+    /// parameter written `fn(T) T` is read back as the name `T` while the same
+    /// `T` reached through the parameter list is the parameter itself. Both are
+    /// one type, and are compared as one.
+    ///
+    /// The name is resolved in the scope current at the comparison. That is
+    /// the declaring scope everywhere but one place: while a call's arguments
+    /// are checked, the callee's parameters are defined over the caller's, so
+    /// a caller's `T` written inside a function type reads as the callee's `T`
+    /// and carries the callee's bound.
+    // TODO: resolve the names inside a written function or tuple type to
+    // parameters once, where the signature is resolved, so this comparison
+    // never looks a name up and a callee's parameter cannot shadow a caller's.
+    fn written_parameter(ty: &Type, context: &Context) -> Option<Type> {
+        let TypeKind::Custom(name, None) = &ty.kind else {
+            return None;
+        };
+        let Some(TypeDefinition::Generic(def)) = context.resolve_type_definition(name) else {
+            return None;
+        };
+        Some(Type::new(
+            TypeKind::Generic(name.clone(), def.constraint.clone().map(Box::new), def.kind),
+            ty.span,
+        ))
+    }
+
+    /// Whether `name` is a type parameter a declaration in scope introduces,
+    /// as opposed to an inference slot a call fills in.
+    fn is_declared_parameter(name: &str, context: &Context) -> bool {
+        matches!(
+            context.resolve_type_definition(name),
+            Some(TypeDefinition::Generic(_))
+        )
     }
 
     /// Checks compatibility when t2 is a generic type.

@@ -179,3 +179,135 @@ fn main()
         "2 hi 3",
     );
 }
+
+const ROTATED: &str = r#"
+class Base<A, B, C>
+    first A
+    second B
+    third C
+
+    fn init(first A, second B, third C)
+        self.first = first
+        self.second = second
+        self.third = third
+"#;
+
+/// `super` is the ancestor at the arguments the `extends` clause gives it, so
+/// `super.init` takes a `Z` first here — handing it the child's `X` would store
+/// an `int` in a slot read back as a `float`.
+#[test]
+fn super_init_is_refused_an_argument_the_clause_binds_elsewhere() {
+    assert_compiler_error(
+        &format!(
+            "{ROTATED}{}",
+            r#"
+class Child<X, Y, Z> extends Base<Z, X, Y>
+    fn init(first X, second Y, third Z)
+        super.init(first, second, third)
+
+fn main()
+    let c = Child<int, String, float>(2, "h" + "i", 1.5)
+    println(f"{c.first}")
+"#
+        ),
+        "expected Z, got X",
+    );
+}
+
+#[test]
+fn super_init_passing_each_argument_where_the_clause_binds_it_runs() {
+    assert_heap_guard_output(
+        &format!(
+            "{ROTATED}{}",
+            r#"
+class Child<X, Y, Z> extends Base<Z, X, Y>
+    fn init(first X, second Y, third Z)
+        super.init(third, first, second)
+
+fn main()
+    let c = Child<int, String, float>(2, "h" + "i", 1.5)
+    println(f"{c.first} {c.second} {c.third}")
+"#
+        ),
+        "1.5 2 hi",
+    );
+}
+
+const CONCRETE_CLAUSE: &str = r#"
+class Base<A>
+    first A
+    fn init(first A)
+        self.first = first
+"#;
+
+#[test]
+fn super_init_is_refused_a_value_the_concrete_clause_does_not_bind() {
+    assert_compiler_error(
+        &format!(
+            "{CONCRETE_CLAUSE}{}",
+            r#"
+class Child extends Base<String>
+    fn init(n int)
+        super.init(n)
+
+fn main()
+    let c = Child(2)
+    println(c.first)
+"#
+        ),
+        "expected String, got int",
+    );
+}
+
+/// Reading the field through `super` gives the type the clause binds, not the
+/// ancestor's bare parameter: an `int` result is refused naming `String`.
+#[test]
+fn a_field_read_through_super_has_the_type_the_clause_binds() {
+    assert_compiler_error(
+        &format!(
+            "{CONCRETE_CLAUSE}{}",
+            r#"
+class Child extends Base<String>
+    fn init()
+        super.init("x" + "y")
+    fn peek() int
+        return super.first
+
+fn main()
+    let c = Child()
+    println(f"{c.peek()}")
+"#
+        ),
+        "expected int, got String",
+    );
+}
+
+/// An inherited method takes its parameter at the type the clause binds, so a
+/// child's own `X` is not a `Y` there either.
+#[test]
+fn an_inherited_method_is_refused_a_parameter_the_clause_binds_elsewhere() {
+    assert_compiler_error(
+        r#"
+class Base<A, B>
+    first A
+    second B
+    fn init(first A, second B)
+        self.first = first
+        self.second = second
+    fn put(a A)
+        self.first = a
+
+class Child<X, Y> extends Base<Y, X>
+    fn init(first X, second Y)
+        super.init(second, first)
+    fn misplace(x X)
+        self.put(x)
+
+fn main()
+    let c = Child<int, String>(2, "h" + "i")
+    c.misplace(3)
+    println(f"{c.second}")
+"#,
+        "expected Y, got X",
+    );
+}
