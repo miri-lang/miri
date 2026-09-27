@@ -218,6 +218,37 @@ pub fn is_own_parameter_at(
     spelled == Some(&declared.name)
 }
 
+/// `args` with every argument inference left unbound
+/// ([`is_own_parameter_at`]) spelled one way, as the open parameter
+/// `Generic(name)`: the checker writes an unbound argument either as that or as
+/// the bare name `Custom(name, None)`, and the two would otherwise name two
+/// drop functions for one instantiation.
+pub fn with_unbound_arguments_normalized(
+    type_defs: &HashMap<String, TypeDefinition>,
+    name: &str,
+    args: &[Type],
+) -> Vec<Type> {
+    args.iter()
+        .enumerate()
+        .map(|(position, arg)| {
+            let TypeKind::Custom(param, None) = &arg.kind else {
+                return arg.clone();
+            };
+            if !is_own_parameter_at(type_defs, name, position, arg) {
+                return arg.clone();
+            }
+            Type::new(
+                TypeKind::Generic(
+                    param.clone(),
+                    None,
+                    crate::ast::types::TypeDeclarationKind::None,
+                ),
+                arg.span,
+            )
+        })
+        .collect()
+}
+
 /// Whether `args` instantiate the generic type `name` at arguments that are
 /// concrete, except for positions inference left unbound
 /// ([`is_own_parameter_at`]), with at least one concrete argument and no

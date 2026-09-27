@@ -382,6 +382,7 @@ impl TypeChecker {
                 );
                 self.record_call_pinning_site(func, span, call_id, context);
                 self.record_element_ordering_for_call(func, positional_args, context);
+                self.refuse_receiver_slots_bound(func, func_data, positional_args, context);
                 result
             }
             TypeKind::Meta(inner_type) => {
@@ -395,6 +396,47 @@ impl TypeChecker {
                     func.span,
                 );
                 make_type(TypeKind::Error)
+            }
+        }
+    }
+
+    /// Refuse a method call that stores a value binding a slot its receiver's
+    /// type leaves unbound: `xs.push(make())` on a `List<E<String, B>>` built
+    /// from `[E.L(s)]`. The method's parameter takes the receiver's element
+    /// type, slot included, and the value it is handed was laid out at the
+    /// argument the slot never chose (see
+    /// [`Self::inference_slots_bound_by`]).
+    fn refuse_receiver_slots_bound(
+        &mut self,
+        func: &Expression,
+        func_data: &crate::ast::types::FunctionTypeData,
+        positional_args: &[(&Expression, Type)],
+        context: &mut Context,
+    ) {
+        let ExpressionKind::Member(receiver, _) = &func.node else {
+            return;
+        };
+        let Some(receiver_ty) = self.get_type(receiver.id).cloned() else {
+            return;
+        };
+        let slots = self.inference_slots_of(&receiver_ty, context);
+        if slots.is_empty() {
+            return;
+        }
+        for (param, (arg, arg_ty)) in func_data.params.iter().zip(positional_args) {
+            let param_ty = self.resolve_type_expression(&param.typ, context);
+            let binds_a_receiver_slot = self
+                .inference_slots_bound_by(&param_ty, arg_ty, context)
+                .iter()
+                .any(|slot| slots.contains(slot));
+            if binds_a_receiver_slot {
+                self.refuse_binding_an_inference_slot(
+                    &param_ty,
+                    arg_ty,
+                    &format!("argument '{}'", param.name),
+                    arg.span,
+                    context,
+                );
             }
         }
     }

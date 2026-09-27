@@ -1095,6 +1095,11 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(DropThunk::SharedBody);
         };
         let (args, open) = Self::instantiation_arguments(name, arg_exprs, facts)?;
+        let args = crate::mir::instantiation::shape::with_unbound_arguments_normalized(
+            facts.definitions(),
+            name,
+            &args,
+        );
         if let Some(missed) = open
             .iter()
             .find(|param| type_ctx.bound_params.contains(*param))
@@ -2054,7 +2059,6 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
-        let no_bound_params = HashSet::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
@@ -2062,7 +2066,7 @@ impl<'a> FunctionTranslator<'a> {
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
             open_params: &element.open_params,
-            bound_params: &no_bound_params,
+            bound_params: &element.bound_params,
         };
 
         Self::emit_decref_value(&mut builder, &mut module_ctx, &element.kind, ptr, &type_ctx)?;

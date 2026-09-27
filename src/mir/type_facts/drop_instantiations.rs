@@ -33,7 +33,7 @@ use crate::ast::factory::type_expr_non_null;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::shape::{
     constructor_parts, instance_type_depth, is_partially_bound_instantiation,
-    MAX_INSTANCE_TYPE_DEPTH,
+    with_unbound_arguments_normalized, MAX_INSTANCE_TYPE_DEPTH,
 };
 use crate::mir::instantiation::{field_types, instantiation_argument, member_type_at};
 use crate::mir::symbol::token::MAX_TOKEN_DEPTH;
@@ -69,8 +69,9 @@ pub(crate) fn drop_instantiations<'b>(
     registered.sort_unstable();
     for name in registered {
         for args in registry.get(name).into_iter().flatten() {
-            if closure.is_concrete(name, args) {
-                closure.admit(name, args.clone())?;
+            let args = with_unbound_arguments_normalized(definitions, name, args);
+            if closure.is_concrete(name, &args) {
+                closure.admit(name, args)?;
             }
         }
     }
@@ -178,6 +179,7 @@ impl Closure<'_> {
             .iter()
             .map(instantiation_argument)
             .collect::<Option<_>>()?;
+        let args = with_unbound_arguments_normalized(self.definitions, name, &args);
         self.is_concrete(name, &args).then(|| (name.clone(), args))
     }
 
