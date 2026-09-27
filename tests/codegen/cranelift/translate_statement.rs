@@ -11,6 +11,10 @@ use miri::error::syntax::Span;
 use miri::mir::Place;
 use std::collections::HashMap;
 
+/// No open parameters: the code under test is not a shared generic body.
+static EMPTY_OPEN_PARAMS: std::sync::OnceLock<std::collections::HashSet<String>> =
+    std::sync::OnceLock::new();
+
 fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
@@ -31,6 +35,7 @@ fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
         ptr_type: cranelift_codegen::ir::types::I64,
         closure_capture_ast_types: EMPTY_CAPS.get_or_init(HashMap::new),
         out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
+        open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
     }
 }
 

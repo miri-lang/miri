@@ -1063,6 +1063,57 @@ fn register_base_class_instantiations(type_checker: &mut TypeChecker) -> Result<
     }
 }
 
+/// The type facts the CPU backend reads, settled over `bodies`.
+///
+/// Drop thunks run on the host only, so a kernel body — which holds no value
+/// a host thunk releases — contributes no instantiation to them.
+#[cfg(feature = "cranelift")]
+fn settled_type_facts(
+    pipeline_result: &PipelineResult,
+    bodies: &[(String, mir::Body)],
+) -> Result<mir::type_facts::TypeFacts, CompilerError> {
+    mir::type_facts::TypeFacts::new(
+        pipeline_result.type_checker.type_definitions().clone(),
+        pipeline_result
+            .type_checker
+            .generic_class_instantiations
+            .clone(),
+        pipeline_result.vtable_fills.clone(),
+        bodies
+            .iter()
+            .map(|(_, body)| body)
+            .filter(|body| !body.is_gpu()),
+    )
+    .map_err(|refusal| drop_instantiation_refusal(refusal, &pipeline_result.ast))
+}
+
+/// The error a refused drop-instantiation closure is reported as: a field
+/// nesting its own type deeper on every instantiation is polymorphic
+/// recursion, refused where its type is declared.
+fn drop_instantiation_refusal(
+    refusal: mir::type_facts::DropInstantiationRefusal,
+    ast: &Program,
+) -> CompilerError {
+    use mir::lowering::instantiation_limits as limits;
+    match refusal {
+        mir::type_facts::DropInstantiationRefusal::TooDeep { name, args, depth } => {
+            CompilerError::Lowering(limits::polymorphic_recursion(
+                &name,
+                &args,
+                &limits::ExceededLimit::TypeDepth(depth),
+                &limits::Growth::default(),
+                class_declaration_span(ast, &name),
+            ))
+        }
+        mir::type_facts::DropInstantiationRefusal::Unnameable { name, symbol } => {
+            CompilerError::Codegen(format!(
+                "two instantiations of `{name}` at types with no name would share {symbol}, \
+                 laid out for only one of them"
+            ))
+        }
+    }
+}
+
 /// Where the program declares `class`; the start of the file for a class it
 /// imports or does not declare.
 fn class_declaration_span(ast: &Program, class: &str) -> Span {
@@ -1516,20 +1567,7 @@ impl Pipeline {
                     use crate::codegen::CraneliftBackend;
                     let mut backend = CraneliftBackend::new()
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
-                    backend.set_type_facts(mir::type_facts::TypeFacts::new(
-                        pipeline_result.type_checker.type_definitions().clone(),
-                        pipeline_result
-                            .type_checker
-                            .generic_class_instantiations
-                            .clone(),
-                        pipeline_result.vtable_fills.clone(),
-                        // Drop thunks run on the host only; a kernel body
-                        // holds no value a host thunk releases.
-                        mir_bodies
-                            .iter()
-                            .map(|(_, body)| body)
-                            .filter(|body| !body.is_gpu()),
-                    ));
+                    backend.set_type_facts(settled_type_facts(pipeline_result, &mir_bodies)?);
 
                     let ptr_ty = backend.pointer_type();
                     let runtime_info = collect_runtime_info(

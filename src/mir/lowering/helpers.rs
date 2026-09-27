@@ -359,9 +359,10 @@ fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
 /// Perceus retains it at the bind. That retain is what balances the release the
 /// enum's drop path emits for the same field once it resolves the instantiation
 /// (`codegen::cranelift::rc::enum_variants_with_managed_fields`). Both sides
-/// read the same instantiation arguments, so a payload is managed at the bind
-/// exactly when it is released at the drop; substituting on only one side
-/// leaks (no release) or double-frees (release without retain).
+/// read the same instantiation arguments through the one rule,
+/// [`crate::mir::instantiation::member_type_at`], so a payload is managed at the
+/// bind exactly when it is released at the drop; substituting differently on
+/// either side leaks (no release) or double-frees (release without retain).
 fn substitute_variant_field_types(
     declared: &[Type],
     type_args: Option<&[Expression]>,
@@ -370,18 +371,7 @@ fn substitute_variant_field_types(
     declared
         .iter()
         .map(|ty| {
-            // TODO: this substitutes only a bare parameter and ignores a nullable
-            // argument, while codegen reads the same payload through
-            // `mir::instantiation::member_type_at`, which substitutes the whole
-            // type and folds `T` at `int?` into an optional. A payload bound here
-            // at `int` is laid out and released by codegen as `Option<int>`; the
-            // two must use one rule.
-            let substituted = crate::type_checker::generics::substitute_generic_field_kind(
-                &ty.kind,
-                type_args,
-                enum_def.generics.as_ref(),
-            );
-            Type::new(substituted, ty.span)
+            crate::mir::instantiation::member_type_at(enum_def.generics.as_deref(), type_args, ty)
         })
         .collect()
 }

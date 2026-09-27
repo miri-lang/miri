@@ -12,6 +12,7 @@
 //! and drops it at cannot drift apart.
 
 pub(crate) mod inherited;
+pub mod shape;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
@@ -50,7 +51,35 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
             crate::type_checker::generics::fold_value_generic_arithmetic(expr, subs)
                 .unwrap_or_else(|| expr.clone())
         }
-        _ => expr.clone(),
+        // A literal value argument is already concrete, and no other
+        // expression is written in a type-argument position, so none of these
+        // holds a parameter to substitute.
+        ExpressionKind::Literal(..)
+        | ExpressionKind::Logical(..)
+        | ExpressionKind::Assignment(..)
+        | ExpressionKind::Conditional(..)
+        | ExpressionKind::Range(..)
+        | ExpressionKind::Guard(..)
+        | ExpressionKind::Member(..)
+        | ExpressionKind::Index(..)
+        | ExpressionKind::Call(..)
+        | ExpressionKind::ImportPath(..)
+        | ExpressionKind::GenericType(..)
+        | ExpressionKind::TypeDeclaration(..)
+        | ExpressionKind::EnumValue(..)
+        | ExpressionKind::StructMember(..)
+        | ExpressionKind::Lambda(..)
+        | ExpressionKind::List(..)
+        | ExpressionKind::Array(..)
+        | ExpressionKind::Map(..)
+        | ExpressionKind::Tuple(..)
+        | ExpressionKind::Set(..)
+        | ExpressionKind::Match(..)
+        | ExpressionKind::FormattedString(..)
+        | ExpressionKind::NamedArgument(..)
+        | ExpressionKind::Super
+        | ExpressionKind::Block(..)
+        | ExpressionKind::Cast(..) => expr.clone(),
     }
 }
 

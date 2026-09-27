@@ -149,6 +149,7 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
+            open_params: &body.type_params,
         };
 
         let layout = CaptureLayout::of_body(body, ptr_type);
