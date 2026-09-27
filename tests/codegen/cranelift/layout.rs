@@ -551,7 +551,6 @@ fn test_class_is_pointer_sized() {
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
-            has_drop: false,
             runtime_settled_methods: std::collections::BTreeSet::new(),
         }),
     );
@@ -603,7 +602,6 @@ fn test_class_field_layout_uses_pointer_slots() {
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
-            has_drop: false,
             runtime_settled_methods: std::collections::BTreeSet::new(),
         }),
     );
@@ -613,10 +611,11 @@ fn test_class_field_layout_uses_pointer_slots() {
     let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr);
     let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr);
     let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr);
-    // Offsets are relative to payload pointer (past the 16-byte header)
-    assert_eq!(o0, 0);
-    assert_eq!(o1, ptr.bytes() as i32);
-    assert_eq!(o2, 2 * ptr.bytes() as i32);
+    // Offsets are relative to the payload pointer (past the 16-byte header);
+    // every class keeps its first word for the vtable pointer.
+    assert_eq!(o0, ptr.bytes() as i32);
+    assert_eq!(o1, 2 * ptr.bytes() as i32);
+    assert_eq!(o2, 3 * ptr.bytes() as i32);
 
     assert_eq!(t0, ptr);
     assert_eq!(t1, ptr);
@@ -878,7 +877,6 @@ fn make_class(name: &str, base: Option<&str>, fields: Vec<(&str, TypeKind)>) -> 
         methods: BTreeMap::new(),
         module: String::new(),
         is_abstract: false,
-        has_drop: false,
         runtime_settled_methods: std::collections::BTreeSet::new(),
     }
 }
@@ -888,7 +886,7 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
     // The payload an instance is allocated and the offsets its fields are
     // reached at come from one walk, so that an instance cannot be given less
     // memory than the fields written into it. A child that counts only what it
-    // declares itself would size this one at 16 bytes and leave the base's two
+    // declares itself would size this one at 24 bytes and leave the base's two
     // fields outside the allocation.
     let ptr = ptr_ty();
     let mut type_defs = HashMap::new();
@@ -917,8 +915,8 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
         "an instance holds the base's fields as well as its own"
     );
     assert_eq!(
-        layout.size, 32,
-        "four eight-byte fields need thirty-two bytes"
+        layout.size, 40,
+        "four eight-byte fields after the vtable word need forty bytes"
     );
 
     let kind = TypeKind::Custom("Child".to_string(), None);
@@ -937,4 +935,25 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
             layout.size
         );
     }
+}
+
+#[test]
+fn a_base_field_sits_where_it_does_in_a_subclass_that_dispatches() {
+    // A base without a vtable and a subclass that dispatches share the base's
+    // bodies, so the base's fields sit at the same offsets in both.
+    let ptr = ptr_ty();
+    let mut type_defs = HashMap::new();
+    type_defs.insert(
+        "Base".to_string(),
+        TypeDefinition::Class(make_class("Base", None, vec![("id", TypeKind::Int)])),
+    );
+    let mut child = make_class("Child", Some("Base"), vec![("extra", TypeKind::Int)]);
+    child.traits = vec!["Named".to_string()];
+    type_defs.insert("Child".to_string(), TypeDefinition::Class(child));
+
+    let base = class_payload_layout("Base", None, &type_defs, ptr);
+    let child = class_payload_layout("Child", None, &type_defs, ptr);
+
+    assert_eq!(base.fields[0], child.fields[0]);
+    assert_eq!(base.fields[0].0, ptr.bytes() as i32);
 }

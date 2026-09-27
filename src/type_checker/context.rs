@@ -236,9 +236,6 @@ pub struct ClassDefinition {
     pub module: String,
     /// Whether this class is abstract.
     pub is_abstract: bool,
-    /// True if this class itself declares `fn drop(self)`. A class also runs a
-    /// hook it inherits; ask [`crate::type_checker::utils::has_drop_hook`].
-    pub has_drop: bool,
     /// The methods this class declares with a body that is correct at every
     /// instantiation of the class, by the rule stated in
     /// [`crate::type_checker::runtime_settled`]. Filled once the class's bodies
@@ -437,6 +434,132 @@ pub fn class_method_declaration<'a>(
         .find_map(|(name, def)| def.methods.get(method_name).map(|method| (name, method)))
 }
 
+/// Where the body a class receiver runs for one method comes from, as
+/// [`resolve_method_source`] decides it.
+#[derive(Debug, Clone, Copy)]
+pub enum MethodSource<'a> {
+    /// The nearest class in the `extends` chain that gives the method a body.
+    Declared {
+        class: &'a str,
+        info: &'a MethodInfo,
+    },
+    /// A trait default filling a method no class in the chain gives a body.
+    Default(TraitDefault<'a>),
+    /// Only abstract declarations, and no default to fill them: `class` is the
+    /// nearest class declaring the method.
+    AbstractOnly {
+        class: &'a str,
+        info: &'a MethodInfo,
+    },
+}
+
+/// A default body a trait supplies to a class, and where the class reaches it.
+#[derive(Debug, Clone, Copy)]
+pub struct TraitDefault<'a> {
+    /// The nearest class in the chain whose `implements` list reaches the trait.
+    pub class_level: &'a str,
+    /// The trait declaring the default.
+    pub trait_name: &'a str,
+    /// The default's signature.
+    pub info: &'a MethodInfo,
+}
+
+impl<'a> MethodSource<'a> {
+    /// The signature of the declaration this source resolves to.
+    pub fn info(&self) -> &'a MethodInfo {
+        match self {
+            MethodSource::Declared { info, .. } | MethodSource::AbstractOnly { info, .. } => info,
+            MethodSource::Default(default) => default.info,
+        }
+    }
+}
+
+/// Which body a `class_name` receiver runs for `method_name`.
+///
+/// The class wins: the nearest class in the `extends` chain that declares the
+/// method with a body supplies it, whatever the traits any class in the chain
+/// lists. Only when no class gives it a body does a trait default fill it —
+/// the nearest class's `implements` list first, in declaration order, each
+/// trait before its parent traits. The nearest declaration being abstract
+/// shadows every body above it, so a class re-declaring an inherited method
+/// abstract leaves it to its descendants; it does not block a default, and is
+/// the answer only when no default exists. A `drop` that is not the hook is an
+/// ordinary body, so it shadows every hook above it just as any other method
+/// would.
+pub fn resolve_method_source<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<MethodSource<'a>> {
+    let mut abstract_declaration = None;
+    for (class, def) in class_ancestry(class_name, type_defs) {
+        match def.methods.get(method_name) {
+            Some(info) if !info.is_abstract => return Some(MethodSource::Declared { class, info }),
+            Some(info) => {
+                abstract_declaration = Some(MethodSource::AbstractOnly { class, info });
+                break;
+            }
+            None => {}
+        }
+    }
+    inherited_trait_default(type_defs, class_name, method_name)
+        .map(MethodSource::Default)
+        .or(abstract_declaration)
+}
+
+/// Whether a class still being declared — its own `methods` and `traits`,
+/// extending `base` — runs a body for `method_name` in the order
+/// [`resolve_method_source`] states, where the class itself is not yet in
+/// `type_defs` to be resolved.
+pub fn declared_class_has_body(
+    type_defs: &HashMap<String, TypeDefinition>,
+    methods: &BTreeMap<String, MethodInfo>,
+    traits: &[String],
+    base: &str,
+    method_name: &str,
+) -> bool {
+    methods
+        .get(method_name)
+        .is_some_and(|method| !method.is_abstract)
+        || trait_default_among(type_defs, traits, method_name).is_some()
+        || matches!(
+            resolve_method_source(type_defs, base, method_name),
+            Some(MethodSource::Declared { .. } | MethodSource::Default(_))
+        )
+}
+
+/// The trait default a `class_name` receiver would inherit for `method_name`
+/// were no class in its chain to give the method a body: the class's own
+/// traits by [`trait_default_among`], then each base's in turn.
+pub fn inherited_trait_default<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<TraitDefault<'a>> {
+    class_ancestry(class_name, type_defs).find_map(|(class_level, def)| {
+        trait_default_among(type_defs, &def.traits, method_name).map(|(trait_name, info)| {
+            TraitDefault {
+                class_level,
+                trait_name,
+                info,
+            }
+        })
+    })
+}
+
+/// The first of `traits`, in the order a class lists them, to supply a default
+/// `method_name` — itself or through a parent trait — paired with the trait
+/// that declares the default and its signature.
+fn trait_default_among<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    traits: &'a [String],
+    method_name: &str,
+) -> Option<(&'a str, &'a MethodInfo)> {
+    traits
+        .iter()
+        .find_map(|trait_name| find_trait_default_method(type_defs, trait_name, method_name))
+}
+
 /// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract,
 /// or if the class (or any ancestor) implements at least one trait.
 ///
@@ -465,14 +588,19 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
 
 /// Finds the default (non-abstract) `method_name` a trait or one of its parent
 /// traits supplies, returning the trait that declares it with its signature.
+///
+/// The hierarchy is searched breadth-first with each trait's parents in the
+/// order it lists them, so a trait is asked before the traits it extends and
+/// the first listed parent wins over a later one — the order a class's own
+/// `implements` list follows.
 pub fn find_trait_default_method<'a>(
     type_defs: &'a HashMap<String, TypeDefinition>,
     trait_name: &'a str,
     method_name: &str,
 ) -> Option<(&'a str, &'a MethodInfo)> {
-    let mut to_check = vec![trait_name];
+    let mut to_check = std::collections::VecDeque::from([trait_name]);
     let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop() {
+    while let Some(t_name) = to_check.pop_front() {
         if !visited.insert(t_name) {
             continue;
         }
@@ -482,7 +610,7 @@ pub fn find_trait_default_method<'a>(
                     return Some((t_name, method_info));
                 }
             }
-            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
+            to_check.extend(td.parent_traits.iter().map(String::as_str));
         }
     }
     None

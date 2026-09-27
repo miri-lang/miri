@@ -12,12 +12,12 @@
 //! a static call on that instantiation names, so a call through a trait
 //! receiver reaches the body compiled at the instance's own type arguments.
 //!
-//! This is also where the rule for which trait default a class inherits
-//! lives, and what a copy of one compiled under the class's name is typed at:
-//! static dispatch, vtable slots and the per-class copies the pipeline lowers
-//! all choose by [`trait_default_among`]. A container's equality thunk does
-//! not yet: it asks only the class chain for `equals`, so an `equals` a class
-//! inherits from a trait default is not what a set or map matches by.
+//! Which body a class runs for a method — its chain's or a trait default's —
+//! is [`resolve_method_source`]'s to say, in the type checker's layer: static
+//! dispatch, vtable slots, the drop hook and the per-class copies the pipeline
+//! lowers all map its answer to a symbol here. A container's equality thunk
+//! does not yet: it asks only the class chain for `equals`, so an `equals` a
+//! class inherits from a trait default is not what a set or map matches by.
 
 use super::method_dispatch::{instantiated_callee, resolve_inherited_method};
 use crate::ast::statement::DROP_HOOK_NAME;
@@ -25,7 +25,8 @@ use crate::ast::types::{Type, CLONE_METHOD_NAME};
 use crate::mir::dispatch::{dispatched_method_names, takes_vtable_slot};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
-    find_trait_default_method, ClassDefinition, MethodInfo, TraitDefinition, TypeDefinition,
+    class_ancestry, resolve_method_source, ClassDefinition, MethodInfo, MethodSource,
+    TraitDefinition, TypeDefinition,
 };
 use crate::type_checker::utils::has_drop_hook;
 use crate::type_checker::TypeChecker;
@@ -43,31 +44,6 @@ const THUNK_METHOD_NAMES: [&str; 3] = {
     [CLONE_METHOD_NAME, ordering, equals]
 };
 
-/// The first of `traits`, in the order a class lists them, to supply a default
-/// `method_name` — itself or through a parent trait — paired with the trait
-/// that declares the default and its signature.
-pub fn trait_default_among<'td>(
-    type_defs: &'td HashMap<String, TypeDefinition>,
-    traits: &'td [String],
-    method_name: &str,
-) -> Option<(&'td str, &'td MethodInfo)> {
-    traits
-        .iter()
-        .find_map(|trait_name| find_trait_default_method(type_defs, trait_name, method_name))
-}
-
-/// The trait whose default `method_name` a `class_name` receiver inherits: the
-/// class's own traits by [`trait_default_among`], then each base's in turn.
-pub fn inherited_trait_default<'td>(
-    type_defs: &'td HashMap<String, TypeDefinition>,
-    class_name: &str,
-    method_name: &str,
-) -> Option<&'td str> {
-    class_chain(type_defs, class_name)
-        .find_map(|(_, class)| trait_default_among(type_defs, &class.traits, method_name))
-        .map(|(trait_name, _)| trait_name)
-}
-
 /// The substitution the copy of `method_name` compiled under `class_name` for
 /// one instantiation reads its body through, given the class's own parameters
 /// at that instantiation.
@@ -82,21 +58,28 @@ pub fn instantiation_substitution<'s>(
     method_name: &str,
     class_substitution: &'s HashMap<String, Type>,
 ) -> Cow<'s, HashMap<String, Type>> {
-    let type_defs = type_checker.type_definitions();
-    let is_declared = matches!(
-        type_defs.get(class_name),
-        Some(TypeDefinition::Class(class)) if class.methods.contains_key(method_name)
-    );
-    let default_owner = (!is_declared)
-        .then(|| inherited_trait_default(type_defs, class_name, method_name))
-        .flatten();
+    let default_owner = inherited_default(type_checker.type_definitions(), class_name, method_name);
     match default_owner {
-        Some(trait_name) => Cow::Owned(type_checker.trait_default_substitution(
+        Some((_, trait_name)) => Cow::Owned(type_checker.trait_default_substitution(
             class_name,
             trait_name,
             class_substitution,
         )),
         None => Cow::Borrowed(class_substitution),
+    }
+}
+
+/// The class whose `implements` list supplies the default a `class_name`
+/// receiver runs for `method_name`, with the trait declaring it, or `None`
+/// when a class in the chain gives the method its body or nothing does.
+fn inherited_default<'td>(
+    type_defs: &'td HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(&'td str, &'td str)> {
+    match resolve_method_source(type_defs, class_name, method_name)? {
+        MethodSource::Default(default) => Some((default.class_level, default.trait_name)),
+        MethodSource::Declared { .. } | MethodSource::AbstractOnly { .. } => None,
     }
 }
 
@@ -107,7 +90,7 @@ pub fn methods_compiled_under<'td>(
     type_defs: &'td HashMap<String, TypeDefinition>,
     class_name: &str,
 ) -> impl Iterator<Item = &'td str> {
-    let declared = class_chain(type_defs, class_name)
+    let declared = class_ancestry(class_name, type_defs)
         .flat_map(|(_, class)| class.methods.keys().map(String::as_str));
     let defaulted = inherited_trait_defaults(type_defs, class_name)
         .into_iter()
@@ -116,33 +99,25 @@ pub fn methods_compiled_under<'td>(
 }
 
 /// Every method a trait anywhere in `class_name`'s chain gives a default body
-/// that no class in the chain declares, each paired with the trait
-/// [`inherited_trait_default`] chooses, sorted by method name.
+/// that no class in the chain gives a body, each paired with the trait
+/// [`resolve_method_source`] chooses, sorted by method name.
 pub fn inherited_trait_defaults<'td>(
     type_defs: &'td HashMap<String, TypeDefinition>,
     class_name: &str,
 ) -> Vec<(&'td str, &'td str)> {
-    let chain: Vec<&ClassDefinition> = class_chain(type_defs, class_name)
-        .map(|(_, class)| class)
-        .collect();
-    let traits = chain.iter().flat_map(|class| class.traits.iter());
+    let traits = class_ancestry(class_name, type_defs).flat_map(|(_, class)| class.traits.iter());
     defaulted_method_names(type_defs, traits)
         .into_iter()
-        .filter(|method| {
-            !chain
-                .iter()
-                .any(|class| class.methods.contains_key(*method))
-        })
         .filter_map(|method| {
-            inherited_trait_default(type_defs, class_name, method).map(|owner| (method, owner))
+            inherited_default(type_defs, class_name, method).map(|(_, owner)| (method, owner))
         })
         .collect()
 }
 
-/// Every method `class_name`'s own trait clauses give a default body that the
-/// class does not declare itself, each paired with the trait
-/// [`trait_default_among`] chooses, sorted by method name. These are the
-/// defaults compiled under the class's own name per instantiation.
+/// Every default [`inherited_trait_defaults`] lists for `class_name` that the
+/// class's own trait clauses supply rather than a base's, sorted by method
+/// name. These are the defaults compiled under the class's own name per
+/// instantiation; one a class in the chain gives a body is not among them.
 pub fn own_trait_defaults<'td>(
     type_defs: &'td HashMap<String, TypeDefinition>,
     class_name: &str,
@@ -152,10 +127,12 @@ pub fn own_trait_defaults<'td>(
     };
     defaulted_method_names(type_defs, class.traits.iter())
         .into_iter()
-        .filter(|method| !class.methods.contains_key(*method))
-        .filter_map(|method| {
-            trait_default_among(type_defs, &class.traits, method).map(|(owner, _)| (method, owner))
-        })
+        .filter_map(
+            |method| match inherited_default(type_defs, class_name, method) {
+                Some((class_level, owner)) if class_level == class_name => Some((method, owner)),
+                Some(_) | None => None,
+            },
+        )
         .collect()
 }
 
@@ -193,37 +170,6 @@ fn trait_hierarchy<'td, 'n>(
         pending.extend(trait_def.parent_traits.iter().map(String::as_str));
         return Some(trait_def);
     })
-}
-
-/// `class_name` and every class it extends, nearest first, each with its name.
-///
-/// Bounded by the number of definitions, so a circular `extends` — reported
-/// where the class is declared — cannot hang the walk.
-fn class_chain<'td>(
-    type_defs: &'td HashMap<String, TypeDefinition>,
-    class_name: &str,
-) -> impl Iterator<Item = (&'td str, &'td ClassDefinition)> {
-    let mut next = class_entry(type_defs, class_name);
-    std::iter::from_fn(move || {
-        let (name, class) = next?;
-        next = class
-            .base_class
-            .as_deref()
-            .and_then(|base| class_entry(type_defs, base));
-        Some((name, class))
-    })
-    .take(type_defs.len() + 1)
-}
-
-/// The class registered under `name`, with the name as the table holds it.
-fn class_entry<'td>(
-    type_defs: &'td HashMap<String, TypeDefinition>,
-    name: &str,
-) -> Option<(&'td str, &'td ClassDefinition)> {
-    let (name, TypeDefinition::Class(class)) = type_defs.get_key_value(name)? else {
-        return None;
-    };
-    Some((name.as_str(), class))
 }
 
 /// The slots of an instance's vtable. They name what a static call on the
@@ -266,7 +212,7 @@ pub fn collect_vtable_methods<'td>(
     class_name: &str,
     type_defs: &'td HashMap<String, TypeDefinition>,
 ) -> Vec<&'td str> {
-    let chain: Vec<&ClassDefinition> = class_chain(type_defs, class_name)
+    let chain: Vec<&ClassDefinition> = class_ancestry(class_name, type_defs)
         .map(|(_, class)| class)
         .collect();
     let abstract_methods = chain
@@ -308,15 +254,16 @@ fn dispatches_through_vtable(
         Some(TypeDefinition::Trait(_)) => {
             traits_dispatch(type_defs, std::iter::once(receiver), method_name)
         }
-        Some(TypeDefinition::Class(class)) if class.is_abstract => class_chain(type_defs, receiver)
-            .any(|(_, class)| {
+        Some(TypeDefinition::Class(class)) if class.is_abstract => {
+            class_ancestry(receiver, type_defs).any(|(_, class)| {
                 (class.is_abstract && declares_dispatched(&class.methods, method_name))
                     || traits_dispatch(
                         type_defs,
                         class.traits.iter().map(String::as_str),
                         method_name,
                     )
-            }),
+            })
+        }
         Some(
             TypeDefinition::Class(_)
             | TypeDefinition::Struct(_)
@@ -346,17 +293,17 @@ fn declares_dispatched(methods: &BTreeMap<String, MethodInfo>, method_name: &str
 
 /// The symbol the slot for `method_name` names in `class_name`'s vtable where
 /// no per-instantiation body applies: the nearest class in its chain that
-/// gives the method a body, else the trait default [`inherited_trait_default`]
+/// gives the method a body, else the trait default [`resolve_method_source`]
 /// chooses.
 ///
 /// A default a class without type parameters of its own inherits resolves to
 /// the class's own copy, `"{class_name}_{method_name}"`: the pipeline lowers
-/// one for every concrete class that declares the method nowhere in its chain,
-/// typed at what its clauses pin the trait's parameters to, and a static call
-/// on the class names the same body. A generic class reaches this only through
-/// its bare vtable; its own copy there leaves its parameters open, so its slot
-/// — like one whose chain declares the method abstractly — names the trait's
-/// shared `"{Trait}_{method_name}"`.
+/// one for every concrete class whose chain gives the method no body — an
+/// abstract declaration included — typed at what its clauses pin the trait's
+/// parameters to, and a static call on the class names the same body. A
+/// generic class reaches this only through its bare vtable; its own copy there
+/// leaves its parameters open, so its slot names the trait's shared
+/// `"{Trait}_{method_name}"`.
 ///
 /// A generic class's bare slots are what an instance runs when its arguments
 /// could not be spelled where it was built, as [`VtableInstance::of`] lists.
@@ -377,26 +324,23 @@ pub fn resolve_vtable_method(
     method_name: &str,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> Option<String> {
-    let mut is_declared_in_chain = false;
-    for (name, class) in class_chain(type_defs, class_name) {
-        if let Some(method) = class.methods.get(method_name) {
-            if !method.is_abstract {
-                return Some(Symbol::method(name, &[], method_name, &[]).link_name());
-            }
-            is_declared_in_chain = true;
+    let owner = match resolve_method_source(type_defs, class_name, method_name)? {
+        MethodSource::Declared { class, .. } => class,
+        MethodSource::Default(default) if is_generic_class(type_defs, class_name) => {
+            default.trait_name
         }
-    }
-    let defining_trait = inherited_trait_default(type_defs, class_name, method_name)?;
-    let is_generic_class = matches!(
-        type_defs.get(class_name),
-        Some(TypeDefinition::Class(class)) if class.generics.is_some()
-    );
-    let owner = if is_declared_in_chain || is_generic_class {
-        defining_trait
-    } else {
-        class_name
+        MethodSource::Default(_) => class_name,
+        MethodSource::AbstractOnly { .. } => return None,
     };
     Some(Symbol::method(owner, &[], method_name, &[]).link_name())
+}
+
+/// Whether `class_name` registers a class declaring type parameters.
+fn is_generic_class(type_defs: &HashMap<String, TypeDefinition>, class_name: &str) -> bool {
+    matches!(
+        type_defs.get(class_name),
+        Some(TypeDefinition::Class(class)) if class.generics.is_some()
+    )
 }
 
 /// The symbol of the body a call to `method_name` on a `type_name` receiver

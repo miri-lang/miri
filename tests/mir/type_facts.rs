@@ -60,7 +60,6 @@ fn generic_class(name: &str, field: Type) -> TypeDefinition {
         methods: BTreeMap::new(),
         module: String::new(),
         is_abstract: false,
-        has_drop: false,
         runtime_settled_methods: BTreeSet::new(),
     })
 }

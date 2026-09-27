@@ -54,7 +54,7 @@ use crate::diagnostics::repair::RepairRequest;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
-use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::context::{inherited_trait_default, Context, TypeDefinition};
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
 use crate::type_checker::TypeChecker;
@@ -1546,34 +1546,27 @@ impl TypeChecker {
         })))
     }
 
-    /// A class receiver's method found on a trait it inherits — directly, from
-    /// a parent trait, or through a base class — typed at what the clauses
+    /// A class receiver's method a trait default it inherits supplies —
+    /// directly, from a parent trait, or through a base class — chosen in the
+    /// order [`resolve_method_source`] states and typed at what the clauses
     /// from the receiver up to the declaring trait pin that trait's parameters.
+    ///
+    /// [`resolve_method_source`]: crate::type_checker::context::resolve_method_source
     fn infer_member_class_trait_fallback(
         &mut self,
         name: &str,
         prop_name: &str,
         type_args: &Option<Vec<Expression>>,
     ) -> Option<Type> {
+        let default =
+            inherited_trait_default(&self.type_table.global_type_definitions, name, prop_name)?;
+        let (trait_name, method_info) = (default.trait_name.to_string(), default.info.clone());
         let receiver_mapping = self.build_receiver_mapping(name, type_args);
         let supertypes = self.declaring_types_above(name, &receiver_mapping);
-        let mut search_class_name = Some(name.to_string());
-        while let Some(class_name) = search_class_name.take() {
-            let (traits, base_class) =
-                match self.type_table.global_type_definitions.get(&class_name) {
-                    Some(TypeDefinition::Class(class_def)) => {
-                        (class_def.traits.clone(), class_def.base_class.clone())
-                    }
-                    _ => break,
-                };
-            for trait_name in &traits {
-                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &supertypes) {
-                    return Some(ty);
-                }
-            }
-            search_class_name = base_class;
-        }
-        None
+        let pins = pins_of(&supertypes, &trait_name)
+            .cloned()
+            .unwrap_or_default();
+        Some(self.build_method_type(&method_info, &pins))
     }
 
     fn build_receiver_mapping(
@@ -1604,40 +1597,6 @@ impl TypeChecker {
             }
         }
         m
-    }
-
-    /// The first default named `prop_name` on `trait_name` or a trait above
-    /// it, its signature read through the pins `supertypes` — as
-    /// [`TypeChecker::declaring_types_above`] lists them for the receiver —
-    /// gives the trait that declares it.
-    fn search_trait_method(
-        &mut self,
-        trait_name: &str,
-        prop_name: &str,
-        supertypes: &[(String, HashMap<String, Type>)],
-    ) -> Option<Type> {
-        let mut to_check: Vec<String> = vec![trait_name.to_string()];
-        let mut visited = std::collections::HashSet::new();
-        while let Some(t_name) = to_check.pop() {
-            if !visited.insert(t_name.clone()) {
-                continue;
-            }
-            let (method_opt, parents) = match self.type_table.global_type_definitions.get(&t_name) {
-                Some(TypeDefinition::Trait(t_def)) => (
-                    t_def.methods.get(prop_name).cloned(),
-                    t_def.parent_traits.clone(),
-                ),
-                _ => continue,
-            };
-            if let Some(method_info) = method_opt {
-                if !method_info.is_abstract {
-                    let pins = pins_of(supertypes, &t_name).cloned().unwrap_or_default();
-                    return Some(self.build_method_type(&method_info, &pins));
-                }
-            }
-            to_check.extend(parents);
-        }
-        None
     }
 
     /// What a method declared on `declaring` reads its signature through when

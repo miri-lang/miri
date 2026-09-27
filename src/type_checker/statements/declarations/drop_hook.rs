@@ -14,12 +14,6 @@ use crate::ast::{Statement, StatementKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::TypeChecker;
 
-/// Returns true if a class or trait method statement is the drop hook,
-/// `fn drop(self)` or `fn drop()`.
-pub(crate) fn is_drop_method(stmt: &Statement) -> bool {
-    matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.is_drop_hook())
-}
-
 /// Returns true if a struct function statement is the drop hook `fn drop(self)`.
 pub(crate) fn is_struct_drop_method(stmt: &Statement) -> bool {
     matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.is_struct_drop_hook())

@@ -676,6 +676,9 @@ impl<'a> FunctionTranslator<'a> {
         }
         if let Some(symbol) = vtable_symbol {
             Self::store_vtable_pointer(builder, ctx, &symbol, payload_ptr, ptr_type)?;
+        } else if matches!(kind, AggregateKind::Class(_)) {
+            let null = builder.ins().iconst(ptr_type, 0);
+            builder.ins().store(MemFlags::new(), null, payload_ptr, 0);
         }
 
         for (val, offset) in translated.into_iter().zip(&field_offsets) {

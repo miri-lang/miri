@@ -578,7 +578,6 @@ impl TypeChecker {
                 methods: BTreeMap::new(),
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
-                has_drop: false,
                 runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
@@ -855,10 +854,6 @@ impl TypeChecker {
         let (methods, base_direct_args) =
             self.scan_class_body(&name, base_class_name.as_deref(), class_data, context);
 
-        let has_drop = class_data
-            .body
-            .iter()
-            .any(statements::declarations::drop_hook::is_drop_method);
         self.register_type_definition(
             name.clone(),
             TypeDefinition::Class(context::ClassDefinition {
@@ -872,7 +867,6 @@ impl TypeChecker {
                 methods,
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
-                has_drop,
                 runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
@@ -899,7 +893,6 @@ impl TypeChecker {
                 methods: BTreeMap::new(),
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
-                has_drop: false,
                 runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );

@@ -45,14 +45,13 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
-    class_method_declaration, ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo,
-    TypeDefinition,
+    class_ancestry, class_method_declaration, declared_class_has_body, ClassDefinition, Context,
+    FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
-use crate::type_checker::statements::declarations::drop_hook::is_drop_method;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The body a class method declares, or `None` for an abstract method, which
 /// declares none or an empty one.
@@ -127,7 +126,6 @@ impl TypeChecker {
             trait_direct_args,
             fields,
             methods,
-            body.iter().any(is_drop_method),
             is_abstract,
             visibility,
             context,
@@ -236,16 +234,14 @@ impl TypeChecker {
         if let Some(ref base_name) = base_class_name {
             self.check_class_super_init(name, base_name, methods, method_statements, name_expr);
         }
-        if !is_abstract {
-            if let Some(ref base_name) = base_class_name {
-                self.check_class_abstract_methods(name, base_name, methods, name_expr);
-            }
-        }
         let lineage = ClassLineage {
             name,
             base_name: base_class_name.as_deref(),
             methods,
         };
+        if !is_abstract {
+            self.check_class_abstract_methods(&lineage, trait_names, name_expr);
+        }
         for trait_name in trait_names {
             self.check_class_trait_methods(&lineage, trait_name, trait_direct_args, name_expr);
         }
@@ -265,7 +261,6 @@ impl TypeChecker {
         trait_args: HashMap<String, Vec<Type>>,
         fields: Vec<(String, FieldInfo)>,
         methods: BTreeMap<String, MethodInfo>,
-        has_drop: bool,
         is_abstract: bool,
         visibility: &MemberVisibility,
         context: &mut Context,
@@ -281,7 +276,6 @@ impl TypeChecker {
             methods,
             module: self.modules.current_module.clone(),
             is_abstract,
-            has_drop,
             runtime_settled_methods: std::collections::BTreeSet::new(),
         };
 
@@ -1064,48 +1058,43 @@ impl TypeChecker {
         false
     }
 
-    /// Validate non-abstract classes implement all abstract methods
+    /// Refuse a concrete class that leaves an abstract method of a class it
+    /// extends without a body: one the class declares, one a class between it
+    /// and the abstract declaration declares, or a default a trait anywhere in
+    /// its chain supplies — the order [`declared_class_has_body`] resolves.
     fn check_class_abstract_methods(
         &mut self,
-        name: &str,
-        base_name: &str,
-        methods: &BTreeMap<String, MethodInfo>,
+        lineage: &ClassLineage,
+        trait_names: &[String],
         name_expr: &Expression,
     ) {
-        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-        visited.insert(name.to_string());
-        let mut current_base: Option<String> = Some(base_name.to_string());
-
-        while let Some(class_name) = current_base.take() {
-            if !visited.insert(class_name.clone()) {
-                break;
-            }
-            let (abstract_method_names, next_base) =
-                match self.type_table.global_type_definitions.get(&class_name) {
-                    Some(TypeDefinition::Class(base_def)) => {
-                        let names: Vec<String> = base_def
-                            .methods
-                            .iter()
-                            .filter(|(_, info)| info.is_abstract)
-                            .map(|(n, _)| n.clone())
-                            .collect();
-                        (names, base_def.base_class.clone())
-                    }
-                    _ => break,
-                };
-            for method_name in &abstract_method_names {
-                if !methods.contains_key(method_name) {
-                    self.report_error(
-                        DiagnosticCode::TypClassDefinition,
-                        format!(
-                            "Class '{}' must implement abstract method '{}' from class '{}'",
-                            name, method_name, class_name
-                        ),
-                        name_expr.span,
-                    );
+        let Some(base_name) = lineage.base_name else {
+            return;
+        };
+        let definitions = &self.type_table.global_type_definitions;
+        let mut seen = BTreeSet::new();
+        let mut refusals = Vec::new();
+        for (declaring, class) in class_ancestry(base_name, definitions) {
+            for (method_name, method) in &class.methods {
+                if !method.is_abstract || !seen.insert(method_name.as_str()) {
+                    continue;
+                }
+                if !declared_class_has_body(
+                    definitions,
+                    lineage.methods,
+                    trait_names,
+                    base_name,
+                    method_name,
+                ) {
+                    refusals.push(format!(
+                        "Class '{}' must implement abstract method '{}' from class '{}'",
+                        lineage.name, method_name, declaring
+                    ));
                 }
             }
-            current_base = next_base;
+        }
+        for message in refusals {
+            self.report_error(DiagnosticCode::TypClassDefinition, message, name_expr.span);
         }
     }
 

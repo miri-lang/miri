@@ -352,7 +352,13 @@ fn struct_def(has_drop: bool) -> TypeDefinition {
     })
 }
 
+/// A class `C`, declaring the drop hook `fn drop(self)` when `has_drop`.
 fn class_def(has_drop: bool) -> TypeDefinition {
+    let methods = if has_drop {
+        BTreeMap::from([("drop".to_string(), drop_method(false))])
+    } else {
+        BTreeMap::<String, MethodInfo>::new()
+    };
     TypeDefinition::Class(ClassDefinition {
         name: "C".to_string(),
         generics: None,
@@ -361,10 +367,9 @@ fn class_def(has_drop: bool) -> TypeDefinition {
         traits: vec![],
         trait_args: std::collections::HashMap::new(),
         fields: vec![] as Vec<(String, FieldInfo)>,
-        methods: BTreeMap::<String, MethodInfo>::new(),
+        methods,
         module: "test".to_string(),
         is_abstract: false,
-        has_drop,
         runtime_settled_methods: std::collections::BTreeSet::new(),
     })
 }
