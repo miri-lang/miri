@@ -95,8 +95,8 @@ impl ElementMethod {
             // TODO: `equals` is looked up along the class chain only, so a set or
             // map holding a class whose `equals` is a trait default it inherits
             // matches those elements by their bytes, not by the default.
-            // Resolving it needs the rule `dispatch_symbols::trait_default_among`
-            // states, and the per-class copy of the default the pipeline lowers.
+            // Resolving it needs the order `resolve_method_source` states,
+            // and the per-class copy of the default the pipeline lowers.
             ElementMethod::Equals => facts
                 .class_method(type_name, self.method_name())
                 .is_some_and(|(declaring, method)| is_element_equality(declaring, method)),

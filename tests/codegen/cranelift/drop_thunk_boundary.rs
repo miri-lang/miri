@@ -58,7 +58,6 @@ fn definitions() -> HashMap<String, TypeDefinition> {
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
-            has_drop: false,
             runtime_settled_methods: BTreeSet::new(),
         }),
     )])

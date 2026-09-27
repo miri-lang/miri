@@ -2914,8 +2914,10 @@ impl Pipeline {
                         if let Some(method_stmts) = abstract_class_methods.get(base_name.as_str()) {
                             for method_stmt in method_stmts.iter() {
                                 if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
-                                    // Skip if the concrete class directly overrides this method.
-                                    if cd.methods.contains_key(md.name.as_str()) {
+                                    let runs_this_body = Self::runs_inherited_body(
+                                        result, class_name, &md.name, base_name,
+                                    );
+                                    if !runs_this_body {
                                         continue;
                                     }
                                     let symbol = Symbol::method(class_name, &[], &md.name, &[]);
@@ -2947,6 +2949,26 @@ impl Pipeline {
             }
         }
         Ok(())
+    }
+
+    /// Whether a `class_name` receiver runs the body `ancestor` declares for
+    /// `method_name` — not one the class overrides, one a nearer class
+    /// replaces, or one re-declared abstract below `ancestor`.
+    fn runs_inherited_body(
+        result: &PipelineResult,
+        class_name: &str,
+        method_name: &str,
+        ancestor: &str,
+    ) -> bool {
+        matches!(
+            crate::type_checker::context::resolve_method_source(
+                result.type_checker.type_definitions(),
+                class_name,
+                method_name,
+            ),
+            Some(crate::type_checker::context::MethodSource::Declared { class, .. })
+                if class == ancestor
+        )
     }
 
     /// Re-lower trait default methods per concrete class.

@@ -11,10 +11,12 @@ use crate::error::syntax::Span;
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
-use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
+use crate::type_checker::context::{
+    class_needs_vtable, resolve_method_source, MethodInfo, MethodSource, TypeDefinition,
+};
 
 use super::class_instantiations::is_registered_instantiation;
-use super::dispatch_symbols::{instantiation_substitution, trait_default_among, vtable_slot_index};
+use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::collections::HashMap;
@@ -99,9 +101,9 @@ pub(crate) fn residency_specialize_call(
     Ok(handles)
 }
 
-/// Walk the inheritance chain starting at `class_name` to find the first class
-/// or trait that directly declares `method_name`. Returns the defining class/trait
-/// name and a clone of its [`MethodInfo`] so the caller can mangle the symbol correctly.
+/// The class or trait whose body a call to `method_name` on a `class_name`
+/// receiver names, in the order [`resolve_method_source`] states, with a clone
+/// of its [`MethodInfo`] so the caller can mangle the symbol correctly.
 ///
 /// This is the core of inherited method resolution: if `Dog extends Animal` and
 /// only `Animal` defines `speak`, the returned defining class is `"Animal"` and
@@ -116,8 +118,8 @@ pub(crate) fn residency_specialize_call(
 ///
 /// Also handles:
 /// - Trait-typed receivers: walks the trait hierarchy to find the method.
-/// - Default trait methods: if the class doesn't define the method, checks all
-///   implemented traits (and their parent traits) for a default (non-abstract) impl.
+/// - Default trait methods: when no class in the chain gives the method a body,
+///   the default a trait the chain implements supplies.
 pub(crate) fn resolve_inherited_method(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     class_name: &str,
@@ -134,75 +136,43 @@ pub(crate) fn resolve_inherited_method(
         return None;
     }
 
-    let caller_is_abstract = matches!(
-        type_defs.get(class_name),
-        Some(TypeDefinition::Class(cd)) if cd.is_abstract
-    );
+    let caller_is_abstract = is_abstract_class(type_defs, class_name);
     resolve_via_class_chain(type_defs, class_name, method_name, caller_is_abstract)
 }
 
-/// Walk the class's inheritance chain (and each class's traits) for `method_name`.
+/// The owner a static call names for the body [`resolve_method_source`]
+/// resolves `method_name` to on a `class_name` receiver.
 ///
-/// TODO: a default a subclass's own trait supplies is preferred over a method
-/// its base class declares, and resolved to a `{Subclass}_{method}` copy that
-/// is never lowered when the base already declares the method, so the call
-/// fails to link (`class Child extends Base implements Named`, where both
-/// `Base` and `Named` supply `name()`).
+/// A concrete caller reaching a method an abstract class declares names its
+/// own copy; so does one inheriting a trait default. An abstract caller names
+/// the declaring class, or the trait that supplies the default.
 fn resolve_via_class_chain(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     class_name: &str,
     method_name: &str,
     caller_is_abstract: bool,
 ) -> Option<(String, MethodInfo)> {
-    let mut current = class_name.to_string();
-    loop {
-        let class_def = match type_defs.get(&current) {
-            Some(TypeDefinition::Class(cd)) => {
-                if let Some(method_info) = cd.methods.get(method_name) {
-                    let defining = if cd.is_abstract && !caller_is_abstract {
-                        class_name.to_string()
-                    } else {
-                        current.clone()
-                    };
-                    return Some((defining, method_info.clone()));
-                }
-                cd
+    let source = resolve_method_source(type_defs, class_name, method_name)?;
+    let owner = match source {
+        MethodSource::Declared { class, .. } | MethodSource::AbstractOnly { class, .. } => {
+            if is_abstract_class(type_defs, class) && !caller_is_abstract {
+                class_name
+            } else {
+                class
             }
-            _ => return None,
-        };
-        if let Some(found) = resolve_via_class_traits(
-            type_defs,
-            &class_def.traits,
-            method_name,
-            class_name,
-            caller_is_abstract,
-        ) {
-            return Some(found);
         }
-        match &class_def.base_class {
-            Some(b) => current = b.clone(),
-            None => return None,
-        }
-    }
+        MethodSource::Default(default) if caller_is_abstract => default.trait_name,
+        MethodSource::Default(_) => class_name,
+    };
+    Some((owner.to_string(), source.info().clone()))
 }
 
-/// The default `method_name` a class's directly-implemented traits supply, by
-/// [`trait_default_among`]. The concrete-caller / abstract-definer rule mirrors
-/// the class-chain case.
-fn resolve_via_class_traits(
+/// Whether `name` registers an abstract class.
+fn is_abstract_class(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
-    traits: &[String],
-    method_name: &str,
-    class_name: &str,
-    caller_is_abstract: bool,
-) -> Option<(String, MethodInfo)> {
-    let (defining_trait, info) = trait_default_among(type_defs, traits, method_name)?;
-    let defining = if caller_is_abstract {
-        defining_trait
-    } else {
-        class_name
-    };
-    Some((defining.to_string(), info.clone()))
+    name: &str,
+) -> bool {
+    matches!(type_defs.get(name), Some(TypeDefinition::Class(class)) if class.is_abstract)
 }
 
 /// Walk the trait hierarchy to find `method_name`. Returns the defining trait

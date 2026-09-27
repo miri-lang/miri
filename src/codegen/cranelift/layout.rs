@@ -9,7 +9,6 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
-use crate::mir::dispatch::class_needs_vtable;
 use crate::mir::instantiation::{field_types, member_type_at};
 use crate::mir::type_facts::{EnumDefinition, StructDefinition, TypeDefinition};
 use cranelift_codegen::ir::Type as CraneliftType;
@@ -328,8 +327,8 @@ pub struct ClassPayloadLayout {
     /// Offset and Cranelift type of each field, in the order
     /// [`field_types`] lists them.
     pub fields: Vec<(i32, CraneliftType)>,
-    /// Bytes the payload occupies, counting the vtable slot a dispatching
-    /// class carries ahead of its first field.
+    /// Bytes the payload occupies, counting the vtable slot every class
+    /// carries ahead of its first field.
     pub size: u32,
 }
 
@@ -341,17 +340,15 @@ pub fn class_payload_layout(
     ptr_ty: CraneliftType,
 ) -> ClassPayloadLayout {
     let ptr_size = ptr_ty.bytes() as i32;
-    // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
-    // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
-    // User-declared fields start after the vtable pointer.
+    // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr][field0][field1]...
+    // Offset 0 holds the vtable pointer — null for a class without a vtable —
+    // on every class, not only one that dispatches: a body compiled for a base
+    // runs on instances of every class extending it, and a subclass that
+    // dispatches while its base does not must still find each inherited field
+    // where the base's bodies read it.
     let field_kinds = class_field_kinds(name, type_args, type_definitions);
-    let vtable_offset = if class_needs_vtable(name, type_definitions) {
-        ptr_size
-    } else {
-        0
-    };
     let mut fields = Vec::with_capacity(field_kinds.len());
-    let mut offset: i32 = vtable_offset;
+    let mut offset: i32 = ptr_size;
     let mut max_align = ptr_size;
     for field_kind in &field_kinds {
         let cl_ty = translate_type_kind(field_kind, ptr_ty);

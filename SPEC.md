@@ -656,6 +656,8 @@ class Fish extends Animal implements Swimmer
 
 A trait a class implements is implemented by every class that extends it, whether or not the subclass names it again. A trait method the base declares answers for the subclass: a `Length` orders, compares equal, and sorts through the `compare` or `equals` a `Measure` declares, unless `Length` declares its own.
 
+A subclass may name a trait its base does not implement. Where that trait's default collides with a method the base declares with a body, the base's method wins: `class Child extends Base implements Named` runs `Base.name()`, not `Named`'s default `name()`, whether it is called on a `Child` or through a `Named`. The same base method satisfies an abstract `name()` the trait requires. A subclass that wants the default's behavior declares the method itself.
+
 A method that overrides one taking `Self` keeps the base's parameter type — it may be handed any `Measure` — so the override spells it `other Measure`. Its return may narrow to the subclass.
 
 A trait method whose return names `Self` (`clone`, `concat`, `repeat`) is the exception. The body a subclass would inherit builds the base class, not the subclass, so every class extending such a declaration declares the method itself — with a body, or `abstract` to leave it to its own descendants. A subclass that does not is refused (`MER_TYP_057`).
@@ -708,7 +710,15 @@ trait ReadWrite extends Readable, Writable
 
 ### Default (Concrete) Methods
 
-Traits can provide default method implementations. Classes inherit the default unless they override it.
+Traits can provide default method implementations. A class inherits a default only for a method no class in its `extends` chain gives a body; the class wins over the trait. A class runs, for any method:
+
+1. the nearest class in its `extends` chain — itself first — that declares the method with a body;
+2. otherwise a default a trait supplies: the nearest class's `implements` list first, in the order it lists them; each listed trait is searched breadth-first through the traits it extends, in the order each lists its parents, so a trait is asked before its parents and an earlier parent before a later one; then the next class up the chain;
+3. otherwise the method has no body: an abstract class may leave it so, and a concrete class is refused.
+
+When two traits supply the same default, the first one reached in that order wins; the collision is not an error. A class that wants a different body declares the method itself.
+
+An abstract declaration in the chain does not block a default: a default fills an abstract method no class gives a body. The nearest declaration being abstract does shadow every body further up the chain, so a class that re-declares an inherited method `abstract` makes its concrete descendants supply one — their own, an intermediate class's, or a trait default. A call through a trait-typed receiver reaches the same body a call on the class does.
 
 ```miri
 trait Logger
@@ -722,6 +732,10 @@ class AppLogger implements Logger
     fn prefix() String
         "APP"
 ```
+
+### The `drop` Hook
+
+A class or struct may declare `fn drop(self)` (on a class, `fn drop()` means the same). Releasing the last reference to an instance is meant to run it exactly once. Known limitation: releasing a class instance through a trait-typed binding does not yet run the hook, nor release the instance's managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own.
 
 ### `Self` Type
 

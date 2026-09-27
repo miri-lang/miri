@@ -15,19 +15,24 @@
 //! different symbols for one body.
 
 use crate::ast::types::Type;
-use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::context::{resolve_method_source, MethodSource, TypeDefinition};
 
 use std::collections::HashMap;
 
 /// One class, instantiated at concrete type arguments.
 pub(crate) type ClassInstantiation = (String, Vec<Type>);
 
-/// The class declaring `method_name` for `class_name`, and the type arguments
-/// that class is instantiated at when `class_name` carries `type_args`.
+/// The class whose body `class_name` runs for `method_name`, and the type
+/// arguments that class is instantiated at when `class_name` carries
+/// `type_args`.
 ///
-/// Returns `class_name` and `type_args` unchanged when the class declares the
-/// method itself. `None` when no class in the chain declares it, or when a
-/// link's `extends` arguments do not fill the parent's generic parameters —
+/// The class is the one [`resolve_method_source`] names: the nearest class in
+/// the chain giving the method a body, else the nearest whose trait clauses
+/// supply the default — a default is re-lowered once per implementing class,
+/// under that class's symbol, so the class owns that body as much as a written
+/// method. Returns `class_name` and `type_args` unchanged when that is the
+/// class itself. `None` when nothing in the chain declares the method, or when
+/// a link's `extends` arguments do not fill the parent's generic parameters —
 /// there is no instantiation to name in either case.
 pub(crate) fn declaring_class_instantiation(
     type_definitions: &HashMap<String, TypeDefinition>,
@@ -35,6 +40,10 @@ pub(crate) fn declaring_class_instantiation(
     type_args: &[Type],
     method_name: &str,
 ) -> Option<ClassInstantiation> {
+    let owner = match resolve_method_source(type_definitions, class_name, method_name)? {
+        MethodSource::Declared { class, .. } | MethodSource::AbstractOnly { class, .. } => class,
+        MethodSource::Default(default) => default.class_level,
+    };
     let mut current = class_name.to_string();
     let mut current_args = type_args.to_vec();
 
@@ -42,10 +51,7 @@ pub(crate) fn declaring_class_instantiation(
     // the walk by the number of definitions keeps this from hanging before the
     // report is produced.
     for _ in 0..type_definitions.len() {
-        let Some(TypeDefinition::Class(class_def)) = type_definitions.get(&current) else {
-            return None;
-        };
-        if compiles_its_own_body(class_def, method_name, type_definitions) {
+        if current == owner {
             return Some((current, current_args));
         }
         let (base, base_args) =
@@ -194,28 +200,6 @@ fn open_parameter(param: &crate::type_checker::context::GenericDefinition) -> Ty
     )
 }
 
-/// Whether a body for `method_name` is compiled under `class_def`'s own name.
-///
-/// That holds for a method the class declares, and equally for one a trait it
-/// lists supplies a default for: a default is re-lowered once per implementing
-/// class, under that class's symbol, so the class owns that body as much as a
-/// written method. Only a method reached through `extends` belongs elsewhere.
-fn compiles_its_own_body(
-    class_def: &crate::type_checker::context::ClassDefinition,
-    method_name: &str,
-    type_definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    class_def.methods.contains_key(method_name)
-        || class_def.traits.iter().any(|trait_name| {
-            crate::type_checker::context::find_trait_default_method(
-                type_definitions,
-                trait_name,
-                method_name,
-            )
-            .is_some()
-        })
-}
-
 /// `class_name` and every class it extends, nearest first, each paired with the
 /// type arguments it is reached at.
 ///
@@ -360,7 +344,6 @@ mod tests {
             methods,
             module: String::new(),
             is_abstract: false,
-            has_drop: false,
             runtime_settled_methods: std::collections::BTreeSet::new(),
         }
     }

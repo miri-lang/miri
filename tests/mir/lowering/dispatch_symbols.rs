@@ -5,11 +5,13 @@
 //! names outside any MIR call.
 
 use miri::mir::lowering::dispatch_symbols::{
-    collect_vtable_methods, inherited_trait_default, instantiation_substitution, method_symbol,
-    resolve_vtable_method, synthesized_references, vtable_slot_index, VtableInstance, VtableLayout,
-    ELEMENT_METHOD_NAMES,
+    collect_vtable_methods, inherited_trait_defaults, instantiation_substitution, method_symbol,
+    own_trait_defaults, resolve_vtable_method, synthesized_references, vtable_slot_index,
+    VtableInstance, VtableLayout, ELEMENT_METHOD_NAMES,
 };
-use miri::type_checker::context::TypeDefinition;
+use miri::type_checker::context::{
+    inherited_trait_default, resolve_method_source, MethodSource, TraitDefault, TypeDefinition,
+};
 use std::collections::HashMap;
 
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
@@ -63,7 +65,6 @@ fn class(
         methods: method_map,
         module: String::new(),
         is_abstract,
-        has_drop: false,
         runtime_settled_methods: std::collections::BTreeSet::new(),
     }
 }
@@ -110,7 +111,7 @@ fn resolve_vtable_method_picks_concrete_override() {
 }
 
 #[test]
-fn resolve_vtable_method_walks_to_base_when_derived_is_abstract() {
+fn resolve_vtable_method_leaves_a_method_re_declared_abstract_unfilled() {
     let base = class("Base", None, &[], &[("greet", method(false, false))], false);
     let mid = class(
         "Mid",
@@ -123,11 +124,9 @@ fn resolve_vtable_method_walks_to_base_when_derived_is_abstract() {
         ("Base".to_string(), TypeDefinition::Class(base)),
         ("Mid".to_string(), TypeDefinition::Class(mid)),
     ]);
-    // Mid declares greet abstract — resolver continues to Base.
-    assert_eq!(
-        resolve_vtable_method("Mid", "greet", &defs),
-        Some("miri.Base.greet".to_string()),
-    );
+    // Mid re-declares greet abstract, which shadows Base's body: a class
+    // extending Mid supplies its own.
+    assert_eq!(resolve_vtable_method("Mid", "greet", &defs), None);
 }
 
 /// A default a non-generic class inherits resolves to the class's own copy,
@@ -171,10 +170,10 @@ fn resolve_vtable_method_names_the_shared_default_for_a_generic_class() {
     );
 }
 
-/// A chain that declares the method abstractly gets no class copy of the
-/// default, so the slot names the trait's shared body.
+/// A default fills a method the chain declares only abstractly, and the class
+/// gets its own copy of it, as it would with no declaration at all.
 #[test]
-fn resolve_vtable_method_names_the_shared_default_under_an_abstract_declaration() {
+fn resolve_vtable_method_names_the_class_copy_of_a_default_under_an_abstract_declaration() {
     let trait_with_default = trait_def("Greeter", &[], &[("greet", method(false, false))]);
     let base = class(
         "Base",
@@ -194,7 +193,7 @@ fn resolve_vtable_method_names_the_shared_default_under_an_abstract_declaration(
     ]);
     assert_eq!(
         resolve_vtable_method("Impl", "greet", &defs),
-        Some("miri.Greeter.greet".to_string()),
+        Some("miri.Impl.greet".to_string()),
     );
 }
 
@@ -539,7 +538,13 @@ fn inherited_trait_default_prefers_the_first_listed_trait() {
         ("Second".to_string(), TypeDefinition::Trait(second)),
         ("Box".to_string(), TypeDefinition::Class(boxed)),
     ]);
-    assert_eq!(inherited_trait_default(&defs, "Box", "who"), Some("First"));
+    assert!(matches!(
+        inherited_trait_default(&defs, "Box", "who"),
+        Some(TraitDefault {
+            trait_name: "First",
+            ..
+        })
+    ));
     assert_eq!(
         resolve_vtable_method("Box", "who", &defs),
         Some("miri.First.who".to_string()),
@@ -625,4 +630,81 @@ fn instantiation_substitution_reads_a_default_at_the_trait_pin() {
 fn instantiation_substitution_reads_a_declared_method_at_the_instantiation() {
     let kind = instantiation_kind(NAME_SHARING_SOURCE, "Box", "value", "T");
     assert_eq!(kind, Some(TypeKind::Float));
+}
+
+/// `Child extends Base implements Named`, where `Base` declares `name` with a
+/// body and `Named` supplies a default `name`.
+fn base_body_under_subclass_default() -> HashMap<String, TypeDefinition> {
+    let named = trait_def("Named", &[], &[("name", method(false, false))]);
+    let base = class("Base", None, &[], &[("name", method(false, false))], false);
+    let child = class("Child", Some("Base"), &["Named"], &[], false);
+    make_defs([
+        ("Named".to_string(), TypeDefinition::Trait(named)),
+        ("Base".to_string(), TypeDefinition::Class(base)),
+        ("Child".to_string(), TypeDefinition::Class(child)),
+    ])
+}
+
+#[test]
+fn resolve_method_source_prefers_a_base_body_over_a_subclass_trait_default() {
+    let defs = base_body_under_subclass_default();
+    assert!(matches!(
+        resolve_method_source(&defs, "Child", "name"),
+        Some(MethodSource::Declared { class: "Base", .. })
+    ));
+}
+
+#[test]
+fn resolve_method_source_fills_an_abstract_declaration_with_a_default() {
+    let named = trait_def("Named", &[], &[("name", method(false, false))]);
+    let base = class("Base", None, &[], &[("name", method(true, false))], true);
+    let child = class("Child", Some("Base"), &["Named"], &[], false);
+    let defs = make_defs([
+        ("Named".to_string(), TypeDefinition::Trait(named)),
+        ("Base".to_string(), TypeDefinition::Class(base)),
+        ("Child".to_string(), TypeDefinition::Class(child)),
+    ]);
+    assert!(matches!(
+        resolve_method_source(&defs, "Child", "name"),
+        Some(MethodSource::Default(TraitDefault {
+            class_level: "Child",
+            trait_name: "Named",
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn resolve_method_source_reports_an_abstract_declaration_without_a_default() {
+    let base = class("Base", None, &[], &[("name", method(true, false))], true);
+    let child = class("Child", Some("Base"), &[], &[], false);
+    let defs = make_defs([
+        ("Base".to_string(), TypeDefinition::Class(base)),
+        ("Child".to_string(), TypeDefinition::Class(child)),
+    ]);
+    assert!(matches!(
+        resolve_method_source(&defs, "Child", "name"),
+        Some(MethodSource::AbstractOnly { class: "Base", .. })
+    ));
+    assert!(resolve_method_source(&defs, "Child", "missing").is_none());
+}
+
+#[test]
+fn a_default_a_base_body_shadows_is_compiled_under_no_class() {
+    let defs = base_body_under_subclass_default();
+    assert!(own_trait_defaults(&defs, "Child").is_empty());
+    assert!(inherited_trait_defaults(&defs, "Child").is_empty());
+}
+
+#[test]
+fn resolve_vtable_method_names_a_base_body_over_a_subclass_default() {
+    let defs = base_body_under_subclass_default();
+    assert_eq!(
+        resolve_vtable_method("Child", "name", &defs),
+        Some("miri.Base.name".to_string()),
+    );
+    assert_eq!(
+        method_symbol(&defs, "Child", "name"),
+        "miri.Base.name".to_string()
+    );
 }
