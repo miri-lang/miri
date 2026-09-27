@@ -502,3 +502,80 @@ fn main()
         "Method 'name' in class 'Child' does not match trait 'Named' signature",
     );
 }
+
+#[test]
+fn test_abstract_ancestor_body_reaches_a_class_below_a_concrete_intermediate() {
+    assert_heap_guard_output(
+        r#"
+trait Named
+    fn name() String
+
+abstract class Top implements Named
+    public var id int
+
+    public fn name() String
+        return f"top {self.id}"
+
+class Mid extends Top
+    public var m int
+
+class Leaf extends Mid
+    public var l int
+
+fn main()
+    let x = Leaf(id: 1, m: 2, l: 3)
+    println(x.name())
+    let y = Mid(id: 4, m: 5)
+    println(y.name())
+    let n Named = Leaf(id: 6, m: 7, l: 8)
+    println(n.name())
+"#,
+        "top 1\ntop 4\ntop 6",
+    );
+}
+
+const TOP_RE_DECLARED_ABSTRACT: &str = r#"
+abstract class Top
+    public var id int
+
+    public fn name() String
+        return "top"
+
+abstract class Mid extends Top
+    abstract fn name() String
+"#;
+
+#[test]
+fn test_method_re_declared_abstract_hides_the_body_above_it() {
+    assert_compiler_error(
+        &program(&[
+            TOP_RE_DECLARED_ABSTRACT,
+            r#"
+class Leaf extends Mid
+    public var l int
+
+fn main()
+    println(Leaf(id: 1, l: 2).name())
+"#,
+        ]),
+        "Class 'Leaf' must implement abstract method 'name' from class 'Mid'",
+    );
+}
+
+#[test]
+fn test_trait_default_fills_a_method_re_declared_abstract() {
+    assert_heap_guard_output(
+        &program(&[
+            NAMED_WITH_DEFAULT,
+            TOP_RE_DECLARED_ABSTRACT,
+            r#"
+class Leaf extends Mid implements Named
+    public var l int
+
+fn main()
+    println(Leaf(id: 1, l: 2).name())
+"#,
+        ]),
+        "trait",
+    );
+}

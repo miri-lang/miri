@@ -586,34 +586,49 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
     false
 }
 
-/// Finds the default (non-abstract) `method_name` a trait or one of its parent
-/// traits supplies, returning the trait that declares it with its signature.
-///
-/// The hierarchy is searched breadth-first with each trait's parents in the
-/// order it lists them, so a trait is asked before the traits it extends and
-/// the first listed parent wins over a later one — the order a class's own
-/// `implements` list follows.
-pub fn find_trait_default_method<'a>(
+/// `trait_name` and every trait it extends, each once, breadth-first with each
+/// trait's parents in the order it lists them: a trait comes before the traits
+/// it extends, and an earlier-listed parent before a later one. A name that
+/// registers no trait is passed over.
+pub fn trait_lineage<'a>(
     type_defs: &'a HashMap<String, TypeDefinition>,
-    trait_name: &'a str,
-    method_name: &str,
-) -> Option<(&'a str, &'a MethodInfo)> {
-    let mut to_check = std::collections::VecDeque::from([trait_name]);
-    let mut visited = std::collections::HashSet::new();
-    while let Some(t_name) = to_check.pop_front() {
-        if !visited.insert(t_name) {
+    trait_name: &str,
+) -> impl Iterator<Item = (&'a str, &'a TraitDefinition)> {
+    let mut pending: std::collections::VecDeque<&'a str> = type_defs
+        .get_key_value(trait_name)
+        .map(|(name, _)| name.as_str())
+        .into_iter()
+        .collect();
+    let mut visited = HashSet::new();
+    std::iter::from_fn(move || loop {
+        let name = pending.pop_front()?;
+        if !visited.insert(name) {
             continue;
         }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
-            if let Some(method_info) = td.methods.get(method_name) {
-                if !method_info.is_abstract {
-                    return Some((t_name, method_info));
-                }
-            }
-            to_check.extend(td.parent_traits.iter().map(String::as_str));
-        }
-    }
-    None
+        let Some(TypeDefinition::Trait(trait_def)) = type_defs.get(name) else {
+            continue;
+        };
+        pending.extend(trait_def.parent_traits.iter().map(String::as_str));
+        return Some((name, trait_def));
+    })
+}
+
+/// Finds the default (non-abstract) `method_name` a trait or one of its parent
+/// traits supplies, in [`trait_lineage`] order, returning the trait that
+/// declares it with its signature. The first listed parent wins over a later
+/// one — the order a class's own `implements` list follows.
+pub fn find_trait_default_method<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    trait_name: &str,
+    method_name: &str,
+) -> Option<(&'a str, &'a MethodInfo)> {
+    trait_lineage(type_defs, trait_name).find_map(|(name, trait_def)| {
+        trait_def
+            .methods
+            .get(method_name)
+            .filter(|method| !method.is_abstract)
+            .map(|method| (name, method))
+    })
 }
 
 /// Context holds the current state of the type checking process, including

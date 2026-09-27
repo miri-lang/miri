@@ -2895,23 +2895,16 @@ impl Pipeline {
                     let self_type =
                         Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
 
-                    // Walk up the inheritance chain; stop at the first non-abstract class.
-                    let mut base_opt = cd.base_class.clone();
-                    while let Some(ref base_name) = base_opt.clone() {
-                        let base_cd = match result
-                            .type_checker
-                            .type_table
-                            .global_type_definitions
-                            .get(base_name)
-                        {
-                            Some(TypeDefinition::Class(bcd)) => bcd,
-                            _ => break,
-                        };
-                        if !base_cd.is_abstract {
-                            break;
-                        }
-
-                        if let Some(method_stmts) = abstract_class_methods.get(base_name.as_str()) {
+                    // Every abstract ancestor, past any concrete class between: static
+                    // dispatch names this class's own copy of whatever abstract-class body
+                    // it runs, however far up the chain that body is declared.
+                    let ancestors = crate::type_checker::context::class_ancestry(
+                        class_name,
+                        result.type_checker.type_definitions(),
+                    )
+                    .skip(1);
+                    for (base_name, _) in ancestors {
+                        if let Some(method_stmts) = abstract_class_methods.get(base_name) {
                             for method_stmt in method_stmts.iter() {
                                 if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
                                     let runs_this_body = Self::runs_inherited_body(
@@ -2942,8 +2935,6 @@ impl Pipeline {
                                 }
                             }
                         }
-
-                        base_opt = base_cd.base_class.clone();
                     }
                 }
             }

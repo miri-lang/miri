@@ -9,6 +9,7 @@ pub mod class;
 pub mod conditional_expression;
 pub mod constant;
 pub mod constructor;
+pub mod context;
 pub mod control_flow;
 pub mod division_by_zero;
 pub mod escape_analysis;
