@@ -63,6 +63,15 @@ fn is_arithmetic_op(op: &BinaryOp) -> bool {
     )
 }
 
+/// True for the operators a generic body admits on a parameter operand and
+/// leaves each instantiation to judge at the types it binds: arithmetic and
+/// comparison.
+fn is_deferred_to_instantiation(op: &BinaryOp) -> bool {
+    is_arithmetic_op(op)
+        || matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+        || crate::type_checker::operators::is_ordering_op(op)
+}
+
 /// True for a member a caller outside the type can read.
 fn is_readable_member(visibility: &MemberVisibility) -> bool {
     match visibility {
@@ -146,6 +155,7 @@ impl TypeChecker {
 
         if crate::type_checker::operators::is_ordering_op(op) {
             self.record_ordering_requirement(&left_ty, context);
+            self.record_ordering_requirement(&right_ty, context);
         }
 
         if let Some(message) = self.missing_ordering(&left_ty, op, &right_ty, context) {
@@ -161,8 +171,8 @@ impl TypeChecker {
 
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(result) => {
-                if is_arithmetic_op(op) {
-                    self.record_arithmetic_requirement(&left_ty, op, &right_ty, context);
+                if is_deferred_to_instantiation(op) {
+                    self.record_binary_requirement(&left_ty, op, &right_ty, &result, context);
                 }
                 result
             }
@@ -457,8 +467,10 @@ impl TypeChecker {
             Ok(result) => {
                 // `x op= y` applies `op` as `x = x op y` does, so a generic
                 // body states the same requirement on its parameters.
-                if is_arithmetic_op(&binary_op) {
-                    self.record_arithmetic_requirement(lhs_type, &binary_op, rhs_type, context);
+                if is_deferred_to_instantiation(&binary_op) {
+                    self.record_binary_requirement(
+                        lhs_type, &binary_op, rhs_type, &result, context,
+                    );
                 }
                 Some(result)
             }

@@ -155,14 +155,19 @@ fn test_generic_class_implementing_iterable_string_high_count() {
 use system.ops
 
 class Queue<T> implements Iterable<T>
+    item T
+
+    fn init(item T)
+        self.item = item
+
     fn length() int
         return 200
 
     fn element_at(index int) T
-        return "a" + "b"
+        return self.item
 
 fn main()
-    let q = Queue<String>()
+    let q = Queue<String>("a" + "b")
     var len_sum = 0
     for s in q
         len_sum += s.length()
@@ -250,6 +255,11 @@ trait Listable<E> extends Iterable<E>
     fn is_empty() bool
 
 class Bag<T> implements Listable<T>
+    item T
+
+    fn init(item T)
+        self.item = item
+
     fn is_empty() bool
         return false
 
@@ -257,10 +267,10 @@ class Bag<T> implements Listable<T>
         return 200
 
     fn element_at(index int) T
-        return "a" + "b"
+        return self.item
 
 fn main()
-    let b = Bag<String>()
+    let b = Bag<String>("a" + "b")
     var total = 0
     for s in b
         total += s.length()
@@ -282,13 +292,20 @@ fn test_for_loop_over_subclass_of_a_generic_iterable_class_pins_the_element_type
 use system.ops
 
 class Bag<T> implements Iterable<T>
+    item T
+
+    fn init(item T)
+        self.item = item
+
     fn length() int
         return 200
 
     fn element_at(index int) T
-        return "a" + "b"
+        return self.item
 
 class Words extends Bag<String>
+    fn init()
+        super.init("a" + "b")
 
 fn main()
     let w = Words()
@@ -394,17 +411,24 @@ fn test_generic_class_with_non_first_trait_param() {
 use system.ops
 
 class Pair<K, V> implements Iterable<V>
+    left V
+    right V
+
+    fn init(left V, right V)
+        self.left = left
+        self.right = right
+
     fn length() int
         return 2
 
     fn element_at(index int) V
         if index == 0
-            return "first"
+            return self.left
         else
-            return "second"
+            return self.right
 
 fn main()
-    var p = Pair<int, String>()
+    var p = Pair<int, String>("first", "second")
     var count = 0
     for v in p
         count += v.length()

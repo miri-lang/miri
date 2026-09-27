@@ -53,7 +53,7 @@ use crate::error::syntax::Span;
 use crate::type_checker::call_instantiation::{type_arguments_noun, GenericCall, ParameterBound};
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
-use crate::type_checker::instantiation_requirements::{GenericBodyId, FREE_FUNCTION_OWNER};
+use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
 use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
@@ -245,6 +245,23 @@ impl TypeChecker {
 
     /// Extracts the bare function name from a call target that is either a
     /// direct identifier (`abs`) or a module member (`M.abs`).
+    /// The body a call through `func` answers the requirements of: the free
+    /// function the name resolved to where it was written — bare, through a
+    /// module alias (`C.lt`) or under an import alias (`{lt as L}`) — keyed by
+    /// the module declaring it and the name it is declared under. A method's
+    /// requirements are keyed by the type that declares it and answered where
+    /// the receiver's type arguments are known, and a local holding a function
+    /// value names no declaration; neither has a body here.
+    fn free_function_body(&self, func: &Expression) -> Option<GenericBodyId> {
+        let named = if let ExpressionKind::Member(_, member) = &func.node {
+            member.as_ref()
+        } else {
+            func
+        };
+        let declared = self.declared_callee(named.id)?;
+        Some((free_function_owner(&declared.module), declared.name.clone()))
+    }
+
     fn call_func_name(func: &Expression) -> Option<&str> {
         match &func.node {
             ExpressionKind::Identifier(name, _) => Some(name.as_str()),
@@ -474,7 +491,7 @@ impl TypeChecker {
             Some(parameters) => {
                 let call = GenericCall {
                     callee: Self::call_func_name(func).map(str::to_string),
-                    body: free_function_body(func),
+                    body: self.free_function_body(func),
                     parameters,
                     bounds,
                     declared_return,
@@ -3466,16 +3483,4 @@ fn generic_parameter_names(func_data: &crate::ast::types::FunctionTypeData) -> O
             })
             .collect(),
     )
-}
-
-/// The body a call through `func` answers the requirements of: a free
-/// function's, when the call names one bare. A method's requirements are keyed
-/// by the type that declares it and answered where the receiver's type
-/// arguments are known, so a method matched on its bare name would be read
-/// against a free function that happens to share it.
-fn free_function_body(func: &Expression) -> Option<GenericBodyId> {
-    let ExpressionKind::Identifier(callee, _) = &func.node else {
-        return None;
-    };
-    Some((FREE_FUNCTION_OWNER.to_string(), callee.clone()))
 }

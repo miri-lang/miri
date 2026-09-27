@@ -442,7 +442,10 @@ impl TypeChecker {
 
     /// Infers the type of a 'super' expression.
     ///
-    /// `super` refers to the parent class. It can only be used inside a class that extends another.
+    /// `super` refers to the parent class at the arguments the `extends`
+    /// clause gives it, so a member reached through it is typed at what the
+    /// clause binds the parent's parameters to. It can only be used inside a
+    /// class that extends another.
     pub(crate) fn infer_super(&mut self, span: Span, context: &Context) -> Type {
         if context.current_class.is_none() {
             self.report_error(
@@ -454,7 +457,13 @@ impl TypeChecker {
         }
 
         if let Some(base_class) = &context.current_base_class {
-            ast_factory::make_type(TypeKind::Custom(base_class.clone(), None))
+            let clause_args = self.extends_clause_arguments(context).map(|args| {
+                args.iter()
+                    .cloned()
+                    .map(ast_factory::type_expr_non_null)
+                    .collect()
+            });
+            ast_factory::make_type(TypeKind::Custom(base_class.clone(), clause_args))
         } else {
             self.report_error(
                 DiagnosticCode::TypClassDefinition,
@@ -463,6 +472,19 @@ impl TypeChecker {
             );
             ast_factory::make_type(TypeKind::Error)
         }
+    }
+
+    /// The type arguments the current class's `extends` clause gives its
+    /// parent, or `None` when the clause names none.
+    fn extends_clause_arguments<'a>(&'a self, context: &'a Context) -> Option<&'a [Type]> {
+        let class_name = context.current_class.as_deref()?;
+        let TypeDefinition::Class(class_def) = context
+            .resolve_type_definition(class_name)
+            .or_else(|| self.type_table.global_type_definitions.get(class_name))?
+        else {
+            return None;
+        };
+        class_def.base_class_args.as_deref()
     }
 }
 
