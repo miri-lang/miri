@@ -78,11 +78,33 @@ impl TypeChecker {
         if has_error {
             return make_type(TypeKind::Error);
         }
+        for element in elements {
+            self.record_joined_type(element, &element_type);
+        }
 
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(element_type)]),
         ))
+    }
+
+    /// Record `joined` as the type of `expr` — one branch of a conditional or
+    /// match, or one element of a literal — when it left open an argument a
+    /// sibling bound.
+    ///
+    /// The value is built at the type recorded for it, and the expression
+    /// holding it reads it at the joined type: an `E.L(s)` built as an
+    /// `E<String, B>` beside an `E<String, i128>` has to be laid out at the
+    /// wider payload slots too, or a read through the joined type lands at the
+    /// wrong offset.
+    pub(crate) fn record_joined_type(&mut self, expr: &Expression, joined: &Type) {
+        let Some(recorded) = self.get_type(expr.id) else {
+            return;
+        };
+        let refined = fill_open_arguments(recorded, joined);
+        if refined != *recorded {
+            self.type_table.types.insert(expr.id, refined);
+        }
     }
 
     /// Infers the type of an array literal expression (`[1, 2, 3]`).
@@ -121,6 +143,9 @@ impl TypeChecker {
 
         if has_error {
             return make_type(TypeKind::Error);
+        }
+        for element in elements {
+            self.record_joined_type(element, &element_type);
         }
 
         make_type(TypeKind::Custom(
@@ -246,7 +271,7 @@ impl TypeChecker {
 /// `Result<String, E>`. A literal holding both holds `Result<String, String>`,
 /// and every layer that releases or compares its elements must see that type,
 /// not whichever argument the first element happened to leave open.
-fn fill_open_arguments(known: &Type, other: &Type) -> Type {
+pub(crate) fn fill_open_arguments(known: &Type, other: &Type) -> Type {
     if matches!(known.kind, TypeKind::Generic(..)) {
         return if matches!(other.kind, TypeKind::Generic(..)) {
             known.clone()

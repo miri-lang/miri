@@ -192,3 +192,33 @@ fn a_field_nesting_its_own_type_deeper_is_refused_at_the_depth_bound() {
     assert_eq!(name, "Grow");
     assert_eq!(depth, 33);
 }
+
+/// `class Duo<A, B>` holding one `value A`.
+fn duo() -> TypeDefinition {
+    let TypeDefinition::Class(mut def) = generic_class("Duo", parameter("A")) else {
+        panic!("`generic_class` builds a class");
+    };
+    def.generics = Some(
+        ["A", "B"]
+            .iter()
+            .map(|name| GenericDefinition {
+                name: name.to_string(),
+                constraint: None,
+                kind: TypeDeclarationKind::None,
+            })
+            .collect(),
+    );
+    TypeDefinition::Class(def)
+}
+
+#[test]
+fn an_unbound_argument_spelled_as_a_bare_name_names_the_same_drop_function() {
+    // Inference writes an argument it left unbound either as the open
+    // parameter or as its bare name; both are one instantiation.
+    let bare_b = ty(TypeKind::Custom("B".to_string(), None));
+    let body = body_holding(vec![instance("Duo", vec![string(), bare_b])]);
+    let definitions = HashMap::from([("Duo".to_string(), duo())]);
+    let facts = TypeFacts::new(definitions, HashMap::new(), Default::default(), [&body]).unwrap();
+
+    assert!(facts.is_drop_instantiation("Duo", &[string(), parameter("B")]));
+}

@@ -109,6 +109,15 @@ impl TypeChecker {
                         body_type.to_string(),
                     );
                 }
+                // A branch built by a variant constructor binds only what its
+                // payload names (`E.L(s)` is an `E<String, B>`); the other
+                // branches bind the rest, and the value the whole expression
+                // yields is laid out at all of them.
+                first_branch_type = Some(
+                    crate::type_checker::expressions::collections::fill_open_arguments(
+                        first, body_type,
+                    ),
+                );
             } else {
                 first_branch_type = Some(body_type.clone());
             }
@@ -456,7 +465,7 @@ impl TypeChecker {
             return make_type(TypeKind::Void);
         }
 
-        self.check_branch_agreement(
+        let joined = self.check_branch_agreement(
             &arm_types,
             |expected, actual| {
                 format!(
@@ -465,7 +474,13 @@ impl TypeChecker {
                 )
             },
             context,
-        )
+        );
+        for branch in branches {
+            if let StatementKind::Expression(expr) = &branch.body.node {
+                self.record_joined_type(expr, &joined);
+            }
+        }
+        joined
     }
 
     /// Returns the span of the expression inside a statement body.
@@ -515,7 +530,7 @@ impl TypeChecker {
 
             let branch_types = [(then_type, then_expr.span), (else_type, else_expr.span)];
 
-            self.check_branch_agreement(
+            let joined = self.check_branch_agreement(
                 &branch_types,
                 |expected, actual| {
                     format!(
@@ -524,7 +539,10 @@ impl TypeChecker {
                     )
                 },
                 context,
-            )
+            );
+            self.record_joined_type(then_expr, &joined);
+            self.record_joined_type(else_expr, &joined);
+            joined
         } else {
             if !self.are_compatible(&then_type, &make_type(TypeKind::Void), context) {
                 self.report_error(

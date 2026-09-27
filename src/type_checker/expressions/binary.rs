@@ -408,6 +408,14 @@ impl TypeChecker {
                 ),
                 span,
             );
+        } else {
+            self.refuse_binding_an_inference_slot(
+                &lhs_type,
+                &stored_type,
+                "an assignment target",
+                span,
+                context,
+            );
         }
 
         if matches!(op, AssignmentOp::Assign) {

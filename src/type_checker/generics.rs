@@ -996,6 +996,190 @@ impl TypeChecker {
 // Stays inline rather than moving to `tests/type_checker/generics.rs`: both
 // `substitute_type` and `MAX_SUBSTITUTION_DEPTH` are crate-internal, and the
 // nesting depth this exercises is not expressible in a `.mi` source program.
+/// The type arguments `target` and `source` hold at the same positions, when
+/// both are built by the same constructor with the same arity; none otherwise.
+fn argument_pairs<'t>(target: &'t Type, source: &'t Type) -> Vec<(&'t Expression, &'t Expression)> {
+    if let (TypeKind::Custom(name, Some(args)), TypeKind::Custom(other, Some(other_args))) =
+        (&target.kind, &source.kind)
+    {
+        if name == other && args.len() == other_args.len() {
+            return args.iter().zip(other_args).collect();
+        }
+    } else if let (TypeKind::Tuple(parts), TypeKind::Tuple(other_parts)) =
+        (&target.kind, &source.kind)
+    {
+        if parts.len() == other_parts.len() {
+            return parts.iter().zip(other_parts).collect();
+        }
+    } else if let (TypeKind::List(element), TypeKind::List(other))
+    | (TypeKind::Set(element), TypeKind::Set(other))
+    | (TypeKind::Future(element), TypeKind::Future(other)) = (&target.kind, &source.kind)
+    {
+        return vec![(&**element, &**other)];
+    } else if let (TypeKind::Map(key, value), TypeKind::Map(other_key, other_value))
+    | (TypeKind::Result(key, value), TypeKind::Result(other_key, other_value)) =
+        (&target.kind, &source.kind)
+    {
+        return vec![(&**key, &**other_key), (&**value, &**other_value)];
+    }
+    Vec::new()
+}
+
+impl TypeChecker {
+    /// The inference slots of `target` that `source` binds.
+    ///
+    /// A variant or empty-collection constructor binds only the parameters its
+    /// arguments name, so `E.L("s")` is an `E<String, B>` and `List([E.L("s")])`
+    /// a `List<E<String, B>>`. `B` is a slot: a parameter no enclosing
+    /// declaration declares, standing for a type nothing chose. The value is
+    /// laid out without it, so a value that does bind it — an
+    /// `E<String, i128>`, whose payload slots are wider — cannot be stored
+    /// where the slot is: a read or release through the location's type would
+    /// land at the wrong offset.
+    ///
+    /// A parameter the enclosing body declares is not a slot; it stands for
+    /// the body's own argument, which every value there shares.
+    pub(crate) fn inference_slots_bound_by(
+        &self,
+        target: &Type,
+        source: &Type,
+        context: &Context,
+    ) -> Vec<String> {
+        let mut bound = Vec::new();
+        self.collect_slots_bound_by(target, source, context, &mut bound);
+        bound
+    }
+
+    fn collect_slots_bound_by(
+        &self,
+        target: &Type,
+        source: &Type,
+        context: &Context,
+        bound: &mut Vec<String>,
+    ) {
+        if let TypeKind::Generic(name, _, _) = &target.kind {
+            let is_declared = matches!(
+                context.resolve_type_definition(name),
+                Some(TypeDefinition::Generic(_))
+            );
+            let source_is_open = matches!(source.kind, TypeKind::Generic(..) | TypeKind::Error);
+            if !is_declared && !source_is_open && !bound.contains(name) {
+                bound.push(name.clone());
+            }
+            return;
+        }
+        if let (TypeKind::Option(inner), TypeKind::Option(other))
+        | (TypeKind::Linear(inner), TypeKind::Linear(other)) = (&target.kind, &source.kind)
+        {
+            self.collect_slots_bound_by(inner, other, context, bound);
+            return;
+        }
+        // Any other pairing names no arguments to compare, or is two different
+        // types, which the compatibility check reports on its own.
+        let pairs = argument_pairs(target, source);
+        for (target_arg, source_arg) in pairs {
+            if let (ExpressionKind::Type(target_ty, _), ExpressionKind::Type(source_ty, _)) =
+                (&target_arg.node, &source_arg.node)
+            {
+                self.collect_slots_bound_by(target_ty, source_ty, context, bound);
+            }
+        }
+    }
+
+    /// Every inference slot `ty` holds anywhere inside it (see
+    /// [`Self::inference_slots_bound_by`]).
+    pub(crate) fn inference_slots_of(&self, ty: &Type, context: &Context) -> Vec<String> {
+        let mut slots = Vec::new();
+        Self::collect_inference_slots(ty, context, &mut slots);
+        slots
+    }
+
+    fn collect_inference_slots(ty: &Type, context: &Context, slots: &mut Vec<String>) {
+        let mut argument = |arg: &Expression| {
+            if let ExpressionKind::Type(inner, _) = &arg.node {
+                Self::collect_inference_slots(inner, context, slots);
+            }
+        };
+        match &ty.kind {
+            TypeKind::Generic(name, _, _) => {
+                let declared = matches!(
+                    context.resolve_type_definition(name),
+                    Some(TypeDefinition::Generic(_))
+                );
+                if !declared && !slots.contains(name) {
+                    slots.push(name.clone());
+                }
+            }
+            TypeKind::Option(inner) | TypeKind::Linear(inner) => {
+                Self::collect_inference_slots(inner, context, slots)
+            }
+            TypeKind::List(elem) | TypeKind::Set(elem) | TypeKind::Future(elem) => argument(elem),
+            TypeKind::Array(elem, _) => argument(elem),
+            TypeKind::Map(first, second) | TypeKind::Result(first, second) => {
+                argument(first);
+                argument(second);
+            }
+            TypeKind::Tuple(elements) => elements.iter().for_each(argument),
+            TypeKind::Custom(_, Some(args)) => args.iter().for_each(argument),
+            // A type names a type rather than holding a value of it, a function
+            // value's parameters are fixed where it is written, and every other
+            // type carries no argument to leave open.
+            TypeKind::Meta(_)
+            | TypeKind::Function(_)
+            | TypeKind::Custom(_, None)
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Void
+            | TypeKind::Error => {}
+        }
+    }
+
+    /// Report a store of a `source` value into a location typed `target`
+    /// whose inference slots `source` binds (see
+    /// [`Self::inference_slots_bound_by`]). Returns whether it was reported.
+    pub(crate) fn refuse_binding_an_inference_slot(
+        &mut self,
+        target: &Type,
+        source: &Type,
+        what: &str,
+        span: Span,
+        context: &Context,
+    ) -> bool {
+        let bound = self.inference_slots_bound_by(target, source, context);
+        let Some(first) = bound.first() else {
+            return false;
+        };
+        self.report_error(
+            DiagnosticCode::TypTypeInference,
+            format!(
+                "Cannot store {source} into {what} of type {target}: that type leaves `{first}` \
+                 unbound, because the value it was inferred from never chose it, and {source} \
+                 binds it at a different layout. Declare the type where it is first written, \
+                 with `{first}` filled in"
+            ),
+            span,
+        );
+        true
+    }
+}
+
 #[cfg(test)]
 mod substitution_depth_tests {
     use super::*;

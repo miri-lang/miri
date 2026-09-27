@@ -16,3 +16,4 @@ pub mod methods;
 pub mod payload_less_generic_variant;
 pub mod payload_substitution;
 pub mod statics;
+pub mod unbound_argument_bindings;

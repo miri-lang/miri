@@ -200,6 +200,11 @@ pub struct StructuralElement {
     /// parameters, and its thunk releases them through the shared drop thunk,
     /// as the body itself would.
     pub open_params: HashSet<String>,
+    /// Every parameter a body holding this entry type bound. A name bound in
+    /// any holder is a substitution that holder missed, which the union of
+    /// open parameters alone would hide behind another holder leaving the
+    /// same name open.
+    pub bound_params: HashSet<String>,
 }
 
 /// Every structural collection-entry type a program uses, deduplicated by
@@ -214,15 +219,18 @@ pub fn structural_element_types(bodies: &[(&str, &Body)]) -> Vec<StructuralEleme
             collect(&decl.ty.kind, &mut found);
         }
         for (symbol, kind) in found {
-            by_symbol
+            let element = by_symbol
                 .entry(symbol.clone())
                 .or_insert_with(|| StructuralElement {
                     symbol,
                     kind,
                     open_params: HashSet::new(),
-                })
-                .open_params
-                .extend(body.open_params.iter().cloned());
+                    bound_params: HashSet::new(),
+                });
+            element.open_params.extend(body.open_params.iter().cloned());
+            element
+                .bound_params
+                .extend(body.bound_params.iter().cloned());
         }
     }
     by_symbol.into_values().collect()
