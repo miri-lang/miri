@@ -399,7 +399,10 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         };
 
-        if !self.are_compatible(&lhs_type, &stored_type, context) {
+        // A plain assignment stores the right-hand value itself, so it is built
+        // at the target's type; a compound one stores what its operator yields.
+        let stored_expr = matches!(op, AssignmentOp::Assign).then_some(rhs);
+        if !self.accepts_value_at(&lhs_type, &stored_type, stored_expr, context) {
             self.report_error(
                 DiagnosticCode::TypImmutabilityViolation,
                 format!(

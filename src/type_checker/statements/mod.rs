@@ -436,7 +436,7 @@ impl TypeChecker {
         if matches!(return_type.kind, TypeKind::Void) {
             return;
         }
-        if !self.are_compatible(&return_type, expr_type, context) {
+        if !self.accepts_value_at(&return_type, expr_type, Some(expr), context) {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,
                 format!(

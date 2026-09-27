@@ -594,7 +594,7 @@ impl TypeChecker {
             let inferred_type = self
                 .widen_int_literals(init, &declared_type, &inferred_type)
                 .unwrap_or(inferred_type);
-            if !self.are_compatible(&declared_type, &inferred_type, context)
+            if !self.accepts_value_at(&declared_type, &inferred_type, Some(init), context)
                 || !self.type_arguments_name_the_same_parameters(
                     &declared_type,
                     &inferred_type,

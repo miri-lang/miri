@@ -286,7 +286,12 @@ impl TypeChecker {
 
             if let Some(default_val) = &param.default_value {
                 let default_val_type = self.infer_expression(default_val, context);
-                if !self.are_compatible(&param_type, &default_val_type, context) {
+                if !self.accepts_value_at(
+                    &param_type,
+                    &default_val_type,
+                    Some(default_val),
+                    context,
+                ) {
                     self.report_error(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
@@ -632,7 +637,7 @@ impl TypeChecker {
 
         if !infer_main_return
             && !matches!(return_type.kind, TypeKind::Void)
-            && !self.are_compatible(return_type, &expr_type, context)
+            && !self.accepts_value_at(return_type, &expr_type, Some(expr), context)
         {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,

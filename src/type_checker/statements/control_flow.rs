@@ -1325,7 +1325,12 @@ impl TypeChecker {
             })
             .unwrap_or(actual_return_type);
 
-        if !self.are_compatible(&expected_return_type, &actual_return_type, context) {
+        if !self.accepts_value_at(
+            &expected_return_type,
+            &actual_return_type,
+            expr_opt.as_deref(),
+            context,
+        ) {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,
                 format!(
