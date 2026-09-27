@@ -11,7 +11,8 @@ use miri::error::syntax::Span;
 use miri::mir::Place;
 use std::collections::HashMap;
 
-/// No open parameters: the code under test is not a shared generic body.
+/// No open or bound parameters: the code under test is neither a shared
+/// generic body nor one lowered for an instantiation.
 static EMPTY_OPEN_PARAMS: std::sync::OnceLock<std::collections::HashSet<String>> =
     std::sync::OnceLock::new();
 
@@ -36,6 +37,7 @@ fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
         closure_capture_ast_types: EMPTY_CAPS.get_or_init(HashMap::new),
         out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
         open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
+        bound_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
     }
 }
 

@@ -780,13 +780,12 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         bodies: &[(&str, &Body)],
     ) -> Result<(), CodegenError> {
-        for (symbol, kind) in structural_elements::structural_element_types(bodies) {
+        for element in structural_elements::structural_element_types(bodies) {
             FunctionTranslator::generate_structural_decref_function(
                 module,
                 ctx,
                 isa,
-                &symbol,
-                &kind,
+                &element,
                 &self.facts,
             )?;
         }

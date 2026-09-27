@@ -13,6 +13,11 @@
 //! lowered bodies themselves, and every field of every instantiation found is
 //! followed until nothing new appears.
 //!
+//! An instantiation inference left partly unbound (`Result<String, E>` from
+//! `let r = Result.Ok("s")`) is collected too, at the arguments it carries: a
+//! value built that way stores nothing at the unbound slot, so its drop
+//! function releases the bound ones and skips that slot.
+//!
 //! A field that nests its own type deeper on every instantiation
 //! (`Node<T>` holding a `Node<List<T>>`) would have the closure grow without
 //! end; it is bounded by the depth any instance may nest to, the same bound
@@ -27,11 +32,10 @@ use crate::ast::expression::Expression;
 use crate::ast::factory::type_expr_non_null;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::shape::{
-    constructor_parts, instance_type_depth, mentions_open_parameter, MAX_INSTANCE_TYPE_DEPTH,
+    constructor_parts, instance_type_depth, is_partially_bound_instantiation,
+    MAX_INSTANCE_TYPE_DEPTH,
 };
-use crate::mir::instantiation::{
-    field_types, has_a_monomorphized_spelling, instantiation_argument, member_type_at,
-};
+use crate::mir::instantiation::{field_types, instantiation_argument, member_type_at};
 use crate::mir::symbol::token::MAX_TOKEN_DEPTH;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
@@ -164,8 +168,8 @@ impl Closure<'_> {
         Some(alias.template.clone())
     }
 
-    /// `ty` as an instantiation of a generic struct, class or enum at arguments
-    /// that are all concrete, or `None`.
+    /// `ty` as an instantiation of a generic struct, class or enum a drop
+    /// function can be named for, or `None`.
     fn concrete_instantiation(&self, ty: &Type) -> Option<(String, Vec<Type>)> {
         let TypeKind::Custom(name, Some(arg_exprs)) = &ty.kind else {
             return None;
@@ -177,22 +181,11 @@ impl Closure<'_> {
         self.is_concrete(name, &args).then(|| (name.clone(), args))
     }
 
-    /// Whether `args` fill every parameter of the generic type `name` with an
-    /// argument that names a type or value and leaves no parameter open.
+    /// Whether `args` instantiate the generic type `name` at arguments a drop
+    /// function can be named for: concrete, or left unbound by inference at
+    /// the type's own parameter ([`is_partially_bound_instantiation`]).
     fn is_concrete(&self, name: &str, args: &[Type]) -> bool {
-        let Some(arity) = self
-            .definitions
-            .get(name)
-            .and_then(TypeDefinition::generics)
-            .map(<[_]>::len)
-        else {
-            return false;
-        };
-        args.len() == arity
-            && args.iter().all(|arg| {
-                has_a_monomorphized_spelling(&arg.kind)
-                    && !mentions_open_parameter(arg, self.definitions)
-            })
+        is_partially_bound_instantiation(self.definitions, name, args)
     }
 
     /// Follow the fields and payloads of every instantiation admitted, until a

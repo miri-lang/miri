@@ -10,7 +10,7 @@
 //! measure, so a type one side refuses is refused by the other.
 
 use super::instantiation_argument;
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::symbol::token::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::type_checker::context::TypeDefinition;
@@ -169,6 +169,12 @@ fn collect_open_parameter_names(
     budget: usize,
     names: &mut Vec<String>,
 ) {
+    // A value argument still written as an expression (`Size`, `Size + 1`)
+    // leaves open every value parameter it reads.
+    if let Some(value) = extract_value_generic_kind(&ty.kind) {
+        names.extend(value_parameter_names(value).unwrap_or_default());
+        return;
+    }
     let open_name = if let TypeKind::Custom(name, None) = &ty.kind {
         matches!(type_defs.get(name), None | Some(TypeDefinition::Generic(_))).then_some(name)
     } else if let TypeKind::Generic(name, _, _) = &ty.kind {
@@ -182,5 +188,113 @@ fn collect_open_parameter_names(
     };
     for part in constructor_parts(ty).1 {
         collect_open_parameter_names(&part, type_defs, rest, names);
+    }
+}
+
+/// Whether `arg`, at `position` among the arguments of the generic type
+/// `name`, is that type's own parameter declared at the same position — an
+/// argument inference never bound, left spelled as the parameter
+/// (`E` in the `Result<String, E>` of `let r = Result.Ok("s")`).
+pub fn is_own_parameter_at(
+    type_defs: &HashMap<String, TypeDefinition>,
+    name: &str,
+    position: usize,
+    arg: &Type,
+) -> bool {
+    let Some(declared) = type_defs
+        .get(name)
+        .and_then(TypeDefinition::generics)
+        .and_then(|generics| generics.get(position))
+    else {
+        return false;
+    };
+    let spelled = if let TypeKind::Generic(param, _, _) = &arg.kind {
+        Some(param)
+    } else if let TypeKind::Custom(param, None) = &arg.kind {
+        Some(param)
+    } else {
+        None
+    };
+    spelled == Some(&declared.name)
+}
+
+/// Whether `args` instantiate the generic type `name` at arguments that are
+/// concrete, except for positions inference left unbound
+/// ([`is_own_parameter_at`]), with at least one concrete argument and no
+/// unbound parameter read anywhere else.
+///
+/// A value built at such an instantiation stores nothing at an unbound
+/// position — a value there would have bound it — so its drop function
+/// releases what the concrete arguments hold and skips the rest.
+pub fn is_partially_bound_instantiation(
+    type_defs: &HashMap<String, TypeDefinition>,
+    name: &str,
+    args: &[Type],
+) -> bool {
+    let Some(arity) = type_defs
+        .get(name)
+        .and_then(TypeDefinition::generics)
+        .map(<[_]>::len)
+    else {
+        return false;
+    };
+    if args.len() != arity {
+        return false;
+    }
+    let mut concrete = 0;
+    for (position, arg) in args.iter().enumerate() {
+        if is_own_parameter_at(type_defs, name, position, arg) {
+            continue;
+        }
+        if !super::has_a_monomorphized_spelling(&arg.kind)
+            || mentions_open_parameter(arg, type_defs)
+        {
+            return false;
+        }
+        concrete += 1;
+    }
+    concrete > 0
+}
+
+/// The parameters an unfolded value argument reads — `Size` in `Size`, or in
+/// `Size + 1` — or `None` when `arg` is no value expression at all.
+pub fn value_parameter_names(arg: &Expression) -> Option<Vec<String>> {
+    match &arg.node {
+        ExpressionKind::Identifier(name, _) => Some(vec![name.clone()]),
+        ExpressionKind::Literal(literal) => {
+            matches!(literal, crate::ast::literal::Literal::Integer(_)).then(Vec::new)
+        }
+        ExpressionKind::Unary(_, operand) => value_parameter_names(operand),
+        ExpressionKind::Binary(left, _, right) => {
+            let mut names = value_parameter_names(left)?;
+            names.extend(value_parameter_names(right)?);
+            Some(names)
+        }
+        ExpressionKind::Logical(..)
+        | ExpressionKind::Assignment(..)
+        | ExpressionKind::Conditional(..)
+        | ExpressionKind::Range(..)
+        | ExpressionKind::Guard(..)
+        | ExpressionKind::Member(..)
+        | ExpressionKind::Index(..)
+        | ExpressionKind::Call(..)
+        | ExpressionKind::ImportPath(..)
+        | ExpressionKind::Type(..)
+        | ExpressionKind::GenericType(..)
+        | ExpressionKind::TypeDeclaration(..)
+        | ExpressionKind::EnumValue(..)
+        | ExpressionKind::StructMember(..)
+        | ExpressionKind::Lambda(..)
+        | ExpressionKind::List(..)
+        | ExpressionKind::Array(..)
+        | ExpressionKind::Map(..)
+        | ExpressionKind::Tuple(..)
+        | ExpressionKind::Set(..)
+        | ExpressionKind::Match(..)
+        | ExpressionKind::FormattedString(..)
+        | ExpressionKind::NamedArgument(..)
+        | ExpressionKind::Super
+        | ExpressionKind::Block(..)
+        | ExpressionKind::Cast(..) => None,
     }
 }

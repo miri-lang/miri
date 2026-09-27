@@ -227,6 +227,9 @@ fn closure_context<'a>(
     // instantiation: its types, and the symbols of closures nested in it, are
     // read at the enclosing body's type arguments.
     lambda_ctx.generic_subs = ctx.generic_subs.clone();
+    // It leaves open exactly what the enclosing body leaves open.
+    lambda_ctx.body.open_params = ctx.body.open_params.clone();
+    lambda_ctx.body.bound_params = ctx.body.bound_params.clone();
 
     // Local 1: env_ptr (implicit first parameter — pointer to the closure struct payload).
     // We use push_param so it does NOT emit StorageLive.
