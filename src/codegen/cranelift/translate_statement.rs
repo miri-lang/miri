@@ -3,7 +3,7 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
-use crate::ast::types::TypeKind;
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
     needs_out_pointer, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
@@ -22,6 +22,14 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
+
+/// A list `miri_rt_list_new_from_managed_array` just built from an array
+/// literal, with the element type it holds.
+#[derive(Clone, Copy)]
+struct ListLiteral<'t> {
+    list_ptr: cranelift_codegen::ir::Value,
+    elem_ty: &'t crate::ast::types::Type,
+}
 
 /// Output of `prepare_call_args`: per-arg Cranelift values, the partially-built
 /// call signature (params filled, returns appended later by the caller), and
@@ -1002,7 +1010,11 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         if func_name == rt::LIST_NEW_FROM_MANAGED_ARRAY {
-            Self::apply_list_from_managed_overrides(builder, ctx, maybe_result, args, type_ctx)?;
+            let elem_ty = Self::list_literal_element_type(dest_ty, args, type_ctx);
+            if let (Some(list_ptr), Some(elem_ty)) = (maybe_result, elem_ty) {
+                let literal = ListLiteral { list_ptr, elem_ty };
+                Self::apply_list_from_managed_overrides(builder, ctx, &literal, type_ctx)?;
+            }
         }
         if func_name == rt::LIST_NEW {
             Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
@@ -1050,61 +1062,21 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// After `miri_rt_list_new_from_managed_array`: the runtime preset is
-    /// `elem_drop_fn = miri_rt_list_decref_element`. Override here for
-    /// non-List managed element types (Array/Set/Map/UserClass) so the
-    /// per-element decref dispatched on clear/remove_at matches the actual
-    /// element kind. Also registers the clone helper for Cloneable user classes.
+    /// `elem_drop_fn = miri_rt_list_decref_element`, which reads each element as
+    /// a list. Every other element kind — a string, a collection, a class, a
+    /// structural value — gets the decref its own kind names, so the per-element
+    /// release dispatched on clear/remove/remove_at matches the element. Also
+    /// registers the clone helper for Cloneable user classes and the order.
     fn apply_list_from_managed_overrides(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        maybe_result: Option<cranelift_codegen::ir::Value>,
-        args: &[Operand],
+        literal: &ListLiteral,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
+        let ListLiteral { list_ptr, elem_ty } = *literal;
+        Self::override_list_literal_drop_fn(builder, ctx, literal, type_ctx)?;
+        let shape = FunctionTranslator::classify_element_shape(&elem_ty.kind);
         let ptr_type = type_ctx.ptr_type;
-        let (Some(list_ptr), Some(array_arg)) = (maybe_result, args.first()) else {
-            return Ok(());
-        };
-        let array_kind = match array_arg {
-            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
-                Some(&type_ctx.local_types[p.local.0].kind)
-            }
-            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
-        };
-        let Some(array_kind) = array_kind else {
-            return Ok(());
-        };
-        let Some(elem_expr) = FunctionTranslator::collection_elem_expr(array_kind) else {
-            return Ok(());
-        };
-        let ExpressionKind::Type(inner_ty, _) = &elem_expr.node else {
-            return Ok(());
-        };
-        let shape = FunctionTranslator::classify_element_shape(&inner_ty.kind);
-        let needs_decref_override = matches!(
-            shape,
-            ElementShape::Builtin(
-                crate::ast::types::BuiltinCollectionKind::Array
-                    | crate::ast::types::BuiltinCollectionKind::Set
-                    | crate::ast::types::BuiltinCollectionKind::Map,
-            ) | ElementShape::UserClass(_)
-        );
-        if needs_decref_override {
-            // Route through `elem_decref_addr_for_kind` (not the shape-only
-            // helper): a generic-class element (`Box<String>`) resolves to its
-            // per-instantiation `miri.Box$String.$decref` thunk so `clear`/`remove_at`
-            // release the concrete managed field. The array-argument type — unlike
-            // the element operand temps — preserves the concrete type arguments.
-            if let Some(addr) = FunctionTranslator::elem_decref_addr_for_kind(
-                builder,
-                ctx,
-                &inner_ty.kind,
-                ptr_type,
-                type_ctx,
-            )? {
-                FunctionTranslator::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
-            }
-        }
         if let Some(addr) = FunctionTranslator::elem_clone_addr_for_shape(
             builder,
             ctx,
@@ -1117,12 +1089,90 @@ impl<'a> FunctionTranslator<'a> {
         FunctionTranslator::emit_element_order(
             builder,
             ctx,
-            &inner_ty.kind,
+            &elem_ty.kind,
             list_ptr,
             type_ctx,
             FunctionTranslator::LIST_ORDER_SETTERS,
         )?;
         Ok(())
+    }
+
+    /// The element type of a list built from an array literal.
+    ///
+    /// The list the call produces carries the element type the program asked
+    /// for, so it comes first. The literal's own type is inferred from its
+    /// elements and can leave an argument none of them fixes open — a
+    /// lone `Result.Err(s)` is a `Result<T, String>` — which would name the
+    /// shared release helper, blind to the payload. It answers only when the
+    /// destination names no element.
+    fn list_literal_element_type<'t>(
+        dest_ty: &'t crate::ast::types::Type,
+        args: &[Operand],
+        type_ctx: &'t TypeCtx,
+    ) -> Option<&'t crate::ast::types::Type> {
+        let element_of = |kind: &'t TypeKind| match FunctionTranslator::collection_elem_expr(kind) {
+            Some(Expression {
+                node: ExpressionKind::Type(inner, _),
+                ..
+            }) => Some(&**inner),
+            Some(_) | None => None,
+        };
+        element_of(&dest_ty.kind).or_else(|| match args.first()? {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                element_of(&type_ctx.local_types[p.local.0].kind)
+            }
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+        })
+    }
+
+    /// Replace the runtime's list-shaped `elem_drop_fn` preset for any element
+    /// that is not itself a list. Where the element's kind names no release
+    /// helper, the drop function is cleared rather than left reading the
+    /// element as a list: an element released through the wrong layout is
+    /// freed at the wrong size, where one that is not released only leaks.
+    fn override_list_literal_drop_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        literal: &ListLiteral,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ListLiteral { list_ptr, elem_ty } = *literal;
+        let shape = FunctionTranslator::classify_element_shape(&elem_ty.kind);
+        let is_list = match shape {
+            ElementShape::Builtin(BuiltinCollectionKind::List) => true,
+            ElementShape::Builtin(
+                BuiltinCollectionKind::Array
+                | BuiltinCollectionKind::Set
+                | BuiltinCollectionKind::Map,
+            )
+            | ElementShape::String
+            | ElementShape::UserClass(_)
+            | ElementShape::Other => false,
+        };
+        if is_list {
+            return Ok(());
+        }
+        let ptr_type = type_ctx.ptr_type;
+        // Route through `elem_decref_addr_for_kind` (not the shape-only helper):
+        // a generic-class element (`Box<String>`) resolves to its
+        // per-instantiation `miri.Box$String.$decref` thunk, and a structural
+        // element to the thunk made for its structure.
+        let addr = match FunctionTranslator::elem_decref_addr_for_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            ptr_type,
+            type_ctx,
+        )? {
+            Some(addr) => addr,
+            // TODO: a managed shape with no release thunk (the native `Result`
+            // and `Future` kinds) lands here and is never released. Zero is the
+            // runtime's "release nothing", which leaks rather than reading the
+            // element as a list; once every managed shape resolves an address
+            // this arm should be a `CodegenError`.
+            None => builder.ins().iconst(ptr_type, 0),
+        };
+        FunctionTranslator::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)
     }
 
     /// After `miri_rt_list_new` (empty `List<T>()` constructor): set
