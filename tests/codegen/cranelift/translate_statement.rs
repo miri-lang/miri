@@ -20,21 +20,17 @@ fn local_types_for(kinds: &[TypeKind]) -> Vec<Type> {
 }
 
 fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
-    static EMPTY_DEFS: std::sync::OnceLock<
-        HashMap<String, miri::type_checker::context::TypeDefinition>,
-    > = std::sync::OnceLock::new();
+    static EMPTY_FACTS: std::sync::OnceLock<miri::mir::type_facts::TypeFacts> =
+        std::sync::OnceLock::new();
     static EMPTY_CAPS: std::sync::OnceLock<HashMap<Local, Vec<Type>>> = std::sync::OnceLock::new();
     static EMPTY_OUT: std::sync::OnceLock<HashMap<Local, cranelift_frontend::Variable>> =
         std::sync::OnceLock::new();
-    static EMPTY_INSTS: std::sync::OnceLock<HashMap<String, Vec<Vec<Type>>>> =
-        std::sync::OnceLock::new();
     TypeCtx {
         local_types,
-        type_definitions: EMPTY_DEFS.get_or_init(HashMap::new),
+        facts: EMPTY_FACTS.get_or_init(Default::default),
         ptr_type: cranelift_codegen::ir::types::I64,
         closure_capture_ast_types: EMPTY_CAPS.get_or_init(HashMap::new),
         out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
-        generic_class_instantiations: EMPTY_INSTS.get_or_init(HashMap::new),
     }
 }
 

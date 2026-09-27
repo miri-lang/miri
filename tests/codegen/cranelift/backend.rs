@@ -51,11 +51,10 @@ fn test_target_returns_valid_triple() {
 // ── Setters ────────────────────────────────────────────────────────────
 
 #[test]
-fn test_set_type_definitions() {
+fn test_set_type_facts() {
     let mut backend = CraneliftBackend::new().unwrap();
-    let defs = std::collections::HashMap::new();
-    backend.set_type_definitions(defs);
-    // No panic = success. Type defs are used internally during compile().
+    backend.set_type_facts(miri::mir::type_facts::TypeFacts::default());
+    // No panic = success. Type facts are read internally during compile().
 }
 
 #[test]

@@ -7,14 +7,13 @@
 //! values, so the runtime can DecRef captures when the closure RC reaches 0
 //! without needing static knowledge of capture types at the drop site.
 
-use crate::ast::types::Type;
 use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
 use crate::mir::rc::is_word_slot_managed;
 use crate::mir::symbol::Symbol;
+use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
-use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature};
@@ -92,8 +91,7 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         lambda_name: &str,
         body: &Body,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
@@ -112,15 +110,7 @@ impl<'a> FunctionTranslator<'a> {
         );
 
         let mut builder_ctx = FunctionBuilderContext::new();
-        Self::emit_closure_destructor_body(
-            module,
-            ctx,
-            &mut builder_ctx,
-            body,
-            type_definitions,
-            generic_class_instantiations,
-            ptr_type,
-        )?;
+        Self::emit_closure_destructor_body(module, ctx, &mut builder_ctx, body, facts, ptr_type)?;
 
         module
             .define_function(func_id, ctx)
@@ -137,8 +127,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
         body: &Body,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+        facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<(), CodegenError> {
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
@@ -156,11 +145,10 @@ impl<'a> FunctionTranslator<'a> {
         let empty_out_ptr_vars = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
-            type_definitions,
+            facts,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            generic_class_instantiations,
         };
 
         let layout = CaptureLayout::of_body(body, ptr_type);

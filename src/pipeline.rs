@@ -1516,16 +1516,14 @@ impl Pipeline {
                     use crate::codegen::CraneliftBackend;
                     let mut backend = CraneliftBackend::new()
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
-                    backend.set_type_definitions(
+                    backend.set_type_facts(mir::type_facts::TypeFacts::new(
                         pipeline_result.type_checker.type_definitions().clone(),
-                    );
-                    backend.set_generic_class_instantiations(
                         pipeline_result
                             .type_checker
                             .generic_class_instantiations
                             .clone(),
-                    );
-                    backend.set_vtable_fills(pipeline_result.vtable_fills.clone());
+                        pipeline_result.vtable_fills.clone(),
+                    ));
 
                     let ptr_ty = backend.pointer_type();
                     let runtime_info = collect_runtime_info(

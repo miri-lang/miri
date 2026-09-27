@@ -5,14 +5,13 @@
 //!
 //! Generates one `miri.{Class}[${args}].$vtable` data symbol per class
 //! instantiation a compiled body builds, for use by
-//! `TerminatorKind::VirtualCall`. Which vtables exist comes from
-//! `mir::lowering::dispatch_symbols`; the slots each fills and the symbol each
-//! slot names, from the `mir::lowering::vtable_demand` the pipeline settled.
+//! `TerminatorKind::VirtualCall`. Which vtables exist, the slots each fills and
+//! the symbol each slot names all come from the dispatch data the pipeline
+//! settled in `mir::dispatch`.
 
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
-use crate::mir::lowering::dispatch_symbols::VtableLayout;
-use crate::mir::lowering::vtable_demand::FilledSlot;
+use crate::mir::dispatch::{FilledSlot, VtableLayout};
 use crate::type_checker::context::TypeDefinition;
 
 use cranelift_module::Module;

@@ -22,6 +22,7 @@ use miri::codegen::cranelift::translator::TypeCtx;
 use miri::codegen::cranelift::FunctionTranslator;
 use miri::error::syntax::Span;
 use miri::mir::symbol::Symbol;
+use miri::mir::type_facts::TypeFacts;
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, MethodInfo,
     StructDefinition, TraitDefinition, TypeDefinition,
@@ -119,19 +120,17 @@ fn alias_to(kind: TypeKind) -> TypeDefinition {
 }
 
 fn minimal_type_ctx<'a>(
-    type_defs: &'a HashMap<String, TypeDefinition>,
+    facts: &'a TypeFacts,
     captures: &'a HashMap<miri::mir::Local, Vec<Type>>,
     out_ptrs: &'a HashMap<miri::mir::Local, Variable>,
-    instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
 ) -> TypeCtx<'a> {
     use cranelift_codegen::ir::types;
     TypeCtx {
         local_types: &[],
-        type_definitions: type_defs,
+        facts,
         ptr_type: types::I64,
         closure_capture_ast_types: captures,
         out_param_ptr_vars: out_ptrs,
-        generic_class_instantiations: instantiations,
     }
 }
 
@@ -414,11 +413,10 @@ fn test_only_variants_carrying_managed_fields_are_collected() {
         ("Labelled", vec![TypeKind::String, TypeKind::Int]),
         ("Sized", vec![TypeKind::Int]),
     ]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert_eq!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
@@ -429,11 +427,10 @@ fn test_only_variants_carrying_managed_fields_are_collected() {
 #[test]
 fn test_managed_field_index_is_the_position_within_its_variant() {
     let shape = enum_def([("Tagged", vec![TypeKind::Int, TypeKind::String])]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert_eq!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
@@ -445,11 +442,10 @@ fn test_managed_field_index_is_the_position_within_its_variant() {
 #[test]
 fn test_enum_of_scalar_variants_collects_nothing() {
     let shape = enum_def([("A", vec![TypeKind::Int]), ("B", vec![TypeKind::F64])]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
@@ -462,11 +458,10 @@ fn test_enum_of_scalar_variants_collects_nothing() {
 #[test]
 fn test_inline_atomic_payload_is_not_collected_as_managed() {
     let shape = enum_def([("Inline", vec![custom_of(ATOMIC_TYPE_NAME, TypeKind::U32)])]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty()
@@ -484,11 +479,10 @@ fn test_vector_payload_is_collected_as_managed() {
         "Mixed",
         vec![vector.clone(), custom_of(ATOMIC_TYPE_NAME, TypeKind::U32)],
     )]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert_eq!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
@@ -503,11 +497,10 @@ fn test_vector_payload_is_collected_as_managed() {
 #[test]
 fn test_a_type_reusing_a_vector_name_is_collected_as_managed() {
     let shape = enum_def([("Payload", vec![custom(VEC3_TYPE_NAME)])]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert_eq!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
@@ -666,11 +659,10 @@ fn test_managed_class_field_survives_as_managed_in_a_variant() {
     // A user class field inside an enum variant is a pointer and must be
     // DecRef'd, unlike the inline value wrappers above.
     let shape = enum_def([("Wrapped", vec![custom("Widget")])]);
-    let defs = HashMap::new();
+    let facts = TypeFacts::default();
     let captures = HashMap::new();
     let out_ptrs = HashMap::new();
-    let instantiations = HashMap::new();
-    let type_ctx = minimal_type_ctx(&defs, &captures, &out_ptrs, &instantiations);
+    let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
     assert_eq!(
         FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),

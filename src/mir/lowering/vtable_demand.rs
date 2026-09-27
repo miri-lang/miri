@@ -46,21 +46,7 @@ use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-/// One filled vtable slot: its number, the method it stands for and the
-/// symbol of the body it points at.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilledSlot {
-    pub slot: usize,
-    pub method: String,
-    pub symbol: String,
-}
-
-/// The filled slots of every vtable a program's reached bodies build, by
-/// vtable symbol: what codegen writes into each vtable it defines.
-#[derive(Debug, Default, Clone)]
-pub struct VtableFills {
-    slots: BTreeMap<String, Vec<FilledSlot>>,
-}
+pub use crate::mir::dispatch::{FilledSlot, VtableFills};
 
 /// The filled slot a body was reached through, newest first: `None` for a
 /// root. Shared between every body reached along the same chain.
@@ -141,14 +127,6 @@ pub struct VtableDemand {
     value_instances: HashMap<String, usize>,
 }
 
-impl VtableFills {
-    /// The filled slots of the vtable `symbol`, in the order they were
-    /// filled; none for a vtable no reached body builds.
-    pub fn slots(&self, symbol: &str) -> &[FilledSlot] {
-        self.slots.get(symbol).map_or(&[], Vec::as_slice)
-    }
-}
-
 impl VtableDemand {
     /// A demand whose roots include `symbols`, the bodies codegen calls
     /// outside any MIR call.
@@ -204,13 +182,10 @@ impl VtableDemand {
 
     /// The filled slots of every vtable a reached body builds.
     pub fn fills(&self) -> VtableFills {
-        VtableFills {
-            slots: self
-                .vtables
-                .iter()
-                .map(|(symbol, vtable)| (symbol.clone(), vtable.filled.clone()))
-                .collect(),
-        }
+        self.vtables
+            .iter()
+            .map(|(symbol, vtable)| (symbol.clone(), vtable.filled.clone()))
+            .collect()
     }
 
     /// Reach `first` and everything it reaches in turn.

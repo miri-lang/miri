@@ -12,7 +12,7 @@ use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
-use crate::mir::lowering::dispatch_symbols::VtableInstance;
+use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue, UnOp,
@@ -246,7 +246,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             TypeKind::Custom(name, _) => {
                 let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
-                    type_ctx.type_definitions.get(name)
+                    type_ctx.facts.definitions().get(name)
                 else {
                     return Ok(None);
                 };
@@ -597,7 +597,7 @@ impl<'a> FunctionTranslator<'a> {
         // helper to name: registering one would emit a symbol nothing defines
         // and fail the link. The instantiation registers the real one. Every
         // sibling registration site screens the element the same way.
-        if FunctionTranslator::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+        if FunctionTranslator::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -610,7 +610,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx,
             shape,
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
             ptr_type,
         )? {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
@@ -746,7 +746,7 @@ impl<'a> FunctionTranslator<'a> {
         expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let declared_slot = match type_ctx.type_definitions.get(enum_name) {
+        let declared_slot = match type_ctx.facts.definitions().get(enum_name) {
             Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) => {
                 let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
                 enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type)
@@ -828,7 +828,7 @@ impl<'a> FunctionTranslator<'a> {
             return None;
         };
         let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
-            type_ctx.type_definitions.get(class_name.as_str())
+            type_ctx.facts.definitions().get(class_name.as_str())
         else {
             return None;
         };
@@ -836,7 +836,7 @@ impl<'a> FunctionTranslator<'a> {
             class_name,
             class_def,
             type_args.as_deref(),
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
             type_ctx.ptr_type,
         ))
     }
@@ -877,7 +877,7 @@ impl<'a> FunctionTranslator<'a> {
         let AggregateKind::Class(ty) = kind else {
             return None;
         };
-        VtableInstance::of(ty, type_ctx.type_definitions).map(|instance| instance.symbol())
+        VtableInstance::of(ty, type_ctx.facts.definitions()).map(|instance| instance.symbol())
     }
 
     /// Resolve the declared payload types for an aggregate kind, one entry per
@@ -896,7 +896,7 @@ impl<'a> FunctionTranslator<'a> {
         match kind {
             AggregateKind::Enum(enum_name, variant_name) => {
                 let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                    type_ctx.type_definitions.get(enum_name.as_ref())
+                    type_ctx.facts.definitions().get(enum_name.as_ref())
                 else {
                     return None;
                 };
@@ -2597,7 +2597,8 @@ impl<'a> FunctionTranslator<'a> {
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..element_exprs.len() {
-            let (offset, cl_ty) = field_layout(&tuple_type, i, type_ctx.type_definitions, ptr_type);
+            let (offset, cl_ty) =
+                field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type);
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
@@ -2630,7 +2631,8 @@ impl<'a> FunctionTranslator<'a> {
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..def.fields.len() {
-            let (offset, cl_ty) = field_layout(struct_type, i, type_ctx.type_definitions, ptr_type);
+            let (offset, cl_ty) =
+                field_layout(struct_type, i, type_ctx.facts.definitions(), ptr_type);
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
