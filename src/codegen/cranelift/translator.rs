@@ -137,7 +137,9 @@ pub enum ElementShape<'a> {
     /// User-defined class — uses the `miri.TypeName.$decref` thunk; clone via
     /// `miri.TypeName.$clone` only when the class implements `Cloneable`.
     UserClass(&'a str),
-    /// Anything else (primitives, void, errors) — no decref needed.
+    /// Anything else: primitives (no decref) and structural values (Option,
+    /// tuple, struct, Result) whose decref comes from the element's kind
+    /// rather than its shape.
     Other,
 }
 

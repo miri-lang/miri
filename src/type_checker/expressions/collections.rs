@@ -59,11 +59,12 @@ impl TypeChecker {
         }
 
         let first_type = self.infer_expression(&elements[0], context);
+        let mut element_type = first_type.clone();
         let mut has_error = false;
 
         for element in &elements[1..] {
-            let element_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &element_type, context) {
+            let next_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &next_type, context) {
                 self.report_error(
                     DiagnosticCode::TypCollectionElementType,
                     "Array elements must have the same type".to_string(),
@@ -71,6 +72,7 @@ impl TypeChecker {
                 );
                 has_error = true;
             }
+            element_type = fill_open_arguments(&element_type, &next_type);
         }
 
         if has_error {
@@ -79,7 +81,7 @@ impl TypeChecker {
 
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
-            Some(vec![self.create_type_expression(first_type)]),
+            Some(vec![self.create_type_expression(element_type)]),
         ))
     }
 
@@ -101,11 +103,12 @@ impl TypeChecker {
         }
 
         let first_type = self.infer_expression(&elements[0], context);
+        let mut element_type = first_type.clone();
         let mut has_error = false;
 
         for element in &elements[1..] {
-            let element_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &element_type, context) {
+            let next_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &next_type, context) {
                 self.report_error(
                     DiagnosticCode::TypCollectionElementType,
                     "Array elements must have the same type".to_string(),
@@ -113,6 +116,7 @@ impl TypeChecker {
                 );
                 has_error = true;
             }
+            element_type = fill_open_arguments(&element_type, &next_type);
         }
 
         if has_error {
@@ -121,7 +125,10 @@ impl TypeChecker {
 
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![self.create_type_expression(first_type), size.clone()]),
+            Some(vec![
+                self.create_type_expression(element_type),
+                size.clone(),
+            ]),
         ))
     }
 
@@ -228,5 +235,78 @@ impl TypeChecker {
             element_types.push(self.create_type_expression(ty));
         }
         make_type(TypeKind::Tuple(element_types))
+    }
+}
+
+/// `known` with each type argument it leaves open filled from `other`, the
+/// type of a later element of the same literal.
+///
+/// A variant constructor fixes only the arguments its payload names:
+/// `Result.Err(s)` is a `Result<T, String>` and `Result.Ok(s)` a
+/// `Result<String, E>`. A literal holding both holds `Result<String, String>`,
+/// and every layer that releases or compares its elements must see that type,
+/// not whichever argument the first element happened to leave open.
+fn fill_open_arguments(known: &Type, other: &Type) -> Type {
+    if matches!(known.kind, TypeKind::Generic(..)) {
+        return if matches!(other.kind, TypeKind::Generic(..)) {
+            known.clone()
+        } else {
+            other.clone()
+        };
+    }
+    let kind = match (&known.kind, &other.kind) {
+        (TypeKind::Custom(name, Some(args)), TypeKind::Custom(other_name, Some(other_args)))
+            if name == other_name && args.len() == other_args.len() =>
+        {
+            TypeKind::Custom(name.clone(), Some(fill_open_expressions(args, other_args)))
+        }
+        (TypeKind::Option(inner), TypeKind::Option(other_inner)) => {
+            TypeKind::Option(Box::new(fill_open_arguments(inner, other_inner)))
+        }
+        (TypeKind::Tuple(parts), TypeKind::Tuple(other_parts))
+            if parts.len() == other_parts.len() =>
+        {
+            TypeKind::Tuple(fill_open_expressions(parts, other_parts))
+        }
+        (TypeKind::List(element), TypeKind::List(other_element)) => {
+            TypeKind::List(Box::new(fill_open_expression(element, other_element)))
+        }
+        (TypeKind::Set(element), TypeKind::Set(other_element)) => {
+            TypeKind::Set(Box::new(fill_open_expression(element, other_element)))
+        }
+        (TypeKind::Map(key, value), TypeKind::Map(other_key, other_value)) => TypeKind::Map(
+            Box::new(fill_open_expression(key, other_key)),
+            Box::new(fill_open_expression(value, other_value)),
+        ),
+        (TypeKind::Result(ok, err), TypeKind::Result(other_ok, other_err)) => TypeKind::Result(
+            Box::new(fill_open_expression(ok, other_ok)),
+            Box::new(fill_open_expression(err, other_err)),
+        ),
+        // Every other pairing either names no argument to fill or is two
+        // different types, which the element compatibility check reports.
+        (known_kind, _) => known_kind.clone(),
+    };
+    Type::new(kind, known.span)
+}
+
+fn fill_open_expressions(known: &[Expression], other: &[Expression]) -> Vec<Expression> {
+    known
+        .iter()
+        .zip(other)
+        .map(|(known, other)| fill_open_expression(known, other))
+        .collect()
+}
+
+/// A type argument written as an expression, filled like
+/// [`fill_open_arguments`]; a value argument (an array's size) is kept.
+fn fill_open_expression(known: &Expression, other: &Expression) -> Expression {
+    match (&known.node, &other.node) {
+        (ExpressionKind::Type(known_ty, nullable), ExpressionKind::Type(other_ty, _)) => {
+            let mut filled = known.clone();
+            filled.node =
+                ExpressionKind::Type(Box::new(fill_open_arguments(known_ty, other_ty)), *nullable);
+            filled
+        }
+        _ => known.clone(),
     }
 }

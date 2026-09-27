@@ -93,7 +93,8 @@ fn main()
 #[test]
 fn test_list_of_strings_clear_no_crash() {
     // List<String>: elem_drop_fn must be set so that clear() properly DecRefs
-    // each string element instead of leaking them.
+    // each string element instead of leaking them. Literals are immortal, so
+    // the real guard is test_list_of_run_time_strings_clear_releases_each_element_as_a_string.
     assert_runs_with_output(
         r#"
 use system.collections.list
@@ -108,8 +109,105 @@ fn main()
 }
 
 #[test]
+fn test_list_of_run_time_strings_clear_releases_each_element_as_a_string() {
+    // A string literal is immortal, so a list of literals never exercises the
+    // release: elements built at run time make `clear` run the drop function the
+    // list was given, which has to be the string one.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List(["p" + "", "q" + "", "r" + ""])
+    l.clear()
+    println(f"{l.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_list_of_run_time_results_clear_releases_each_payload() {
+    // A `Result` element is neither a list nor a class: `clear` must release
+    // it through a drop function made for its own shape, never the list one
+    // the runtime starts a literal-built list with.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List<Result<String, String>>([Result.Err("b" + ""), Result.Ok("a" + "")])
+    xs.clear()
+    println(f"{xs.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_unannotated_list_of_run_time_results_releases_each_payload() {
+    // No type argument and no annotation: the list's element type comes from
+    // the literal's elements alone, and each one fixes a different argument.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List([Result.Err("b" + ""), Result.Ok("a" + "")])
+    xs.clear()
+    var ys = List([Result.Err("d" + ""), Result.Ok("c" + "")])
+    ys.remove_at(0)
+    println(f"{xs.length()} {ys.length()}")
+"#,
+        "0 1",
+    );
+}
+
+#[test]
+fn test_list_of_run_time_results_built_as_an_argument_or_a_result_releases_each_payload() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn emptied(xs List<Result<String, String>>) int
+    var ys = xs
+    ys.clear()
+    return ys.length()
+
+fn made() List<Result<String, String>>
+    return List([Result.Err("b" + ""), Result.Ok("a" + "")])
+
+fn main()
+    let a = emptied(List([Result.Err("d" + ""), Result.Ok("c" + "")]))
+    var m = made()
+    m.remove_at(0)
+    println(f"{a} {m.length()}")
+"#,
+        "0 1",
+    );
+}
+
+#[test]
+fn test_list_of_pushed_results_clear_releases_each_payload() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List<Result<String, String>>()
+    xs.push(Result.Err("b" + ""))
+    xs.push(Result.Ok("a" + ""))
+    xs.clear()
+    println(f"{xs.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
 fn test_list_of_strings_remove_no_crash() {
     // remove_at on a List<String> must call the elem_drop_fn on the removed element.
+    // Literals are immortal; the run-time-strings tests beside it are the real guard.
     assert_runs_with_output(
         r#"
 use system.collections.list
