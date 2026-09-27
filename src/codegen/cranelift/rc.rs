@@ -16,6 +16,7 @@ use crate::codegen::cranelift::translator::{
 use crate::error::CodegenError;
 use crate::mir::rc::{is_field_managed, is_word_slot_managed};
 use crate::mir::symbol::{Symbol, ThunkKind};
+use crate::mir::type_facts::TypeFacts;
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{EnumDefinition, TypeDefinition};
 
@@ -141,7 +142,7 @@ impl<'a> FunctionTranslator<'a> {
             // parameter that has no concrete type yet: that symbol is defined
             // nowhere, so emitting it turns a compile into a link failure
             // reporting a mangled name instead of the program.
-            if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+            if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
                 return Err(CodegenError::Internal(format!(
                     "refusing to register a release helper named for the unresolved generic \
                      parameter '{class_name}': the registration site must skip an element whose \
@@ -175,7 +176,7 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
-        if Self::is_unresolved_generic_elem(key_kind, type_ctx.type_definitions) {
+        if Self::is_unresolved_generic_elem(key_kind, type_ctx.facts.definitions()) {
             return Ok(None);
         }
         Self::elem_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)
@@ -230,7 +231,7 @@ impl<'a> FunctionTranslator<'a> {
         list_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -316,7 +317,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::UserClass(name) => name,
             ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
         };
-        if !ElementMethod::Compare.is_answered_by(name, type_ctx.type_definitions) {
+        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts.definitions()) {
             return Ok(None);
         }
         let recorded =
@@ -346,7 +347,7 @@ impl<'a> FunctionTranslator<'a> {
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
-        if !ElementMethod::Equals.is_answered_by(name, type_ctx.type_definitions) {
+        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts.definitions()) {
             return Ok(None);
         }
         let recorded =
@@ -382,7 +383,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementIdentitySetters,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         let (depth, value_kind) = Self::peel_optionals(elem_kind);
@@ -463,7 +464,7 @@ impl<'a> FunctionTranslator<'a> {
         set_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -510,7 +511,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementOrderSetters,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.type_definitions) {
+        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(kind) = Self::element_order_kind(elem_kind) {
@@ -722,7 +723,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         // Resolve type aliases before dispatching so that e.g.
         // `type IntArray is [int; 2]` correctly frees via rt_array_free.
-        let resolved = Self::resolve_alias(kind, type_ctx.type_definitions);
+        let resolved = Self::resolve_alias(kind, type_ctx.facts.definitions());
         let kind = resolved.unwrap_or(kind);
 
         if Self::is_map_type(kind) {
@@ -866,7 +867,7 @@ impl<'a> FunctionTranslator<'a> {
                     return None;
                 }
                 let (offset, _) =
-                    layout::field_layout(&tuple_type, i, type_ctx.type_definitions, ptr_type);
+                    layout::field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type);
                 Some((offset, ty.kind.clone()))
             })
             .collect();
@@ -926,8 +927,8 @@ impl<'a> FunctionTranslator<'a> {
         // exists only after substitution (`Box<String>`). The per-instantiation
         // thunk resolves the concrete field and frees the block either way.
         let needs_thunk = recorded.is_some()
-            || Self::has_managed_fields(name, type_ctx.type_definitions)
-            || Self::type_has_user_drop(name, type_ctx.type_definitions);
+            || Self::has_managed_fields(name, type_ctx.facts.definitions())
+            || Self::type_has_user_drop(name, type_ctx.facts.definitions());
         if needs_thunk {
             let thunk = Symbol::type_thunk(ThunkKind::Drop, name, recorded.iter().flatten());
             Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type)
@@ -935,7 +936,7 @@ impl<'a> FunctionTranslator<'a> {
             // For generic enums (concrete_args available) without a thunk, emit field
             // drops inline using resolved type arguments so that generic variant
             // fields become their concrete kinds and are correctly identified as managed.
-            if let Some(TypeDefinition::Enum(_)) = type_ctx.type_definitions.get(name) {
+            if let Some(TypeDefinition::Enum(_)) = type_ctx.facts.definitions().get(name) {
                 Self::emit_struct_drop(
                     builder,
                     ctx,
@@ -984,7 +985,7 @@ impl<'a> FunctionTranslator<'a> {
         let monomorphized = written.iter().all(|arg| {
             crate::mir::lowering::is_monomorphizable_type_argument(
                 &arg.kind,
-                type_ctx.type_definitions,
+                type_ctx.facts.definitions(),
             )
         });
         if !monomorphized {
@@ -1011,7 +1012,7 @@ impl<'a> FunctionTranslator<'a> {
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> Option<Vec<Type>> {
-        type_ctx.type_definitions.get(class_name)?.generics()?;
+        type_ctx.facts.definitions().get(class_name)?.generics()?;
         // A value-generic class is recorded at arguments that include the size,
         // wrapped in a marker type; skipping it would name a thunk nothing
         // generated and fall back to the shared one, which leaves a managed
@@ -1025,7 +1026,8 @@ impl<'a> FunctionTranslator<'a> {
         }
         let want = Symbol::type_thunk(ThunkKind::Drop, class_name, &concrete);
         let recorded = type_ctx
-            .generic_class_instantiations
+            .facts
+            .generic_class_instantiations()
             .get(class_name)?
             .iter()
             .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, class_name, tuple) == want);
@@ -1109,13 +1111,16 @@ impl<'a> FunctionTranslator<'a> {
         payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let Some(def) = type_ctx.type_definitions.get(type_name) else {
+        let Some(def) = type_ctx.facts.definitions().get(type_name) else {
             return Ok(());
         };
         match def {
             TypeDefinition::Struct(struct_def) => {
-                let managed_fields =
-                    Self::managed_struct_fields(struct_def, inst_args, type_ctx.type_definitions);
+                let managed_fields = Self::managed_struct_fields(
+                    struct_def,
+                    inst_args,
+                    type_ctx.facts.definitions(),
+                );
                 Self::emit_struct_like_field_decrefs(
                     builder,
                     ctx,
@@ -1146,7 +1151,7 @@ impl<'a> FunctionTranslator<'a> {
                 // mangled thunk, so an unresolvable generic field is skipped.
                 let resolved =
                     crate::mir::lowering::inherited_instantiation::instantiated_field_types(
-                        type_ctx.type_definitions,
+                        type_ctx.facts.definitions(),
                         type_name,
                         inst_args.unwrap_or_default(),
                     );
@@ -1154,7 +1159,7 @@ impl<'a> FunctionTranslator<'a> {
                 for (idx, field_ty) in resolved.iter().enumerate() {
                     let kind = &field_ty.kind;
                     if class_def.generics.is_some()
-                        && Self::is_unresolved_generic_elem(kind, type_ctx.type_definitions)
+                        && Self::is_unresolved_generic_elem(kind, type_ctx.facts.definitions())
                     {
                         continue;
                     }
@@ -1264,7 +1269,7 @@ impl<'a> FunctionTranslator<'a> {
             let (offset, _cl_ty) = layout::field_layout(
                 &custom_kind,
                 *field_idx,
-                type_ctx.type_definitions,
+                type_ctx.facts.definitions(),
                 ptr_type,
             );
             let field_ptr = builder
@@ -1352,7 +1357,10 @@ impl<'a> FunctionTranslator<'a> {
                     .filter_map(|(fi, ty)| {
                         let kind = layout::enum_payload_field_kind(enum_def, &ty.kind, type_args);
                         let unresolved = enum_def.generics.is_some()
-                            && Self::is_unresolved_generic_elem(&kind, type_ctx.type_definitions);
+                            && Self::is_unresolved_generic_elem(
+                                &kind,
+                                type_ctx.facts.definitions(),
+                            );
                         (!unresolved && is_word_slot_managed(&kind)).then_some((fi, kind))
                     })
                     .collect();
@@ -1626,8 +1634,7 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
         type_args: Option<&[Type]>,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
@@ -1652,8 +1659,7 @@ impl<'a> FunctionTranslator<'a> {
             &mut builder_ctx,
             type_name,
             type_args,
-            type_definitions,
-            generic_class_instantiations,
+            facts,
             ptr_type,
             call_conv,
         )?;
@@ -1684,8 +1690,7 @@ impl<'a> FunctionTranslator<'a> {
         builder_ctx: &mut FunctionBuilderContext,
         type_name: &str,
         type_args: Option<&[Type]>,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
+        facts: &TypeFacts,
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
@@ -1704,14 +1709,13 @@ impl<'a> FunctionTranslator<'a> {
         let empty_out_ptr_vars = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
-            type_definitions,
+            facts,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            generic_class_instantiations,
         };
 
-        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, type_definitions) {
+        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts.definitions()) {
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,
@@ -1828,8 +1832,7 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         encoding: &str,
         kind: &TypeKind,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+        facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let decref_name = Symbol::structural_thunk(ThunkKind::Decref, encoding).link_name();
@@ -1844,15 +1847,7 @@ impl<'a> FunctionTranslator<'a> {
             sig,
         );
         let mut builder_ctx = FunctionBuilderContext::new();
-        Self::emit_structural_decref_body(
-            module,
-            ctx,
-            &mut builder_ctx,
-            kind,
-            type_definitions,
-            generic_class_instantiations,
-            ptr_type,
-        )?;
+        Self::emit_structural_decref_body(module, ctx, &mut builder_ctx, kind, facts, ptr_type)?;
 
         module
             .define_function(func_id, ctx)
@@ -1868,8 +1863,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
         kind: &TypeKind,
-        type_definitions: &HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+        facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<(), CodegenError> {
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
@@ -1886,11 +1880,10 @@ impl<'a> FunctionTranslator<'a> {
         let empty_out_ptr_vars = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
-            type_definitions,
+            facts,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            generic_class_instantiations,
         };
 
         Self::emit_decref_value(&mut builder, &mut module_ctx, kind, ptr, &type_ctx)?;

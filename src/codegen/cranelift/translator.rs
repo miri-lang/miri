@@ -12,9 +12,9 @@ use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
+use crate::mir::type_facts::TypeFacts;
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
-use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{
@@ -54,14 +54,12 @@ pub struct FunctionTranslator<'a> {
     ptr_type: cl_types::Type,
     /// Borrowed references to MIR local types to avoid cloning.
     local_types: Vec<&'a Type>,
-    /// Type definitions from the type checker (for layout computation).
-    /// Borrowed from the backend to avoid cloning the entire HashMap per function.
-    pub(crate) type_definitions: &'a HashMap<String, TypeDefinition>,
-    /// Recorded generic-class instantiations, borrowed from the backend. A
-    /// function body inline-drops generic-class locals (`let b = Box<String>()`),
-    /// so the drop path needs the registry to route to the per-instantiation
-    /// `miri.Box$String.$drop` thunk that releases the concrete managed field.
-    pub(crate) generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
+    /// The program's settled type facts, borrowed from the backend: type
+    /// definitions for layout, and the recorded generic-class instantiations a
+    /// body's inline drop of a generic-class local (`let b = Box<String>()`)
+    /// routes through to reach the per-instantiation `miri.Box$String.$drop`
+    /// thunk that releases the concrete managed field.
+    pub(crate) facts: &'a TypeFacts,
 }
 
 /// Context for module-level resources during translation.
@@ -80,7 +78,13 @@ pub(crate) struct ModuleCtx<'a> {
 /// Context for type information during translation.
 pub struct TypeCtx<'a> {
     pub local_types: &'a [&'a Type],
-    pub type_definitions: &'a HashMap<String, TypeDefinition>,
+    /// The program's settled type facts: every type definition, and the
+    /// concrete type-argument tuples recorded for each generic class, which
+    /// resolve a generic class's bare-generic field to the concrete type of
+    /// its instantiation when deciding the field's drop semantics. Every
+    /// translation site — function bodies, drop thunks, structural decref
+    /// thunks and closure destructors — reads the same facts.
+    pub facts: &'a TypeFacts,
     pub ptr_type: cl_types::Type,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Used by `read_place` and `resolve_projected_type_kind` to translate
@@ -89,11 +93,6 @@ pub struct TypeCtx<'a> {
     /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
     /// that holds the incoming pointer. Used by the Return terminator to write back.
     pub out_param_ptr_vars: &'a HashMap<Local, Variable>,
-    /// Concrete type-argument tuples recorded for each generic class. Only the
-    /// drop-thunk path populates this; other translation sites leave it empty.
-    /// Used to resolve a generic class's bare-generic field to the concrete type
-    /// of its instantiation when deciding the field's drop semantics.
-    pub generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
 }
 
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
@@ -177,13 +176,8 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// * `isa` - The target instruction set architecture
     /// * `body` - The MIR body whose local types will be cached
-    /// * `type_definitions` - Borrowed type definitions for layout computation
-    pub fn new(
-        isa: &Arc<dyn TargetIsa>,
-        body: &'a Body,
-        type_definitions: &'a HashMap<String, TypeDefinition>,
-        generic_class_instantiations: &'a HashMap<String, Vec<Vec<Type>>>,
-    ) -> Self {
+    /// * `facts` - The program's settled type facts, borrowed from the backend
+    pub fn new(isa: &Arc<dyn TargetIsa>, body: &'a Body, facts: &'a TypeFacts) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
         let ptr_type = isa.pointer_type();
@@ -197,8 +191,7 @@ impl<'a> FunctionTranslator<'a> {
             call_conv: isa.default_call_conv(),
             ptr_type,
             local_types,
-            type_definitions,
-            generic_class_instantiations,
+            facts,
         }
     }
     /// Translate a MIR function body to Cranelift IR.
@@ -219,11 +212,10 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
-            type_definitions: self.type_definitions,
+            facts: self.facts,
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
-            generic_class_instantiations: self.generic_class_instantiations,
         };
 
         Self::translate_blocks(
@@ -517,8 +509,12 @@ impl<'a> FunctionTranslator<'a> {
         idx: usize,
         type_ctx: &TypeCtx,
     ) -> Value {
-        let (offset, field_ty) =
-            layout::field_layout(vec_kind, idx, type_ctx.type_definitions, type_ctx.ptr_type);
+        let (offset, field_ty) = layout::field_layout(
+            vec_kind,
+            idx,
+            type_ctx.facts.definitions(),
+            type_ctx.ptr_type,
+        );
         builder.ins().load(field_ty, MemFlags::new(), value, offset)
     }
 
@@ -544,8 +540,12 @@ impl<'a> FunctionTranslator<'a> {
                 .ins()
                 .load(ptr_type, MemFlags::new(), value, offset as i32);
         }
-        let (offset, mut field_ty) =
-            layout::field_layout(&owner_type.kind, idx, type_ctx.type_definitions, ptr_type);
+        let (offset, mut field_ty) = layout::field_layout(
+            &owner_type.kind,
+            idx,
+            type_ctx.facts.definitions(),
+            ptr_type,
+        );
         if let Some(expected) = expected_ty {
             if Self::field_width_comes_from_expected_ty(&owner_type.kind, type_ctx) {
                 field_ty =
@@ -568,7 +568,8 @@ impl<'a> FunctionTranslator<'a> {
         match owner_kind {
             TypeKind::Option(_) => true,
             TypeKind::Custom(name, _) => type_ctx
-                .type_definitions
+                .facts
+                .definitions()
                 .get(name)
                 .map(|def| matches!(def, crate::type_checker::context::TypeDefinition::Enum(_)))
                 .unwrap_or(false),
@@ -711,7 +712,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(Value, Type), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let type_definitions = type_ctx.type_definitions;
+        let type_definitions = type_ctx.facts.definitions();
         let mut addr = base_addr;
         let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
 
@@ -812,7 +813,7 @@ impl<'a> FunctionTranslator<'a> {
                 let (offset, field_ty) = layout::field_layout(
                     &current_type.kind,
                     *idx,
-                    type_ctx.type_definitions,
+                    type_ctx.facts.definitions(),
                     type_ctx.ptr_type,
                 );
                 // Storing into an inline vector component: narrow/extend the

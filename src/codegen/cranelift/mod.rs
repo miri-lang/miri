@@ -25,6 +25,7 @@ use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
 use crate::mir::symbol::{StringLiteralPart, Symbol, ThunkKind};
+use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::AbiParam;
@@ -63,14 +64,9 @@ pub struct RuntimeImport {
 pub struct CraneliftBackend {
     /// The target ISA (instruction set architecture).
     isa: Arc<dyn TargetIsa>,
-    /// Type definitions from the type checker (for layout computation).
-    type_definitions: HashMap<String, TypeDefinition>,
-    /// Concrete type-argument tuples recorded for each generic class. Consulted
-    /// by the drop-thunk generator to resolve a bare-generic field to its
-    /// instantiation's concrete type.
-    generic_class_instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
-    /// The slots each vtable fills, as the pipeline settled them.
-    vtable_fills: crate::mir::lowering::vtable_demand::VtableFills,
+    /// The program's settled type facts: type definitions, recorded
+    /// generic-class instantiations and vtable fills.
+    facts: TypeFacts,
     /// Runtime function imports to declare as external symbols.
     runtime_imports: Vec<RuntimeImport>,
 }
@@ -156,9 +152,7 @@ impl CraneliftBackend {
 
         Ok(Self {
             isa,
-            type_definitions: HashMap::new(),
-            generic_class_instantiations: HashMap::new(),
-            vtable_fills: Default::default(),
+            facts: TypeFacts::default(),
             runtime_imports: Vec::new(),
         })
     }
@@ -173,24 +167,12 @@ impl CraneliftBackend {
         self.isa.pointer_type()
     }
 
-    /// Set the type definitions for layout computation.
-    pub fn set_type_definitions(&mut self, defs: HashMap<String, TypeDefinition>) {
-        self.type_definitions = defs;
-    }
-
-    /// Set the recorded generic-class instantiations used by the drop-thunk
-    /// generator to resolve bare-generic fields to concrete instantiation types.
-    pub fn set_generic_class_instantiations(
-        &mut self,
-        instantiations: HashMap<String, Vec<Vec<crate::ast::types::Type>>>,
-    ) {
-        self.generic_class_instantiations = instantiations;
-    }
-
-    /// Set the slots each vtable fills. A vtable no fill names is defined
-    /// with every slot null.
-    pub fn set_vtable_fills(&mut self, fills: crate::mir::lowering::vtable_demand::VtableFills) {
-        self.vtable_fills = fills;
+    /// Set the settled type facts the backend reads while emitting code: type
+    /// definitions for layout, recorded generic-class instantiations for
+    /// per-instantiation thunks, and the slots each vtable fills. A vtable no
+    /// fill names is defined with every slot null.
+    pub fn set_type_facts(&mut self, facts: TypeFacts) {
+        self.facts = facts;
     }
 
     /// Set runtime function imports that should be declared as external symbols.
@@ -277,17 +259,17 @@ impl Backend for CraneliftBackend {
             )?;
         }
 
-        let vtables = crate::mir::lowering::dispatch_symbols::constructed_vtable_symbols(
+        let vtables = crate::mir::dispatch::constructed_vtable_symbols(
             cpu_bodies.iter().map(|(_, body)| *body),
-            &self.type_definitions,
+            self.facts.definitions(),
         );
         FunctionTranslator::generate_vtables(
             &mut module,
             isa.pointer_type(),
-            &self.type_definitions,
+            self.facts.definitions(),
             vtables
                 .iter()
-                .map(|symbol| (symbol.as_str(), self.vtable_fills.slots(symbol))),
+                .map(|symbol| (symbol.as_str(), self.facts.vtable_fills().slots(symbol))),
         )?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
         let object = self.finalize_object(module)?;
@@ -408,8 +390,7 @@ impl CraneliftBackend {
                     isa,
                     name,
                     body,
-                    &self.type_definitions,
-                    &self.generic_class_instantiations,
+                    &self.facts,
                 )?;
             }
         }
@@ -586,12 +567,7 @@ impl CraneliftBackend {
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         // Create function translator
-        let mut translator = FunctionTranslator::new(
-            isa,
-            body,
-            &self.type_definitions,
-            &self.generic_class_instantiations,
-        );
+        let mut translator = FunctionTranslator::new(isa, body, &self.facts);
 
         // Translate MIR to Cranelift IR
         translator
@@ -652,7 +628,8 @@ impl CraneliftBackend {
         // before any `miri.TypeName.$drop` thunk is consulted, so emitting one would be
         // dead code that bloats the object file.
         let mut managed_names: Vec<&str> = self
-            .type_definitions
+            .facts
+            .definitions()
             .iter()
             .filter_map(|(name, def)| {
                 match def {
@@ -684,15 +661,14 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 None,
-                &self.type_definitions,
-                &self.generic_class_instantiations,
+                &self.facts,
             )?;
             FunctionTranslator::generate_clone_function(
                 module,
                 ctx,
                 isa,
                 type_name,
-                &self.type_definitions,
+                self.facts.definitions(),
             )?;
             self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
         }
@@ -719,7 +695,8 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
     ) -> Result<(), CodegenError> {
         let mut names: Vec<&str> = self
-            .type_definitions
+            .facts
+            .definitions()
             .keys()
             .map(String::as_str)
             .filter(|name| BuiltinCollectionKind::from_name(name).is_none())
@@ -734,7 +711,7 @@ impl CraneliftBackend {
                     isa,
                     type_name,
                     None,
-                    &self.type_definitions,
+                    self.facts.definitions(),
                 )?;
                 self.generate_instantiation_method_thunks(method, module, ctx, isa, type_name)?;
             }
@@ -758,13 +735,13 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
     ) -> Result<(), CodegenError> {
-        let Some(TypeDefinition::Class(class_def)) = self.type_definitions.get(type_name) else {
+        let Some(TypeDefinition::Class(class_def)) = self.facts.definitions().get(type_name) else {
             return Ok(());
         };
         if class_def.generics.is_none() {
             return Ok(());
         }
-        let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
+        let Some(tuples) = self.facts.generic_class_instantiations().get(type_name) else {
             return Ok(());
         };
         let mut emitted = std::collections::HashSet::new();
@@ -772,7 +749,7 @@ impl CraneliftBackend {
             let monomorphized = args.iter().all(|arg| {
                 crate::mir::lowering::is_monomorphizable_type_argument(
                     &arg.kind,
-                    &self.type_definitions,
+                    self.facts.definitions(),
                 )
             });
             if !monomorphized {
@@ -788,7 +765,7 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 Some(args),
-                &self.type_definitions,
+                self.facts.definitions(),
             )?;
         }
         Ok(())
@@ -816,8 +793,7 @@ impl CraneliftBackend {
                 isa,
                 &symbol,
                 &kind,
-                &self.type_definitions,
-                &self.generic_class_instantiations,
+                &self.facts,
             )?;
         }
         Ok(())
@@ -838,13 +814,13 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
     ) -> Result<(), CodegenError> {
-        let Some(definition) = self.type_definitions.get(type_name) else {
+        let Some(definition) = self.facts.definitions().get(type_name) else {
             return Ok(());
         };
         if definition.generics().is_none() {
             return Ok(());
         }
-        let Some(tuples) = self.generic_class_instantiations.get(type_name) else {
+        let Some(tuples) = self.facts.generic_class_instantiations().get(type_name) else {
             return Ok(());
         };
         let mut emitted = std::collections::HashSet::new();
@@ -866,8 +842,7 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 Some(args),
-                &self.type_definitions,
-                &self.generic_class_instantiations,
+                &self.facts,
             )?;
             // Per-instantiation `miri.Box$String.$decref` wrapper: the collection
             // element decref helper for a `List<Box<String>>` must route to the

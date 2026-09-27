@@ -446,8 +446,10 @@ impl<'a> FunctionTranslator<'a> {
         let ExpressionKind::Type(value_ty, _) = &value_expr.node else {
             return Ok(());
         };
-        if FunctionTranslator::is_unresolved_generic_elem(&value_ty.kind, type_ctx.type_definitions)
-        {
+        if FunctionTranslator::is_unresolved_generic_elem(
+            &value_ty.kind,
+            type_ctx.facts.definitions(),
+        ) {
             return Ok(());
         }
 
@@ -466,7 +468,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx,
             shape,
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
             ptr_type,
         )? {
             FunctionTranslator::call_rt_map_set_val_clone_fn(builder, ctx, map_ptr, clone_addr)?;
@@ -515,7 +517,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             set_ptr,
             ptr_type,
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
         )?;
         Ok(())
     }
@@ -1081,7 +1083,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx,
             shape,
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
             ptr_type,
         )? {
             FunctionTranslator::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
@@ -1208,7 +1210,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             list_ptr,
             ptr_type,
-            type_ctx.type_definitions,
+            type_ctx.facts.definitions(),
         )?;
         FunctionTranslator::emit_element_order(
             builder,
@@ -1425,7 +1427,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> TypeKind {
         use crate::type_checker::context::TypeDefinition;
-        match type_ctx.type_definitions.get(name) {
+        match type_ctx.facts.definitions().get(name) {
             Some(TypeDefinition::Struct(def)) => {
                 // A vector's component is named by its first parameter alone and
                 // its layout is the compiler's, not the declaration's, so it
@@ -1478,7 +1480,7 @@ impl<'a> FunctionTranslator<'a> {
             Some(args) => match crate::mir::lowering::type_arguments(args) {
                 Some(written) => {
                     crate::mir::lowering::inherited_instantiation::instantiated_field_types(
-                        type_ctx.type_definitions,
+                        type_ctx.facts.definitions(),
                         name,
                         &written,
                     )
@@ -1490,7 +1492,7 @@ impl<'a> FunctionTranslator<'a> {
                 None => {
                     let all_fields = crate::type_checker::context::collect_class_fields_all(
                         def,
-                        type_ctx.type_definitions,
+                        type_ctx.facts.definitions(),
                     );
                     return Self::field_kind_at_instantiation(
                         all_fields.get(idx).map(|(_, info)| &info.ty),
@@ -1502,7 +1504,7 @@ impl<'a> FunctionTranslator<'a> {
             // Inside the shared body of a generic class the arguments are the
             // class's own parameters, and the binding still has to be followed.
             None => crate::mir::lowering::inherited_instantiation::declared_field_types(
-                type_ctx.type_definitions,
+                type_ctx.facts.definitions(),
                 name,
             ),
         };

@@ -15,7 +15,7 @@
 use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
-use crate::mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
+use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
 
