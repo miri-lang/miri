@@ -64,6 +64,7 @@ fn class(
         module: String::new(),
         is_abstract,
         has_drop: false,
+        runtime_settled_methods: std::collections::BTreeSet::new(),
     }
 }
 

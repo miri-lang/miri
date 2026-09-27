@@ -54,6 +54,15 @@ use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
 
+/// The body a class method declares, or `None` for an abstract method, which
+/// declares none or an empty one.
+pub(crate) fn method_body(decl: &FunctionDeclarationData) -> Option<&Statement> {
+    decl.body.as_deref().filter(|body| {
+        !matches!(&body.node, StatementKind::Empty)
+            && !matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
+    })
+}
+
 impl TypeChecker {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_class(
@@ -125,6 +134,7 @@ impl TypeChecker {
         );
 
         self.check_class_method_bodies(&method_statements, context);
+        self.record_runtime_settled_methods(&name, &method_statements);
 
         context.exit_class();
         context.exit_scope();
@@ -272,6 +282,7 @@ impl TypeChecker {
             module: self.modules.current_module.clone(),
             is_abstract,
             has_drop,
+            runtime_settled_methods: std::collections::BTreeSet::new(),
         };
 
         if context.scopes.len() == 2 {
@@ -1336,11 +1347,7 @@ impl TypeChecker {
     ) {
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                let is_abstract = decl.body.as_ref().is_none_or(|body| {
-                    matches!(&body.node, StatementKind::Empty)
-                        || matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
-                });
-                if is_abstract {
+                if method_body(decl).is_none() {
                     continue;
                 }
 

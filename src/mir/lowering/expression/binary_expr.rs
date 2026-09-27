@@ -99,12 +99,7 @@ pub(crate) fn try_lower_operator_trait_call(
 /// leaves the operator comparing the two operands' addresses. Outside an
 /// instantiated body the substitution is empty and this is the recorded type.
 fn binary_trait_receiver_type(ctx: &LoweringContext, lhs: &Expression) -> Option<Type> {
-    let recorded = ctx.type_checker.get_type(lhs.id)?;
-    let receiver = if ctx.generic_subs.is_empty() {
-        recorded.clone()
-    } else {
-        super::super::apply_generic_sub(recorded, &ctx.generic_subs)
-    };
+    let receiver = ctx.recorded_type(lhs.id)?;
     operator_trait_class_name(&receiver.kind)
         .is_some()
         .then_some(receiver)
@@ -402,9 +397,10 @@ fn return_method_call(
     Ok(ret_op)
 }
 
-/// Pick the runtime membership-test function for the collection `rhs`.
+/// Pick the runtime membership-test function for the collection `rhs`, read
+/// at the instantiation a generic body is lowered for.
 fn resolve_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> &'static str {
-    match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
+    match ctx.recorded_type(rhs.id).as_ref().map(|t| &t.kind) {
         Some(TypeKind::Set(_)) | Some(TypeKind::Map(_, _)) => {
             unreachable!("collection types are normalized to Custom before this point")
         }
@@ -561,9 +557,12 @@ pub(crate) fn lower_binary_expr(
     }
 
     if is_equality_operator(op) {
+        // Read with the instantiation's substitution: inside a monomorphized
+        // body the operand was recorded as the bare parameter `T`, which names
+        // no struct, enum or option, so the raw type would compare a struct or
+        // an optional string by the word it is passed in.
         let structural = ctx
-            .type_checker
-            .get_type(lhs.id)
+            .recorded_type(lhs.id)
             .is_some_and(|ty| is_structural_equality_type(ctx, &ty.kind));
         if structural {
             return lower_structural_equality(ctx, lhs_op, rhs_op, expr, dest, op, arg_watermark);

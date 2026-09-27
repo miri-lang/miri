@@ -361,6 +361,7 @@ mod tests {
             module: String::new(),
             is_abstract: false,
             has_drop: false,
+            runtime_settled_methods: std::collections::BTreeSet::new(),
         }
     }
 

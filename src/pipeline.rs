@@ -2042,11 +2042,11 @@ impl Pipeline {
     ///
     /// Those bodies do it through the runtime rather than by any RC operation MIR
     /// can see, so the shared generic one is correct at every element type and
-    /// [`mir::verify::verify_collection_element_ownership`] exempts them. A method
-    /// the collection inherits from a trait, or declares taking a function value,
-    /// has no intrinsic to lean on, and needs the concrete element type instead —
+    /// [`mir::verify::verify_collection_element_ownership`] exempts them. Every
+    /// other method needs the concrete element type instead —
     /// [`mir::lowering::method_dispatch::is_settled_by_the_runtime`] is the one
-    /// definition dispatch and this exemption share.
+    /// definition dispatch and this exemption share, and
+    /// [`crate::type_checker::runtime_settled`] states the rule.
     fn collection_methods_backed_by_intrinsics(
         result: &PipelineResult,
     ) -> std::collections::HashSet<String> {

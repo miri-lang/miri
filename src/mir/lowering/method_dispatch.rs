@@ -601,7 +601,7 @@ fn call_result_type(
 /// else. `int` matches the fallback exactly, and every managed type is passed
 /// as a pointer, so both agree on layout — a managed argument needs its own
 /// body for a different reason, spelled out in
-/// [`shared_body_would_borrow_a_managed_element`].
+/// [`shared_body_misreads_a_managed_element`].
 fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
     let layout = crate::ast::types::element_layout(kind);
     layout.is_address
@@ -632,49 +632,36 @@ fn orders_differently_from_signed_fallback(kind: &TypeKind) -> bool {
     )
 }
 
-/// Whether a built-in collection's `method_name` settles the ownership of the
-/// elements it touches by calling the runtime, which makes its shared generic
-/// body correct at every element type.
+/// Whether a built-in collection's `method_name` has a body the runtime settles,
+/// which makes its shared generic body correct at every element type.
 ///
-/// A method the collection declares itself pairs each element read with the
-/// runtime call that hands the container's own reference over (`pop` and
-/// `remove_at` do), and only a body that can name the intrinsic can pair with
-/// it; re-lowering one against an owning read would leave that donated reference
-/// with no one to release it.
-///
-/// A declared method that takes a function value does not. It builds its result
-/// from what that function hands back and from the collection's own element
-/// reads — ordinary Miri code, like a trait default — so no intrinsic accounts
-/// for either, and neither does a method the collection only inherits.
-// TODO: a declared method that calls a trait default on `self` is not settled
-// by the runtime although it takes no function value. `List.remove` calls the
-// `index_of` default, which compares elements with `==`, so the shared body it
-// is routed to compares a `List<String>`'s computed elements by address and
-// answers `false` for an element the list holds.
+/// The type checker records the set on the class; the rule is stated once, in
+/// [`crate::type_checker::runtime_settled`]. A settled body pairs each element
+/// read with the runtime call that hands the container's own reference over
+/// (`pop` and `remove_at` do), and only a body that can name the intrinsic can
+/// pair with it: re-lowering one against an owning read would leave that
+/// donated reference with no one to release it. A method the collection only
+/// inherits is never in the set.
 pub(crate) fn is_settled_by_the_runtime(
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,
 ) -> bool {
-    class_def.methods.get(method_name).is_some_and(|method| {
-        !method
-            .params
-            .iter()
-            .any(|(_, param_ty)| matches!(param_ty.kind, TypeKind::Function(_)))
-    })
+    class_def.runtime_settled_methods.contains(method_name)
 }
 
-/// Whether the shared generic body of `method_name` would read `elem_kind` as a
-/// borrow the resulting value does not own.
+/// Whether the shared generic body of `method_name` would mishandle a managed
+/// `elem_kind`: take it as a borrow the resulting value does not own, or
+/// compare it by address.
 ///
-/// A method written in ordinary Miri code reaches an element only through
-/// `element_at`, and stores it in a new collection, returns it, or hands it to a
-/// function value. Lowered once per receiver class, its element type stays a
-/// type parameter, so Perceus reads it as unmanaged: it takes no reference to
-/// what it stores and releases nothing a function value returns — while the call
-/// site, which knows the concrete element, releases every element of the
-/// collection it gets back. Giving the body the concrete element makes both
-/// sides agree.
-fn shared_body_would_borrow_a_managed_element(
+/// A body the runtime does not settle is ordinary Miri code. Lowered once per
+/// receiver class, its element type stays a type parameter, so Perceus reads
+/// it as unmanaged — it takes no reference to what it stores and releases
+/// nothing a function value returns, while the call site, which knows the
+/// concrete element, releases every element of the collection it gets back —
+/// and `==` on it compares the words the elements are passed in, which for a
+/// string or a class is their address. Giving the body the concrete element
+/// makes the ownership agree and sends `==` to the element's own equality.
+fn shared_body_misreads_a_managed_element(
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,
     elem_kind: &TypeKind,
@@ -692,7 +679,7 @@ fn shared_body_would_borrow_a_managed_element(
 /// ordered unlike a signed integer would sort wrongly in any list the body
 /// builds. And a body written in ordinary Miri code that reads a managed
 /// element takes no reference to it, while the call site releases every element
-/// of the collection it gets back.
+/// of the collection it gets back, and compares it by address.
 ///
 /// Every other class always needs one, so it passes straight through.
 fn builtin_collection_needs_its_own_body(
@@ -715,7 +702,7 @@ fn builtin_collection_needs_its_own_body(
         .any(|arg| {
             differs_from_pointer_width_fallback(&arg.kind)
                 || orders_differently_from_signed_fallback(&arg.kind)
-                || shared_body_would_borrow_a_managed_element(class_def, method_name, &arg.kind)
+                || shared_body_misreads_a_managed_element(class_def, method_name, &arg.kind)
         })
 }
 

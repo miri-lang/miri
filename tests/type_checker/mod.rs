@@ -37,6 +37,7 @@ pub mod option;
 pub mod rawptr;
 pub mod result;
 pub mod runtime_function;
+pub mod runtime_settled_methods;
 pub mod selective_import;
 pub mod self_super;
 pub mod set;
