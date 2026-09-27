@@ -338,7 +338,7 @@ fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
 /// A parameter reaches an operator from below the surface as readily as from
 /// it — `Vec3<T> * f32` states as much about `T` as `a * b` does — so a
 /// requirement is decided over the whole type rather than its head alone.
-fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool) -> bool {
+pub(crate) fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool) -> bool {
     if applies(kind) {
         return true;
     }
@@ -839,7 +839,7 @@ impl TypeChecker {
     }
 
     /// The generic parameters a class or trait declares, in order.
-    fn generics_of(&self, type_name: &str) -> &[GenericDefinition] {
+    pub(crate) fn generics_of(&self, type_name: &str) -> &[GenericDefinition] {
         let generics = match self.type_table.global_type_definitions.get(type_name) {
             Some(TypeDefinition::Class(def)) => def.generics.as_deref(),
             Some(TypeDefinition::Trait(def)) => def.generics.as_deref(),
@@ -903,6 +903,37 @@ impl TypeChecker {
             substitution.extend(pins.iter().map(|(param, ty)| (param.clone(), ty.clone())));
         }
         substitution
+    }
+
+    /// The arguments `sup` is reached at from `sub` written with the type
+    /// arguments `sub_arguments`, in `sup`'s declaration order, read through
+    /// the `extends`, `implements` and parent-trait clauses on the way up.
+    ///
+    /// `None` when `sup` is not above `sub`. An entry is `None` where the
+    /// clauses leave that parameter to one `sub_arguments` does not bind.
+    pub(crate) fn supertype_arguments(
+        &self,
+        sub: &str,
+        sub_arguments: Option<&[Expression]>,
+        sup: &str,
+    ) -> Option<Vec<Option<Type>>> {
+        let substitution: HashMap<String, Type> = self
+            .generics_of(sub)
+            .iter()
+            .zip(sub_arguments.unwrap_or_default())
+            .filter_map(|(generic, argument)| {
+                let ty = self.extract_type_from_expression(argument).ok()?;
+                Some((generic.name.clone(), ty))
+            })
+            .collect();
+        let supertypes = self.declaring_types_above(sub, &substitution);
+        let pins = pins_of(&supertypes, sup)?;
+        Some(
+            self.generics_of(sup)
+                .iter()
+                .map(|generic| pins.get(&generic.name).cloned())
+                .collect(),
+        )
     }
 
     /// The types `type_name` names in its own `extends`, `implements` or

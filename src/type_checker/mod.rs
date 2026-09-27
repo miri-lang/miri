@@ -16,6 +16,7 @@
 //!
 //! ## Support Modules
 //! - [`builtins`] - Built-in types and functions (String, Dim3, Future, print)
+//! - [`call_instantiation`] - Which instantiation of a generic function a call reaches
 //! - [`compatibility`] - Type compatibility and subtyping checks
 //! - [`generics`] - Generic type inference and substitution
 //! - [`operators`] - Binary and unary operator type validation
@@ -34,6 +35,7 @@ pub(crate) mod attributes;
 
 use crate::type_checker::attributes::Deprecation;
 pub mod builtins;
+pub(crate) mod call_instantiation;
 mod compatibility;
 pub mod context;
 pub(crate) mod diagnostics;
@@ -110,6 +112,9 @@ pub struct TypeChecker {
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
+    /// Generic calls whose type parameters are not all bound yet, waiting for
+    /// the location their result goes into — see [`call_instantiation`].
+    pub(crate) open_generic_calls: call_instantiation::OpenGenericCalls,
     /// What each body requires of its own generic parameters, keyed by the
     /// declaration that stated it. Recorded while the generic body is checked
     /// and answered at every site that pins the parameter — see
@@ -228,6 +233,7 @@ impl TypeChecker {
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
+            open_generic_calls: call_instantiation::OpenGenericCalls::default(),
             instantiation_requirements: HashMap::new(),
             pinning_sites: Vec::new(),
             entry_source: None,
@@ -489,6 +495,10 @@ impl TypeChecker {
                 self.check_statement(statement, context);
             }
         }
+        // A call opened outside any statement — an initializer the hoisting
+        // pass checked and the body pass never reached again — is refused
+        // here rather than lowered at no instantiation.
+        self.refuse_open_generic_calls_since(0);
     }
 
     fn run_pass_escape_summaries(&mut self, program: &Program, context: &mut Context) {

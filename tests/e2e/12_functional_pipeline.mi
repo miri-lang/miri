@@ -37,7 +37,7 @@ fn count_matching(values List<int>, pred fn(x int) bool) int
 
 fn identity<T>(x T) T: x
 
-fn first_or_default<T>(values List<int>, default_val int, f fn(x int) bool) int
+fn first_or_default(values List<int>, default_val int, f fn(x int) bool) int
     var i = 0
     while i < values.length()
         if f(values.element_at(i))

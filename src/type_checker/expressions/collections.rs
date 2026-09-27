@@ -109,39 +109,242 @@ impl TypeChecker {
         expr: Option<&Expression>,
         context: &mut Context,
     ) -> bool {
+        // A generic call left open binds its parameters from the location
+        // first, so it is judged at the type it will be built at.
+        let bound_actual = expr
+            .filter(|expr| self.open_generic_calls.contains(expr.id))
+            .and_then(|expr| {
+                self.bind_open_call_from_expected(expr.id, expected, context);
+                self.get_type(expr.id).cloned()
+            });
+        let actual = bound_actual.as_ref().unwrap_or(actual);
         if !self.are_compatible(expected, actual, context) {
+            if let Some(fits) =
+                expr.and_then(|expr| self.literal_fits(expected, actual, expr, context))
+            {
+                return fits;
+            }
+            if let Some(expr) = expr.filter(|expr| self.open_generic_calls.contains(expr.id)) {
+                self.note_open_call_mismatch(expr.id, expected);
+            }
             return false;
         }
         if let Some(expr) = expr {
-            let mut built_elsewhere = Vec::new();
-            self.settle_at_expected(expr, expected, context, &mut built_elsewhere);
-            for (read, read_type) in built_elsewhere {
-                let unbound = self
-                    .inference_slots_bound_by(&read_type, expected, context)
-                    .join("`, `");
-                self.report_error(
-                    DiagnosticCode::TypTypeInference,
-                    format!(
-                        "Cannot use a value of type {read_type} where {expected} is expected: \
-                         its type leaves `{unbound}` unbound, so it was built at a layout that \
-                         does not hold what {expected} does. Declare the type where the value \
-                         is first written, with `{unbound}` filled in"
-                    ),
-                    read.span,
-                );
-            }
+            self.settle_value_at(expr, expected, context);
         }
         true
+    }
+
+    /// Settle `expr` at `expected` and report each value it reads that was
+    /// built elsewhere at a layout `expected` does not hold.
+    pub(crate) fn settle_value_at(
+        &mut self,
+        expr: &Expression,
+        expected: &Type,
+        context: &Context,
+    ) {
+        let mut built_elsewhere = Vec::new();
+        self.settle_at_expected(expr, expected, context, &mut built_elsewhere);
+        for (read, read_type) in built_elsewhere {
+            let unbound = self
+                .inference_slots_bound_by(&read_type, expected, context)
+                .join("`, `");
+            self.report_error(
+                DiagnosticCode::TypTypeInference,
+                format!(
+                    "Cannot use a value of type {read_type} where {expected} is expected: \
+                     its type leaves `{unbound}` unbound, so it was built at a layout that \
+                     does not hold what {expected} does. Declare the type where the value \
+                     is first written, with `{unbound}` filled in"
+                ),
+                read.span,
+            );
+        }
+    }
+
+    /// Whether the collection literal `expr`, inferred as `actual`, which the
+    /// collection rules alone refuse at `expected`, may be built there — and,
+    /// when it may, record it at that type. `None` when `expr` is no
+    /// non-empty collection literal or `expected` no built-in collection.
+    ///
+    /// A collection's element types are invariant, but a literal is built
+    /// here, not handed on: it is laid out at the declared element types, so
+    /// `let m {String: int?} = {"a": 1}` stores each value where an `int?` is
+    /// read. Its own shape (kind, size) must still match, and each element
+    /// must be one [`Self::literal_element_fits`] lets it hold.
+    fn literal_fits(
+        &mut self,
+        expected: &Type,
+        actual: &Type,
+        expr: &Expression,
+        context: &mut Context,
+    ) -> Option<bool> {
+        let (element_count, values) = literal_values(expr)?;
+        let TypeKind::Custom(expected_name, Some(expected_args)) = &expected.kind else {
+            return None;
+        };
+        BuiltinCollectionKind::from_name(expected_name)?;
+        let TypeKind::Custom(actual_name, Some(actual_args)) = &actual.kind else {
+            return None;
+        };
+        let mut built_args = actual_args.clone();
+        for (built, declared) in built_args.iter_mut().zip(expected_args).take(element_count) {
+            *built = declared.clone();
+        }
+        let built = make_type(TypeKind::Custom(actual_name.clone(), Some(built_args)));
+        if !self.are_compatible(expected, &built, context) {
+            return Some(false);
+        }
+        let element_types = expected_args
+            .iter()
+            .take(element_count)
+            .map(|arg| self.extract_type_from_expression(arg).ok())
+            .collect::<Option<Vec<Type>>>()?;
+        for (value, position) in values {
+            let element_type = element_types.get(position)?;
+            if !self.literal_element_fits(element_type, value, context) {
+                return Some(false);
+            }
+        }
+        self.type_table.types.insert(expr.id, built);
+        Some(true)
+    }
+
+    /// Whether each element of the literal `expr` — a list, array or set
+    /// literal handed to a collection constructor — may be built at
+    /// `element`, the element type the constructor was written with; when
+    /// every one may, each is settled there and the literal recorded at that
+    /// element type. Anything that is no such literal is left as it is.
+    pub(crate) fn literal_elements_fit(
+        &mut self,
+        expr: &Expression,
+        element: &Type,
+        context: &mut Context,
+    ) -> bool {
+        let (ExpressionKind::List(elements)
+        | ExpressionKind::Array(elements, _)
+        | ExpressionKind::Set(elements)) = &expr.node
+        else {
+            return true;
+        };
+        for value in elements {
+            if !self.literal_element_fits(element, value, context) {
+                return false;
+            }
+        }
+        let Some(TypeKind::Custom(name, Some(arguments))) =
+            self.get_type(expr.id).map(|recorded| recorded.kind.clone())
+        else {
+            return true;
+        };
+        let mut arguments = arguments;
+        if let Some(first) = arguments.first_mut() {
+            *first = self.create_type_expression(element.clone());
+            let settled = make_type(TypeKind::Custom(name, Some(arguments)));
+            self.record_joined_type(expr, &settled, context);
+        }
+        true
+    }
+
+    /// Whether `value`, one element of a literal being built where `element`
+    /// is the declared element type, may be stored there.
+    ///
+    /// A literal's elements are stored as they are, with no conversion. So
+    /// only an element that builds its own value where it is written takes
+    /// the declared type the way a typed location does; a value read from
+    /// elsewhere — a binding, a field, a call's fixed result — is already
+    /// laid out at its own type, and must be of the declared type exactly. A
+    /// class instance stored as its base class is the one exception: both
+    /// are one pointer.
+    fn literal_element_fits(
+        &mut self,
+        element: &Type,
+        value: &Expression,
+        context: &mut Context,
+    ) -> bool {
+        let Some(value_type) = self.get_type(value.id).cloned() else {
+            return false;
+        };
+        if self.builds_in_place(value, context) {
+            return self.accepts_value_at(element, &value_type, Some(value), context);
+        }
+        let fits = self.type_arguments_agree(element, &value_type, context)
+            || self.is_base_class_instance(element, &value_type, context);
+        if fits {
+            self.settle_value_at(value, element, context);
+        }
+        fits
+    }
+
+    /// Whether `value` builds its value where it is written, at whatever type
+    /// the location declares: a literal (negated or not), a collection,
+    /// tuple or enum literal made of such, a variant constructor, or a
+    /// generic call whose parameters the location still binds.
+    fn builds_in_place(&self, value: &Expression, context: &Context) -> bool {
+        match &value.node {
+            ExpressionKind::Literal(..)
+            | ExpressionKind::List(..)
+            | ExpressionKind::Array(..)
+            | ExpressionKind::Set(..)
+            | ExpressionKind::Map(..)
+            | ExpressionKind::EnumValue(..) => true,
+            ExpressionKind::Unary(_, operand) => {
+                matches!(operand.node, ExpressionKind::Literal(..))
+            }
+            ExpressionKind::Tuple(elements) => elements
+                .iter()
+                .all(|element| self.builds_in_place(element, context)),
+            ExpressionKind::Call(callee, _) => {
+                self.open_generic_calls.contains(value.id)
+                    || self.constructs_a_variant(callee, context)
+            }
+            ExpressionKind::Identifier(..)
+            | ExpressionKind::Member(..)
+            | ExpressionKind::Index(..)
+            | ExpressionKind::Binary(..)
+            | ExpressionKind::Logical(..)
+            | ExpressionKind::Assignment(..)
+            | ExpressionKind::Range(..)
+            | ExpressionKind::Guard(..)
+            | ExpressionKind::Conditional(..)
+            | ExpressionKind::Match(..)
+            | ExpressionKind::Block(..)
+            | ExpressionKind::Type(..)
+            | ExpressionKind::GenericType(..)
+            | ExpressionKind::ImportPath(..)
+            | ExpressionKind::TypeDeclaration(..)
+            | ExpressionKind::StructMember(..)
+            | ExpressionKind::Lambda(..)
+            | ExpressionKind::FormattedString(..)
+            | ExpressionKind::NamedArgument(..)
+            | ExpressionKind::Super
+            | ExpressionKind::Cast(..) => false,
+        }
+    }
+
+    /// Whether `value` is an instance of a class `element` names a base
+    /// class of, at the arguments `element` spells.
+    fn is_base_class_instance(&self, element: &Type, value: &Type, context: &Context) -> bool {
+        let is_class = |ty: &Type| {
+            matches!(&ty.kind, TypeKind::Custom(name, _) if matches!(
+                context
+                    .resolve_type_definition(name)
+                    .or_else(|| self.type_definitions().get(name.as_str())),
+                Some(crate::type_checker::context::TypeDefinition::Class(_))
+            ))
+        };
+        is_class(element) && is_class(value) && self.are_compatible(element, value, context)
     }
 
     /// Record `expr`, and every branch or literal element it is made of, at
     /// `expected` wherever it left open an argument `expected` binds.
     ///
     /// Only an expression that builds its value — a variant constructor, a
-    /// literal, a built-in collection built from one — is recorded again: its
-    /// value is laid out at the recorded type. One that reads a value built
-    /// elsewhere (a binding, a field, a call's result) keeps its type, which is
-    /// the layout that value already has.
+    /// literal, a built-in collection built from one, a generic call whose
+    /// parameters are still open — is recorded again: its value is laid out
+    /// at the recorded type. One that reads a value built elsewhere (a
+    /// binding, a field, another call's result) keeps its type, which is the
+    /// layout that value already has.
     fn settle_at_expected<'e>(
         &mut self,
         expr: &'e Expression,
@@ -160,91 +363,27 @@ impl TypeChecker {
             }
         }
         match &expr.node {
-            ExpressionKind::Tuple(elements) => {
-                self.record_joined_type(expr, expected, context);
-                let TypeKind::Tuple(element_types) = &expected.kind else {
-                    return;
-                };
-                for (value, element_type) in elements.iter().zip(element_types) {
-                    if let Ok(element_type) = self.extract_type_from_expression(element_type) {
-                        self.settle_at_expected(value, &element_type, context, built_elsewhere);
-                    }
-                }
+            ExpressionKind::Tuple(..)
+            | ExpressionKind::List(..)
+            | ExpressionKind::Array(..)
+            | ExpressionKind::Set(..) => {
+                self.settle_elements_at_expected(expr, expected, context, built_elsewhere)
             }
-            ExpressionKind::List(elements)
-            | ExpressionKind::Array(elements, _)
-            | ExpressionKind::Set(elements) => {
-                self.record_joined_type(expr, expected, context);
-                let Some(element) = self.literal_element_type(expected) else {
-                    return;
-                };
-                for value in elements {
-                    self.settle_at_expected(value, &element, context, built_elsewhere);
-                }
-            }
-            ExpressionKind::Conditional(then_expr, _, else_expr, _) => {
-                self.record_joined_type(expr, expected, context);
-                self.settle_at_expected(then_expr, expected, context, built_elsewhere);
-                if let Some(else_expr) = else_expr {
-                    self.settle_at_expected(else_expr, expected, context, built_elsewhere);
-                }
-            }
-            ExpressionKind::Match(_, branches) => {
-                self.record_joined_type(expr, expected, context);
-                for branch in branches {
-                    if let crate::ast::statement::StatementKind::Expression(value) =
-                        &branch.body.node
-                    {
-                        self.settle_at_expected(value, expected, context, built_elsewhere);
-                    }
-                }
-            }
-            ExpressionKind::Block(_, value) => {
-                self.record_joined_type(expr, expected, context);
-                self.settle_at_expected(value, expected, context, built_elsewhere);
+            ExpressionKind::Conditional(..)
+            | ExpressionKind::Match(..)
+            | ExpressionKind::Block(..) => {
+                self.settle_branches_at_expected(expr, expected, context, built_elsewhere)
             }
             ExpressionKind::Map(..) | ExpressionKind::EnumValue(..) => {
                 self.record_joined_type(expr, expected, context);
             }
-            // A built-in collection constructed from a literal (`List([..])`)
-            // holds the literal's elements at its own element type.
-            ExpressionKind::Call(callee, args) if self.names_a_collection(callee, expected) => {
-                self.record_joined_type(expr, expected, context);
-                for arg in args {
-                    self.settle_at_expected(arg, expected, context, built_elsewhere);
-                }
+            ExpressionKind::Call(..) => {
+                self.settle_call_at_expected(expr, expected, context, built_elsewhere)
             }
-            ExpressionKind::Call(callee, args) if self.is_variant_constructor(callee, context) => {
-                self.record_joined_type(expr, expected, context);
-                let payloads = self.variant_payloads_at(callee, expected, context);
-                for (arg, payload) in args.iter().zip(payloads) {
-                    self.settle_at_expected(arg, &payload, context, built_elsewhere);
-                }
-            }
-            // The built-in optional constructor boxes its argument, which is
-            // built at the optional's payload type.
-            ExpressionKind::Call(callee, args) if self.builds_an_optional(expr, callee) => {
-                self.record_joined_type(expr, expected, context);
-                if let (TypeKind::Option(inner), [arg]) = (&expected.kind, args.as_slice()) {
-                    self.settle_at_expected(arg, inner, context, built_elsewhere);
-                }
-            }
-            // Every other expression reads a value already built at its own
-            // type, which cannot be widened now: one left open where the
-            // expected type binds an argument is reported.
             ExpressionKind::Identifier(..)
             | ExpressionKind::Member(..)
-            | ExpressionKind::Index(..)
-            | ExpressionKind::Call(..) => {
-                let Some(actual) = self.get_type(expr.id).cloned() else {
-                    return;
-                };
-                if !self
-                    .inference_slots_bound_by(&actual, expected, context)
-                    .is_empty()
-                {
-                    built_elsewhere.push((expr, actual));
-                }
+            | ExpressionKind::Index(..) => {
+                self.note_built_elsewhere(expr, expected, context, built_elsewhere)
             }
             ExpressionKind::Type(..)
             | ExpressionKind::GenericType(..)
@@ -263,6 +402,129 @@ impl TypeChecker {
             | ExpressionKind::NamedArgument(..)
             | ExpressionKind::Super
             | ExpressionKind::Cast(..) => {}
+        }
+    }
+
+    /// [`Self::settle_at_expected`] for the tuple or collection literal
+    /// `expr`: each element is settled at the element type `expected` gives
+    /// it.
+    fn settle_elements_at_expected<'e>(
+        &mut self,
+        expr: &'e Expression,
+        expected: &Type,
+        context: &Context,
+        built_elsewhere: &mut Vec<(&'e Expression, Type)>,
+    ) {
+        self.record_joined_type(expr, expected, context);
+        if let ExpressionKind::Tuple(elements) = &expr.node {
+            let TypeKind::Tuple(element_types) = &expected.kind else {
+                return;
+            };
+            for (value, element_type) in elements.iter().zip(element_types) {
+                if let Ok(element_type) = self.extract_type_from_expression(element_type) {
+                    self.settle_at_expected(value, &element_type, context, built_elsewhere);
+                }
+            }
+            return;
+        }
+        let (ExpressionKind::List(elements)
+        | ExpressionKind::Array(elements, _)
+        | ExpressionKind::Set(elements)) = &expr.node
+        else {
+            return;
+        };
+        let Some(element) = self.literal_element_type(expected) else {
+            return;
+        };
+        for value in elements {
+            self.settle_at_expected(value, &element, context, built_elsewhere);
+        }
+    }
+
+    /// [`Self::settle_at_expected`] for the conditional, match or block
+    /// `expr`: each branch it can yield is settled at `expected`.
+    fn settle_branches_at_expected<'e>(
+        &mut self,
+        expr: &'e Expression,
+        expected: &Type,
+        context: &Context,
+        built_elsewhere: &mut Vec<(&'e Expression, Type)>,
+    ) {
+        self.record_joined_type(expr, expected, context);
+        if let ExpressionKind::Conditional(then_expr, _, else_expr, _) = &expr.node {
+            self.settle_at_expected(then_expr, expected, context, built_elsewhere);
+            if let Some(else_expr) = else_expr {
+                self.settle_at_expected(else_expr, expected, context, built_elsewhere);
+            }
+        } else if let ExpressionKind::Match(_, branches) = &expr.node {
+            for branch in branches {
+                if let crate::ast::statement::StatementKind::Expression(value) = &branch.body.node {
+                    self.settle_at_expected(value, expected, context, built_elsewhere);
+                }
+            }
+        } else if let ExpressionKind::Block(_, value) = &expr.node {
+            self.settle_at_expected(value, expected, context, built_elsewhere);
+        }
+    }
+
+    /// [`Self::settle_at_expected`] for the call `expr`.
+    ///
+    /// A built-in collection constructed from a literal (`List([..])`) holds
+    /// the literal's elements at its own element type; a variant constructor
+    /// and the built-in optional constructor build their payload at the
+    /// expected payload; a generic call left open takes its unbound
+    /// parameters from `expected`. Any other call reads a value already built.
+    fn settle_call_at_expected<'e>(
+        &mut self,
+        expr: &'e Expression,
+        expected: &Type,
+        context: &Context,
+        built_elsewhere: &mut Vec<(&'e Expression, Type)>,
+    ) {
+        let ExpressionKind::Call(callee, args) = &expr.node else {
+            return;
+        };
+        if self.names_a_collection(callee, expected) {
+            self.record_joined_type(expr, expected, context);
+            for arg in args {
+                self.settle_at_expected(arg, expected, context, built_elsewhere);
+            }
+        } else if self.is_variant_constructor(callee, context) {
+            self.record_joined_type(expr, expected, context);
+            let payloads = self.variant_payloads_at(callee, expected, context);
+            for (arg, payload) in args.iter().zip(payloads) {
+                self.settle_at_expected(arg, &payload, context, built_elsewhere);
+            }
+        } else if self.builds_an_optional(expr, callee) {
+            self.record_joined_type(expr, expected, context);
+            if let (TypeKind::Option(inner), [arg]) = (&expected.kind, args.as_slice()) {
+                self.settle_at_expected(arg, inner, context, built_elsewhere);
+            }
+        } else if self.open_generic_calls.contains(expr.id) {
+            self.bind_open_call_from_expected(expr.id, expected, context);
+        } else {
+            self.note_built_elsewhere(expr, expected, context, built_elsewhere);
+        }
+    }
+
+    /// Note `expr`, which reads a value already built at its own type, when
+    /// that type leaves open an argument `expected` binds: the value cannot
+    /// be widened now, so the read is reported.
+    fn note_built_elsewhere<'e>(
+        &self,
+        expr: &'e Expression,
+        expected: &Type,
+        context: &Context,
+        built_elsewhere: &mut Vec<(&'e Expression, Type)>,
+    ) {
+        let Some(actual) = self.get_type(expr.id).cloned() else {
+            return;
+        };
+        if !self
+            .inference_slots_bound_by(&actual, expected, context)
+            .is_empty()
+        {
+            built_elsewhere.push((expr, actual));
         }
     }
 
@@ -329,7 +591,7 @@ impl TypeChecker {
 
     /// Whether `callee` names a variant of an enum (`E.L`), whose call builds
     /// the enum value at the type recorded for the call.
-    fn is_variant_constructor(&self, callee: &Expression, context: &Context) -> bool {
+    pub(crate) fn is_variant_constructor(&self, callee: &Expression, context: &Context) -> bool {
         let ExpressionKind::Member(owner, _) = &callee.node else {
             return false;
         };
@@ -644,4 +906,25 @@ fn fill_open_expression(
         *nullable,
     );
     filled
+}
+
+/// The values a non-empty collection literal holds, each with the position of
+/// the collection type argument it is stored at, and how many such arguments
+/// the literal fills: one element type, or a key type and a value type.
+fn literal_values(expr: &Expression) -> Option<(usize, Vec<(&Expression, usize)>)> {
+    if let ExpressionKind::Map(entries) = &expr.node {
+        let values: Vec<(&Expression, usize)> = entries
+            .iter()
+            .flat_map(|(key, value)| [(key, 0), (value, 1)])
+            .collect();
+        return (!values.is_empty()).then_some((2, values));
+    }
+    let (ExpressionKind::List(elements)
+    | ExpressionKind::Array(elements, _)
+    | ExpressionKind::Set(elements)) = &expr.node
+    else {
+        return None;
+    };
+    let values: Vec<(&Expression, usize)> = elements.iter().map(|value| (value, 0)).collect();
+    (!values.is_empty()).then_some((1, values))
 }

@@ -643,7 +643,8 @@ impl TypeChecker {
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
-                    return_type, expr_type
+                    crate::type_checker::diagnostics::spelled(return_type),
+                    crate::type_checker::diagnostics::spelled(&expr_type)
                 ),
                 expr.span,
             );

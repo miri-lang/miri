@@ -688,12 +688,7 @@ impl TypeChecker {
         let call_arity = self.call_site_arity.take();
 
         if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-            if let Some(module_path) = self
-                .modules
-                .module_aliases
-                .get(alias_name.as_str())
-                .cloned()
-            {
+            if let Some(module_path) = self.module_alias_in_scope(alias_name, context) {
                 return self.infer_member_module_alias(
                     alias_name,
                     &module_path,
@@ -848,6 +843,33 @@ impl TypeChecker {
                 Some(make_type(TypeKind::Error))
             }
         }
+    }
+
+    /// The module path `name` aliases, when it names a module alias rather
+    /// than a binding: a local or parameter of the same name shadows the
+    /// alias, as any inner name shadows an outer one.
+    pub(crate) fn module_alias_in_scope(&self, name: &str, context: &Context) -> Option<String> {
+        if context.resolve_info(name).is_some() {
+            return None;
+        }
+        self.modules.module_aliases.get(name).cloned()
+    }
+
+    /// Whether the checked expression `obj` was read as a module alias. The
+    /// decision is [`Self::module_alias_in_scope`]'s, made where the member
+    /// access was checked, which records the alias itself as an identifier; a
+    /// binding shadowing the alias is recorded at its own type instead. Every
+    /// later reader — the checker's own and MIR lowering — asks here rather
+    /// than looking the name up again, where the binding is no longer in scope.
+    pub fn read_as_module_alias(&self, obj: &Expression) -> bool {
+        let ExpressionKind::Identifier(name, _) = &obj.node else {
+            return false;
+        };
+        self.modules.module_aliases.contains_key(name.as_str())
+            && matches!(
+                self.get_type(obj.id).map(|ty| &ty.kind),
+                Some(TypeKind::Identifier)
+            )
     }
 
     fn infer_member_module_alias(

@@ -842,6 +842,34 @@ let n = identity(42)
 let s = identity("hello")
 ```
 
+#### Binding type parameters
+
+A call binds each of the callee's type parameters from, in order:
+
+1. **Type arguments written on the call.** `make<String>()` binds `T` to `String`. The call must write exactly as many type arguments as the function declares, or it is refused (`MER_TYP_036`). Inside a generic body, `make<T>()` binds the callee's parameter to the caller's own `T`.
+2. **The arguments it passes.** `identity(42)` binds `T` to `int`. A parameter declared as a trait or base class binds through the argument's own clauses: with `class Box implements Op<Foo>`, passing a `Box` where `Op<X>` is declared binds `X` to `Foo`.
+3. **The type of the location the result goes into.** A parameter only the return type mentions is bound by the declared type of the binding, parameter or return type the result is stored in:
+
+```miri
+fn make<T>() Box<T>
+    return Box<T>()
+
+let b Box<String> = make()      // T = String
+take(make())                    // T = the parameter type of `take`
+```
+
+A call whose type parameters are still unbound once its statement has been checked is refused (`MER_TYP_048`): no body can be compiled for it. That includes `let b = make()`, where nothing names the type, and a type parameter that appears nowhere in the signature (`fn noop<T>(x int) int`), which must always be written out: `noop<int>(5)`. Each bound a function declares on a type parameter (`T implements Named`) is checked against the type the call binds it to, however it was bound.
+
+#### Type arguments are invariant
+
+A generic type's arguments must match exactly: a `Box<Dog>` is not a `Box<Animal>`, and a class implementing `Sink<Dog>` is not a `Sink<Animal>`, even though a `Dog` is an `Animal`. An instance's argument is both read and written through it, so accepting a subtype would let an `Animal` be stored where `Dog` readers expect a `Dog`.
+
+The built-in collections follow the same rule for their element, key and value types: a `List<Dog>` is not a `List<Animal>`, a `List<i8>` is not a `List<i64>`, a `List<int>` is not a `List<int?>`, and a `Map<String, Dog>` is not a `Map<String, Animal>`. A literal is built at the type of the location it is written into rather than handed on, so it may be written where a wider element type is declared: `let ys Array<i8, 2> = [5, 6]` and `let m Map<String, int> = {}` are accepted. A collection constructor (`List([1, 2])`) is not a literal: it copies the literal it is given, so write the element type on it — `List<int?>([1, 2])`.
+
+Function types are invariant in their parameters and their result: `fn(d Dog) String` is not a `fn(a Animal) String`, nor the other way round. A function value is called through the signature of the location holding it, so each argument is passed, and the result read back, at that signature's types.
+
+A class that extends or implements a generic type must write that type's arguments: `class B<X> extends A<X>`, never `class B<X> extends A` (`MER_TYP_036`). The supertype's members are typed by the position of its parameters, which a bare clause does not state.
+
 ### Generic Structs
 
 ```miri

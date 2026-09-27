@@ -561,6 +561,12 @@ impl TypeChecker {
                 self.infer_custom_generics(p_args, a_args, mapping);
             }
 
+            // A trait or base class matches a type below it at the arguments
+            // the clauses on the way up pass it.
+            (TypeKind::Custom(p_name, p_args), TypeKind::Custom(a_name, a_args)) => {
+                self.infer_inherited_generics(p_name, p_args, a_name, a_args, mapping);
+            }
+
             // fn(T) R matches fn(concrete) concrete
             (TypeKind::Function(p_func), TypeKind::Function(a_func)) => {
                 self.infer_function_generics(p_func, a_func, mapping);
@@ -656,6 +662,35 @@ impl TypeChecker {
                         self.infer_generic_types(&p_arg, &a_arg, mapping);
                     }
                 }
+            }
+        }
+    }
+
+    /// Bind the parameters `p_args` names from the arguments the type
+    /// `a_name<a_args>` reaches its supertype `p_name` at. Nothing binds when
+    /// `p_name` is not above `a_name`.
+    fn infer_inherited_generics(
+        &self,
+        p_name: &str,
+        p_args: &Option<Vec<Expression>>,
+        a_name: &str,
+        a_args: &Option<Vec<Expression>>,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        let Some(p_args) = p_args else {
+            return;
+        };
+        if !self.is_subtype(a_name, p_name) {
+            return;
+        }
+        let Some(inherited) = self.supertype_arguments(a_name, a_args.as_deref(), p_name) else {
+            return;
+        };
+        for (p_arg_expr, inherited) in p_args.iter().zip(inherited) {
+            if let (Ok(p_arg), Some(inherited)) =
+                (self.extract_type_from_expression(p_arg_expr), inherited)
+            {
+                self.infer_generic_types(&p_arg, &inherited, mapping);
             }
         }
     }
