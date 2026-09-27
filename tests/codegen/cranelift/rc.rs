@@ -30,7 +30,8 @@ use miri::type_checker::context::{
 use miri::type_checker::ModuleId;
 use std::collections::{BTreeMap, HashMap};
 
-/// No open parameters: the code under test is not a shared generic body.
+/// No open or bound parameters: the code under test is neither a shared
+/// generic body nor one lowered for an instantiation.
 static EMPTY_OPEN_PARAMS: std::sync::OnceLock<std::collections::HashSet<String>> =
     std::sync::OnceLock::new();
 
@@ -141,6 +142,7 @@ fn minimal_type_ctx<'a>(
         closure_capture_ast_types: captures,
         out_param_ptr_vars: out_ptrs,
         open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
+        bound_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
     }
 }
 

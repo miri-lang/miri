@@ -70,6 +70,19 @@ pub struct Body {
     /// Populated from the function's explicit generics and from `TypeKind::Generic`
     /// names found in parameter/return types (captures class-level generics too).
     pub type_params: HashSet<String>,
+    /// The type and value parameters this body leaves open: those of a shared
+    /// generic body, compiled once for every instantiation of its declaration,
+    /// and inherited by the closures written inside it. A value held at an
+    /// instantiation still naming one of them is released through its type's
+    /// shared drop function. Empty for a body compiled for one instantiation.
+    ///
+    /// Unlike [`Body::type_params`], which reference counting reads, this never
+    /// lists a parameter the body's substitution bound.
+    pub open_params: HashSet<String>,
+    /// The parameters this body's substitution bound, when it was lowered for
+    /// one instantiation. A type still naming one of them missed that
+    /// substitution.
+    pub bound_params: HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Populated by `lower_lambda_expr` after capture pruning.
     /// Used by Perceus to emit per-capture DecRef at StorageDead, and by codegen
@@ -182,6 +195,8 @@ impl Body {
             class_type_params: HashMap::new(),
             env_capture_locals: Vec::new(),
             type_params: HashSet::new(),
+            open_params: HashSet::new(),
+            bound_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
             param_written: Vec::new(),

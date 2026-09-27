@@ -100,6 +100,10 @@ pub struct TypeCtx<'a> {
     /// parameter reached code that should have been monomorphized, and is
     /// reported.
     pub open_params: &'a HashSet<String>,
+    /// The parameters the substitution of the body being translated bound.
+    /// A value still naming one of them missed that substitution, and is
+    /// reported rather than released through a shared drop function.
+    pub bound_params: &'a HashSet<String>,
 }
 
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
@@ -223,7 +227,8 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
-            open_params: &body.type_params,
+            open_params: &body.open_params,
+            bound_params: &body.bound_params,
         };
 
         Self::translate_blocks(

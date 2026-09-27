@@ -164,6 +164,7 @@ pub fn lower_function_with_compilation_ids(
     // Populate generic type parameter names so that `is_managed_type` can
     // distinguish unresolved generic placeholders from concrete user types.
     ctx.body.type_params = collect_type_params(decl, tc);
+    ctx.body.open_params = ctx.body.type_params.clone();
 
     // _0: Return value
     ctx.body
@@ -592,6 +593,7 @@ fn lower_instantiation_core(
     // substitution. Populate type_params with the original names anyway so that
     // any types not yet substituted (e.g. nested generics) are handled correctly.
     ctx.body.type_params = subs.keys().cloned().collect();
+    (ctx.body.open_params, ctx.body.bound_params) = substitution_parameters(subs, tc);
     // Carry the substitution so that a type the type checker recorded against
     // the generic parameter — an operand of an operator, an intrinsic element
     // read — resolves to the instantiation's concrete type. Without it the
@@ -874,6 +876,9 @@ fn lower_class_method_impl(
         type_params.insert(name);
     }
     type_params.retain(|name| !subs.contains_key(name));
+    let (open_through_subs, bound_params) = substitution_parameters(subs, tc);
+    ctx.body.open_params = type_params.union(&open_through_subs).cloned().collect();
+    ctx.body.bound_params = bound_params;
     ctx.body.type_params = type_params;
 
     // _0: Return value
@@ -995,56 +1000,127 @@ fn collect_type_params(
 
     // Generic names appearing in parameter types (catches class-level generics)
     for param in &decl.params {
-        collect_generic_names_from_type(&resolve_type(tc, &param.typ), &mut params);
+        collect_generic_names_from_type(
+            &resolve_type(tc, &param.typ),
+            tc.type_definitions(),
+            &mut params,
+        );
     }
 
     // Generic names appearing in the return type
     if let Some(ret_expr) = &decl.return_type {
-        collect_generic_names_from_type(&resolve_type(tc, ret_expr), &mut params);
+        collect_generic_names_from_type(
+            &resolve_type(tc, ret_expr),
+            tc.type_definitions(),
+            &mut params,
+        );
     }
 
     params
 }
 
-/// Recursively collect `TypeKind::Generic` parameter names from a resolved type.
-fn collect_generic_names_from_type(ty: &Type, params: &mut std::collections::HashSet<String>) {
-    use crate::ast::expression::ExpressionKind as EK;
+/// The parameters a body lowered under `subs` leaves open, and the ones it
+/// binds.
+///
+/// A parameter substituted by a concrete type is bound. One substituted by a
+/// type still naming a parameter — a callee reached from a shared body at that
+/// body's own open parameter (`getN<T>` called inside `Box<T>`) — is not: the
+/// body is shared by every instantiation, and the parameters that type names
+/// are the ones it leaves open.
+fn substitution_parameters(
+    subs: &HashMap<String, Type>,
+    tc: &TypeChecker,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let definitions = tc.type_definitions();
+    let mut open = std::collections::HashSet::new();
+    let mut bound = std::collections::HashSet::new();
+    for (name, ty) in subs {
+        let still_open = crate::mir::instantiation::shape::open_parameter_names(ty, definitions);
+        if still_open.is_empty() {
+            bound.insert(name.clone());
+        } else {
+            open.extend(still_open);
+        }
+    }
+    (open, bound)
+}
+
+/// Recursively collect the type parameter names a resolved type reads: each
+/// `TypeKind::Generic`, and each type argument written as a bare name the type
+/// table does not define (`T` in `List<T>` before normalization), inside every
+/// type that can carry one — an optional, a collection, a tuple, a result, a
+/// future, a function's parameters and return.
+fn collect_generic_names_from_type(
+    ty: &Type,
+    definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
+    params: &mut std::collections::HashSet<String>,
+) {
+    // A value argument (`3`, `Size + 1`) names no type parameter a body holds
+    // a value of, so only a type and a bare name are read.
+    let mut collect_argument = |arg: &Expression| {
+        if let ExpressionKind::Type(inner, _) = &arg.node {
+            collect_generic_names_from_type(inner, definitions, params);
+        } else if let ExpressionKind::Identifier(name, None) = &arg.node {
+            if !definitions.contains_key(name) {
+                params.insert(name.clone());
+            }
+        }
+    };
     match &ty.kind {
         TypeKind::Generic(name, _, _) => {
             params.insert(name.clone());
         }
-        TypeKind::Option(inner) => collect_generic_names_from_type(inner, params),
-        TypeKind::Linear(inner) => collect_generic_names_from_type(inner, params),
+        TypeKind::Option(inner) | TypeKind::Linear(inner) | TypeKind::Meta(inner) => {
+            collect_generic_names_from_type(inner, definitions, params)
+        }
         // Canonical collection variants may appear when resolve_type reads a raw
-        // type expression from the parser before normalization. Recurse into their
-        // element/key/value type expressions to collect any generic names.
-        TypeKind::List(elem) | TypeKind::Set(elem) => {
-            if let EK::Type(inner_ty, _) = &elem.node {
-                collect_generic_names_from_type(inner_ty, params);
+        // type expression from the parser before normalization.
+        TypeKind::List(elem) | TypeKind::Set(elem) | TypeKind::Future(elem) => {
+            collect_argument(elem)
+        }
+        TypeKind::Array(elem, _) => collect_argument(elem),
+        TypeKind::Map(first, second) | TypeKind::Result(first, second) => {
+            collect_argument(first);
+            collect_argument(second);
+        }
+        TypeKind::Tuple(elements) => elements.iter().for_each(collect_argument),
+        TypeKind::Custom(_, Some(args)) => args.iter().for_each(collect_argument),
+        TypeKind::Function(function) => {
+            function
+                .params
+                .iter()
+                .for_each(|param| collect_argument(&param.typ));
+            if let Some(return_type) = &function.return_type {
+                collect_argument(return_type);
             }
         }
-        TypeKind::Array(elem, _) => {
-            if let EK::Type(inner_ty, _) = &elem.node {
-                collect_generic_names_from_type(inner_ty, params);
-            }
-        }
-        TypeKind::Map(k, v) => {
-            if let EK::Type(k_ty, _) = &k.node {
-                collect_generic_names_from_type(k_ty, params);
-            }
-            if let EK::Type(v_ty, _) = &v.node {
-                collect_generic_names_from_type(v_ty, params);
-            }
-        }
-        TypeKind::Custom(_, Some(args)) => {
-            for arg in args {
-                if let EK::Type(inner_ty, _) = &arg.node {
-                    collect_generic_names_from_type(inner_ty, params);
-                }
-            }
-        }
-        TypeKind::Custom(_, None) => {}
-        _ => {}
+        // A named type without arguments and every type built from nothing
+        // read no parameter.
+        TypeKind::Custom(_, None)
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error => {}
     }
 }
 

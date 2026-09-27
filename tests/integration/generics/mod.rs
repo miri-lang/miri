@@ -14,6 +14,7 @@ pub mod extends;
 pub mod generic_type_drop_thunks;
 pub mod lambdas;
 pub mod operator_dispatch;
+pub mod shared_body_releases;
 pub mod structs;
 pub mod trait_bounded_parameters;
 pub mod unary_and_cast;

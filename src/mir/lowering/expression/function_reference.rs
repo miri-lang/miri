@@ -157,6 +157,8 @@ fn build_forwarding_thunk(
 
     let mut thunk_ctx = LoweringContext::new(body, ctx.type_checker, ctx.is_release);
     thunk_ctx.use_compilation_ids(ctx.compilation_ids.clone());
+    thunk_ctx.body.open_params = ctx.body.open_params.clone();
+    thunk_ctx.body.bound_params = ctx.body.bound_params.clone();
     thunk_ctx.push_param(
         "__env_ptr".to_string(),
         Type::new(TypeKind::RawPtr, span),

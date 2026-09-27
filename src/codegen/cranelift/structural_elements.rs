@@ -16,6 +16,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::Body;
+use std::collections::{BTreeMap, HashSet};
 
 /// Symbol suffix naming the decref thunk for a structural type — a tuple, an
 /// option or a function value, the managed shapes carrying no declared name.
@@ -188,20 +189,43 @@ fn encode_leaf(tag: char, text: &str, out: &mut String) {
     out.push_str(text);
 }
 
-/// Every structural collection-entry type a program uses, paired with its
-/// symbol suffix and deduplicated. Walks the declared type of every local in
-/// every body, descending through composite types so a collection nested inside
-/// another one is found too.
-pub fn structural_element_types(bodies: &[(&str, &Body)]) -> Vec<(String, TypeKind)> {
-    let mut found: Vec<(String, TypeKind)> = Vec::new();
+/// A structural collection-entry type, the symbol suffix its decref thunk is
+/// named by, and the parameters the bodies holding it leave open.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuralElement {
+    pub symbol: String,
+    pub kind: TypeKind,
+    /// Every parameter a body holding this entry type leaves open. An entry
+    /// type written in a shared generic body (`(Pair<U>, int)`) still names its
+    /// parameters, and its thunk releases them through the shared drop thunk,
+    /// as the body itself would.
+    pub open_params: HashSet<String>,
+}
+
+/// Every structural collection-entry type a program uses, deduplicated by
+/// symbol suffix. Walks the declared type of every local in every body,
+/// descending through composite types so a collection nested inside another
+/// one is found too.
+pub fn structural_element_types(bodies: &[(&str, &Body)]) -> Vec<StructuralElement> {
+    let mut by_symbol: BTreeMap<String, StructuralElement> = BTreeMap::new();
     for (_, body) in bodies {
+        let mut found: Vec<(String, TypeKind)> = Vec::new();
         for decl in &body.local_decls {
             collect(&decl.ty.kind, &mut found);
         }
+        for (symbol, kind) in found {
+            by_symbol
+                .entry(symbol.clone())
+                .or_insert_with(|| StructuralElement {
+                    symbol,
+                    kind,
+                    open_params: HashSet::new(),
+                })
+                .open_params
+                .extend(body.open_params.iter().cloned());
+        }
     }
-    found.sort_by(|(left, _), (right, _)| left.cmp(right));
-    found.dedup_by(|(left, _), (right, _)| left == right);
-    found
+    by_symbol.into_values().collect()
 }
 
 /// Record the entry types of `kind` when it is a collection, then descend into
