@@ -30,6 +30,10 @@ use miri::type_checker::context::{
 use miri::type_checker::ModuleId;
 use std::collections::{BTreeMap, HashMap};
 
+/// No open parameters: the code under test is not a shared generic body.
+static EMPTY_OPEN_PARAMS: std::sync::OnceLock<std::collections::HashSet<String>> =
+    std::sync::OnceLock::new();
+
 fn span() -> Span {
     Span::new(0, 0)
 }
@@ -100,7 +104,7 @@ fn defs<const N: usize>(entries: [(&str, TypeDefinition); N]) -> HashMap<String,
 
 /// The settled facts over `table`, with no instantiations and no bodies.
 fn facts_of(table: HashMap<String, TypeDefinition>) -> TypeFacts {
-    TypeFacts::new(table, HashMap::new(), Default::default(), [])
+    TypeFacts::new(table, HashMap::new(), Default::default(), []).unwrap()
 }
 
 fn enum_def<const N: usize>(variants: [(&str, Vec<TypeKind>); N]) -> EnumDefinition {
@@ -136,6 +140,7 @@ fn minimal_type_ctx<'a>(
         ptr_type: types::I64,
         closure_capture_ast_types: captures,
         out_param_ptr_vars: out_ptrs,
+        open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
     }
 }
 

@@ -24,7 +24,7 @@ use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
-use crate::mir::symbol::{StringLiteralPart, Symbol, ThunkKind};
+use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::type_facts::TypeDefinition;
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
@@ -798,10 +798,7 @@ impl CraneliftBackend {
     /// ([`TypeFacts::drop_instantiations_of`]), so a managed field is DecRef'd
     /// and a scalar field skipped, each per instantiation. Non-generic types
     /// and types no value is held at produce nothing here (the bare thunk
-    /// suffices). Each drop thunk symbol is
-    /// generated once, so the same symbol is never defined twice; two
-    /// instantiations meeting in one symbol only because their arguments have
-    /// no name are refused rather than merged.
+    /// suffices).
     fn generate_instantiation_drop_functions(
         &self,
         module: &mut ObjectModule,
@@ -815,19 +812,9 @@ impl CraneliftBackend {
         if definition.generics().is_none() {
             return Ok(());
         }
-        let mut emitted = std::collections::HashSet::new();
+        // The drop set holds each thunk symbol once, and refuses two
+        // instantiations meeting in one symbol when it is settled.
         for args in self.facts.drop_instantiations_of(type_name) {
-            let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, args);
-            if thunk.has_an_unnameable_argument() && emitted.contains(&thunk) {
-                return Err(CodegenError::Internal(format!(
-                    "two instantiations of `{type_name}` at types with no name would share \
-                     {}, laid out for only one of them",
-                    thunk.written()
-                )));
-            }
-            if !emitted.insert(thunk) {
-                continue;
-            }
             FunctionTranslator::generate_drop_function(
                 module,
                 ctx,

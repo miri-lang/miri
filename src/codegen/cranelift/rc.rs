@@ -26,7 +26,7 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// A runtime call recording one pointer-sized setting on a container.
@@ -102,14 +102,47 @@ impl DropThunk {
     }
 }
 
-/// Whether `arg` is a value argument not yet folded to a constant — the size
-/// parameter a shared body of a value-generic type spells by name (`Size`), or
-/// arithmetic over it — which names no single instantiation.
-fn is_open_value_argument(arg: &Expression) -> bool {
-    matches!(
-        arg.node,
-        ExpressionKind::Identifier(..) | ExpressionKind::Binary(..) | ExpressionKind::Unary(..)
-    )
+/// The parameters an unfolded value argument reads — `Size` in `Size`, or in
+/// `Size + 1` — or `None` when `arg` is no value expression at all.
+fn value_parameter_names(arg: &Expression) -> Option<Vec<String>> {
+    match &arg.node {
+        ExpressionKind::Identifier(name, _) => Some(vec![name.clone()]),
+        ExpressionKind::Literal(literal) => {
+            matches!(literal, crate::ast::literal::Literal::Integer(_)).then(Vec::new)
+        }
+        ExpressionKind::Unary(_, operand) => value_parameter_names(operand),
+        ExpressionKind::Binary(left, _, right) => {
+            let mut names = value_parameter_names(left)?;
+            names.extend(value_parameter_names(right)?);
+            Some(names)
+        }
+        ExpressionKind::Logical(..)
+        | ExpressionKind::Assignment(..)
+        | ExpressionKind::Conditional(..)
+        | ExpressionKind::Range(..)
+        | ExpressionKind::Guard(..)
+        | ExpressionKind::Member(..)
+        | ExpressionKind::Index(..)
+        | ExpressionKind::Call(..)
+        | ExpressionKind::ImportPath(..)
+        | ExpressionKind::Type(..)
+        | ExpressionKind::GenericType(..)
+        | ExpressionKind::TypeDeclaration(..)
+        | ExpressionKind::EnumValue(..)
+        | ExpressionKind::StructMember(..)
+        | ExpressionKind::Lambda(..)
+        | ExpressionKind::List(..)
+        | ExpressionKind::Array(..)
+        | ExpressionKind::Map(..)
+        | ExpressionKind::Tuple(..)
+        | ExpressionKind::Set(..)
+        | ExpressionKind::Match(..)
+        | ExpressionKind::FormattedString(..)
+        | ExpressionKind::NamedArgument(..)
+        | ExpressionKind::Super
+        | ExpressionKind::Block(..)
+        | ExpressionKind::Cast(..) => None,
+    }
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -1062,10 +1095,14 @@ impl<'a> FunctionTranslator<'a> {
     /// arguments are substituted, and each concrete instantiation a value is
     /// held at gets its own thunk ([`TypeFacts::drop_instantiations_of`]).
     ///
-    /// A concrete instantiation missing from that set would fall back to the
-    /// shared thunk, which skips every field written at a parameter and leaks
-    /// what it holds, so it is reported instead. So is an argument that is
-    /// neither a type nor a value expression, which names no instantiation.
+    /// Only code that leaves parameters open — a shared generic body, or a
+    /// generic type's own shared thunk — may release a value at an
+    /// instantiation still naming one, and only one of those parameters
+    /// ([`TypeCtx::open_params`]); it goes through the shared thunk. Anything
+    /// else is reported rather than released by a thunk that skips every field
+    /// written at a parameter and leaks what it holds: a concrete instantiation
+    /// no thunk is emitted for, an argument naming a parameter the code does not
+    /// leave open, and an argument that is neither a type nor a value.
     ///
     /// [`TypeFacts::drop_instantiations_of`]: crate::mir::type_facts::TypeFacts::drop_instantiations_of
     fn drop_thunk(
@@ -1082,38 +1119,140 @@ impl<'a> FunctionTranslator<'a> {
         if !is_generic {
             return Ok(DropThunk::Shared);
         }
+        // TODO: a generic value released with no type arguments at all reaches
+        // here from concrete bodies too, not only shared ones: an enum value
+        // built without an expected type (`let r = Result.Ok(0.5)` in `main`),
+        // a payload-less generic
+        // variant (`Slot.Empty`) stored into a field or list element, and a
+        // collection of such results. Its type is recorded as the bare enum
+        // (`Custom("Result", None)`), so the shared thunk releases it and skips
+        // every payload written at a parameter. Lowering has to record those
+        // values at the instantiation they are used at before this can refuse.
         let Some(arg_exprs) = type_args.filter(|args| !args.is_empty()) else {
             return Ok(DropThunk::SharedBody);
         };
-        let mut args = Vec::with_capacity(arg_exprs.len());
-        for arg in arg_exprs {
-            match crate::mir::instantiation::instantiation_argument(arg) {
-                Some(ty) => args.push(ty),
-                None if is_open_value_argument(arg) => return Ok(DropThunk::SharedBody),
-                None => {
-                    return Err(CodegenError::Internal(format!(
-                        "a `{name}` value carries a type argument that is neither a type nor \
-                         a value: {:?}",
-                        arg.node
-                    )))
-                }
+        let (args, open) = Self::instantiation_arguments(name, arg_exprs, facts)?;
+        if open.is_empty() {
+            if facts.is_drop_instantiation(name, &args) {
+                return Ok(DropThunk::PerInstantiation(args));
             }
+            return Err(CodegenError::Internal(format!(
+                "a `{name}` value is released at {}, an instantiation no drop thunk is \
+                 emitted for",
+                Symbol::type_thunk(ThunkKind::Drop, name, &args).written()
+            )));
         }
-        if facts.is_drop_instantiation(name, &args) {
-            return Ok(DropThunk::PerInstantiation(args));
+        // TODO: a concrete body can hold a value at an instantiation that still
+        // names one of the released types' own parameters, which inference
+        // left unbound: `let r = Result.Ok(0.5)` in `main` is typed
+        // `Result<f32, E>`. Such an argument is released through the shared
+        // thunk like a shared body's; binding it where the value is built is
+        // what lets this refuse.
+        let unbound = Self::parameters_declared_by(name, &args, facts);
+        if let Some(stray) = open
+            .iter()
+            .find(|param| !type_ctx.open_params.contains(*param) && !unbound.contains(*param))
+        {
+            return Err(CodegenError::Internal(format!(
+                "a `{name}` value is released at an instantiation naming the parameter \
+                 `{stray}`, which the code releasing it does not leave open"
+            )));
         }
         // TODO: the shared method body of a value-generic class
         // (`Buf<T, Size>`) drops its own type here, through the bare thunk,
         // which skips the fields written at `T`; that is the likely root of the
         // leak a value-generic class holding `Array<T, Size>` beside a bare `T`
         // shows at a managed instantiation.
-        if args.iter().any(|arg| facts.mentions_open_parameter(arg)) {
-            return Ok(DropThunk::SharedBody);
+        Ok(DropThunk::SharedBody)
+    }
+
+    /// Every parameter the generic type `name`, or a generic type spelled
+    /// anywhere inside `args`, declares — the parameters an inferred type can
+    /// leave standing for an argument nothing bound.
+    fn parameters_declared_by(name: &str, args: &[Type], facts: &TypeFacts) -> HashSet<String> {
+        let definitions = facts.definitions();
+        let mut declaring = vec![name.to_string()];
+        let mut pending: Vec<Type> = args.to_vec();
+        let mut budget = crate::mir::symbol::token::MAX_TOKEN_DEPTH * args.len().max(1);
+        while let Some(ty) = pending.pop() {
+            let Some(rest) = budget.checked_sub(1) else {
+                break;
+            };
+            budget = rest;
+            let (constructor, parts) = crate::mir::instantiation::shape::constructor_parts(&ty);
+            declaring.push(constructor.into_owned());
+            pending.extend(parts);
         }
-        Err(CodegenError::Internal(format!(
-            "a `{name}` value is released at {}, an instantiation no drop thunk is emitted for",
-            Symbol::type_thunk(ThunkKind::Drop, name, &args).written()
-        )))
+        declaring
+            .iter()
+            .filter_map(|declared| definitions.get(declared.as_str()))
+            .filter_map(TypeDefinition::generics)
+            .flatten()
+            .map(|generic| generic.name.clone())
+            .collect()
+    }
+
+    /// `arg_exprs` as the instantiation arguments a drop thunk is named by,
+    /// with the name of every parameter they leave open — a type parameter
+    /// anywhere inside a type argument, or one an unfolded value argument
+    /// (`Size`, `Size + 1`) reads.
+    fn instantiation_arguments(
+        name: &str,
+        arg_exprs: &[Expression],
+        facts: &TypeFacts,
+    ) -> Result<(Vec<Type>, Vec<String>), CodegenError> {
+        let mut args = Vec::with_capacity(arg_exprs.len());
+        let mut open = Vec::new();
+        for arg in arg_exprs {
+            match crate::mir::instantiation::instantiation_argument(arg) {
+                Some(ty) => {
+                    open.extend(facts.open_parameter_names(&ty));
+                    args.push(ty);
+                }
+                None => {
+                    let names = value_parameter_names(arg).ok_or_else(|| {
+                        CodegenError::Internal(format!(
+                            "a `{name}` value carries a type argument that is neither a type \
+                             nor a value: {:?}",
+                            arg.node
+                        ))
+                    })?;
+                    open.extend(names);
+                }
+            }
+        }
+        Ok((args, open))
+    }
+
+    /// Every type parameter `type_name` and the classes it extends declare —
+    /// the parameters its shared drop thunk reads its fields at.
+    fn declared_parameters(type_name: &str, facts: &TypeFacts) -> HashSet<String> {
+        let definitions = facts.definitions();
+        let mut names = HashSet::new();
+        let mut current = Some(type_name);
+        // Bounded by the table's size: a circular `extends` is reported where
+        // the class is declared, and must not hang the walk before that.
+        for _ in 0..=definitions.len() {
+            let Some(definition) = current.and_then(|name| definitions.get(name)) else {
+                break;
+            };
+            names.extend(
+                definition
+                    .generics()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|generic| generic.name.clone()),
+            );
+            current = match definition {
+                TypeDefinition::Class(class) => class.base_class.as_deref(),
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_)
+                | TypeDefinition::Trait(_) => None,
+            };
+        }
+        names
     }
 
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
@@ -1746,12 +1885,20 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
+        // The shared thunk of a generic type reads its fields at the parameters
+        // they are declared in — the type's own and every ancestor's; a
+        // per-instantiation thunk reads them at concrete arguments.
+        let open_params = match type_args {
+            None => Self::declared_parameters(type_name, facts),
+            Some(_) => HashSet::new(),
+        };
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
+            open_params: &open_params,
         };
 
         if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
@@ -1917,12 +2064,14 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
+        let no_open_params = HashSet::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
+            open_params: &no_open_params,
         };
 
         Self::emit_decref_value(&mut builder, &mut module_ctx, kind, ptr, &type_ctx)?;
@@ -2262,24 +2411,40 @@ mod drop_thunk_tests {
             ("Plain".to_string(), class("Plain", false)),
         ]);
         let registry = HashMap::from([("Box".to_string(), vec![vec![ty(TypeKind::String)]])]);
-        TypeFacts::new(definitions, registry, Default::default(), [])
+        let Ok(facts) = TypeFacts::new(definitions, registry, Default::default(), []) else {
+            panic!("a `Box<String>` registry settles");
+        };
+        facts
     }
 
-    fn choose(
+    /// The thunk chosen for `name` at `args` in code leaving `open` open.
+    fn choose_in(
         facts: &TypeFacts,
         name: &str,
         args: Option<&[Expression]>,
+        open: &[&str],
     ) -> Result<DropThunk, CodegenError> {
         let captures = HashMap::new();
         let out_ptrs = HashMap::new();
+        let open_params: HashSet<String> = open.iter().map(|name| name.to_string()).collect();
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
             ptr_type: cl_types::I64,
             closure_capture_ast_types: &captures,
             out_param_ptr_vars: &out_ptrs,
+            open_params: &open_params,
         };
         FunctionTranslator::drop_thunk(name, args, &type_ctx)
+    }
+
+    /// The thunk chosen for `name` at `args` in code leaving nothing open.
+    fn choose(
+        facts: &TypeFacts,
+        name: &str,
+        args: Option<&[Expression]>,
+    ) -> Result<DropThunk, CodegenError> {
+        choose_in(facts, name, args, &[])
     }
 
     fn type_arg(kind: TypeKind) -> Expression {
@@ -2315,13 +2480,28 @@ mod drop_thunk_tests {
         );
     }
 
-    #[test]
-    fn an_instantiation_at_an_open_parameter_is_released_by_the_shared_body_thunk() {
-        let args = [type_arg(TypeKind::Generic(
+    fn open_parameter() -> Expression {
+        type_arg(TypeKind::Generic(
             "T".to_string(),
             None,
             TypeDeclarationKind::None,
-        ))];
+        ))
+    }
+
+    #[test]
+    fn an_instantiation_at_a_parameter_the_body_leaves_open_is_released_by_the_shared_body_thunk() {
+        let args = [open_parameter()];
+        assert_eq!(
+            choose_in(&facts(), "Box", Some(&args), &["T"]).ok(),
+            Some(DropThunk::SharedBody)
+        );
+    }
+
+    #[test]
+    fn an_instantiation_left_at_the_types_own_parameter_is_released_by_the_shared_body_thunk() {
+        // Inference can leave a parameter of the released type unbound in a
+        // concrete body (`Result.Ok(0.5)` typed `Result<f32, E>`).
+        let args = [open_parameter()];
         assert_eq!(
             choose(&facts(), "Box", Some(&args)).ok(),
             Some(DropThunk::SharedBody)
@@ -2329,15 +2509,37 @@ mod drop_thunk_tests {
     }
 
     #[test]
-    fn an_unfolded_size_argument_is_released_by_the_shared_body_thunk() {
+    fn an_instantiation_at_a_parameter_neither_the_body_nor_the_type_declares_is_refused() {
+        let args = [type_arg(TypeKind::Generic(
+            "U".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ))];
+        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
+            panic!("a parameter no enclosing code declares must be reported");
+        };
+        assert!(message.contains("does not leave open"), "{message}");
+    }
+
+    #[test]
+    fn an_unfolded_size_argument_the_body_leaves_open_is_released_by_the_shared_body_thunk() {
         let args = [expression(ExpressionKind::Identifier(
             "Size".to_string(),
             None,
         ))];
         assert_eq!(
-            choose(&facts(), "Box", Some(&args)).ok(),
+            choose_in(&facts(), "Box", Some(&args), &["Size"]).ok(),
             Some(DropThunk::SharedBody)
         );
+    }
+
+    #[test]
+    fn an_unfolded_size_argument_the_body_does_not_leave_open_is_refused() {
+        let args = [expression(ExpressionKind::Identifier(
+            "Size".to_string(),
+            None,
+        ))];
+        assert!(choose(&facts(), "Box", Some(&args)).is_err());
     }
 
     #[test]

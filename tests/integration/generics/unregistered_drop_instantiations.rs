@@ -134,3 +134,88 @@ fn main()
         "ab",
     );
 }
+
+#[test]
+fn an_instance_held_only_through_an_alias_releases_its_fields() {
+    assert_heap_guard_output(
+        r#"
+struct Pair<T>
+    left T
+    right T
+
+type Names is Pair<String>
+
+fn make() Names
+    return Pair<String>(left: "a" + "b", right: "c" + "d")
+
+fn main()
+    let n = make()
+    println(n.left + n.right)
+"#,
+        "abcd",
+    );
+}
+
+#[test]
+fn an_alias_field_of_a_plain_struct_releases_its_fields() {
+    assert_heap_guard_output(
+        r#"
+struct Pair<T>
+    left T
+    right T
+
+type Names is Pair<String>
+
+struct Holder
+    names Names
+
+fn main()
+    let h = Holder(names: Pair<String>(left: "a" + "b", right: "c" + "d"))
+    println(h.names.left)
+"#,
+        "ab",
+    );
+}
+
+#[test]
+fn a_struct_whose_field_nests_its_own_type_deeper_is_refused() {
+    // `Node<int>` stores a `Node<List<int>>`, which stores a
+    // `Node<List<List<int>>>`, and so on: no finite set of drop functions
+    // releases every level, so the program is refused as polymorphic recursion.
+    assert_build_error(
+        r#"
+use system.collections.list
+
+struct Node<T>
+    value T
+    next Node<List<T>>?
+
+fn main()
+    let n = Node<int>(value: 1, next: None)
+    println(f"{n.value}")
+"#,
+        "nests its type argument 33 levels deep",
+    );
+}
+
+#[test]
+fn a_class_whose_field_nests_its_own_type_deeper_is_refused() {
+    assert_build_error(
+        r#"
+use system.collections.list
+
+class Node<T>
+    var value T
+    var next Node<List<T>>?
+
+    fn init(value T)
+        self.value = value
+        self.next = None
+
+fn main()
+    let n = Node<int>(1)
+    println(f"{n.value}")
+"#,
+        "nests its type argument 33 levels deep",
+    );
+}

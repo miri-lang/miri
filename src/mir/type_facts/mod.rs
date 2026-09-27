@@ -27,6 +27,22 @@ pub use crate::type_checker::context::{
     TypeDefinition,
 };
 
+/// Why the instantiations a drop thunk is emitted for could not be closed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DropInstantiationRefusal {
+    /// `name` at `args` nests its type arguments `depth` constructors deep,
+    /// past the depth any instance may nest to: a field that nests its own
+    /// type deeper on every instantiation.
+    TooDeep {
+        name: String,
+        args: Vec<Type>,
+        depth: usize,
+    },
+    /// Two instantiations of `name` at types with no name would share the
+    /// drop thunk `symbol`, laid out for only one of them.
+    Unnameable { name: String, symbol: String },
+}
+
 /// Read-only view of the program's types, as settled before code generation.
 #[derive(Debug, Default, Clone)]
 pub struct TypeFacts {
@@ -42,23 +58,27 @@ impl TypeFacts {
     /// slots each vtable a reached body builds is filled with, and `bodies`
     /// every body the backend compiles — whose held values decide the
     /// instantiations a drop thunk is emitted for.
+    ///
+    /// Refused when those instantiations cannot be closed: a field nests its
+    /// own type deeper on every instantiation, or two instantiations would
+    /// share one drop thunk.
     pub fn new<'b>(
         definitions: HashMap<String, TypeDefinition>,
         generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
         vtable_fills: VtableFills,
         bodies: impl IntoIterator<Item = &'b Body>,
-    ) -> Self {
+    ) -> Result<Self, DropInstantiationRefusal> {
         let drop_instantiations = drop_instantiations::drop_instantiations(
             &definitions,
             &generic_class_instantiations,
             bodies,
-        );
-        Self {
+        )?;
+        Ok(Self {
             definitions,
             generic_class_instantiations,
             drop_instantiations,
             vtable_fills,
-        }
+        })
     }
 
     /// The definition of every named type, keyed by name.
@@ -91,10 +111,9 @@ impl TypeFacts {
             .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, name, tuple) == wanted)
     }
 
-    /// Whether `ty` still names a type parameter no substitution has bound,
-    /// anywhere inside it.
-    pub fn mentions_open_parameter(&self, ty: &Type) -> bool {
-        crate::mir::lowering::instantiation_limits::mentions_open_parameter(ty, &self.definitions)
+    /// The name of every type parameter `ty` leaves open, anywhere inside it.
+    pub fn open_parameter_names(&self, ty: &Type) -> Vec<String> {
+        crate::mir::instantiation::shape::open_parameter_names(ty, &self.definitions)
     }
 
     /// The filled slots of every vtable a reached body builds. A vtable no fill

@@ -10,7 +10,10 @@ use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::body::{Body, ExecutionModel, LocalDecl};
-use miri::mir::type_facts::{ClassDefinition, GenericDefinition, TypeDefinition, TypeFacts};
+use miri::mir::type_facts::{
+    ClassDefinition, DropInstantiationRefusal, GenericDefinition, TypeDefinition, TypeFacts,
+};
+use miri::mir::{AggregateKind, BasicBlockData, Local, Place, Rvalue, Statement, StatementKind};
 use miri::type_checker::context::FieldInfo;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -89,7 +92,7 @@ fn string() -> Type {
 #[test]
 fn an_instantiation_a_body_holds_gets_a_drop_thunk_without_a_lowered_method() {
     let body = body_holding(vec![instance("Box", vec![string()])]);
-    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
     assert!(facts.is_drop_instantiation("Box", &[string()]));
 }
@@ -97,7 +100,7 @@ fn an_instantiation_a_body_holds_gets_a_drop_thunk_without_a_lowered_method() {
 #[test]
 fn an_instantiation_a_field_stores_is_closed_over() {
     let body = body_holding(vec![instance("Outer", vec![string()])]);
-    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
     assert!(facts.is_drop_instantiation("Outer", &[string()]));
     assert!(
@@ -112,7 +115,7 @@ fn an_instantiation_nested_in_an_optional_is_found() {
         "Box",
         vec![string()],
     ))))]);
-    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
     assert!(facts.is_drop_instantiation("Box", &[string()]));
 }
@@ -120,7 +123,7 @@ fn an_instantiation_nested_in_an_optional_is_found() {
 #[test]
 fn an_instantiation_at_an_open_parameter_gets_no_thunk() {
     let body = body_holding(vec![instance("Box", vec![parameter("T")])]);
-    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
     assert!(facts.drop_instantiations_of("Box").is_empty());
 }
@@ -128,8 +131,65 @@ fn an_instantiation_at_an_open_parameter_gets_no_thunk() {
 #[test]
 fn a_registered_instantiation_keeps_its_thunk() {
     let registry = HashMap::from([("Box".to_string(), vec![vec![string()]])]);
-    let facts = TypeFacts::new(definitions(), registry, Default::default(), []);
+    let facts = TypeFacts::new(definitions(), registry, Default::default(), []).unwrap();
 
     assert!(facts.is_drop_instantiation("Box", &[string()]));
     assert!(!facts.is_drop_instantiation("Box", &[ty(TypeKind::Int)]));
+}
+
+#[test]
+fn an_instantiation_only_a_closure_captures_gets_a_drop_thunk() {
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    body.closure_capture_types
+        .insert(Local(0), vec![instance("Box", vec![string()])]);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
+
+    assert!(facts.is_drop_instantiation("Box", &[string()]));
+}
+
+#[test]
+fn an_instantiation_only_a_construction_names_gets_a_drop_thunk() {
+    // The destination is typed as something else entirely, so only the
+    // construction itself names `Box<String>`.
+    let mut body = body_holding(vec![ty(TypeKind::Int)]);
+    let mut block = BasicBlockData::new(None);
+    block.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(0)),
+            Rvalue::Aggregate(
+                AggregateKind::Struct(instance("Box", vec![string()])),
+                Vec::new(),
+            ),
+        ),
+        span: Span::default(),
+    });
+    body.basic_blocks.push(block);
+    let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
+
+    assert!(facts.is_drop_instantiation("Box", &[string()]));
+}
+
+#[test]
+fn a_field_nesting_its_own_type_deeper_is_refused_at_the_depth_bound() {
+    // `Grow<T>` stores a `Grow<List<T>>`: every instantiation reaches a deeper
+    // one, so the closure is refused once an instance passes the depth bound.
+    let definitions = HashMap::from([
+        ("Box".to_string(), generic_class("Box", parameter("T"))),
+        (
+            "Grow".to_string(),
+            generic_class(
+                "Grow",
+                instance("Grow", vec![instance("Box", vec![parameter("T")])]),
+            ),
+        ),
+    ]);
+    let body = body_holding(vec![instance("Grow", vec![string()])]);
+    let refusal = TypeFacts::new(definitions, HashMap::new(), Default::default(), [&body])
+        .expect_err("an ever-deeper field has no finite set of drop thunks");
+
+    let DropInstantiationRefusal::TooDeep { name, depth, .. } = refusal else {
+        panic!("expected the depth bound to refuse, got {refusal:?}");
+    };
+    assert_eq!(name, "Grow");
+    assert_eq!(depth, 33);
 }

@@ -24,7 +24,7 @@ use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// User trap code raised when a collection that stores its elements inline was
@@ -93,6 +93,13 @@ pub struct TypeCtx<'a> {
     /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
     /// that holds the incoming pointer. Used by the Return terminator to write back.
     pub out_param_ptr_vars: &'a HashMap<Local, Variable>,
+    /// The type and value parameters the code being translated leaves open:
+    /// a shared generic body's own parameters, or a generic type's in its
+    /// shared drop thunk. A value held at an instantiation still naming one of
+    /// these is released through the shared drop thunk; one naming any other
+    /// parameter reached code that should have been monomorphized, and is
+    /// reported.
+    pub open_params: &'a HashSet<String>,
 }
 
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
@@ -216,6 +223,7 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
+            open_params: &body.type_params,
         };
 
         Self::translate_blocks(
