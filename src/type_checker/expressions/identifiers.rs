@@ -70,6 +70,13 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if let Some(ty) = self.try_builtin_identifier(name) {
+            // A built-in that is a function is a variant constructor: `Some`,
+            // `Ok`, `Err`.
+            if matches!(ty.kind, TypeKind::Function(_)) {
+                self.fn_analysis
+                    .callee_kinds
+                    .insert(expr_id, crate::type_checker::CalleeKind::VariantConstructor);
+            }
             return ty;
         }
 

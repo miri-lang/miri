@@ -31,7 +31,7 @@
 use crate::ast::statement::BindingResidency;
 use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::escape_analysis::{load_ffi_summaries, EscapeSummary, FunctionId};
 
@@ -239,6 +239,11 @@ pub struct ClassDefinition {
     /// True if this class itself declares `fn drop(self)`. A class also runs a
     /// hook it inherits; ask [`crate::type_checker::utils::has_drop_hook`].
     pub has_drop: bool,
+    /// The methods this class declares with a body that is correct at every
+    /// instantiation of the class, by the rule stated in
+    /// [`crate::type_checker::runtime_settled`]. Filled once the class's bodies
+    /// are checked; empty before then and for a class built outside the checker.
+    pub runtime_settled_methods: BTreeSet<String>,
 }
 
 /// Definition of a trait type.

@@ -365,6 +365,7 @@ fn class_def(has_drop: bool) -> TypeDefinition {
         module: "test".to_string(),
         is_abstract: false,
         has_drop,
+        runtime_settled_methods: std::collections::BTreeSet::new(),
     })
 }
 

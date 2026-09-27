@@ -552,6 +552,7 @@ fn test_class_is_pointer_sized() {
             module: String::new(),
             is_abstract: false,
             has_drop: false,
+            runtime_settled_methods: std::collections::BTreeSet::new(),
         }),
     );
 
@@ -603,6 +604,7 @@ fn test_class_field_layout_uses_pointer_slots() {
             module: String::new(),
             is_abstract: false,
             has_drop: false,
+            runtime_settled_methods: std::collections::BTreeSet::new(),
         }),
     );
 
@@ -877,6 +879,7 @@ fn make_class(name: &str, base: Option<&str>, fields: Vec<(&str, TypeKind)>) -> 
         module: String::new(),
         is_abstract: false,
         has_drop: false,
+        runtime_settled_methods: std::collections::BTreeSet::new(),
     }
 }
 

@@ -28,6 +28,10 @@ pub enum CalleeKind {
     Intrinsic,
     /// A function this compilation lowers, or a name that is no function.
     Program,
+    /// A built-in variant constructor — `Some`, `Ok`, `Err` — which wraps its
+    /// argument and calls nothing. No declaration is one, so [`CalleeKind::of`]
+    /// never answers it; the identifier is recorded where it is resolved.
+    VariantConstructor,
 }
 
 impl CalleeKind {
@@ -127,8 +131,9 @@ pub(crate) struct FunctionAnalysis {
     pub(crate) fn_residencies: HashMap<String, FnResidency>,
     /// Every identifier expression, by id, that resolved in its scope to a
     /// declaration made `runtime` or `intrinsic` — including one a module body
-    /// reaches that the program's own imports leave out of its scope. Every
-    /// other expression names a [`CalleeKind::Program`] callee.
+    /// reaches that the program's own imports leave out of its scope — or to a
+    /// built-in variant constructor. Every other expression names a
+    /// [`CalleeKind::Program`] callee.
     pub(crate) callee_kinds: HashMap<usize, CalleeKind>,
     /// Every identifier expression, by id, that resolved in its scope to a
     /// [`CalleeKind::Program`] function, with the declaration it resolved to.

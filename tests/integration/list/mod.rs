@@ -8,6 +8,7 @@ pub mod construction;
 pub mod cow;
 pub mod edge_cases;
 pub mod element_field_read;
+pub mod element_identity;
 pub mod errors;
 pub mod float_collections;
 pub mod float_widths;

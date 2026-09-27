@@ -51,6 +51,7 @@ pub(crate) mod int_literals;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
+pub(crate) mod runtime_settled;
 pub mod statements;
 mod type_table;
 pub mod use_after_move;
@@ -332,7 +333,9 @@ impl TypeChecker {
                         .insert(expr_id, DeclaredFunction::resolved(written, info));
                 }
             }
-            kind @ (CalleeKind::Runtime | CalleeKind::Intrinsic) => {
+            kind @ (CalleeKind::Runtime
+            | CalleeKind::Intrinsic
+            | CalleeKind::VariantConstructor) => {
                 self.fn_analysis.callee_kinds.insert(expr_id, kind);
             }
         }
@@ -576,6 +579,7 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop: false,
+                runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
         self.modules.pre_registered_types.insert(name);
@@ -869,6 +873,7 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop,
+                runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
     }
@@ -895,6 +900,7 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
                 is_abstract: class_data.is_abstract,
                 has_drop: false,
+                runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
         self.modules.pre_registered_types.insert(name.to_string());

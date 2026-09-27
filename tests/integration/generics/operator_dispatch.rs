@@ -366,3 +366,122 @@ fn main()
         "n=2 holds=true",
     );
 }
+
+#[test]
+fn test_generic_fn_compares_a_struct_argument_field_by_field() {
+    assert_runs_with_output(
+        r#"
+struct Word
+    text String
+    count int
+
+fn same<T>(a T, b T) bool
+    return a == b
+
+fn main()
+    let a = Word("B".to_lower(), 2)
+    let b = Word("B".to_lower(), 2)
+    let c = Word("C".to_lower(), 2)
+    println(f"{same(a, b)} {same(a, c)}")
+"#,
+        "true false",
+    );
+}
+
+#[test]
+fn test_generic_fn_compares_an_optional_string_argument_by_content() {
+    assert_runs_with_output(
+        r#"
+fn same<T>(a T, b T) bool
+    return a == b
+
+fn main()
+    let a String? = Some("q" + "")
+    let b String? = Some("Q".to_lower())
+    let c String? = None
+    println(f"{same(a, b)} {same(a, c)}")
+"#,
+        "true false",
+    );
+}
+
+#[test]
+fn test_list_of_structs_finds_and_removes_a_structurally_equal_element() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Word
+    text String
+    count int
+
+fn main()
+    var words = List<Word>()
+    words.push(Word("A".to_lower(), 1))
+    words.push(Word("B".to_lower(), 2))
+    let probe = Word("B".to_lower(), 2)
+    let at = words.index_of(probe) ?? -1
+    let removed = words.remove(Word("B".to_lower(), 2))
+    let missing = words.remove(Word("B".to_lower(), 3))
+    println(f"{at} {removed} {missing} {words.length()}")
+"#,
+        "1 true false 1",
+    );
+}
+
+#[test]
+fn test_list_of_optional_strings_removes_an_element_equal_by_content() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var xs = List<String?>()
+    xs.push(Some("p" + ""))
+    xs.push(Some("q" + ""))
+    let removed = xs.remove(Some("Q".to_lower()))
+    println(f"{removed} {xs.length()}")
+"#,
+        "true 1",
+    );
+}
+
+#[test]
+fn test_generic_fn_in_operator_finds_a_set_element_by_content() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn has<T>(s Set<T>, x T) bool
+    return x in s
+
+fn main()
+    var s = Set<String>()
+    s.add("PEAR".to_lower())
+    let hit = has(s, "PEAR".to_lower())
+    let miss = has(s, "FIG".to_lower())
+    println(f"{hit} {miss}")
+"#,
+        "true false",
+    );
+}
+
+#[test]
+fn test_generic_fn_in_operator_finds_a_map_key_by_content() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn has<K, V>(m Map<K, V>, k K) bool
+    return k in m
+
+fn main()
+    var m = Map<String, int>()
+    m.set("PEAR".to_lower(), 1)
+    let hit = has(m, "PEAR".to_lower())
+    let miss = has(m, "FIG".to_lower())
+    println(f"{hit} {miss}")
+"#,
+        "true false",
+    );
+}
