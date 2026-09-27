@@ -1057,12 +1057,18 @@ impl TypeChecker {
         context: &Context,
         bound: &mut Vec<String>,
     ) {
+        // A type already reported as wrong binds nothing: a second diagnostic
+        // about it would only repeat the first.
+        if matches!(target.kind, TypeKind::Error) || matches!(source.kind, TypeKind::Error) {
+            return;
+        }
         if let TypeKind::Generic(name, _, _) = &target.kind {
             let is_declared = matches!(
                 context.resolve_type_definition(name),
                 Some(TypeDefinition::Generic(_))
             );
-            let source_is_open = matches!(source.kind, TypeKind::Generic(..) | TypeKind::Error);
+            // A slot filled by another open parameter is still unbound.
+            let source_is_open = matches!(source.kind, TypeKind::Generic(..));
             if !is_declared && !source_is_open && !bound.contains(name) {
                 bound.push(name.clone());
             }
@@ -1121,6 +1127,8 @@ impl TypeChecker {
             }
             TypeKind::Tuple(elements) => elements.iter().for_each(argument),
             TypeKind::Custom(_, Some(args)) => args.iter().for_each(argument),
+            // A type already reported as wrong holds no slot to report again.
+            TypeKind::Error => {}
             // A type names a type rather than holding a value of it, a function
             // value's parameters are fixed where it is written, and every other
             // type carries no argument to leave open.
@@ -1146,8 +1154,7 @@ impl TypeChecker {
             | TypeKind::Boolean
             | TypeKind::Identifier
             | TypeKind::RawPtr
-            | TypeKind::Void
-            | TypeKind::Error => {}
+            | TypeKind::Void => {}
         }
     }
 

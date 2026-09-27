@@ -1114,6 +1114,14 @@ fn drop_instantiation_refusal(
     }
 }
 
+/// What lowering a concrete class's copy of an inherited abstract-class body
+/// reads: the checked program, the build mode, and the compilation-wide ids.
+struct InheritedCopy<'r> {
+    result: &'r PipelineResult,
+    is_release: bool,
+    compilation_ids: &'r mir::lowering::SharedCompilationIds,
+}
+
 /// Where the program declares `class`; the start of the file for a class it
 /// imports or does not declare.
 fn class_declaration_span(ast: &Program, class: &str) -> Span {
@@ -2826,117 +2834,123 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        {
-            use crate::type_checker::context::TypeDefinition;
-
-            // Step 1: build abstract_class_methods —
-            //   abstract class name → list of (method AST stmt, method name)
-            //   for every non-abstract method body in that class.
-            let mut abstract_class_methods: std::collections::HashMap<String, Vec<&Statement>> =
-                std::collections::HashMap::new();
-
-            let all_stmts = result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter());
-
-            for stmt in all_stmts {
-                if let StatementKind::Class(class_data) = &stmt.node {
-                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                        continue;
-                    };
-                    let is_abstract = matches!(
-                        result.type_checker.type_definitions().get(class_name),
-                        Some(TypeDefinition::Class(cd)) if cd.is_abstract
-                    );
-                    if !is_abstract {
-                        continue;
-                    }
-                    let methods_entry = abstract_class_methods
-                        .entry(class_name.to_string())
-                        .or_default();
-                    for method_stmt in &class_data.body {
-                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
-                            if md.body.is_some() {
-                                // Only collect methods with a concrete body.
-                                methods_entry.push(method_stmt);
-                            }
-                        }
-                    }
-                }
+        let abstract_methods = Self::abstract_class_method_bodies(result);
+        let copy = InheritedCopy {
+            result,
+            is_release,
+            compilation_ids,
+        };
+        for stmt in Self::class_statements(result) {
+            let StatementKind::Class(class_data) = &stmt.node else {
+                continue;
+            };
+            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                continue;
+            };
+            let is_concrete = matches!(
+                result.type_checker.type_definitions().get(class_name),
+                Some(TypeDefinition::Class(cd)) if !cd.is_abstract
+            );
+            if is_concrete {
+                let self_type =
+                    Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
+                Self::lower_inherited_abstract_bodies(
+                    &copy,
+                    class_name,
+                    &self_type,
+                    &abstract_methods,
+                    bodies,
+                    symbols,
+                )?;
             }
+        }
+        Ok(())
+    }
 
-            // Step 2: for each concrete class, compile inherited abstract-base methods.
-            let all_stmts2 = result
-                .ast
-                .body
-                .iter()
-                .chain(result.type_checker.imported_statements.iter());
+    /// Every statement of the program and of the modules it imports.
+    fn class_statements(result: &PipelineResult) -> impl Iterator<Item = &Statement> {
+        result
+            .ast
+            .body
+            .iter()
+            .chain(result.type_checker.imported_statements.iter())
+    }
 
-            for stmt in all_stmts2 {
-                if let StatementKind::Class(class_data) = &stmt.node {
-                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                        continue;
-                    };
-                    let cd = match result
-                        .type_checker
-                        .type_table
-                        .global_type_definitions
-                        .get(class_name)
-                    {
-                        Some(TypeDefinition::Class(cd)) => cd,
-                        _ => continue,
-                    };
-                    if cd.is_abstract {
-                        continue; // only process concrete classes
-                    }
+    /// Each abstract class's methods that carry a body, by class name.
+    fn abstract_class_method_bodies(
+        result: &PipelineResult,
+    ) -> std::collections::HashMap<String, Vec<&Statement>> {
+        let mut methods: std::collections::HashMap<String, Vec<&Statement>> =
+            std::collections::HashMap::new();
+        for stmt in Self::class_statements(result) {
+            let StatementKind::Class(class_data) = &stmt.node else {
+                continue;
+            };
+            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                continue;
+            };
+            let is_abstract = matches!(
+                result.type_checker.type_definitions().get(class_name),
+                Some(TypeDefinition::Class(cd)) if cd.is_abstract
+            );
+            if !is_abstract {
+                continue;
+            }
+            let with_bodies = class_data.body.iter().filter(|method_stmt| {
+                matches!(&method_stmt.node, StatementKind::FunctionDeclaration(md) if md.body.is_some())
+            });
+            methods
+                .entry(class_name.to_string())
+                .or_default()
+                .extend(with_bodies);
+        }
+        methods
+    }
 
-                    let self_type =
-                        Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
-
-                    // Every abstract ancestor, past any concrete class between: static
-                    // dispatch names this class's own copy of whatever abstract-class body
-                    // it runs, however far up the chain that body is declared.
-                    let ancestors = crate::type_checker::context::class_ancestry(
-                        class_name,
-                        result.type_checker.type_definitions(),
-                    )
-                    .skip(1);
-                    for (base_name, _) in ancestors {
-                        if let Some(method_stmts) = abstract_class_methods.get(base_name) {
-                            for method_stmt in method_stmts.iter() {
-                                if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
-                                    let runs_this_body = Self::runs_inherited_body(
-                                        result, class_name, &md.name, base_name,
-                                    );
-                                    if !runs_this_body {
-                                        continue;
-                                    }
-                                    let symbol = Symbol::method(class_name, &[], &md.name, &[]);
-                                    if !symbols
-                                        .claim_at(&symbol, method_stmt.span)
-                                        .map_err(CompilerError::Lowering)?
-                                    {
-                                        continue;
-                                    }
-                                    let (mir_body, lambdas) =
-                                        mir::lowering::lower_class_method_with_compilation_ids(
-                                            method_stmt,
-                                            self_type.clone(),
-                                            &result.type_checker,
-                                            is_release,
-                                            compilation_ids.clone(),
-                                        )
-                                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-                                    Self::push_lowered_body(
-                                        bodies, symbols, symbol, mir_body, lambdas,
-                                    )?;
-                                }
-                            }
-                        }
-                    }
+    /// Lower the concrete class `class_name`'s own copy of every body an
+    /// abstract ancestor declares and the class runs.
+    ///
+    /// Every abstract ancestor counts, past any concrete class between: static
+    /// dispatch names this class's own copy of whatever abstract-class body it
+    /// runs, however far up the chain that body is declared.
+    fn lower_inherited_abstract_bodies(
+        copy: &InheritedCopy,
+        class_name: &str,
+        self_type: &Type,
+        abstract_methods: &std::collections::HashMap<String, Vec<&Statement>>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+    ) -> Result<(), CompilerError> {
+        let result = copy.result;
+        let ancestors = crate::type_checker::context::class_ancestry(
+            class_name,
+            result.type_checker.type_definitions(),
+        )
+        .skip(1);
+        for (base_name, _) in ancestors {
+            for method_stmt in abstract_methods.get(base_name).into_iter().flatten() {
+                let StatementKind::FunctionDeclaration(md) = &method_stmt.node else {
+                    continue;
+                };
+                if !Self::runs_inherited_body(result, class_name, &md.name, base_name) {
+                    continue;
                 }
+                let symbol = Symbol::method(class_name, &[], &md.name, &[]);
+                if !symbols
+                    .claim_at(&symbol, method_stmt.span)
+                    .map_err(CompilerError::Lowering)?
+                {
+                    continue;
+                }
+                let (mir_body, lambdas) = mir::lowering::lower_class_method_with_compilation_ids(
+                    method_stmt,
+                    self_type.clone(),
+                    &result.type_checker,
+                    copy.is_release,
+                    copy.compilation_ids.clone(),
+                )
+                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
             }
         }
         Ok(())

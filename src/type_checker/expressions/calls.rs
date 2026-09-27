@@ -372,6 +372,10 @@ impl TypeChecker {
 
         match &func_type.kind {
             TypeKind::Function(func_data) => {
+                let named: Vec<(String, &Expression, Type)> = named_args
+                    .iter()
+                    .map(|(name, (value, ty, _))| (name.clone(), *value, ty.clone()))
+                    .collect();
                 let result = self.infer_function_call(
                     func_data,
                     positional_args,
@@ -382,7 +386,7 @@ impl TypeChecker {
                 );
                 self.record_call_pinning_site(func, span, call_id, context);
                 self.record_element_ordering_for_call(func, positional_args, context);
-                self.refuse_receiver_slots_bound(func, func_data, positional_args, context);
+                self.refuse_receiver_slots_bound(func, func_data, positional_args, &named, context);
                 result
             }
             TypeKind::Meta(inner_type) => {
@@ -411,8 +415,12 @@ impl TypeChecker {
         func: &Expression,
         func_data: &crate::ast::types::FunctionTypeData,
         positional_args: &[(&Expression, Type)],
+        named_args: &[(String, &Expression, Type)],
         context: &mut Context,
     ) {
+        // Only a receiver's type can hold a slot: a callee reached by name
+        // declares its parameters in types its own generics bind, and a
+        // written type cannot name a parameter nothing declares.
         let ExpressionKind::Member(receiver, _) = &func.node else {
             return;
         };
@@ -423,7 +431,17 @@ impl TypeChecker {
         if slots.is_empty() {
             return;
         }
-        for (param, (arg, arg_ty)) in func_data.params.iter().zip(positional_args) {
+        let named = named_args.iter().filter_map(|(name, value, ty)| {
+            let param = func_data.params.iter().find(|param| &param.name == name)?;
+            Some((param, (*value, ty.clone())))
+        });
+        let positional = func_data
+            .params
+            .iter()
+            .zip(positional_args.iter().map(|(arg, ty)| (*arg, ty.clone())));
+        let arguments: Vec<_> = positional.chain(named).collect();
+        for (param, (arg, arg_ty)) in arguments {
+            let arg_ty = &arg_ty;
             let param_ty = self.resolve_type_expression(&param.typ, context);
             let binds_a_receiver_slot = self
                 .inference_slots_bound_by(&param_ty, arg_ty, context)
@@ -1819,7 +1837,8 @@ impl TypeChecker {
                         &mut seen_out_vars,
                         context,
                     );
-                } else if !self.are_compatible(&concrete_param_type, &arg_type, context) {
+                } else if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context)
+                {
                     self.report_error(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
@@ -2804,7 +2823,7 @@ impl TypeChecker {
                             .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
-                if !self.are_compatible(&concrete_field_type, &arg_type, context) {
+                if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
                     self.report_error(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
@@ -2890,7 +2909,7 @@ impl TypeChecker {
                             .or_else(|| self.widen_int_literals(e, &concrete_param_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
-                if !self.are_compatible(&concrete_param_type, &arg_type, context) {
+                if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context) {
                     self.report_error(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
@@ -2984,7 +3003,7 @@ impl TypeChecker {
                             .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
                     })
                     .unwrap_or(arg_type);
-                if !self.are_compatible(&concrete_field_type, &arg_type, context) {
+                if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
                     self.report_error(
                         DiagnosticCode::TypTypeMismatch,
                         format!(

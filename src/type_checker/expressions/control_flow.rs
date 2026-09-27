@@ -477,7 +477,7 @@ impl TypeChecker {
         );
         for branch in branches {
             if let StatementKind::Expression(expr) = &branch.body.node {
-                self.record_joined_type(expr, &joined);
+                self.record_joined_type(expr, &joined, context);
             }
         }
         joined
@@ -540,8 +540,8 @@ impl TypeChecker {
                 },
                 context,
             );
-            self.record_joined_type(then_expr, &joined);
-            self.record_joined_type(else_expr, &joined);
+            self.record_joined_type(then_expr, &joined, context);
+            self.record_joined_type(else_expr, &joined, context);
             joined
         } else {
             if !self.are_compatible(&then_type, &make_type(TypeKind::Void), context) {
