@@ -50,7 +50,10 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
+use crate::type_checker::call_instantiation::{type_arguments_noun, GenericCall, ParameterBound};
 use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::instantiation_requirements::{GenericBodyId, FREE_FUNCTION_OWNER};
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
 use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
@@ -97,7 +100,8 @@ impl TypeChecker {
         // written it is a type, which makes the call look like a construction:
         // no function is resolved, so nothing records which instantiation the
         // call reaches and it falls through to the shared body.
-        let func = Self::called_function_expression(self, func);
+        let callee = self.called_function_expression(func, context);
+        let func = callee.expression;
         let func_type = self.infer_expression(func, context);
 
         // Restore call_site_arity after member-access inference completes.
@@ -148,7 +152,7 @@ impl TypeChecker {
 
         let result_type = self.infer_call_dispatch(
             &func_type,
-            func,
+            callee,
             &positional_args,
             named_args,
             span,
@@ -261,12 +265,7 @@ impl TypeChecker {
     /// library's.
     fn math_intrinsic_callee(&self, func: &Expression) -> Option<MathIntrinsic> {
         let callee = if let ExpressionKind::Member(obj, prop) = &func.node {
-            let through_alias = matches!(
-                &obj.node,
-                ExpressionKind::Identifier(alias, _)
-                    if self.modules.module_aliases.contains_key(alias.as_str())
-            );
-            if !through_alias {
+            if !self.read_as_module_alias(obj) {
                 return None;
             }
             &**prop
@@ -310,23 +309,67 @@ impl TypeChecker {
     }
 
     /// The expression a call targets, with a written-out generic spelling of a
-    /// function name unwrapped to the name.
+    /// function name unwrapped to the name, and the type arguments it writes.
     ///
     /// Only a name that is a function is unwrapped. `List<int>()` wraps a type,
     /// and there the spelling really is what is being constructed.
-    fn called_function_expression<'e>(&self, func: &'e Expression) -> &'e Expression {
-        let (ExpressionKind::GenericType(base, _, _)
-        | ExpressionKind::TypeDeclaration(base, _, _, _)) = &func.node
-        else {
-            return func;
+    fn called_function_expression<'e>(
+        &self,
+        func: &'e Expression,
+        context: &Context,
+    ) -> CalledFunction<'e> {
+        let unwrapped = CalledFunction {
+            expression: func,
+            type_arguments: None,
         };
-        let ExpressionKind::Identifier(name, _) = &base.node else {
-            return func;
+        let (base, type_arguments) = if let ExpressionKind::GenericType(base, _, _) = &func.node {
+            (base, None)
+        } else if let ExpressionKind::TypeDeclaration(base, arguments, _, _) = &func.node {
+            (base, arguments.as_deref())
+        } else {
+            return unwrapped;
         };
-        match self.type_table.global_scope.get(name) {
-            Some(info) if matches!(info.ty.kind, TypeKind::Function(_)) => base,
-            _ => func,
+        // TODO: a method call writing its type arguments out — `obj.f<T>()` —
+        // wraps a member access, which is not unwrapped here, so its written
+        // arguments bind nothing and the call is inferred as if it wrote none.
+        let Some(name) = self.function_name_written(base, context) else {
+            return unwrapped;
+        };
+        let names_a_function = self
+            .type_table
+            .global_scope
+            .get(name)
+            .is_some_and(|info| matches!(info.ty.kind, TypeKind::Function(_)));
+        if !names_a_function {
+            return unwrapped;
         }
+        CalledFunction {
+            expression: base,
+            type_arguments,
+        }
+    }
+
+    /// The name a callee written as `name` or as `Alias.name` — a function
+    /// reached through a module alias — spells.
+    fn function_name_written<'e>(
+        &self,
+        callee: &'e Expression,
+        context: &Context,
+    ) -> Option<&'e str> {
+        if let ExpressionKind::Identifier(name, _) = &callee.node {
+            return Some(name);
+        }
+        let ExpressionKind::Member(owner, member) = &callee.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(alias, _) = &owner.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(name, _) = &member.node else {
+            return None;
+        };
+        self.module_alias_in_scope(alias, context)
+            .map(|_| name.as_str())
     }
 
     /// Dispatches to function or constructor call based on the function type.
@@ -334,13 +377,14 @@ impl TypeChecker {
     fn infer_call_dispatch(
         &mut self,
         func_type: &Type,
-        func: &Expression,
+        callee: CalledFunction<'_>,
         positional_args: &[(&Expression, Type)],
         named_args: HashMap<String, (&Expression, Type, Span)>,
         span: Span,
         context: &mut Context,
         call_id: usize,
     ) -> Type {
+        let func = callee.expression;
         // Check for math intrinsics with numeric polymorphism (abs, min, max).
         // These accept both int and float arguments, with return type matching the first arg.
         if let Some(return_type) =
@@ -372,22 +416,13 @@ impl TypeChecker {
 
         match &func_type.kind {
             TypeKind::Function(func_data) => {
-                let named: Vec<(String, &Expression, Type)> = named_args
-                    .iter()
-                    .map(|(name, (value, ty, _))| (name.clone(), *value, ty.clone()))
-                    .collect();
-                let result = self.infer_function_call(
-                    func_data,
+                let site = CallSite {
                     positional_args,
                     named_args,
                     span,
-                    context,
                     call_id,
-                );
-                self.record_call_pinning_site(func, span, call_id, context);
-                self.record_element_ordering_for_call(func, positional_args, context);
-                self.refuse_receiver_slots_bound(func, func_data, positional_args, &named, context);
-                result
+                };
+                self.infer_function_type_call(func_data, callee, site, context)
             }
             TypeKind::Meta(inner_type) => {
                 self.infer_constructor_call(inner_type, positional_args, named_args, span, context)
@@ -402,6 +437,57 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// Infer a call to a value of function type: bind the callee's type
+    /// parameters from the arguments the call writes and passes, then settle
+    /// which instantiation it reaches.
+    fn infer_function_type_call(
+        &mut self,
+        func_data: &crate::ast::types::FunctionTypeData,
+        callee: CalledFunction<'_>,
+        site: CallSite<'_, '_>,
+        context: &mut Context,
+    ) -> Type {
+        let func = callee.expression;
+        let Some(mut generic_map) =
+            self.explicit_type_arguments(func_data, callee, site.span, context)
+        else {
+            return make_type(TypeKind::Error);
+        };
+        let named: Vec<(String, &Expression, Type)> = site
+            .named_args
+            .iter()
+            .map(|(name, (value, ty, _))| (name.clone(), *value, ty.clone()))
+            .collect();
+        let (span, call_id, positional_args) = (site.span, site.call_id, site.positional_args);
+        let (declared_return, bounds) =
+            self.infer_function_call(func_data, site, &mut generic_map, context);
+        let result = match generic_parameter_names(func_data) {
+            Some(parameters) if self.constructs_a_variant(func, context) => self
+                .record_variant_constructor_call(
+                    call_id,
+                    &parameters,
+                    &declared_return,
+                    &generic_map,
+                ),
+            Some(parameters) => {
+                let call = GenericCall {
+                    callee: Self::call_func_name(func).map(str::to_string),
+                    body: free_function_body(func),
+                    parameters,
+                    bounds,
+                    declared_return,
+                    bound: generic_map,
+                    span,
+                };
+                self.instantiate_generic_call(call_id, call, context)
+            }
+            None => declared_return,
+        };
+        self.record_element_ordering_for_call(func, positional_args, context);
+        self.refuse_receiver_slots_bound(func, func_data, positional_args, &named, context);
+        result
     }
 
     /// Refuse a method call that stores a value binding a slot its receiver's
@@ -1741,40 +1827,80 @@ impl TypeChecker {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Check a call's arguments against the callee's parameters, binding the
+    /// callee's type parameters into `generic_map` from them, and return the
+    /// callee's declared return type and the bounds it declares on its type
+    /// parameters, both spelled in its own type parameters.
     fn infer_function_call(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
-        positional_args: &[(&Expression, Type)],
-        mut named_args: HashMap<String, (&Expression, Type, Span)>,
-        span: Span,
+        site: CallSite<'_, '_>,
+        generic_map: &mut HashMap<String, Type>,
         context: &mut Context,
-        call_id: usize,
-    ) -> Type {
-        let mut generic_map = std::collections::HashMap::new();
-
+    ) -> (Type, Vec<ParameterBound>) {
         if let Some(gens) = &func_data.generics {
             context.enter_scope();
             self.define_generics(gens, context);
         }
-
+        let mut named_args = site.named_args;
         self.validate_function_parameters(
             func_data,
-            positional_args,
+            site.positional_args,
             &mut named_args,
-            &mut generic_map,
-            span,
+            generic_map,
+            site.span,
             context,
         );
-
-        let return_type = self.compute_function_return_type(func_data, &generic_map, context);
-
+        let return_type = self.declared_return_type(func_data, context);
+        let bounds = declared_bounds(func_data, context);
         if func_data.generics.is_some() {
             context.exit_scope();
-            self.store_generic_call_mapping(func_data, &generic_map, call_id);
         }
+        (return_type, bounds)
+    }
+    /// Whether `func` names a variant constructor — the built-in `Some`, `Ok`
+    /// and `Err`, or a variant reached through its enum — which wraps its
+    /// arguments and compiles no body of its own.
+    pub(crate) fn constructs_a_variant(&self, func: &Expression, context: &Context) -> bool {
+        matches!(
+            self.fn_analysis.callee_kinds.get(&func.id),
+            Some(CalleeKind::VariantConstructor)
+        ) || self.is_variant_constructor(func, context)
+    }
 
-        return_type
+    /// The callee's type parameters bound to the type arguments the call
+    /// writes out — `make<String>()` — resolved in the caller's scope, so a
+    /// parameter of the calling body pins the callee to that parameter.
+    /// `None` when the call writes a different number than the callee
+    /// declares, which is reported.
+    fn explicit_type_arguments(
+        &mut self,
+        func_data: &crate::ast::types::FunctionTypeData,
+        callee: CalledFunction<'_>,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<HashMap<String, Type>> {
+        let Some(written) = callee.type_arguments else {
+            return Some(HashMap::new());
+        };
+        let parameters = generic_parameter_names(func_data).unwrap_or_default();
+        if written.len() != parameters.len() {
+            let noun = type_arguments_noun(parameters.len());
+            let expects = format!("expects {} {noun}, got {}", parameters.len(), written.len());
+            let message = match Self::call_func_name(callee.expression) {
+                Some(name) => format!("'{name}' {expects}"),
+                None => format!("The called function {expects}"),
+            };
+            self.report_error(DiagnosticCode::TypGenericArgumentCount, message, span);
+            return None;
+        }
+        Some(
+            parameters
+                .into_iter()
+                .zip(written)
+                .map(|(name, argument)| (name, self.resolve_type_expression(argument, context)))
+                .collect(),
+        )
     }
 
     fn validate_function_parameters(
@@ -1786,6 +1912,9 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) {
+        if func_data.generics.is_some() {
+            self.bind_generics_from_arguments(func_data, positional_args, named_args, generic_map);
+        }
         let mut pos_iter = positional_args.iter();
         let mut seen_out_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -1839,14 +1968,8 @@ impl TypeChecker {
                     );
                 } else if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context)
                 {
-                    self.report_error(
-                        DiagnosticCode::TypTypeMismatch,
-                        format!(
-                            "Type mismatch for argument '{}': expected {}, got {}",
-                            param.name, concrete_param_type, arg_type
-                        ),
-                        arg_expr.map(|e| e.span).unwrap_or(span),
-                    );
+                    let mismatch = (&concrete_param_type, arg_type);
+                    self.report_argument_mismatch(&param.name, mismatch, arg_expr, span);
                 }
 
                 if let Some(arg_e) = arg_expr {
@@ -1887,10 +2010,78 @@ impl TypeChecker {
         }
     }
 
-    fn compute_function_return_type(
+    /// Bind the callee's type parameters from every argument the call passes
+    /// before any argument is checked, so the order the arguments are written
+    /// in does not decide what binds: `apply(fn(x int) int: x + 1, 3)` binds
+    /// `T` from the lambda as `apply(3, ..)` does from the value.
+    ///
+    /// A parameter type written inside a function type — the `T` of
+    /// `f fn(x T) U` — reads back as a plain name, so each of the callee's
+    /// parameters is first marked as one throughout the parameter's type; a
+    /// function-typed argument then binds them from its own parameters and
+    /// result.
+    fn bind_generics_from_arguments(
+        &self,
+        func_data: &crate::ast::types::FunctionTypeData,
+        positional_args: &[(&Expression, Type)],
+        named_args: &HashMap<String, (&Expression, Type, Span)>,
+        generic_map: &mut HashMap<String, Type>,
+    ) {
+        let marked: HashMap<String, Type> = generic_parameter_names(func_data)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| !generic_map.contains_key(name))
+            .map(|name| {
+                let parameter = TypeKind::Generic(name.clone(), None, TypeDeclarationKind::None);
+                (name, make_type(parameter))
+            })
+            .collect();
+        let mut positional = positional_args.iter();
+        for param in &func_data.params {
+            let argument = positional
+                .next()
+                .map(|(_, ty)| ty)
+                .or_else(|| named_args.get(&param.name).map(|(_, ty, _)| ty));
+            let Some(argument) = argument else {
+                continue;
+            };
+            let Ok(written) = self.extract_type_from_expression(&param.typ) else {
+                continue;
+            };
+            let parameter_type = self.substitute_type(&written, &marked);
+            self.infer_generic_types(&parameter_type, argument, generic_map);
+        }
+    }
+
+    /// Report the argument `arg_expr` refused for the parameter `param_name`,
+    /// with `mismatch` holding the parameter's type and the argument's, read
+    /// again in case storing it bound a call the argument is.
+    fn report_argument_mismatch(
+        &mut self,
+        param_name: &str,
+        mismatch: (&Type, Type),
+        arg_expr: Option<&Expression>,
+        span: Span,
+    ) {
+        let (expected, arg_type) = mismatch;
+        let arg_type = match arg_expr {
+            Some(expr) => self.settled_value_type(expr, arg_type),
+            None => arg_type,
+        };
+        self.report_error(
+            DiagnosticCode::TypTypeMismatch,
+            format!(
+                "Type mismatch for argument '{param_name}': expected {}, got {}",
+                spelled(expected),
+                spelled(&arg_type)
+            ),
+            arg_expr.map_or(span, |e| e.span),
+        );
+    }
+
+    fn declared_return_type(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
-        generic_map: &std::collections::HashMap<String, Type>,
         context: &mut Context,
     ) -> Type {
         if let Some(rt_expr) = &func_data.return_type {
@@ -1902,11 +2093,7 @@ impl TypeChecker {
             self.resolving_declared_signature = true;
             let rt = self.resolve_type_expression(rt_expr, context);
             self.resolving_declared_signature = previous;
-            if func_data.generics.is_some() {
-                self.substitute_type(&rt, generic_map)
-            } else {
-                rt
-            }
+            rt
         } else {
             ast_factory::make_type(TypeKind::Void)
         }
@@ -1966,39 +2153,6 @@ impl TypeChecker {
         }
     }
 
-    /// Answer, for this call, every ordering requirement the callee's body
-    /// recorded against a generic parameter this call pins.
-    ///
-    /// Only a call written as a bare name is answered here: a requirement is
-    /// keyed by the type that declares the body, and a method reached through a
-    /// receiver is answered where that receiver's type arguments are known. A
-    /// method call matched on its bare name would be read against a free
-    /// function that happens to share it.
-    ///
-    /// The inferred arguments are read back from the mapping the call already
-    /// stored, so a call that pins nothing generic costs one map lookup.
-    fn record_call_pinning_site(
-        &mut self,
-        func: &Expression,
-        span: Span,
-        call_id: usize,
-        context: &Context,
-    ) {
-        let ExpressionKind::Identifier(callee, _) = &func.node else {
-            return;
-        };
-        let Some(mapping) = self.call_generic_mappings.get(&call_id) else {
-            return;
-        };
-        let substitution: std::collections::HashMap<String, Type> =
-            mapping.iter().cloned().collect();
-        let body = (
-            crate::type_checker::instantiation_requirements::FREE_FUNCTION_OWNER.to_string(),
-            callee.clone(),
-        );
-        self.record_pinning_site(body, &substitution, span, context);
-    }
-
     /// State the ordering a call needs of the elements it sorts, against the
     /// body that writes the call.
     ///
@@ -2018,39 +2172,6 @@ impl TypeChecker {
             return;
         };
         self.record_elements_a_call_orders(callee, container_ty, context);
-    }
-
-    fn store_generic_call_mapping(
-        &mut self,
-        func_data: &crate::ast::types::FunctionTypeData,
-        generic_map: &std::collections::HashMap<String, Type>,
-        call_id: usize,
-    ) {
-        if generic_map.is_empty() {
-            return;
-        }
-
-        let ordered: Vec<(String, crate::ast::types::Type)> =
-            if let Some(gens) = &func_data.generics {
-                gens.iter()
-                    .filter_map(|g| {
-                        if let ExpressionKind::GenericType(name_expr, _, _) = &g.node {
-                            if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-                                generic_map.get(n).map(|t| (n.clone(), t.clone()))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        if !ordered.is_empty() {
-            self.call_generic_mappings.insert(call_id, ordered);
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2324,7 +2445,10 @@ impl TypeChecker {
                 // keeps the default `int` and fills only part of a wider slot.
                 self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type);
                 self.narrow_sequence_argument_elements(arg_expr, arg_type, &elem_type, context);
-                if !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
+                let elements_fit = self.literal_elements_fit(arg_expr, &elem_type, context);
+                if !elements_fit
+                    || !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context)
+                {
                     self.report_error(
                         DiagnosticCode::TypBuiltinConstructor,
                         format!(
@@ -2617,7 +2741,10 @@ impl TypeChecker {
                 // being one the set can be built from: lowering reads it only
                 // when it is a set literal, and drops anything else silently.
                 if let Some((arg_expr, arg_type)) = positional_args.first() {
-                    if !self.set_argument_fits_element(&elem_type, arg_expr, arg_type, context) {
+                    let elements_fit = self.literal_elements_fit(arg_expr, &elem_type, context);
+                    if !elements_fit
+                        || !self.set_argument_fits_element(&elem_type, arg_expr, arg_type, context)
+                    {
                         self.report_error(
                             DiagnosticCode::TypBuiltinConstructor,
                             format!(
@@ -3168,7 +3295,7 @@ impl TypeChecker {
         &mut self,
         elem_type: &Type,
         positional_args: &[(&Expression, Type)],
-        context: &Context,
+        context: &mut Context,
     ) {
         for (arg, arg_type) in positional_args {
             if matches!(arg_type.kind, TypeKind::Error) {
@@ -3178,11 +3305,14 @@ impl TypeChecker {
                 .narrow_float_literals(arg, elem_type, arg_type, context)
                 .or_else(|| self.widen_int_literals(arg, elem_type, arg_type))
                 .unwrap_or_else(|| arg_type.clone());
-            if !self.are_compatible(elem_type, &arg_type, context) {
+            if !self.accepts_value_at(elem_type, &arg_type, Some(arg), context) {
+                let arg_type = self.settled_value_type(arg, arg_type);
                 self.report_error(
                     DiagnosticCode::TypTypeMismatch,
                     format!(
-                        "Type mismatch for array element: expected {elem_type}, got {arg_type}"
+                        "Type mismatch for array element: expected {}, got {}",
+                        spelled(elem_type),
+                        spelled(&arg_type)
                     ),
                     arg.span,
                 );
@@ -3275,4 +3405,77 @@ fn surplus_argument_range(
         return None;
     }
     Some((start, last_extra))
+}
+
+/// The function a call targets and the type arguments the call writes out
+/// for it (`make<String>()`), if any.
+#[derive(Clone, Copy)]
+struct CalledFunction<'e> {
+    expression: &'e Expression,
+    type_arguments: Option<&'e [Expression]>,
+}
+
+/// The arguments of one call, as the call site checks them.
+struct CallSite<'a, 'e> {
+    positional_args: &'a [(&'e Expression, Type)],
+    named_args: HashMap<String, (&'e Expression, Type, Span)>,
+    span: Span,
+    call_id: usize,
+}
+
+/// The bounds `func_data` declares on its type parameters, read while its
+/// parameters are the scope in `context`.
+fn declared_bounds(
+    func_data: &crate::ast::types::FunctionTypeData,
+    context: &Context,
+) -> Vec<ParameterBound> {
+    generic_parameter_names(func_data)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|parameter| {
+            let Some(TypeDefinition::Generic(definition)) =
+                context.resolve_type_definition(&parameter)
+            else {
+                return None;
+            };
+            let constraint = definition.constraint.clone()?;
+            Some(ParameterBound {
+                parameter,
+                constraint,
+                kind: definition.kind,
+            })
+        })
+        .collect()
+}
+
+/// The type parameters a function declares, in order, or `None` for a
+/// function that declares none.
+fn generic_parameter_names(func_data: &crate::ast::types::FunctionTypeData) -> Option<Vec<String>> {
+    let generics = func_data.generics.as_ref()?;
+    Some(
+        generics
+            .iter()
+            .filter_map(|generic| {
+                let ExpressionKind::GenericType(name, _, _) = &generic.node else {
+                    return None;
+                };
+                let ExpressionKind::Identifier(name, _) = &name.node else {
+                    return None;
+                };
+                Some(name.clone())
+            })
+            .collect(),
+    )
+}
+
+/// The body a call through `func` answers the requirements of: a free
+/// function's, when the call names one bare. A method's requirements are keyed
+/// by the type that declares it and answered where the receiver's type
+/// arguments are known, so a method matched on its bare name would be read
+/// against a free function that happens to share it.
+fn free_function_body(func: &Expression) -> Option<GenericBodyId> {
+    let ExpressionKind::Identifier(callee, _) = &func.node else {
+        return None;
+    };
+    Some((FREE_FUNCTION_OWNER.to_string(), callee.clone()))
 }

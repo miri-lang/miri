@@ -110,19 +110,29 @@ pub(crate) fn aliased_function<'e>(
     ctx: &LoweringContext,
     func: &'e Expression,
 ) -> Option<&'e Expression> {
+    let func = written_function_callee(ctx, func);
     let ExpressionKind::Member(obj_expr, method_expr) = &func.node else {
         return None;
     };
-    let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node else {
-        return None;
-    };
     let is_aliased_function = matches!(method_expr.node, ExpressionKind::Identifier(..))
-        && ctx
-            .type_checker
-            .modules
-            .module_aliases
-            .contains_key(alias_name.as_str());
+        && ctx.type_checker.read_as_module_alias(obj_expr);
     is_aliased_function.then_some(method_expr.as_ref())
+}
+
+/// The callee a call writing its type arguments out — `M.foo<int>(x)` —
+/// targets: the wrapped name, when the type checker resolved it to a function.
+/// A wrapped type (`M.Box<int>()`) stays as written.
+fn written_function_callee<'e>(ctx: &LoweringContext, func: &'e Expression) -> &'e Expression {
+    let callee = callee_name_expression(func);
+    let is_function = matches!(
+        ctx.type_checker.get_type(callee.id).map(|ty| &ty.kind),
+        Some(TypeKind::Function(_))
+    );
+    if is_function {
+        callee
+    } else {
+        func
+    }
 }
 
 /// Lower a call to a function in another module via its alias: `M.foo(args)`.
@@ -1321,11 +1331,11 @@ fn lower_callee(ctx: &mut LoweringContext, func: &Expression) -> Result<Operand,
 /// The expression naming what a call targets.
 ///
 /// A call may write its type arguments out — `f<int>(x)` — and that spelling
-/// parses as a generic type reference wrapping the name. The arguments it
-/// writes are recorded against the call itself, which is where the
-/// instantiation is read from, so the name is all that is wanted here. Leaving
-/// the wrapper in place asks for a type to be lowered as a value, which is
-/// refused.
+/// parses as a generic type reference wrapping the name. The type checker binds
+/// the callee's parameters from the arguments it writes and records the
+/// instantiation against the call itself, which is where it is read from, so
+/// the name is all that is wanted here. Leaving the wrapper in place asks for a
+/// type to be lowered as a value, which is refused.
 fn callee_name_expression(func: &Expression) -> &Expression {
     let (ExpressionKind::GenericType(base, _, _) | ExpressionKind::TypeDeclaration(base, _, _, _)) =
         &func.node
@@ -1497,9 +1507,11 @@ fn apply_generic_mangling(
 /// identifier `callee` targets, recorded on the body so the pipeline lowers
 /// that instantiation.
 ///
-/// `None` when the callee is no identifier or the call pins no generic
-/// parameter. A call pinning one to a type with no name to compile a body at
-/// is refused.
+/// `None` when the callee is no identifier or no generic function. A call
+/// pinning a parameter to a type with no name to compile a body at is refused.
+/// A call to a generic function the type checker recorded no instantiation for
+/// is an internal error: the shared body it would otherwise link is laid out
+/// for no caller's types.
 fn generic_function_symbol(
     ctx: &mut LoweringContext,
     callee: &Expression,
@@ -1510,7 +1522,7 @@ fn generic_function_symbol(
         return Ok(None);
     };
     let Some(type_args) = ctx.instantiated_call_mapping(call_expr_id) else {
-        return Ok(None);
+        return refuse_uninstantiated_generic_call(ctx, callee, func_name, span);
     };
     refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
     let function = ctx.declared_callee(callee, func_name)?.clone();
@@ -1528,6 +1540,45 @@ fn generic_function_symbol(
             type_args,
         });
     Ok(Some(link_name))
+}
+
+/// Refuse a call through `callee` to a generic function whose instantiation
+/// the type checker did not record; `Ok(None)` for any other callee.
+fn refuse_uninstantiated_generic_call(
+    ctx: &LoweringContext,
+    callee: &Expression,
+    func_name: &str,
+    span: Span,
+) -> Result<Option<String>, LoweringError> {
+    if calls_a_generic_function(ctx, callee) {
+        return Err(uninstantiated_generic_call(func_name, span));
+    }
+    Ok(None)
+}
+
+/// Whether `callee` names a function this compilation lowers that declares
+/// type parameters.
+fn calls_a_generic_function(ctx: &LoweringContext, callee: &Expression) -> bool {
+    let declares_type_parameters = matches!(
+        ctx.type_checker.get_type(callee.id).map(|ty| &ty.kind),
+        Some(TypeKind::Function(signature))
+            if signature.generics.as_ref().is_some_and(|generics| !generics.is_empty())
+    );
+    declares_type_parameters && ctx.callee_kind(callee) == CalleeKind::Program
+}
+
+/// The internal error for a call to the generic `func_name` that reached
+/// lowering with no instantiation: the shared body it would otherwise link is
+/// laid out for no caller's types.
+fn uninstantiated_generic_call(func_name: &str, span: Span) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirInvalidInstantiationArgument,
+        format!(
+            "the call to the generic function `{func_name}` reached lowering with no \
+             instantiation recorded for it"
+        ),
+        span,
+    )
 }
 
 /// Refuse the generic `func_name` pinned by a call to `type_args` when one of

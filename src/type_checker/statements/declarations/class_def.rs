@@ -94,6 +94,9 @@ impl TypeChecker {
 
         let base_direct_args = self.resolve_base_direct_args(base_class, context);
         let (trait_names, trait_direct_args) = self.check_class_traits(traits, context);
+        for clause in base_class.iter().map(Box::as_ref).chain(traits) {
+            self.refuse_bare_generic_supertype(&name, clause);
+        }
 
         self.register_class_hierarchy(&name, &base_class_name, &trait_names);
 
@@ -136,6 +139,44 @@ impl TypeChecker {
 
         context.exit_class();
         context.exit_scope();
+    }
+
+    /// Refuse an `extends` or `implements` clause naming a generic type
+    /// without its arguments. The supertype's members are typed by position,
+    /// so a clause that leaves the arguments to be matched by name would read
+    /// `class B<Y, X> extends A` as `A<Y, X>`, and a bound the supertype
+    /// declares on a parameter would never be checked against what fills it.
+    fn refuse_bare_generic_supertype(&mut self, class_name: &str, clause: &Expression) {
+        if matches!(
+            &clause.node,
+            ExpressionKind::TypeDeclaration(_, Some(_), _, _)
+        ) {
+            return;
+        }
+        let Ok(supertype) = self.extract_type_name(clause) else {
+            return;
+        };
+        let parameters: Vec<&str> = self
+            .generics_of(supertype)
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        if parameters.is_empty() {
+            return;
+        }
+        let noun = crate::type_checker::call_instantiation::type_arguments_noun(parameters.len());
+        let placeholders = vec!["..."; parameters.len()].join(", ");
+        let message = format!(
+            "'{supertype}' takes the {noun} `{}`, which '{class_name}' does not write: write \
+             the type each one is given — `{supertype}<{placeholders}>` — using a concrete type \
+             or a parameter '{class_name}' declares",
+            parameters.join("`, `"),
+        );
+        self.report_error(
+            DiagnosticCode::TypGenericArgumentCount,
+            message,
+            clause.span,
+        );
     }
 
     fn check_class_extract_and_validate_name(

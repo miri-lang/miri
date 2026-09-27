@@ -206,17 +206,12 @@ fn try_module_alias_binding(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let (ExpressionKind::Identifier(alias_name, _), ExpressionKind::Identifier(prop_name, _)) =
+    let (ExpressionKind::Identifier(..), ExpressionKind::Identifier(prop_name, _)) =
         (&obj.node, &prop.node)
     else {
         return Ok(None);
     };
-    if !ctx
-        .type_checker
-        .modules
-        .module_aliases
-        .contains_key(alias_name.as_str())
-    {
+    if !ctx.type_checker.read_as_module_alias(obj) {
         return Ok(None);
     }
     let is_binding = ctx

@@ -47,6 +47,7 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::utils::{
     is_accelerable, is_gpu_compatible, resolve_element_type_kind, type_mentions_f16,
 };
@@ -568,8 +569,15 @@ impl TypeChecker {
             let outer_resident = context.in_gpu_resident_initializer;
             context.in_gpu_resident_initializer =
                 outer_resident || decl.residency == BindingResidency::Gpu;
+            let open_calls = self.open_generic_call_mark();
             let inferred = self.infer_expression(init, context);
             context.in_gpu_resident_initializer = outer_resident;
+            // With no declared type, nothing is left to bind a call the
+            // initializer leaves open; the binding takes the refusal rather
+            // than a type spelled in the callee's own parameters.
+            if decl.typ.is_none() && self.refuse_open_generic_calls_since(open_calls) {
+                return make_type(TypeKind::Error);
+            }
             inferred
         } else if let Some(type_expr) = &decl.typ {
             self.resolve_type_expression(type_expr, context)
@@ -594,7 +602,10 @@ impl TypeChecker {
             let inferred_type = self
                 .widen_int_literals(init, &declared_type, &inferred_type)
                 .unwrap_or(inferred_type);
-            if !self.accepts_value_at(&declared_type, &inferred_type, Some(init), context)
+            let accepted =
+                self.accepts_value_at(&declared_type, &inferred_type, Some(init), context);
+            let inferred_type = self.settled_value_type(init, inferred_type);
+            if !accepted
                 || !self.type_arguments_name_the_same_parameters(
                     &declared_type,
                     &inferred_type,
@@ -619,7 +630,9 @@ impl TypeChecker {
                         DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for variable '{}': expected {}, got {}",
-                            decl.name, declared_type, inferred_type
+                            decl.name,
+                            spelled(&declared_type),
+                            spelled(&inferred_type)
                         ),
                         init.span,
                     );

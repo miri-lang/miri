@@ -280,6 +280,55 @@ impl TypeChecker {
         if !self.check_declaration_attributes(statement) {
             return;
         }
+        let open_calls = self.open_generic_call_mark();
+        self.check_statement_kind(statement, context);
+        self.refuse_open_generic_calls_since(open_calls);
+    }
+
+    /// Check a top-level function declaration, noting a deprecation first.
+    fn check_function_statement(
+        &mut self,
+        decl: &FunctionDeclarationData,
+        span: Span,
+        context: &mut Context,
+    ) {
+        self.collect_deprecated_declaration(&decl.name, DeprecatedKind::Function, &decl.attributes);
+        self.check_function_declaration(
+            FunctionDeclarationInfo {
+                name: &decl.name,
+                generics: &decl.generics,
+                params: &decl.params,
+                return_type: &decl.return_type,
+                body: decl.body.as_ref().map(|b| b.as_ref()),
+                properties: &decl.properties,
+                span,
+                is_member: false,
+            },
+            context,
+        );
+    }
+
+    /// Check a class declaration, noting a deprecation first.
+    fn check_class_statement(&mut self, class_data: &ClassData, span: Span, context: &mut Context) {
+        self.collect_deprecated_type(
+            &class_data.name,
+            DeprecatedKind::Class,
+            &class_data.attributes,
+        );
+        self.check_class(
+            &class_data.name,
+            &class_data.generics,
+            &class_data.base_class,
+            &class_data.traits,
+            &class_data.body,
+            &class_data.visibility,
+            context,
+            span,
+            class_data.is_abstract,
+        )
+    }
+
+    fn check_statement_kind(&mut self, statement: &Statement, context: &mut Context) {
         match &statement.node {
             StatementKind::Variable(decls, vis) => {
                 self.check_variable_declaration(decls, vis, context, statement.span)
@@ -309,25 +358,7 @@ impl TypeChecker {
             StatementKind::Continue => self.check_continue(context, statement.span),
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
             StatementKind::FunctionDeclaration(decl) => {
-                // Collect deprecation information before checking the function
-                self.collect_deprecated_declaration(
-                    &decl.name,
-                    DeprecatedKind::Function,
-                    &decl.attributes,
-                );
-                self.check_function_declaration(
-                    FunctionDeclarationInfo {
-                        name: &decl.name,
-                        generics: &decl.generics,
-                        params: &decl.params,
-                        return_type: &decl.return_type,
-                        body: decl.body.as_ref().map(|b| b.as_ref()),
-                        properties: &decl.properties,
-                        span: statement.span,
-                        is_member: false,
-                    },
-                    context,
-                );
+                self.check_function_statement(decl, statement.span, context)
             }
             StatementKind::Struct(name, generics, fields, methods, vis, traits) => {
                 self.check_struct(name, generics, fields, methods, vis, traits, context)
@@ -337,22 +368,7 @@ impl TypeChecker {
                 self.check_enum(name, generics, variants, methods, attributes, vis, context)
             }
             StatementKind::Class(class_data) => {
-                self.collect_deprecated_type(
-                    &class_data.name,
-                    DeprecatedKind::Class,
-                    &class_data.attributes,
-                );
-                self.check_class(
-                    &class_data.name,
-                    &class_data.generics,
-                    &class_data.base_class,
-                    &class_data.traits,
-                    &class_data.body,
-                    &class_data.visibility,
-                    context,
-                    statement.span,
-                    class_data.is_abstract,
-                )
+                self.check_class_statement(class_data, statement.span, context)
             }
             StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
                 name,
@@ -441,7 +457,8 @@ impl TypeChecker {
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
-                    return_type, expr_type
+                    crate::type_checker::diagnostics::spelled(&return_type),
+                    crate::type_checker::diagnostics::spelled(expr_type)
                 ),
                 expr.span,
             );

@@ -1335,7 +1335,8 @@ impl TypeChecker {
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
-                    expected_return_type, actual_return_type
+                    crate::type_checker::diagnostics::spelled(&expected_return_type),
+                    crate::type_checker::diagnostics::spelled(&actual_return_type)
                 ),
                 return_span,
             );

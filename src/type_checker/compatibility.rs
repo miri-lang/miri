@@ -28,8 +28,8 @@ impl TypeChecker {
     /// - Inheritance/Interface implementation (via `is_subtype`)
     /// - Generic type constraints
     pub(crate) fn are_compatible(&self, t1: &Type, t2: &Type, context: &Context) -> bool {
-        // Fast path: exact equality
-        if t1 == t2 {
+        // Fast path: the same type, wherever each was written.
+        if t1.kind == t2.kind {
             return true;
         }
 
@@ -184,10 +184,68 @@ impl TypeChecker {
 
             // Check subtyping relationship
             if self.is_subtype(n2, n1) {
-                return Some(true);
+                return Some(self.inherited_arguments_compatible(n1, args1, n2, args2, context));
             }
         }
         None
+    }
+
+    /// Whether `sub<sub_args>` reaches its supertype `sup` at the arguments
+    /// `sup_args` spells, read through the clauses on the way up: a class
+    /// implementing `Op<Foo>` is no `Op<String>`.
+    ///
+    /// A parameter the clauses leave to nothing `sub_args` binds, or a path the
+    /// clauses do not spell (a mixin), gives no argument to compare, and an
+    /// argument that cannot be read is no argument the value was built at: the
+    /// two are refused rather than assumed to agree.
+    fn inherited_arguments_compatible(
+        &self,
+        sup: &str,
+        sup_args: &Option<Vec<crate::ast::Expression>>,
+        sub: &str,
+        sub_args: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> bool {
+        let Some(sup_args) = sup_args else {
+            return true;
+        };
+        let Some(inherited) = self.supertype_arguments(sub, sub_args.as_deref(), sup) else {
+            return false;
+        };
+        sup_args.len() == inherited.len()
+            && sup_args.iter().zip(&inherited).all(|(written, pinned)| {
+                pinned
+                    .as_ref()
+                    .is_some_and(|pinned| self.argument_agrees_with(written, pinned, context))
+            })
+    }
+
+    /// Whether the written type argument `written` names what the clauses pin
+    /// its parameter to, `pinned` — a value for a value parameter.
+    fn argument_agrees_with(
+        &self,
+        written: &crate::ast::Expression,
+        pinned: &Type,
+        context: &Context,
+    ) -> bool {
+        if let Some(value) = super::generics::extract_value_generic(pinned) {
+            return Self::value_arguments_agree(written, value, context) == Some(true);
+        }
+        self.extract_type_from_expression(written)
+            .is_ok_and(|written| self.type_arguments_agree(&written, pinned, context))
+    }
+
+    /// Whether two type arguments name the same type. An instance's
+    /// argument is read and written through it alike, so neither side may
+    /// stand for a subtype of the other: a `Box<Dog>` handed on as a
+    /// `Box<Animal>` would be stored an `Animal` its `Dog` readers never see.
+    pub(crate) fn type_arguments_agree(
+        &self,
+        first: &Type,
+        second: &Type,
+        context: &Context,
+    ) -> bool {
+        self.are_compatible(first, second, context) && self.are_compatible(second, first, context)
     }
 
     /// Whether one of these spellings of `name` is a generic enum whose
@@ -236,7 +294,7 @@ impl TypeChecker {
                     let t2 = self
                         .extract_type_from_expression(arg2)
                         .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
-                    if !self.are_compatible(&t1, &t2, context) {
+                    if !self.type_arguments_agree(&t1, &t2, context) {
                         return false;
                     }
                 }
@@ -425,8 +483,8 @@ impl TypeChecker {
                 self.extract_type_from_expression(v1),
             ) {
                 return Some(
-                    self.are_compatible(&k1_t, &k2_t, context)
-                        && self.are_compatible(&v1_t, &v2_t, context),
+                    self.type_arguments_agree(&k1_t, &k2_t, context)
+                        && self.type_arguments_agree(&v1_t, &v2_t, context),
                 );
             }
         }
@@ -473,7 +531,12 @@ impl TypeChecker {
                 {
                     return false;
                 }
-                return self.are_compatible(&t1_inner, &t2_inner, context);
+                // A collection is read and written through alike, so its
+                // element type is invariant: a `List<Dog>` handed on as a
+                // `List<Animal>` would be pushed an `Animal` its `Dog` readers
+                // never see, and a `List<i8>` as a `List<i64>` written 8-byte
+                // elements into 1-byte slots.
+                return self.type_arguments_agree(&t1_inner, &t2_inner, context);
             }
         }
         false
@@ -582,6 +645,12 @@ impl TypeChecker {
                 return Some(false);
             }
 
+            // A function value is called through the signature it is stored
+            // at, so each parameter is passed at the stored type's layout and
+            // the result read back at it. Parameters and result are therefore
+            // invariant: a `fn(d Dog)` stored as a `fn(a Animal)` would be
+            // handed an `Animal`, and a `fn() int` stored as a `fn() int?`
+            // would be read at an optional's layout it never wrote.
             for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
                 let t1 = self
                     .extract_type_from_expression(&p1.typ)
@@ -589,7 +658,7 @@ impl TypeChecker {
                 let t2 = self
                     .extract_type_from_expression(&p2.typ)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
-                if !self.are_compatible(&t1, &t2, context) {
+                if !self.type_arguments_agree(&t1, &t2, context) {
                     return Some(false);
                 }
             }
@@ -606,7 +675,7 @@ impl TypeChecker {
                 .and_then(|r| self.extract_type_from_expression(r).ok())
                 .unwrap_or(crate::ast::factory::make_type(TypeKind::Void));
 
-            return Some(self.are_compatible(&r1, &r2, context));
+            return Some(self.type_arguments_agree(&r1, &r2, context));
         }
         None
     }

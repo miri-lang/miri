@@ -220,7 +220,8 @@ impl TypeChecker {
                     DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Invalid return type: expected {}, got {}",
-                        expected, implicit_return_type
+                        crate::type_checker::diagnostics::spelled(expected),
+                        crate::type_checker::diagnostics::spelled(implicit_return_type)
                     ),
                     body.span,
                 );
@@ -232,7 +233,8 @@ impl TypeChecker {
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Invalid return type: expected {}, got {}",
-                    expected, implicit_return_type
+                    crate::type_checker::diagnostics::spelled(expected),
+                    crate::type_checker::diagnostics::spelled(implicit_return_type)
                 ),
                 body.span,
             );

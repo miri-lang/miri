@@ -75,3 +75,57 @@ impl DiagnosticCollector {
         self.reported_errors.insert(key)
     }
 }
+
+/// `ty` as a diagnostic spells it: a collection reads back as the source
+/// writes it, `List<int?>`, at every depth, rather than as the internal
+/// `List(int?)` the type's own display gives. Every other type displays as
+/// it does elsewhere.
+pub(crate) fn spelled(ty: &crate::ast::types::Type) -> String {
+    use crate::ast::types::TypeKind;
+    let mut normalized = ty.clone();
+    crate::ast::normalize::normalize_type(&mut normalized);
+    if let TypeKind::Option(inner) = &normalized.kind {
+        return format!("{}?", spelled(inner));
+    }
+    if let TypeKind::Function(function) = &normalized.kind {
+        return spelled_function(function);
+    }
+    if crate::type_checker::generics::extract_value_generic(&normalized).is_some() {
+        return normalized.to_string();
+    }
+    let TypeKind::Custom(name, Some(arguments)) = &normalized.kind else {
+        return normalized.to_string();
+    };
+    let arguments: Vec<String> = arguments.iter().map(spelled_argument).collect();
+    format!("{name}<{}>", arguments.join(", "))
+}
+
+/// A written type argument as a diagnostic spells it: a type through
+/// [`spelled`], a value as written.
+fn spelled_argument(argument: &crate::ast::Expression) -> String {
+    if let crate::ast::ExpressionKind::Type(ty, nullable) = &argument.node {
+        let written = spelled(ty);
+        return if *nullable {
+            format!("{written}?")
+        } else {
+            written
+        };
+    }
+    argument.node.to_string()
+}
+
+/// A function type as a diagnostic spells it, with each parameter and the
+/// result through [`spelled_argument`], so a nullable result keeps its `?`.
+fn spelled_function(function: &crate::ast::types::FunctionTypeData) -> String {
+    let parameters: Vec<String> = function
+        .params
+        .iter()
+        .map(|parameter| spelled_argument(&parameter.typ))
+        .collect();
+    let result = function
+        .return_type
+        .as_deref()
+        .map(|ret| format!(" -> {}", spelled_argument(ret)))
+        .unwrap_or_default();
+    format!("Function({}){result}", parameters.join(", "))
+}
