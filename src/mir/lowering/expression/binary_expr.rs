@@ -405,6 +405,9 @@ fn resolve_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> &'static str 
         {
             rt::MAP_CONTAINS_KEY
         }
+        // TODO: nothing defines `__contains`, so `x in l` on a List or Array
+        // type-checks and then fails to link; it needs to lower as the
+        // collection's own `contains` method at the instantiation.
         _ => "__contains",
     }
 }

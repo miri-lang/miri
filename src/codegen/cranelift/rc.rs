@@ -219,27 +219,45 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Address of the runtime clone helper for an element of `shape`.
+    /// Address of the runtime clone helper for an element of `elem_kind`.
     ///
     /// Only user classes that implement `Cloneable` produce a clone helper;
     /// built-in collections and strings use the runtime's default IncRef path.
-    pub(crate) fn elem_clone_addr_for_shape(
+    /// A recorded instantiation of a generic class is cloned through the
+    /// `clone` compiled for its concrete type, and one whose `clone` lowering
+    /// withheld keeps the default path too: nothing that runs copies it.
+    pub(crate) fn elem_clone_addr_for_kind(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        shape: ElementShape,
+        elem_kind: &TypeKind,
         facts: &TypeFacts,
         ptr_type: cl_types::Type,
     ) -> Result<Option<Value>, CodegenError> {
-        let ElementShape::UserClass(name) = shape else {
+        let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
         if !Self::class_implements_cloneable(name, facts) {
             return Ok(None);
         }
-        let thunk = Symbol::type_thunk(ThunkKind::Clone, name, &[]);
+        let recorded =
+            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), facts);
+        if facts.is_withheld(&Self::clone_method_symbol(name, recorded.as_deref(), facts)) {
+            return Ok(None);
+        }
+        let thunk = Symbol::type_thunk(ThunkKind::Clone, name, recorded.iter().flatten());
         Ok(Some(Self::get_custom_clone_thunk_addr(
             builder, ctx, &thunk, ptr_type,
         )?))
+    }
+
+    /// The `clone` body a clone of a `type_name` element at `inst_args` calls:
+    /// the one compiled for that instantiation, or the shared one.
+    fn clone_method_symbol(
+        type_name: &str,
+        inst_args: Option<&[Type]>,
+        facts: &TypeFacts,
+    ) -> String {
+        facts.element_method_symbol(type_name, crate::ast::types::CLONE_METHOD_NAME, inst_args)
     }
 
     /// Sets `elem_drop_fn` on `list_ptr` based on the declared element type.
@@ -344,8 +362,11 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::UserClass(name) => name,
             ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
         };
-        let recorded =
-            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        let recorded = Self::element_method_instantiation(
+            name,
+            Self::custom_type_args(elem_kind),
+            type_ctx.facts,
+        );
         if !ElementMethod::Compare.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
             return Ok(None);
         }
@@ -374,8 +395,11 @@ impl<'a> FunctionTranslator<'a> {
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
-        let recorded =
-            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        let recorded = Self::element_method_instantiation(
+            name,
+            Self::custom_type_args(elem_kind),
+            type_ctx.facts,
+        );
         if !ElementMethod::Equals.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
             return Ok(None);
         }
@@ -517,8 +541,9 @@ impl<'a> FunctionTranslator<'a> {
         if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
             return Ok(());
         }
-        let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_clone_addr_for_shape(builder, ctx, shape, facts, ptr_type)? {
+        if let Some(addr) =
+            Self::elem_clone_addr_for_kind(builder, ctx, elem_kind, facts, ptr_type)?
+        {
             Self::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
@@ -575,8 +600,9 @@ impl<'a> FunctionTranslator<'a> {
         if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
             return Ok(());
         }
-        let shape = Self::classify_element_shape(elem_kind);
-        if let Some(addr) = Self::elem_clone_addr_for_shape(builder, ctx, shape, facts, ptr_type)? {
+        if let Some(addr) =
+            Self::elem_clone_addr_for_kind(builder, ctx, elem_kind, facts, ptr_type)?
+        {
             Self::call_rt_set_set_elem_clone_fn(builder, ctx, set_ptr, addr)?;
         }
         Ok(())
@@ -992,7 +1018,7 @@ impl<'a> FunctionTranslator<'a> {
     fn element_method_instantiation(
         class_name: &str,
         type_args: Option<&[Expression]>,
-        type_ctx: &TypeCtx,
+        facts: &TypeFacts,
     ) -> Option<Vec<Type>> {
         // Every argument has to be a written type: a body is monomorphized for
         // types, so an instantiation carrying a value — the size of a value
@@ -1005,13 +1031,13 @@ impl<'a> FunctionTranslator<'a> {
         let monomorphized = written.iter().all(|arg| {
             crate::mir::instantiation::is_monomorphizable_type_argument(
                 &arg.kind,
-                type_ctx.facts.definitions(),
+                facts.definitions(),
             )
         });
         if !monomorphized {
             return None;
         }
-        Self::lowered_instantiation(class_name, type_args, type_ctx)
+        Self::lowered_instantiation(class_name, type_args, facts)
     }
 
     /// The type arguments of `class_name`'s per-instantiation method bodies
@@ -1026,9 +1052,9 @@ impl<'a> FunctionTranslator<'a> {
     fn lowered_instantiation(
         class_name: &str,
         type_args: Option<&[Expression]>,
-        type_ctx: &TypeCtx,
+        facts: &TypeFacts,
     ) -> Option<Vec<Type>> {
-        type_ctx.facts.definitions().get(class_name)?.generics()?;
+        facts.definitions().get(class_name)?.generics()?;
         let concrete = type_args?
             .iter()
             .map(crate::mir::instantiation::instantiation_argument)
@@ -1037,8 +1063,7 @@ impl<'a> FunctionTranslator<'a> {
             return None;
         }
         let want = Symbol::type_thunk(ThunkKind::Drop, class_name, &concrete);
-        let recorded = type_ctx
-            .facts
+        let recorded = facts
             .generic_class_instantiations()
             .get(class_name)?
             .iter()
@@ -2187,6 +2212,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
+        inst_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
         // Only generate for concrete classes that implement Cloneable somewhere in their
@@ -2205,11 +2231,17 @@ impl<'a> FunctionTranslator<'a> {
         if !Self::class_implements_cloneable(type_name, facts) {
             return Ok(());
         }
+        let clone_method = Self::clone_method_symbol(type_name, inst_args, facts);
+        if facts.is_withheld(&clone_method) {
+            return Ok(());
+        }
 
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
-        let clone_name = Symbol::type_thunk(ThunkKind::Clone, type_name, &[]).link_name();
+        let clone_name =
+            Symbol::type_thunk(ThunkKind::Clone, type_name, inst_args.unwrap_or_default())
+                .link_name();
 
         // Signature: (ptr: *TypeName) -> *TypeName
         let mut sig = Signature::new(call_conv);
@@ -2230,8 +2262,7 @@ impl<'a> FunctionTranslator<'a> {
             module,
             ctx,
             &mut builder_ctx,
-            type_name,
-            facts,
+            clone_method,
             ptr_type,
             call_conv,
         )?;
@@ -2244,15 +2275,15 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Emit the body of `miri.TypeName.$clone(ptr)`: null guard → call the
-    /// user-defined `clone()` resolved through the inheritance chain →
-    /// return the result.
+    /// `clone()` body `clone_method_name` names, resolved through the
+    /// inheritance chain at the instantiation the thunk is for → return the
+    /// result.
     #[allow(clippy::too_many_arguments)]
     fn emit_clone_body(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
-        type_name: &str,
-        facts: &TypeFacts,
+        clone_method_name: String,
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
@@ -2282,8 +2313,6 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(call_block);
         builder.seal_block(call_block);
 
-        // Resolve clone() through inheritance (applies concrete-caller / abstract-definer rule).
-        let clone_method_name = Self::resolve_clone_method_name(type_name, facts);
         let mut user_clone_sig = Signature::new(call_conv);
         user_clone_sig.params.push(AbiParam::new(ptr_type)); // self
         user_clone_sig.params.push(AbiParam::new(ptr_type)); // allocator
@@ -2327,14 +2356,14 @@ impl<'a> FunctionTranslator<'a> {
         facts.drop_hook_symbol(type_name)
     }
 
-    /// Resolves the mangled name of the `clone()` method for `type_name`.
+    /// Resolves the mangled name of the shared `clone()` body for `type_name`.
     ///
     /// Walks the inheritance chain to find where `clone()` is defined.  The
     /// concrete-caller / abstract-definer rule is applied: if the defining class
     /// is abstract, the caller's name is used instead (matching how
     /// `resolve_inherited_method` in `mir::lowering::dispatch` mangles the call).
     pub fn resolve_clone_method_name(type_name: &str, facts: &TypeFacts) -> String {
-        facts.clone_symbol(type_name)
+        Self::clone_method_symbol(type_name, None, facts)
     }
 
     /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,

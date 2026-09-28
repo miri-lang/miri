@@ -410,7 +410,7 @@ fn canonical_container_element(kind: &TypeKind) -> Option<(BuiltinCollectionKind
 }
 
 /// The type a written type argument names, or `None` for a value argument.
-fn written_type(argument: &Expression) -> Option<Type> {
+pub(super) fn written_type(argument: &Expression) -> Option<Type> {
     let ExpressionKind::Type(ty, _) = &argument.node else {
         return None;
     };
@@ -772,14 +772,20 @@ impl TypeChecker {
         if crate::runtime_fns::matches_its_elements(callee) {
             let keyed = [BuiltinCollectionKind::Set, BuiltinCollectionKind::Map];
             if let Some(element) = self.container_element_type(container, &keyed) {
-                self.record_equality_requirement(&element, context);
+                let equals = crate::ast::implicit_methods::EQUALS_METHOD_NAME;
+                self.record_element_method_requirement(&element, equals, context);
             }
         }
     }
 
-    /// Record that the body being checked runs `equals` on values of `ty`,
+    /// Record that the body being checked runs `method` on values of `ty`,
     /// when `ty` is one of that body's own generic parameters.
-    pub(super) fn record_equality_requirement(&mut self, ty: &Type, context: &Context) {
+    pub(super) fn record_element_method_requirement(
+        &mut self,
+        ty: &Type,
+        method: &str,
+        context: &Context,
+    ) {
         let Some(parameter) = generic_parameter_in_scope(ty, context) else {
             return;
         };
@@ -790,7 +796,7 @@ impl TypeChecker {
             self.instantiation_requirements.entry(body).or_default(),
             Obligation::ParameterMethod {
                 parameter: parameter.to_string(),
-                method: crate::ast::implicit_methods::EQUALS_METHOD_NAME.to_string(),
+                method: method.to_string(),
             },
         );
     }

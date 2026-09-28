@@ -776,3 +776,71 @@ fn main()
         "ok",
     );
 }
+
+/// A collection copies its `Cloneable` elements through their own `clone`,
+/// explicitly or when a write to a shared collection copies it first, so
+/// building a collection of instances uses their `clone` at its argument.
+const CLONED_BOX: &str = r#"
+use system.io
+use system.memory
+use system.collections.list
+use system.collections.map
+
+class Box<T> implements Cloneable
+    v T
+    w int
+    public fn clone() Self
+        let d = self.v - 1
+        return Box<T>(v: self.v, w: self.w + 100)
+"#;
+
+#[test]
+fn a_list_of_cloneable_instances_is_refused_at_the_elements_argument() {
+    assert_compiler_error(
+        &with(
+            CLONED_BOX,
+            r#"
+fn main()
+    var l = List<Box<String>>()
+    l.push(Box<String>(v: "x", w: 1))
+    let m = l.clone()
+    println(f"{m[0].w}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+#[test]
+fn a_map_of_cloneable_values_is_refused_at_the_values_argument() {
+    assert_compiler_error(
+        &with(
+            CLONED_BOX,
+            r#"
+fn main()
+    var m = Map<int, Box<String>>()
+    m.set(1, Box<String>(v: "x", w: 1))
+    println(f"{m.length()}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+/// The copy runs the `clone` compiled for the element's own argument.
+#[test]
+fn a_list_of_cloneable_instances_clones_them_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            CLONED_BOX,
+            r#"
+fn main()
+    var l = List<Box<i32>>()
+    l.push(Box<i32>(v: 7, w: 1))
+    let m = l.clone()
+    println(f"{m[0].w} {m[0].v}")
+"#,
+        ),
+        "101 7",
+    );
+}

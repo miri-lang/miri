@@ -82,10 +82,12 @@ impl TypeChecker {
             self.record_joined_type(element, &element_type, context);
         }
 
-        make_type(TypeKind::Custom(
+        let list = make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
             Some(vec![self.create_type_expression(element_type)]),
-        ))
+        ));
+        self.record_elements_cloned(&list, elements[0].span, context);
+        list
     }
 
     /// Whether a value of `actual`, written as `expr`, may be stored where
@@ -707,13 +709,15 @@ impl TypeChecker {
             self.record_joined_type(element, &element_type, context);
         }
 
-        make_type(TypeKind::Custom(
+        let array = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
                 self.create_type_expression(element_type),
                 size.clone(),
             ]),
-        ))
+        ));
+        self.record_elements_cloned(&array, elements[0].span, context);
+        array
     }
 
     pub(crate) fn infer_map(
@@ -763,13 +767,15 @@ impl TypeChecker {
         }
         self.record_element_matching(&key_type, first_key.span, context);
 
-        make_type(TypeKind::Custom(
+        let map = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
                 self.create_type_expression(key_type),
                 self.create_type_expression(val_type),
             ]),
-        ))
+        ));
+        self.record_elements_cloned(&map, first_key.span, context);
+        map
     }
 
     pub(crate) fn infer_set(&mut self, elements: &[Expression], context: &mut Context) -> Type {
@@ -809,10 +815,12 @@ impl TypeChecker {
 
         self.record_element_matching(&first_type, elements[0].span, context);
 
-        make_type(TypeKind::Custom(
+        let set = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(first_type)]),
-        ))
+        ));
+        self.record_elements_cloned(&set, elements[0].span, context);
+        set
     }
 
     pub(crate) fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {

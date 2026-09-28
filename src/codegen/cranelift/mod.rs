@@ -663,7 +663,24 @@ impl CraneliftBackend {
                 None,
                 &self.facts,
             )?;
-            FunctionTranslator::generate_clone_function(module, ctx, isa, type_name, &self.facts)?;
+            FunctionTranslator::generate_clone_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                None,
+                &self.facts,
+            )?;
+            for args in self.monomorphized_instantiations(type_name) {
+                FunctionTranslator::generate_clone_function(
+                    module,
+                    ctx,
+                    isa,
+                    type_name,
+                    Some(args),
+                    &self.facts,
+                )?;
+            }
             self.generate_instantiation_drop_functions(module, ctx, isa, type_name)?;
         }
         Ok(())
@@ -729,29 +746,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
     ) -> Result<(), CodegenError> {
-        let Some(TypeDefinition::Class(class_def)) = self.facts.definitions().get(type_name) else {
-            return Ok(());
-        };
-        if class_def.generics.is_none() {
-            return Ok(());
-        }
-        let Some(tuples) = self.facts.generic_class_instantiations().get(type_name) else {
-            return Ok(());
-        };
-        let mut emitted = std::collections::HashSet::new();
-        for args in tuples {
-            let monomorphized = args.iter().all(|arg| {
-                crate::mir::instantiation::is_monomorphizable_type_argument(
-                    &arg.kind,
-                    self.facts.definitions(),
-                )
-            });
-            if !monomorphized {
-                continue;
-            }
-            if !emitted.insert(Symbol::type_thunk(method.thunk_kind(), type_name, args)) {
-                continue;
-            }
+        for args in self.monomorphized_instantiations(type_name) {
             FunctionTranslator::generate_element_method_thunk(
                 method,
                 module,
@@ -763,6 +758,41 @@ impl CraneliftBackend {
             )?;
         }
         Ok(())
+    }
+
+    /// The recorded instantiations of the generic class `type_name` a
+    /// per-instantiation body is lowered for, each once: those whose
+    /// arguments are all monomorphizable. Empty for any other type.
+    fn monomorphized_instantiations(&self, type_name: &str) -> Vec<&[crate::ast::types::Type]> {
+        let Some(TypeDefinition::Class(class_def)) = self.facts.definitions().get(type_name) else {
+            return Vec::new();
+        };
+        if class_def.generics.is_none() {
+            return Vec::new();
+        }
+        let Some(tuples) = self.facts.generic_class_instantiations().get(type_name) else {
+            return Vec::new();
+        };
+        let mut seen = std::collections::HashSet::new();
+        tuples
+            .iter()
+            .filter(|args| {
+                args.iter().all(|arg| {
+                    crate::mir::instantiation::is_monomorphizable_type_argument(
+                        &arg.kind,
+                        self.facts.definitions(),
+                    )
+                })
+            })
+            .filter(|args| {
+                seen.insert(Symbol::type_thunk(
+                    crate::mir::symbol::ThunkKind::Drop,
+                    type_name,
+                    *args,
+                ))
+            })
+            .map(Vec::as_slice)
+            .collect()
     }
 
     /// Generate the decref thunk for every structural collection entry the

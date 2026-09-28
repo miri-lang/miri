@@ -25,12 +25,14 @@
 
 use super::context::{resolve_method_source, Context, TypeDefinition};
 use super::instantiation_requirements::{
-    spells_a_type, GenericBodyId, InstantiationRequirements, Obligation, Pin, PinningSite, SELF_PIN,
+    spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
+    PinningSite, SELF_PIN,
 };
 use super::TypeChecker;
 use crate::ast::expression::Expression;
 use crate::ast::implicit_methods::{
-    operator_method_name, operator_receiver, CONSTRUCTION_METHOD_NAMES, EQUALS_METHOD_NAME,
+    operator_method_name, operator_receiver, CLONE_METHOD_NAME, CONSTRUCTION_METHOD_NAMES,
+    EQUALS_METHOD_NAME,
 };
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::BinaryOp;
@@ -138,14 +140,54 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        let element = held_value(element);
-        self.record_equality_requirement(element, context);
+        self.record_element_method_use(held_value(element), EQUALS_METHOD_NAME, span, context);
+    }
+
+    /// Record the `clone` a collection of type `container` runs on its
+    /// elements — a map's values — when the collection is built: a copy of it,
+    /// explicit or the one a write to a shared collection makes first, copies
+    /// each `Cloneable` element through its own `clone`.
+    pub(crate) fn record_elements_cloned(
+        &mut self,
+        container: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        let TypeKind::Custom(name, Some(arguments)) = &container.kind else {
+            return;
+        };
+        let position = match BuiltinCollectionKind::from_name(name) {
+            Some(
+                BuiltinCollectionKind::List
+                | BuiltinCollectionKind::Array
+                | BuiltinCollectionKind::Set,
+            ) => 0,
+            Some(BuiltinCollectionKind::Map) => 1,
+            None => return,
+        };
+        let Some(element) = arguments.get(position).and_then(written_type) else {
+            return;
+        };
+        self.record_element_method_use(held_value(&element), CLONE_METHOD_NAME, span, context);
+    }
+
+    /// Record that `method` runs on values of `element`: a requirement of the
+    /// body being checked when `element` is one of its parameters, and the
+    /// sites of the class's `method` when it is a class instance.
+    fn record_element_method_use(
+        &mut self,
+        element: &Type,
+        method: &str,
+        span: Span,
+        context: &Context,
+    ) {
+        self.record_element_method_requirement(element, method, context);
         let Some((class_name, substitution)) = self.class_instance(element) else {
             return;
         };
         self.record_receiver_method_sites(
             &class_name,
-            EQUALS_METHOD_NAME,
+            method,
             &substitution,
             element,
             span,
