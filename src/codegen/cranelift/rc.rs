@@ -344,11 +344,11 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::UserClass(name) => name,
             ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
         };
-        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts) {
-            return Ok(None);
-        }
         let recorded =
             Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        if !ElementMethod::Compare.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
+            return Ok(None);
+        }
         let thunk = Symbol::type_thunk(ThunkKind::Compare, name, recorded.iter().flatten());
         Ok(Some(Self::get_custom_compare_thunk_addr(
             builder,
@@ -374,11 +374,11 @@ impl<'a> FunctionTranslator<'a> {
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
-        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts) {
-            return Ok(None);
-        }
         let recorded =
             Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), type_ctx);
+        if !ElementMethod::Equals.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
+            return Ok(None);
+        }
         let thunk = Symbol::type_thunk(ThunkKind::Equals, name, recorded.iter().flatten());
         Ok(Some(Self::get_custom_equals_thunk_addr(
             builder,

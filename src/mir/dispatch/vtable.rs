@@ -207,6 +207,14 @@ impl VtableFills {
     pub fn slots(&self, symbol: &str) -> &[FilledSlot] {
         self.slots.get(symbol).map_or(&[], Vec::as_slice)
     }
+
+    /// Keep only the filled slots `keep` accepts; every other slot is left
+    /// empty.
+    pub fn retain_slots(&mut self, keep: impl Fn(&FilledSlot) -> bool) {
+        for slots in self.slots.values_mut() {
+            slots.retain(&keep);
+        }
+    }
 }
 
 impl FromIterator<(String, Vec<FilledSlot>)> for VtableFills {

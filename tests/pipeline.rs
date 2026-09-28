@@ -315,3 +315,77 @@ fn get_mir_reports_the_type_error_instead_of_emitting_mir() {
         "expected a type error, got {error:?}"
     );
 }
+
+fn lowered_body_names(source: &str) -> Vec<String> {
+    Pipeline::new()
+        .get_gpu_mir_bodies(source)
+        .expect("lowering")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// A method of a generic class compiled at an instance was checked there, and
+/// a method is checked at an instance only where the program uses it. So a
+/// method nothing calls is not compiled for a scalar instance either: its body
+/// may apply an operator the argument does not support.
+#[test]
+fn a_method_nothing_calls_is_not_compiled_for_a_scalar_instance() {
+    let names = lowered_body_names(
+        r#"
+use system.io
+
+class Box<T>
+    v T
+    fn lt() bool
+        return self.v < "a"
+    fn get() T
+        return self.v
+
+fn main()
+    let b = Box<int>(v: 3)
+    println(f"{b.get()}")
+"#,
+    );
+    assert!(
+        names.iter().any(|name| name.ends_with("Box$int.get")),
+        "the called method is compiled at the instance: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name.ends_with("Box$int.lt")),
+        "an uncalled method must not be compiled at the instance: {names:?}"
+    );
+}
+
+/// A class's copy of a trait default reads the trait's parameters at what the
+/// class's clauses pin. Nothing calls this one, so its obligation on `int` is
+/// never checked, and it is not compiled: `int` has no `<` against a string.
+#[test]
+fn a_trait_default_nothing_calls_is_not_compiled_for_a_class_pinning_it() {
+    let names = lowered_body_names(
+        r#"
+use system.io
+
+trait Op<T>
+    fn keep(a T) T
+    fn bad(a T) bool
+        return a < "a"
+
+class A implements Op<int>
+    fn keep(a int) int
+        return a
+
+fn main()
+    let x Op<int> = A()
+    println(f"{x.keep(3)}")
+"#,
+    );
+    assert!(
+        names.iter().any(|name| name.ends_with("A.keep")),
+        "the called method is compiled: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name.ends_with("A.bad")),
+        "an uncalled default failing at the class's pins must not be compiled: {names:?}"
+    );
+}

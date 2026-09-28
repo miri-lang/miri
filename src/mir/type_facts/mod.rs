@@ -20,7 +20,7 @@ use crate::ast::types::Type;
 use crate::mir::dispatch::VtableFills;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::Body;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub use crate::type_checker::context::{
     ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition,
@@ -50,6 +50,7 @@ pub struct TypeFacts {
     generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
     drop_instantiations: HashMap<String, Vec<Vec<Type>>>,
     vtable_fills: VtableFills,
+    withheld_methods: HashSet<String>,
 }
 
 impl TypeFacts {
@@ -78,7 +79,15 @@ impl TypeFacts {
             generic_class_instantiations,
             drop_instantiations,
             vtable_fills,
+            withheld_methods: HashSet::new(),
         })
+    }
+
+    /// The same facts, with `withheld_methods` the link names of the methods
+    /// lowering withheld at an instance nothing that runs reaches them at.
+    pub fn withholding(mut self, withheld_methods: HashSet<String>) -> Self {
+        self.withheld_methods = withheld_methods;
+        self
     }
 
     /// The definition of every named type, keyed by name.
@@ -120,6 +129,12 @@ impl TypeFacts {
     /// names is defined with every slot null.
     pub fn vtable_fills(&self) -> &VtableFills {
         &self.vtable_fills
+    }
+
+    /// Whether lowering withheld the method body `link_name` names: it
+    /// compiled no body for it, so nothing may call or register it.
+    pub fn is_withheld(&self, link_name: &str) -> bool {
+        self.withheld_methods.contains(link_name)
     }
 
     /// The type each field of the struct or class `name` is stored at in an

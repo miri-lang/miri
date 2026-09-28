@@ -37,6 +37,8 @@ use crate::type_checker::attributes::Deprecation;
 pub mod builtins;
 pub(crate) mod call_instantiation;
 mod compatibility;
+mod compiled_instances;
+pub use compiled_instances::CompiledInstance;
 pub mod context;
 pub(crate) mod diagnostics;
 pub mod escape_analysis;
@@ -129,6 +131,10 @@ pub struct TypeChecker {
     pub(crate) trait_conversions: Vec<used_methods::TraitConversion>,
     /// Every method called through a receiver whose type is a trait.
     pub(crate) trait_method_calls: Vec<used_methods::TraitMethodCall>,
+    /// The program's global scope, kept once the check completes so a
+    /// compiled instance is answered where every site was; see
+    /// [`compiled_instances`].
+    pub(crate) global_scope: Option<compiled_instances::GlobalScope>,
     /// Source text of the entry-point file, populated by the pipeline right
     /// before MIR lowering. Used by lowering passes (notably the testing
     /// intrinsic lowering) to convert byte spans into human-readable line
@@ -248,6 +254,7 @@ impl TypeChecker {
             pinning_sites: Vec::new(),
             trait_conversions: Vec::new(),
             trait_method_calls: Vec::new(),
+            global_scope: None,
             entry_source: None,
             entry_source_path: None,
             gpu_buffer_inits: HashMap::new(),
@@ -465,6 +472,7 @@ impl TypeChecker {
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);
+        self.global_scope = Some(compiled_instances::GlobalScope(context));
 
         if self.diagnostics.is_empty() {
             self.collect_gpu_buffer_initializers(program);

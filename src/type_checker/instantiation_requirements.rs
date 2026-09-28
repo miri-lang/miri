@@ -381,6 +381,32 @@ fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[&P
     }
 }
 
+/// The kind of a container spelled with its own type syntax (`[T]`, `{K: V}`,
+/// `{T}`), with its element — a map's key — as written.
+fn canonical_container_element(kind: &TypeKind) -> Option<(BuiltinCollectionKind, &Expression)> {
+    if let TypeKind::List(element) = kind {
+        return Some((BuiltinCollectionKind::List, element));
+    }
+    if let TypeKind::Array(element, _) = kind {
+        return Some((BuiltinCollectionKind::Array, element));
+    }
+    if let TypeKind::Set(element) = kind {
+        return Some((BuiltinCollectionKind::Set, element));
+    }
+    if let TypeKind::Map(key, _) = kind {
+        return Some((BuiltinCollectionKind::Map, key));
+    }
+    None
+}
+
+/// The type a written type argument names, or `None` for a value argument.
+fn written_type(argument: &Expression) -> Option<Type> {
+    let ExpressionKind::Type(ty, _) = &argument.node else {
+        return None;
+    };
+    Some((**ty).clone())
+}
+
 /// The generic-parameter name `ty` spells, when that name is in scope as a
 /// parameter rather than as a declared type.
 fn generic_parameter_in_scope<'t>(ty: &'t Type, context: &Context) -> Option<&'t str> {
@@ -673,58 +699,95 @@ impl TypeChecker {
         Some((owner, function))
     }
 
-    /// Record that the body being checked hands a container to a call that
-    /// orders that container's elements, when the element type is one of the
-    /// body's own generic parameters.
+    /// Record what a call handed a container asks of that container's
+    /// elements, when the element type is one of the body's own generic
+    /// parameters: an ordering for a call that sorts them, `equals` for one
+    /// that matches a value against them.
     ///
     /// The runtime knows an element only by its size, so a sort it performs has
     /// nothing but the element's bytes to order by — which for a reference is
-    /// where the value lives rather than what it is. A body written against a
+    /// where the value lives rather than what it is — and it matches a class
+    /// element only through the class's own `equals`. A body written against a
     /// parameter states the need here, and the sites that pin the parameter
-    /// answer it, the same way an ordering operator written in Miri does.
-    pub(crate) fn record_elements_a_call_orders(
+    /// answer it, the same way an operator written in Miri does.
+    pub(crate) fn record_elements_a_call_uses(
         &mut self,
         callee: &str,
         container: &Type,
         context: &Context,
     ) {
-        if !crate::runtime_fns::orders_its_elements(callee) {
-            return;
+        if crate::runtime_fns::orders_its_elements(callee) {
+            let sequences = [BuiltinCollectionKind::List, BuiltinCollectionKind::Array];
+            if let Some(element) = self.container_element_type(container, &sequences) {
+                self.record_ordering_requirement(&element, context);
+            }
         }
-        let Some(element) = self.sorted_element_type(container) else {
-            return;
-        };
-        self.record_ordering_requirement(&element, context);
+        if crate::runtime_fns::matches_its_elements(callee) {
+            let keyed = [BuiltinCollectionKind::Set, BuiltinCollectionKind::Map];
+            if let Some(element) = self.container_element_type(container, &keyed) {
+                self.record_equality_requirement(&element, context);
+            }
+        }
     }
 
-    /// The element type of a container handed to such a call.
+    /// Record that the body being checked runs `equals` on values of `ty`,
+    /// when `ty` is one of that body's own generic parameters.
+    pub(super) fn record_equality_requirement(&mut self, ty: &Type, context: &Context) {
+        let Some(parameter) = generic_parameter_in_scope(ty, context) else {
+            return;
+        };
+        let Some(body) = self.current_body(context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::ParameterMethod {
+                parameter: parameter.to_string(),
+                method: crate::ast::implicit_methods::EQUALS_METHOD_NAME.to_string(),
+            },
+        );
+    }
+
+    /// The element type — a map's key type — of a container of one of
+    /// `kinds` handed to such a call.
     ///
     /// A call written inside the container's own class names the receiver
     /// without type arguments — `List`, not `List<T>` — so the element is read
     /// from the class's own parameter list, in the position a written argument
     /// would occupy.
-    fn sorted_element_type(&self, container: &Type) -> Option<Type> {
-        if let Some(element) = container.kind.sequence_element_kind() {
-            return Some(Type::new(element.clone(), container.span));
+    pub(super) fn container_element_type(
+        &self,
+        container: &Type,
+        kinds: &[BuiltinCollectionKind],
+    ) -> Option<Type> {
+        if let TypeKind::Custom(name, arguments) = &container.kind {
+            let kind = BuiltinCollectionKind::from_name(name)?;
+            if !kinds.contains(&kind) {
+                return None;
+            }
+            return match arguments {
+                Some(arguments) => written_type(arguments.first()?),
+                None => self.class_first_parameter(name, container.span),
+            };
         }
-        let TypeKind::Custom(name, None) = &container.kind else {
-            return None;
-        };
-        if !matches!(
-            BuiltinCollectionKind::from_name(name),
-            Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
-        ) {
-            return None;
-        }
+        let (kind, element) = canonical_container_element(&container.kind)?;
+        kinds
+            .contains(&kind)
+            .then(|| written_type(element))
+            .flatten()
+    }
+
+    /// The first generic parameter the class `name` declares, as a type.
+    fn class_first_parameter(&self, name: &str, span: Span) -> Option<Type> {
         let Some(TypeDefinition::Class(class_def)) =
-            self.type_table.global_type_definitions.get(name.as_str())
+            self.type_table.global_type_definitions.get(name)
         else {
             return None;
         };
         let parameter = class_def.generics.as_ref()?.first()?;
         Some(Type::new(
             TypeKind::Generic(parameter.name.clone(), None, TypeDeclarationKind::None),
-            container.span,
+            span,
         ))
     }
 
@@ -870,7 +933,7 @@ impl TypeChecker {
     /// answering pass, so a site reads what its body stated rather than copying
     /// it — the operands an arithmetic obligation carries make that copy a
     /// deep one.
-    fn answer_pinning_site(
+    pub(super) fn answer_pinning_site(
         &mut self,
         stated: &[Obligation],
         site: &PinningSite,
