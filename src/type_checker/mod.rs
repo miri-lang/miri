@@ -201,6 +201,10 @@ pub struct TypeChecker {
     /// not during sub-expression inference (preventing leakage from nested calls).
     /// Diagnostic-only: does not affect what resolves or compiles.
     pub(crate) call_site_arity: Option<usize>,
+    /// The expression a call being inferred calls, by id. A generic function
+    /// named there is instantiated by the call; named anywhere else it is a
+    /// value no call instantiates, which is refused.
+    pub(crate) callee_expr_id: Option<usize>,
     /// Where to report a type the compiler resolved on the reader's behalf.
     ///
     /// A callee's declared type reaches the caller as an expression the
@@ -249,6 +253,7 @@ impl TypeChecker {
             resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,
+            callee_expr_id: None,
             synthesized_type_use_site: None,
         }
     }

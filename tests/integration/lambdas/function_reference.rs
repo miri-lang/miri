@@ -280,3 +280,154 @@ fn main()
         "the:3\nfox:2",
     );
 }
+
+const GENERIC_VALUE_REFUSED: &str = "Cannot use the generic function 'ident' as a value";
+
+/// A generic function's type parameters are bound only where it is called, so
+/// using it as a value — bound, stored, passed, returned or written with its
+/// type arguments but not called — is refused rather than compiled for no
+/// caller's types.
+#[test]
+fn a_generic_function_bound_to_a_local_is_refused() {
+    assert_compiler_error(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn main()
+    let g = ident
+    println(f"{g(5)}")
+"#,
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_in_a_list_literal_is_refused() {
+    assert_compiler_error(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn main()
+    let fs = [ident]
+    println(f"{fs[0](5)}")
+"#,
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_passed_as_an_argument_is_refused() {
+    assert_compiler_error(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn apply(f fn(x int) int, v int) int
+    return f(v)
+
+fn main()
+    println(f"{apply(ident, 4)}")
+"#,
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_returned_as_a_value_is_refused() {
+    assert_compiler_error(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn pick() fn(x int) int
+    return ident
+
+fn main()
+    println(f"{pick()(3)}")
+"#,
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_written_with_type_arguments_but_not_called_is_refused() {
+    assert_compiler_error(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn main()
+    let g = ident<int>
+    println(f"{g(5)}")
+"#,
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_is_still_called_and_wrapped_in_a_lambda() {
+    assert_heap_guard_output(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn inc(x int) int
+    return x + 1
+
+fn apply(f fn(x int) int, v int) int
+    return f(v)
+
+fn main()
+    let g = inc
+    println(f"{ident(5)} {ident<int>(6)} {g(1)} {apply(inc, 2)} {apply(fn(x int) int: ident(x), 7)}")
+    let ident = fn(x int) int: x * 10
+    println(f"{ident(3)}")
+"#,
+        "5 6 2 3 7\n30",
+    );
+}
+
+const HELPER: (&str, &str) = ("helper.mi", "public fn ident<T>(x T) T\n    return x\n");
+
+/// Through a module alias, the generic function is still refused as a value
+/// and still called.
+#[test]
+fn a_generic_function_read_through_a_module_alias_is_refused_as_a_value() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.helper as helper\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let g = helper.ident\n",
+                    "    println(f\"{g(9)}\")\n",
+                ),
+            ),
+            HELPER,
+        ],
+        GENERIC_VALUE_REFUSED,
+    );
+}
+
+#[test]
+fn a_generic_function_called_through_a_module_alias_runs() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.helper as helper\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f\"{helper.ident(9)} {helper.ident<int>(4)}\")\n",
+                ),
+            ),
+            HELPER,
+        ],
+        "9 4",
+    );
+}

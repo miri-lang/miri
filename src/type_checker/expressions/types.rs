@@ -328,6 +328,9 @@ impl TypeChecker {
             if let Some(args) = generics {
                 let expr_type = self.infer_expression(expr, context);
                 match expr_type.kind {
+                    // A generic function written with its type arguments but not
+                    // called is still a value no call instantiates.
+                    TypeKind::Error => return expr_type,
                     TypeKind::Function(func_data) if func_data.generics.is_some() => {
                         return self.instantiate_generic_function(&func_data, args, span, context);
                     }
