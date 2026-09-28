@@ -116,7 +116,15 @@ impl MiriSet {
             self.alloc_tables(INITIAL_CAPACITY);
             return;
         }
-        if self.len * LOAD_FACTOR_DEN > self.capacity * LOAD_FACTOR_NUM {
+        // Security Invariant: Use checked multiplication to prevent integer overflow during load factor checks
+        let need_grow = match (
+            self.len.checked_mul(LOAD_FACTOR_DEN),
+            self.capacity.checked_mul(LOAD_FACTOR_NUM),
+        ) {
+            (Some(l), Some(c)) => l > c,
+            _ => true,
+        };
+        if need_grow {
             self.grow();
         }
     }
@@ -143,7 +151,10 @@ impl MiriSet {
         let old_data = self.data;
         let old_capacity = self.capacity;
 
-        let new_capacity = old_capacity * 2;
+        // Security Invariant: Guard against capacity multiplication overflow
+        let new_capacity = old_capacity
+            .checked_mul(2)
+            .unwrap_or_else(|| std::process::abort());
         self.alloc_tables(new_capacity);
         self.len = 0;
 
@@ -166,19 +177,18 @@ impl MiriSet {
 
     unsafe fn free_tables(states: *mut u8, data: *mut u8, capacity: usize, elem_size: usize) {
         if !states.is_null() && capacity > 0 {
-            let states_layout =
-                Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
-            crate::guard::guard_free_raw(states);
-            dealloc(states, states_layout);
+            if let Ok(states_layout) = Layout::from_size_align(capacity, 1) {
+                crate::guard::guard_free_raw(states);
+                dealloc(states, states_layout);
+            }
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
-            let data_size = capacity
-                .checked_mul(elem_size)
-                .unwrap_or_else(|| std::process::abort());
-            let data_layout =
-                Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
-            crate::guard::guard_free_raw(data);
-            dealloc(data, data_layout);
+            if let Some(data_size) = capacity.checked_mul(elem_size) {
+                if let Ok(data_layout) = Layout::from_size_align(data_size, 8) {
+                    crate::guard::guard_free_raw(data);
+                    dealloc(data, data_layout);
+                }
+            }
         }
     }
 
