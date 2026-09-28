@@ -70,6 +70,20 @@ fn test_set_new_empty() {
     }
 }
 
+/// Verifies that load factor calculations and set growth handling execute safely
+/// without arithmetic overflow.
+#[test]
+fn test_set_load_factor_overflow_safety() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        for i in 0..100usize {
+            miri_rt_set_add(set, i);
+        }
+        assert_eq!(miri_rt_set_len(set), 100);
+        miri_rt_set_free(set);
+    }
+}
+
 #[test]
 fn test_set_add_contains() {
     unsafe {

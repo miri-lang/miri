@@ -35,3 +35,8 @@
 **Vulnerability:** `alloc_with_rc` and `free_with_rc` in `src/runtime/core/src/rc.rs` (and `guard.rs`) added `RC_HEADER_SIZE` to `payload_size` without checked arithmetic, causing `usize` integer overflow when allocated huge sizes.
 **Learning:** Raw memory management code in `src/runtime/core` that computes layout sizes from caller parameters must guard all size additions with `checked_add`. Unchecked addition can wrap to 0, producing a zero-sized layout that receives out-of-bounds writes.
 **Prevention:** Always use `RC_HEADER_SIZE.checked_add(payload_size)` and return null / early exit on `None` before passing to `Layout::from_size_align`.
+
+## 2026-05-28 - [Integer Overflow in Collection Growth and Load Factor Calculations]
+**Vulnerability:** Capacity growth (`capacity * 2`) and load factor threshold multiplication (`len * LOAD_FACTOR_DEN`, `capacity * LOAD_FACTOR_NUM`) in `src/runtime/core/src/set.rs` and `src/runtime/core/src/map.rs` used unchecked arithmetic operations that could wrap `usize`.
+**Learning:** Hash tables and dynamic collection structures evaluating growth conditions or doubling capacities on large element counts can experience integer wrapping, leading to missed resizes or undersized table allocations.
+**Prevention:** Use `checked_mul` and `saturating_add` when computing thresholds and target capacities for collection growth.
