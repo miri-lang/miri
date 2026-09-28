@@ -23,10 +23,8 @@ use super::{
     apply_generic_sub, build_class_generic_substitution, lower_expression, monomorphized_arguments,
     LoweringContext,
 };
+use crate::type_checker::implicit_methods::INIT_METHOD_NAME;
 use std::collections::HashMap;
-
-/// The method a class constructor runs on the instance it builds.
-const INIT_METHOD_NAME: &str = "init";
 
 /// Lowers a struct constructor call to an Aggregate rvalue.
 pub fn lower_struct_constructor(

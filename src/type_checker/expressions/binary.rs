@@ -174,6 +174,7 @@ impl TypeChecker {
                 if is_deferred_to_instantiation(op) {
                     self.record_binary_requirement(&left_ty, op, &right_ty, &result, context);
                 }
+                self.record_operator_method_sites(&left_ty, op, span, context);
                 result
             }
             Err(msg) => {

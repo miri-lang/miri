@@ -2347,6 +2347,7 @@ impl TypeChecker {
                         }
                     }
                 }
+                self.record_construction_sites(name, type_args.as_deref(), span, context);
 
                 let init_method = self.find_init_method(def);
 

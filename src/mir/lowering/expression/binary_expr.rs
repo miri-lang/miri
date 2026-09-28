@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, ORDERING_METHOD_NAME};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
@@ -126,31 +126,36 @@ enum TraitResult {
     AgainstZero(BinOp),
 }
 
-/// Map a binary operator to its trait method name and how the operator reads
-/// that method's result (`Add→concat`, `Mul→repeat`, `Equal→equals`,
-/// `NotEqual→!equals`, ordering→`compare` against zero).
+/// The trait method a binary operator dispatches to, as the checker names it,
+/// and how the operator reads that method's result.
 fn binary_op_trait_method(
     op: &crate::ast::operator::BinaryOp,
 ) -> Option<(&'static str, TraitResult)> {
-    match op {
-        crate::ast::operator::BinaryOp::Add => Some(("concat", TraitResult::AsReturned)),
-        crate::ast::operator::BinaryOp::Mul => Some(("repeat", TraitResult::AsReturned)),
-        crate::ast::operator::BinaryOp::Equal => Some(("equals", TraitResult::AsReturned)),
-        crate::ast::operator::BinaryOp::NotEqual => Some(("equals", TraitResult::Negated)),
-        crate::ast::operator::BinaryOp::LessThan => {
-            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Lt)))
-        }
-        crate::ast::operator::BinaryOp::LessThanEqual => {
-            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Le)))
-        }
-        crate::ast::operator::BinaryOp::GreaterThan => {
-            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Gt)))
-        }
-        crate::ast::operator::BinaryOp::GreaterThanEqual => {
-            Some((ORDERING_METHOD_NAME, TraitResult::AgainstZero(BinOp::Ge)))
-        }
-        _ => None,
-    }
+    use crate::ast::operator::BinaryOp;
+    let method = crate::type_checker::implicit_methods::operator_method_name(op)?;
+    let result = match op {
+        BinaryOp::NotEqual => TraitResult::Negated,
+        BinaryOp::LessThan => TraitResult::AgainstZero(BinOp::Lt),
+        BinaryOp::LessThanEqual => TraitResult::AgainstZero(BinOp::Le),
+        BinaryOp::GreaterThan => TraitResult::AgainstZero(BinOp::Gt),
+        BinaryOp::GreaterThanEqual => TraitResult::AgainstZero(BinOp::Ge),
+        BinaryOp::Add
+        | BinaryOp::Mul
+        | BinaryOp::Equal
+        | BinaryOp::Sub
+        | BinaryOp::Div
+        | BinaryOp::Mod
+        | BinaryOp::BitwiseOr
+        | BinaryOp::BitwiseAnd
+        | BinaryOp::BitwiseXor
+        | BinaryOp::Not
+        | BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Range
+        | BinaryOp::In
+        | BinaryOp::NullCoalesce => TraitResult::AsReturned,
+    };
+    Some((method, result))
 }
 
 /// The symbol owner and declaration of the body answering `method_name` for

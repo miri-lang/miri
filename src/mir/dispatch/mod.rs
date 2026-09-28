@@ -18,8 +18,4 @@ pub use vtable::{
 
 pub use crate::type_checker::context::class_needs_vtable;
 
-use crate::ast::types::{EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
-
-/// The methods a container's runtime thunk asks of two class elements: the
-/// ordering it sorts by and the equality it matches by.
-pub const ELEMENT_METHOD_NAMES: [&str; 2] = [ORDERING_METHOD_NAME, EQUALS_METHOD_NAME];
+pub use crate::type_checker::implicit_methods::ELEMENT_METHOD_NAMES;

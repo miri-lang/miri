@@ -255,7 +255,7 @@ fn delegated_operand_of(operand: &Type, pins: &HashMap<String, Pin>) -> Option<T
 }
 
 /// What a site pins one generic parameter to.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Pin {
     /// One of the pinning body's own generic parameters, named as that body
     /// declares it. Such a pin names no type to judge: it hands the requirement
@@ -266,17 +266,143 @@ pub(crate) enum Pin {
 }
 
 /// One place the program pins a generic body's parameters: a call to a generic
-/// function, or a method reached through a receiver whose type arguments are
-/// known.
-#[derive(Debug)]
+/// function, a method reached through a receiver whose type arguments are
+/// known, or a method the program runs without writing a call to it.
+#[derive(Debug, Clone)]
 pub(crate) struct PinningSite {
     /// The body the site is written in, or `None` outside a function body.
-    caller: Option<GenericBodyId>,
+    pub(super) caller: Option<GenericBodyId>,
     /// The body whose parameters the site pins.
-    callee: GenericBodyId,
+    pub(super) callee: GenericBodyId,
     /// Each pinned parameter of `callee`, by the name `callee` declares it with.
-    pins: HashMap<String, Pin>,
-    span: Span,
+    pub(super) pins: HashMap<String, Pin>,
+    pub(super) span: Span,
+    /// The methods of an instance a pin names that `callee` runs when it
+    /// applies an operation to that parameter.
+    pub(super) element_sites: Vec<ElementMethodSite>,
+}
+
+/// A site pinning the method an instance's class answers an operation with —
+/// its `compare`, its `equals`, an operator's method — in force once the body
+/// its parent site pins is known to apply that operation to the parameter the
+/// instance is pinned to.
+///
+/// A runtime sort orders a `List<Box<String>>` through `Box`'s `compare` at
+/// `String` without any call to it being written, and a generic body's `a < b`
+/// reaches the same method; the parent's settled obligations say whether it
+/// is reached at all, so a list that is never sorted places no requirement on
+/// `compare`.
+#[derive(Debug, Clone)]
+pub(crate) struct ElementMethodSite {
+    /// The parameter of the parent site's callee the instance is pinned to.
+    pub(super) parameter: String,
+    /// The method the class answers the operation with.
+    pub(super) method: &'static str,
+    pub(super) site: PinningSite,
+}
+
+impl PinningSite {
+    /// The same site pinning `method` of the body's owner instead.
+    pub(super) fn for_method(&self, method: &str) -> PinningSite {
+        PinningSite {
+            callee: (self.callee.0.clone(), method.to_string()),
+            ..self.clone()
+        }
+    }
+}
+
+impl Obligation {
+    /// The method an instance pinned to `parameter` answers this obligation
+    /// with, when the obligation applies an operation to that parameter which
+    /// a class answers with a method of its own.
+    ///
+    /// An operator dispatches on its left operand, so only a parameter written
+    /// there reaches a method; an ordering reaches `compare` from either side,
+    /// and [`Obligation::Ordering`] is recorded for each.
+    fn runs_method_on(&self, parameter: &str) -> Option<&'static str> {
+        match self {
+            Obligation::Ordering { parameter: ordered } => {
+                (ordered == parameter).then_some(super::implicit_methods::ORDERING_METHOD_NAME)
+            }
+            Obligation::Binary(written) => {
+                let receiver = generic_parameter_name(&written.left.kind)?;
+                (receiver == parameter)
+                    .then(|| super::implicit_methods::operator_method_name(&written.op))
+                    .flatten()
+            }
+            Obligation::Unary(_) | Obligation::Cast(_) => None,
+        }
+    }
+}
+
+/// A pinning site together with the gate that puts it in force: none for a
+/// site the program writes, and for an [`ElementMethodSite`] the index of its
+/// parent, the parameter and the method whose use it waits on.
+struct GatedSite<'s> {
+    site: &'s PinningSite,
+    gate: Option<(usize, &'s str, &'static str)>,
+}
+
+/// Every site and every element site nested under one, parents before their
+/// children.
+fn gated_sites(sites: &[PinningSite]) -> Vec<GatedSite<'_>> {
+    let mut gated: Vec<GatedSite<'_>> = sites
+        .iter()
+        .map(|site| GatedSite { site, gate: None })
+        .collect();
+    let mut next = 0;
+    while next < gated.len() {
+        let parent = gated[next].site;
+        gated.extend(parent.element_sites.iter().map(|element| GatedSite {
+            site: &element.site,
+            gate: Some((next, element.parameter.as_str(), element.method)),
+        }));
+        next += 1;
+    }
+    gated
+}
+
+/// Settle `requirements` over the sites in force, putting an element site in
+/// force once its parent is and the parent's callee is known to run the
+/// element's method, until neither grows.
+///
+/// Both only grow, over a finite set of sites and — by
+/// [`settle_requirements`] — a finite set of obligations, so the loop ends.
+/// Returns which of `gated` are in force.
+fn settle_sites_in_force(
+    requirements: &mut InstantiationRequirements,
+    gated: &[GatedSite<'_>],
+) -> Vec<bool> {
+    let mut in_force: Vec<bool> = gated.iter().map(|entry| entry.gate.is_none()).collect();
+    loop {
+        let sites: Vec<&PinningSite> = gated
+            .iter()
+            .zip(&in_force)
+            .filter_map(|(entry, &live)| live.then_some(entry.site))
+            .collect();
+        settle_requirements(requirements, &sites);
+        let mut grew = false;
+        for (index, entry) in gated.iter().enumerate() {
+            let Some((parent, parameter, method)) = entry.gate else {
+                continue;
+            };
+            if in_force[index] || !in_force[parent] {
+                continue;
+            }
+            let runs = requirements
+                .get(&gated[parent].site.callee)
+                .is_some_and(|stated| {
+                    stated
+                        .iter()
+                        .any(|obligation| obligation.runs_method_on(parameter) == Some(method))
+                });
+            in_force[index] = runs;
+            grew |= runs;
+        }
+        if !grew {
+            return in_force;
+        }
+    }
 }
 
 /// Grow `requirements` until every body that pins another body's required
@@ -293,7 +419,7 @@ pub(crate) struct PinningSite {
 /// target is never restated at all, because a body writes it as a type name
 /// rather than deferring it. Each set being finite, the loop ends, including
 /// when bodies delegate to each other in a cycle.
-fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[PinningSite]) {
+fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[&PinningSite]) {
     loop {
         let mut inherited: Vec<(GenericBodyId, Obligation)> = Vec::new();
         for site in sites {
@@ -592,10 +718,34 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        if substitution.is_empty() || self.suppress_diagnostics {
+        if self.suppress_diagnostics {
             return;
         }
-        let pins = substitution
+        let site = self.pinning_site(body, substitution, span, context, None);
+        self.pinning_sites.extend(site);
+    }
+
+    /// The site pinning `body`'s generic parameters as `substitution` spells
+    /// them, or `None` when it pins nothing.
+    ///
+    /// Whether each pin names the checking body's own parameter is decided
+    /// now, while that body's scope is the one in `context`; so is each method
+    /// an instance a pin names may be asked to run, which only this scope can
+    /// say the instance's own arguments are pinned to. `bound` limits those
+    /// instances to types smaller than it, as
+    /// [`element_method_sites`](Self::element_method_sites) states.
+    pub(super) fn pinning_site(
+        &self,
+        body: GenericBodyId,
+        substitution: &HashMap<String, Type>,
+        span: Span,
+        context: &Context,
+        bound: Option<usize>,
+    ) -> Option<PinningSite> {
+        if substitution.is_empty() {
+            return None;
+        }
+        let pins: HashMap<String, Pin> = substitution
             .iter()
             .map(|(parameter, pinned)| {
                 let pin = match generic_parameter_in_scope(pinned, context) {
@@ -605,12 +755,14 @@ impl TypeChecker {
                 (parameter.clone(), pin)
             })
             .collect();
-        self.pinning_sites.push(PinningSite {
+        let element_sites = self.element_method_sites(&pins, span, context, bound);
+        Some(PinningSite {
             caller: self.current_body(context),
             callee: body,
             pins,
             span,
-        });
+            element_sites,
+        })
     }
 
     /// Record the sites a call to `method`, reached through a receiver of type
@@ -630,15 +782,36 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        self.record_pinning_site(
-            (class_name.to_string(), method.to_string()),
-            substitution,
-            span,
-            context,
-        );
-        for (declaring, rekeyed) in self.declaring_types_above(class_name, substitution) {
-            self.record_pinning_site((declaring, method.to_string()), &rekeyed, span, context);
+        if self.suppress_diagnostics {
+            return;
         }
+        let sites =
+            self.method_pinning_sites(class_name, method, substitution, span, context, None);
+        self.pinning_sites.extend(sites);
+    }
+
+    /// The sites [`record_method_pinning_sites`](Self::record_method_pinning_sites)
+    /// records, with `bound` limiting the instances their element sites
+    /// reach.
+    pub(super) fn method_pinning_sites(
+        &self,
+        class_name: &str,
+        method: &str,
+        substitution: &HashMap<String, Type>,
+        span: Span,
+        context: &Context,
+        bound: Option<usize>,
+    ) -> Vec<PinningSite> {
+        let own = (class_name.to_string(), method.to_string());
+        let above = self.declaring_types_above(class_name, substitution);
+        std::iter::once((own, substitution.clone()))
+            .chain(
+                above
+                    .into_iter()
+                    .map(|(declaring, rekeyed)| ((declaring, method.to_string()), rekeyed)),
+            )
+            .filter_map(|(body, pins)| self.pinning_site(body, &pins, span, context, bound))
+            .collect()
     }
 
     /// Settle every requirement, then report each site that pins a required
@@ -646,20 +819,23 @@ impl TypeChecker {
     ///
     /// Runs once the body pass has recorded every requirement and every site,
     /// so a site is answered the same wherever it is written relative to the
-    /// body it pins.
+    /// body it pins. The sites a trait slot reaches join here, once every
+    /// conversion and every call through a trait is known.
     /// `context` carries the program's global scope. An obligation is answered
     /// only once every type in it is concrete — a parameter pinned to another
     /// parameter is handed on instead — so nothing named there is body-local,
     /// and the global scope is the whole scope the answer needs.
     pub(crate) fn answer_pinning_sites(&mut self, context: &Context) {
-        let sites = std::mem::take(&mut self.pinning_sites);
+        let mut sites = std::mem::take(&mut self.pinning_sites);
+        sites.extend(self.sites_reached_through_trait_slots());
         let mut requirements = std::mem::take(&mut self.instantiation_requirements);
-        settle_requirements(&mut requirements, &sites);
-        for site in &sites {
+        let gated = gated_sites(&sites);
+        let in_force = settle_sites_in_force(&mut requirements, &gated);
+        for (entry, _) in gated.iter().zip(in_force).filter(|(_, live)| *live) {
             let stated = requirements
-                .get(&site.callee)
+                .get(&entry.site.callee)
                 .map_or(&[][..], Vec::as_slice);
-            self.answer_pinning_site(stated, site, context);
+            self.answer_pinning_site(stated, entry.site, context);
         }
         self.instantiation_requirements = requirements;
     }
@@ -1110,6 +1286,7 @@ mod tests {
                 .map(|(parameter, pin)| (parameter.to_string(), pin))
                 .collect(),
             span: Span::new(0, 0),
+            element_sites: Vec::new(),
         }
     }
 
@@ -1135,7 +1312,7 @@ mod tests {
             body("", "inner"),
             vec![("T", Pin::CallerParameter("U".into()))],
         )];
-        settle_requirements(&mut requirements, &sites);
+        settle_requirements(&mut requirements, &sites.iter().collect::<Vec<_>>());
         assert_eq!(
             requirements.get(&body("", "outer")),
             Some(&vec![ordering("U")])
@@ -1151,7 +1328,7 @@ mod tests {
             body("", "inner"),
             vec![("T", Pin::Concrete(named("Pt")))],
         )];
-        settle_requirements(&mut requirements, &sites);
+        settle_requirements(&mut requirements, &sites.iter().collect::<Vec<_>>());
         assert_eq!(requirements.get(&body("", "outer")), None);
     }
 
@@ -1171,9 +1348,75 @@ mod tests {
                 vec![("U", Pin::CallerParameter("T".into()))],
             ),
         ];
-        settle_requirements(&mut requirements, &sites);
+        settle_requirements(&mut requirements, &sites.iter().collect::<Vec<_>>());
         assert_eq!(requirements.get(&body("", "a")), Some(&vec![ordering("T")]));
         assert_eq!(requirements.get(&body("", "b")), Some(&vec![ordering("U")]));
+    }
+
+    fn element(
+        parent_parameter: &str,
+        method: &'static str,
+        callee: GenericBodyId,
+    ) -> ElementMethodSite {
+        ElementMethodSite {
+            parameter: parent_parameter.to_string(),
+            method,
+            site: site(None, callee, vec![("T", Pin::Concrete(named("Pt")))]),
+        }
+    }
+
+    fn sorting_site(ordered_element: ElementMethodSite) -> PinningSite {
+        let mut sorting = site(
+            None,
+            body("List", "sort"),
+            vec![("T", Pin::Concrete(named("Box")))],
+        );
+        sorting.element_sites.push(ordered_element);
+        sorting
+    }
+
+    #[test]
+    fn an_element_site_is_in_force_once_its_parent_orders_the_parameter() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("List", "sort"), vec![ordering("T")]);
+        let sites = [sorting_site(element(
+            "T",
+            "compare",
+            body("Box", "compare"),
+        ))];
+        let gated = gated_sites(&sites);
+        assert_eq!(
+            settle_sites_in_force(&mut requirements, &gated),
+            vec![true, true]
+        );
+    }
+
+    #[test]
+    fn an_element_site_stays_out_of_force_when_its_parent_never_orders() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("List", "sort"), vec![ordering("U")]);
+        let sites = [sorting_site(element(
+            "T",
+            "compare",
+            body("Box", "compare"),
+        ))];
+        let gated = gated_sites(&sites);
+        assert_eq!(
+            settle_sites_in_force(&mut requirements, &gated),
+            vec![true, false]
+        );
+    }
+
+    #[test]
+    fn an_element_site_waits_on_its_own_method() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("List", "sort"), vec![ordering("T")]);
+        let sites = [sorting_site(element("T", "equals", body("Box", "equals")))];
+        let gated = gated_sites(&sites);
+        assert_eq!(
+            settle_sites_in_force(&mut requirements, &gated),
+            vec![true, false]
+        );
     }
 
     #[test]

@@ -23,4 +23,5 @@ pub mod structs;
 pub mod trait_bounded_parameters;
 pub mod unary_and_cast;
 pub mod unregistered_drop_instantiations;
+pub mod used_methods;
 pub mod written_local_types;
