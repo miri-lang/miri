@@ -28,6 +28,7 @@ use crate::type_checker::context::{
     class_ancestry, resolve_method_source, trait_lineage, ClassDefinition, MethodInfo,
     MethodSource, TraitDefinition, TypeDefinition,
 };
+use crate::type_checker::implicit_methods::THUNK_METHOD_NAMES;
 use crate::type_checker::utils::has_drop_hook;
 use crate::type_checker::TypeChecker;
 use std::borrow::Cow;
@@ -36,12 +37,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub(crate) use crate::mir::dispatch::constructed_class;
 pub use crate::mir::dispatch::{
     constructed_vtable_symbols, VtableInstance, VtableLayout, ELEMENT_METHOD_NAMES,
-};
-
-/// The methods a runtime thunk calls on a class instance, besides its drop hook.
-const THUNK_METHOD_NAMES: [&str; 3] = {
-    let [ordering, equals] = ELEMENT_METHOD_NAMES;
-    [CLONE_METHOD_NAME, ordering, equals]
 };
 
 /// The substitution the copy of `method_name` compiled under `class_name` for

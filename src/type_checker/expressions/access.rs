@@ -1696,6 +1696,7 @@ impl TypeChecker {
     ) -> Type {
         let pinned = self.build_trait_method_mapping(trait_def, type_args);
         self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
+        self.record_trait_method_call(name, prop_name, type_args.as_deref());
         let mut to_check: Vec<String> = vec![name.to_string()];
         let mut visited = std::collections::HashSet::new();
         while let Some(t_name) = to_check.pop() {

@@ -131,6 +131,7 @@ impl TypeChecker {
         }
         if let Some(expr) = expr {
             self.settle_value_at(expr, expected, context);
+            self.record_trait_conversion(expected, actual, expr.span, context);
         }
         true
     }

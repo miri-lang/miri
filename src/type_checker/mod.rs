@@ -48,6 +48,7 @@ pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
 pub(crate) mod hygiene;
+pub(crate) mod implicit_methods;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod member_hints;
@@ -57,6 +58,7 @@ pub(crate) mod runtime_settled;
 pub mod statements;
 mod type_table;
 pub mod use_after_move;
+mod used_methods;
 pub mod utils;
 
 use context::{Context, SymbolInfo, TypeDefinition};
@@ -123,6 +125,11 @@ pub struct TypeChecker {
     /// Every site that pins a generic body's parameters, recorded during the
     /// body pass and answered once all requirements are known.
     pub(crate) pinning_sites: Vec<instantiation_requirements::PinningSite>,
+    /// Every class instance converted to a trait, whose methods a call
+    /// through that trait reaches; see [`used_methods`].
+    pub(crate) trait_conversions: Vec<used_methods::TraitConversion>,
+    /// Every method called through a receiver whose type is a trait.
+    pub(crate) trait_method_calls: Vec<used_methods::TraitMethodCall>,
     /// Source text of the entry-point file, populated by the pipeline right
     /// before MIR lowering. Used by lowering passes (notably the testing
     /// intrinsic lowering) to convert byte spans into human-readable line
@@ -240,6 +247,8 @@ impl TypeChecker {
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
             instantiation_requirements: HashMap::new(),
             pinning_sites: Vec::new(),
+            trait_conversions: Vec::new(),
+            trait_method_calls: Vec::new(),
             entry_source: None,
             entry_source_path: None,
             gpu_buffer_inits: HashMap::new(),
