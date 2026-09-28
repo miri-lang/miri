@@ -89,9 +89,10 @@ pub(crate) enum Obligation {
     Unary(WrittenUnary),
     /// The body casts a value whose type spells one of its own parameters.
     Cast(WrittenCast),
-    /// A trait default calls this method of the trait on `self`, which runs
-    /// the method of whichever class the default is compiled for.
-    SelfMethod { method: String },
+    /// The body calls `method` on a value of `parameter` — a trait-bounded
+    /// type parameter, or [`SELF_PIN`] for `self` in a trait default — which
+    /// runs the method of whichever class the parameter is bound to.
+    ParameterMethod { parameter: String, method: String },
 }
 
 /// A unary operator a body applied, with its operand as that body wrote it.
@@ -243,7 +244,13 @@ impl Obligation {
                     })
                 })
             }
-            Obligation::SelfMethod { .. } => None,
+            Obligation::ParameterMethod { parameter, method } => match pins.get(parameter) {
+                Some(Pin::CallerParameter(own)) => Some(Obligation::ParameterMethod {
+                    parameter: own.clone(),
+                    method: method.clone(),
+                }),
+                Some(Pin::Concrete(_)) | None => None,
+            },
         }
     }
 }
@@ -306,9 +313,10 @@ pub(crate) const SELF_PIN: &str = crate::ast::types::SELF_TYPE_NAME;
 impl Obligation {
     /// The method an instance pinned to `parameter` runs for this obligation,
     /// when the obligation is an operation on that parameter which a class
-    /// answers with a method of its own, or a call on `self`.
+    /// answers with a method of its own, or a call on a value of it.
     ///
-    /// An operator dispatches on its left operand, so only a parameter written
+    /// A method call names its receiver's parameter outright. An operator
+    /// dispatches on its left operand, so only a parameter written
     /// there — or, for an equality, as the payload of an optional there —
     /// reaches a method; an ordering reaches `compare` from either side, and
     /// [`Obligation::Ordering`] is recorded for each.
@@ -325,7 +333,10 @@ impl Obligation {
                     .then(|| crate::ast::implicit_methods::operator_method_name(&written.op))
                     .flatten()
             }
-            Obligation::SelfMethod { method } => (parameter == SELF_PIN).then_some(method.as_str()),
+            Obligation::ParameterMethod {
+                parameter: called,
+                method,
+            } => (called == parameter).then_some(method.as_str()),
             Obligation::Unary(_) | Obligation::Cast(_) => None,
         }
     }
@@ -336,7 +347,9 @@ impl Obligation {
 ///
 /// A requirement can only be added, and the obligations that can be added form
 /// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
-/// body it is recorded against, and the program declares finitely many. The
+/// body it is recorded against, and the program declares finitely many; an
+/// [`Obligation::ParameterMethod`] names one of those and a method the program
+/// writes. The
 /// three that carry types — [`Obligation::Binary`], [`Obligation::Unary`]
 /// and [`Obligation::Cast`] — carry operands that could grow around a
 /// delegation cycle; every one of them hands an operand on through
@@ -517,7 +530,36 @@ impl TypeChecker {
         };
         state_obligation(
             self.instantiation_requirements.entry(body).or_default(),
-            Obligation::SelfMethod {
+            Obligation::ParameterMethod {
+                parameter: SELF_PIN.to_string(),
+                method: method.to_string(),
+            },
+        );
+    }
+
+    /// Record that the body being checked calls `method` on a value of type
+    /// `receiver`, when `receiver` is one of the body's own trait-bounded
+    /// parameters: the call runs the method of whichever class a site binds
+    /// the parameter to, so each such site answers for that class's method.
+    pub(crate) fn record_parameter_method_requirement(
+        &mut self,
+        receiver: &Type,
+        method: &str,
+        context: &Context,
+    ) {
+        if !matches!(receiver.kind, TypeKind::Generic(_, Some(_), _)) {
+            return;
+        }
+        let Some(parameter) = generic_parameter_in_scope(receiver, context) else {
+            return;
+        };
+        let Some(body) = self.current_body(context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::ParameterMethod {
+                parameter: parameter.to_string(),
                 method: method.to_string(),
             },
         );
@@ -840,7 +882,7 @@ impl TypeChecker {
                 Obligation::Binary(written) => self.answer_binary(written, site, context),
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
-                Obligation::SelfMethod { .. } => {}
+                Obligation::ParameterMethod { .. } => {}
             }
         }
     }
@@ -1334,6 +1376,36 @@ mod tests {
         settle_requirements(&mut requirements, &sites.iter().collect::<Vec<_>>());
         assert_eq!(requirements.get(&body("", "a")), Some(&vec![ordering("T")]));
         assert_eq!(requirements.get(&body("", "b")), Some(&vec![ordering("U")]));
+    }
+
+    fn calls(parameter: &str, method: &str) -> Obligation {
+        Obligation::ParameterMethod {
+            parameter: parameter.to_string(),
+            method: method.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_method_called_on_a_bounded_parameter_is_handed_on_to_the_caller() {
+        let mut requirements = InstantiationRequirements::new();
+        requirements.insert(body("", "go"), vec![calls("X", "lt")]);
+        let sites = [site(
+            Some(body("", "outer")),
+            body("", "go"),
+            vec![("X", Pin::CallerParameter("Y".into()))],
+        )];
+        settle_requirements(&mut requirements, &sites.iter().collect::<Vec<_>>());
+        assert_eq!(
+            requirements.get(&body("", "outer")),
+            Some(&vec![calls("Y", "lt")])
+        );
+    }
+
+    #[test]
+    fn a_method_called_on_a_parameter_is_run_on_that_parameter_only() {
+        let obligation = calls("X", "lt");
+        assert_eq!(obligation.method_run_on("X"), Some("lt"));
+        assert_eq!(obligation.method_run_on("Y"), None);
     }
 
     #[test]
