@@ -102,7 +102,15 @@ impl TypeChecker {
         // call reaches and it falls through to the shared body.
         let callee = self.called_function_expression(func, context);
         let func = callee.expression;
+        // The name a call calls: the identifier itself, or the member named
+        // after a module alias (`m.f`).
+        let called_name = match &func.node {
+            ExpressionKind::Member(_, property) => property.id,
+            _ => func.id,
+        };
+        let outer_callee = self.callee_expr_id.replace(called_name);
         let func_type = self.infer_expression(func, context);
+        self.callee_expr_id = outer_callee;
 
         // Restore call_site_arity after member-access inference completes.
         // Use prev_arity to handle nested cases correctly.

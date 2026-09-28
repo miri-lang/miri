@@ -55,6 +55,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{inherited_trait_default, Context, TypeDefinition};
+use crate::type_checker::expressions::identifiers::declares_type_parameters;
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
 use crate::type_checker::TypeChecker;
@@ -903,6 +904,10 @@ impl TypeChecker {
             .cloned()
         {
             self.record_callee(prop.id, &prop_name, &info);
+            if declares_type_parameters(&info) && self.callee_expr_id != Some(prop.id) {
+                self.refuse_generic_function_value(&prop_name, span);
+                return make_type(TypeKind::Error);
+            }
             if !self.check_visibility(&info.visibility, &info.module) {
                 self.report_error(
                     DiagnosticCode::TypNameNotVisible,

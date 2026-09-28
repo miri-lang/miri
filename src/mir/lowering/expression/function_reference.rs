@@ -32,6 +32,7 @@ use crate::mir::{
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::helpers::resolve_type;
@@ -54,6 +55,20 @@ pub(crate) fn try_lower_function_reference(
     let TypeKind::Function(func_data) = &info.ty.kind else {
         return Ok(None);
     };
+    // The type checker refuses a generic function used as a value; one that
+    // reaches here would be a thunk over the shared body, laid out for no
+    // caller's types.
+    if func_data
+        .generics
+        .as_ref()
+        .is_some_and(|generics| !generics.is_empty())
+    {
+        return Err(LoweringError::internal(
+            DiagnosticCode::MirInvalidInstantiationArgument,
+            format!("the generic function `{name}` reached lowering as a value"),
+            expr.span,
+        ));
+    }
     let func_data = func_data.clone();
     let fn_ty = info.ty.clone();
     let declared = super::identifier_expr::declared_name(info, name);

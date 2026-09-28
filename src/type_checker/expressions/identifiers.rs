@@ -243,6 +243,12 @@ impl TypeChecker {
             .resolve_info(name)
             .cloned()
             .or_else(|| self.type_table.global_scope.get(name).cloned());
+        if info_opt.as_ref().is_some_and(declares_type_parameters)
+            && self.callee_expr_id != Some(expr_id)
+        {
+            self.refuse_generic_function_value(name, span);
+            return Some(ast_factory::make_type(TypeKind::Error));
+        }
 
         if let Some(info) = info_opt {
             self.record_callee(expr_id, name, &info);
@@ -504,3 +510,29 @@ fn foreign_absent_value(name: &str, span: Span) -> Option<ForeignForm> {
 
 /// The names other languages give the absent value.
 const FOREIGN_ABSENT_VALUES: &[&str] = &["null", "nil", "nullptr"];
+
+/// Whether `info` is a function that declares type parameters of its own.
+pub(crate) fn declares_type_parameters(info: &crate::type_checker::context::SymbolInfo) -> bool {
+    matches!(
+        &info.ty.kind,
+        TypeKind::Function(function)
+            if function.generics.as_ref().is_some_and(|generics| !generics.is_empty())
+    )
+}
+
+impl TypeChecker {
+    /// Refuse the generic function `name` used as a value. Only a call binds
+    /// its type parameters; a value reaching no call would be compiled for no
+    /// caller's types.
+    pub(crate) fn refuse_generic_function_value(&mut self, name: &str, span: Span) {
+        self.report_error(
+            DiagnosticCode::TypTypeInference,
+            format!(
+                "Cannot use the generic function '{name}' as a value: its type parameters \
+                 are bound only where it is called. Call it, or wrap the call in a lambda \
+                 with concrete types — `fn(x int) int: {name}(x)`"
+            ),
+            span,
+        );
+    }
+}
