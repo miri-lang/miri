@@ -226,9 +226,12 @@ impl TypeChecker {
                     body.span,
                 );
             }
-        } else if !self.are_compatible(expected, implicit_return_type, context)
-            && !matches!(expected.kind, TypeKind::Void)
-        {
+        } else if matches!(expected.kind, TypeKind::Void) {
+        } else if self.are_compatible(expected, implicit_return_type, context) {
+            // The value the body ends on is returned at the declared type,
+            // which converts an instance returned as a trait.
+            self.record_trait_conversion(expected, implicit_return_type, body.span, context);
+        } else {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,
                 format!(

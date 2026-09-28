@@ -217,6 +217,13 @@ pub struct TypeChecker {
     /// named there is instantiated by the call; named anywhere else it is a
     /// value no call instantiates, which is refused.
     pub(crate) callee_expr_id: Option<usize>,
+    /// The expression whose type a member access is reading its member off,
+    /// while it is being inferred: `self` there is a receiver, not a value
+    /// handed on.
+    pub(crate) member_receiver_expr_id: Option<usize>,
+    /// Whether the member access being resolved reads its member off a
+    /// parameter of the function being checked.
+    pub(crate) member_receiver_is_parameter: bool,
     /// Where to report a type the compiler resolved on the reader's behalf.
     ///
     /// A callee's declared type reaches the caller as an expression the
@@ -269,6 +276,8 @@ impl TypeChecker {
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,
             callee_expr_id: None,
+            member_receiver_expr_id: None,
+            member_receiver_is_parameter: false,
             synthesized_type_use_site: None,
         }
     }

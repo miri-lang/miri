@@ -25,7 +25,7 @@
 
 use super::context::{resolve_method_source, Context, TypeDefinition};
 use super::instantiation_requirements::{
-    spells_a_type, GenericBodyId, InstantiationRequirements, Pin, PinningSite, SELF_PIN,
+    spells_a_type, GenericBodyId, InstantiationRequirements, Obligation, Pin, PinningSite, SELF_PIN,
 };
 use super::TypeChecker;
 use crate::ast::expression::Expression;
@@ -201,6 +201,7 @@ impl TypeChecker {
         let TypeKind::Custom(trait_name, trait_args) = &expected.kind else {
             return;
         };
+        self.record_trait_value_handed_on(trait_name, actual, context);
         let Some((class_name, substitution)) = self.class_instance(actual) else {
             return;
         };
@@ -216,6 +217,29 @@ impl TypeChecker {
             trait_substitution: &trait_substitution,
         };
         self.push_trait_conversion(&conversion, span, context);
+    }
+
+    /// Record that a trait default stores a value typed as its own trait, or
+    /// one above it, where the trait `declared` is declared.
+    ///
+    /// Inside a default such a value may be the instance the default runs
+    /// for, however it was produced — `self`, an alias of it, what a method
+    /// declared to return `Self` returned on it — and storing it as a trait
+    /// hands that instance on, as [`Obligation::SelfConversion`] states. A
+    /// value that is not the instance is pinned where it was converted, so
+    /// counting it too can pin a method nothing reaches, never leave one
+    /// reached unpinned.
+    fn record_trait_value_handed_on(&mut self, declared: &str, actual: &Type, context: &Context) {
+        let definitions = &self.type_table.global_type_definitions;
+        if !matches!(definitions.get(declared), Some(TypeDefinition::Trait(_))) {
+            return;
+        }
+        let TypeKind::Custom(actual_name, _) = &actual.kind else {
+            return;
+        };
+        if matches!(definitions.get(actual_name), Some(TypeDefinition::Trait(_))) {
+            self.record_self_conversion_of(actual_name, context);
+        }
     }
 
     /// Whether a value of `class_name` stored where `declared` is declared
@@ -411,13 +435,17 @@ impl TypeChecker {
                 let Some((class_name, substitution)) = self.class_instance(pinned) else {
                     continue;
                 };
-                let mut methods: Vec<&str> = stated
+                let mut methods: Vec<String> = stated
                     .iter()
                     .filter_map(|obligation| obligation.method_run_on(parameter))
+                    .map(str::to_string)
                     .collect();
+                if parameter == SELF_PIN {
+                    methods.extend(self.methods_called_through_self(stated, site));
+                }
                 methods.sort_unstable();
                 methods.dedup();
-                for method in methods {
+                for method in &methods {
                     let use_of = MethodUse {
                         class_name: &class_name,
                         method,
@@ -434,6 +462,39 @@ impl TypeChecker {
             derivation.origins.push(Some(origin));
         }
         grew
+    }
+
+    /// Every method a default pinned at `site` runs on its `self` by handing
+    /// it on as a trait value: each one the program calls through a receiver
+    /// of that trait, or of one above it, at arguments that agree with what
+    /// the site pins the trait's own parameters to.
+    fn methods_called_through_self(
+        &self,
+        stated: &[Obligation],
+        site: &PinningSite,
+    ) -> Vec<String> {
+        let pinned: HashMap<String, Type> = site
+            .pins
+            .iter()
+            .filter_map(|(parameter, pin)| match pin {
+                Pin::Concrete(ty) => Some((parameter.clone(), ty.clone())),
+                Pin::CallerParameter(_) => None,
+            })
+            .collect();
+        let mut methods = Vec::new();
+        for obligation in stated {
+            let Obligation::SelfConversion { trait_name } = obligation else {
+                continue;
+            };
+            let reached = self.traits_reached(trait_name, &pinned);
+            let called = self.trait_method_calls.iter().filter(|call| {
+                reached.iter().any(|(name, arguments)| {
+                    *name == call.trait_name && Self::arguments_agree(arguments, &call.arguments)
+                })
+            });
+            methods.extend(called.map(|call| call.method.clone()));
+        }
+        methods
     }
 
     /// The sites `use_of`, reached from the site at index `parent`, derives,

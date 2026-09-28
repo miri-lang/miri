@@ -93,6 +93,13 @@ pub(crate) enum Obligation {
     /// type parameter, or [`SELF_PIN`] for `self` in a trait default — which
     /// runs the method of whichever class the parameter is bound to.
     ParameterMethod { parameter: String, method: String },
+    /// A default of `trait_name` hands its `self` on as a value — an
+    /// argument, an initializer, a returned value — rather than calling a
+    /// method on it. The value is then an instance of whichever class the
+    /// default is compiled for, stored as the trait, so each method the
+    /// program calls through that trait, or one above it, runs that class's
+    /// own method, as a conversion of the instance to the trait would.
+    SelfConversion { trait_name: String },
 }
 
 /// A unary operator a body applied, with its operand as that body wrote it.
@@ -251,6 +258,9 @@ impl Obligation {
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
+            // `self` is pinned to the instance at every site that pins a
+            // default, so the conversion is answered there, never handed on.
+            Obligation::SelfConversion { .. } => None,
         }
     }
 }
@@ -337,7 +347,7 @@ impl Obligation {
                 parameter: called,
                 method,
             } => (called == parameter).then_some(method.as_str()),
-            Obligation::Unary(_) | Obligation::Cast(_) => None,
+            Obligation::Unary(_) | Obligation::Cast(_) | Obligation::SelfConversion { .. } => None,
         }
     }
 }
@@ -349,7 +359,7 @@ impl Obligation {
 /// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
 /// body it is recorded against, and the program declares finitely many; an
 /// [`Obligation::ParameterMethod`] names one of those and a method the program
-/// writes. The
+/// writes, and an [`Obligation::SelfConversion`] a trait it declares. The
 /// three that carry types — [`Obligation::Binary`], [`Obligation::Unary`]
 /// and [`Obligation::Cast`] — carry operands that could grow around a
 /// delegation cycle; every one of them hands an operand on through
@@ -528,17 +538,63 @@ impl TypeChecker {
     /// is `self`: the default is compiled once per class, and the call runs
     /// that class's own method.
     ///
-    /// A call through another value of the same trait counts too; it can pin
-    /// a method the default never reaches, never leave one it reaches unpinned.
+    /// A call through another value of the same trait counts too — it can pin
+    /// a method the default never reaches, never leave one it reaches
+    /// unpinned — except one through a parameter the default declares. A
+    /// parameter holds what its caller passed: an instance converted to the
+    /// trait, whose conversion pins the method, or the caller's own `self`,
+    /// which [`Obligation::SelfConversion`] records where the caller writes
+    /// it.
     pub(crate) fn record_self_method_requirement(
         &mut self,
         trait_name: &str,
         method: &str,
         context: &Context,
     ) {
-        let Some(owner) = context.current_class.as_deref() else {
+        if self.member_receiver_is_parameter {
+            return;
+        }
+        let Some(body) = self.enclosing_default_of(trait_name, context) else {
             return;
         };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::ParameterMethod {
+                parameter: SELF_PIN.to_string(),
+                method: method.to_string(),
+            },
+        );
+    }
+
+    /// Record that the trait default being checked hands its `self` on as a
+    /// value; see [`Obligation::SelfConversion`].
+    pub(crate) fn record_self_conversion(&mut self, context: &Context) {
+        let Some(owner) = context.current_class.clone() else {
+            return;
+        };
+        self.record_self_conversion_of(&owner, context);
+    }
+
+    /// Record that the trait default being checked hands on a value of the
+    /// trait `trait_name`, which may be its `self` when the default belongs
+    /// to that trait or to one below it.
+    pub(crate) fn record_self_conversion_of(&mut self, trait_name: &str, context: &Context) {
+        let Some(owner) = context.current_class.clone() else {
+            return;
+        };
+        let Some(body) = self.enclosing_default_of(trait_name, context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::SelfConversion { trait_name: owner },
+        );
+    }
+
+    /// The trait default being checked, when a value of `trait_name` may be
+    /// its `self`: the default belongs to `trait_name` or to a trait below it.
+    fn enclosing_default_of(&self, trait_name: &str, context: &Context) -> Option<GenericBodyId> {
+        let owner = context.current_class.as_deref()?;
         let is_own_trait = owner == trait_name
             || self
                 .declaring_types_above(owner, &HashMap::new())
@@ -549,18 +605,9 @@ impl TypeChecker {
             Some(TypeDefinition::Trait(_))
         );
         if !is_trait || !is_own_trait {
-            return;
+            return None;
         }
-        let Some(body) = self.current_body(context) else {
-            return;
-        };
-        state_obligation(
-            self.instantiation_requirements.entry(body).or_default(),
-            Obligation::ParameterMethod {
-                parameter: SELF_PIN.to_string(),
-                method: method.to_string(),
-            },
-        );
+        self.current_body(context)
     }
 
     /// Record that the body being checked calls `method` on a value of type
@@ -945,7 +992,7 @@ impl TypeChecker {
                 Obligation::Binary(written) => self.answer_binary(written, site, context),
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
-                Obligation::ParameterMethod { .. } => {}
+                Obligation::ParameterMethod { .. } | Obligation::SelfConversion { .. } => {}
             }
         }
     }
