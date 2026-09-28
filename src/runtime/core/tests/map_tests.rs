@@ -115,6 +115,23 @@ fn test_map_new_empty() {
     }
 }
 
+/// Verifies that load factor calculations and map growth handling execute safely
+/// without arithmetic overflow.
+#[test]
+fn test_map_load_factor_overflow_safety() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        for i in 0..100usize {
+            miri_rt_map_set(map, i, i * 10);
+        }
+        assert_eq!(miri_rt_map_len(map), 100);
+        for i in 0..100usize {
+            assert_eq!(miri_rt_map_get(map, i), i * 10);
+        }
+        miri_rt_map_free(map);
+    }
+}
+
 #[test]
 fn test_map_set_get_int_keys() {
     unsafe {
