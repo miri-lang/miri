@@ -85,7 +85,7 @@ fn resolve_function_return_type(
     span: crate::error::syntax::Span,
 ) -> Type {
     if let Some(ret_expr) = ret_type_expr {
-        return resolve_return_annotation(tc, ret_expr);
+        return resolve_declared_annotation(tc, ret_expr);
     }
     match tc.get_variable_type(name).map(|t| &t.kind) {
         Some(TypeKind::Function(func)) => match &func.return_type {
@@ -96,14 +96,17 @@ fn resolve_function_return_type(
     }
 }
 
-/// A written return type in the canonical form the body's return slot needs.
+/// A written return or parameter type in the canonical form the body's slot
+/// for it needs.
 ///
 /// `Option<int?>` reaches lowering as a named type with an argument, not as an
 /// optional. Left that way, a `return` into the slot cannot tell that the value
 /// must be boxed as `Some`, so a bare or one-layer-short optional is stored raw
-/// and the caller reads its payload as the address of an optional.
-fn resolve_return_annotation(tc: &TypeChecker, ret_expr: &Expression) -> Type {
-    variable::canonical_declared_type(tc, &resolve_type(tc, ret_expr))
+/// and the caller reads its payload as the address of an optional. A parameter
+/// left that way reads as a value no optional holds, so storing it into an
+/// optional local wraps it in a second `Some`.
+fn resolve_declared_annotation(tc: &TypeChecker, annotation: &Expression) -> Type {
+    variable::canonical_declared_type(tc, &resolve_type(tc, annotation))
 }
 
 pub fn lower_function(
@@ -173,7 +176,7 @@ pub fn lower_function_with_compilation_ids(
     // Lower parameters and record out-param flags.
     ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
-        let param_ty = resolve_type(tc, &param.typ);
+        let param_ty = resolve_declared_annotation(tc, &param.typ);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
     assign_gpu_param_storage_classes(&mut ctx, params.len());
@@ -446,7 +449,7 @@ fn resolve_generic_return_type(
     subs: &HashMap<String, Type>,
 ) -> Type {
     if let Some(ret_expr) = ret_type_expr {
-        return apply_generic_sub(&resolve_return_annotation(tc, ret_expr), subs);
+        return apply_generic_sub(&resolve_declared_annotation(tc, ret_expr), subs);
     }
     match tc.get_variable_type(name).map(|t| &t.kind) {
         Some(TypeKind::Function(func)) => match &func.return_type {
@@ -582,7 +585,7 @@ fn lower_instantiation_core(
     for param in params.iter() {
         ctx.push_param(
             param.name.clone(),
-            resolve_type(tc, &param.typ),
+            resolve_declared_annotation(tc, &param.typ),
             param.typ.span,
         );
     }
@@ -797,7 +800,7 @@ fn lower_class_method_impl(
     let ret_ty = ret_type_expr.as_deref().map_or_else(
         || Type::new(TypeKind::Void, ast_method.span),
         |e| {
-            let declared = apply_generic_sub(&resolve_return_annotation(tc, e), subs);
+            let declared = apply_generic_sub(&resolve_declared_annotation(tc, e), subs);
             substitute_self_type(&declared, &self_type)
         },
     );
@@ -871,7 +874,8 @@ fn lower_class_method_impl(
         out_params.push(false); // self is never `out`
     }
     for param in params.iter() {
-        let param_ty = substitute_self_type(&resolve_type(tc, &param.typ), &self_type);
+        let param_ty =
+            substitute_self_type(&resolve_declared_annotation(tc, &param.typ), &self_type);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }
