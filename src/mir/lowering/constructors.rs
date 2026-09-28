@@ -23,7 +23,7 @@ use super::{
     apply_generic_sub, build_class_generic_substitution, lower_expression, monomorphized_arguments,
     LoweringContext,
 };
-use crate::type_checker::implicit_methods::INIT_METHOD_NAME;
+use crate::ast::implicit_methods::INIT_METHOD_NAME;
 use std::collections::HashMap;
 
 /// Lowers a struct constructor call to an Aggregate rvalue.

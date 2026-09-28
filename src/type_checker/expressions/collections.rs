@@ -131,7 +131,6 @@ impl TypeChecker {
         }
         if let Some(expr) = expr {
             self.settle_value_at(expr, expected, context);
-            self.record_trait_conversion(expected, actual, expr.span, context);
         }
         true
     }
@@ -353,6 +352,15 @@ impl TypeChecker {
         context: &Context,
         built_elsewhere: &mut Vec<(&'e Expression, Type)>,
     ) {
+        // A branching expression converts nothing itself: each branch it
+        // yields is settled below, and records the conversion at its own span.
+        let yields_a_branch = matches!(
+            expr.node,
+            ExpressionKind::Conditional(..) | ExpressionKind::Match(..) | ExpressionKind::Block(..)
+        );
+        if let Some(actual) = self.get_type(expr.id).cloned().filter(|_| !yields_a_branch) {
+            self.record_trait_conversion(expected, &actual, expr.span, context);
+        }
         // A value stored where an optional is declared is wrapped on the way
         // (`let o E<String, i128>? = E.L(s)`): it is built at the payload type.
         if let TypeKind::Option(inner) = &expected.kind {
@@ -459,7 +467,7 @@ impl TypeChecker {
             }
         } else if let ExpressionKind::Match(_, branches) = &expr.node {
             for branch in branches {
-                if let crate::ast::statement::StatementKind::Expression(value) = &branch.body.node {
+                if let Some(value) = super::types::yielded_expression(&branch.body) {
                     self.settle_at_expected(value, expected, context, built_elsewhere);
                 }
             }

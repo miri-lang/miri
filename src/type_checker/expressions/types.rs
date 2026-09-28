@@ -516,3 +516,37 @@ impl TypeChecker {
         }
     }
 }
+
+/// The expression `stmt` yields its value through when it stands where a value
+/// is expected — a match arm's body, a block's last statement — or `None` when
+/// it yields none.
+///
+/// This names the expression [`TypeChecker::infer_statement_type`] types the
+/// statement by: an expression statement is its own value, and a block is the
+/// value of its last statement.
+pub(crate) fn yielded_expression(stmt: &Statement) -> Option<&Expression> {
+    match &stmt.node {
+        StatementKind::Expression(expr) => Some(expr),
+        StatementKind::Block(stmts) => stmts.last().and_then(yielded_expression),
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Variable(..)
+        | StatementKind::If(..)
+        | StatementKind::While(..)
+        | StatementKind::For(..)
+        | StatementKind::Forall { .. }
+        | StatementKind::GpuFrame(..)
+        | StatementKind::GpuFrameBlock(..)
+        | StatementKind::FunctionDeclaration(..)
+        | StatementKind::Return(..)
+        | StatementKind::Use(..)
+        | StatementKind::Type(..)
+        | StatementKind::Enum(..)
+        | StatementKind::Struct(..)
+        | StatementKind::Class(..)
+        | StatementKind::Trait(..)
+        | StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => None,
+    }
+}

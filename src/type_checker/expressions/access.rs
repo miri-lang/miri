@@ -1189,7 +1189,8 @@ impl TypeChecker {
         } else {
             HashMap::new()
         };
-        self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
+        let receiver = make_type(TypeKind::Custom(name.to_string(), type_args.clone()));
+        self.record_receiver_method_sites(name, prop_name, &pinned, &receiver, span, context);
 
         if let Some(ty) =
             self.search_class_hierarchy(def, name, prop_name, type_args, span, context)
@@ -1697,6 +1698,7 @@ impl TypeChecker {
         let pinned = self.build_trait_method_mapping(trait_def, type_args);
         self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
         self.record_trait_method_call(name, prop_name, type_args.as_deref());
+        self.record_self_method_requirement(name, prop_name, context);
         let mut to_check: Vec<String> = vec![name.to_string()];
         let mut visited = std::collections::HashSet::new();
         while let Some(t_name) = to_check.pop() {

@@ -48,7 +48,6 @@ pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
 pub(crate) mod hygiene;
-pub(crate) mod implicit_methods;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod member_hints;
