@@ -311,5 +311,4 @@ cells = [
 # outside the five families: each cell is its own defect, described by its comment
 [X]
 cells = [
-    "local/option_int/overwrite/mono", # an optional parameter holding None, reassigned into a local, reads back as Some(0) (wrong value: got `Some:0`, expected `None`)
 ]

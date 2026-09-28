@@ -185,3 +185,102 @@ fn main()
         "1",
     );
 }
+
+const SHOW_OPT: &str = r#"
+fn show_opt(v Option<int>) String
+    match v
+        Some(n): f"Some:{n}"
+        None: "None"
+"#;
+
+/// A parameter declared with the written `Option<int>` is the same optional
+/// as `int?`: storing it into an optional local copies it, it is not wrapped
+/// in another `Some`.
+#[test]
+fn test_a_written_option_parameter_holding_none_reassigned_into_a_local_stays_none() {
+    assert_runs_with_output(
+        &format!(
+            "{SHOW_OPT}{}",
+            r#"
+fn cell0(a Option<int>, b Option<int>, ea Option<int>, eb Option<int>) Option<int>
+    var x Option<int> = a
+    x = b
+    return x
+
+fn main()
+    let a Option<int> = Some(4)
+    let b Option<int> = None
+    let ea = a
+    let eb = b
+    let r = cell0(a, b, ea, eb)
+    println(f"r={show_opt(r)}")
+"#
+        ),
+        "r=None",
+    );
+}
+
+#[test]
+fn test_a_single_written_option_parameter_reassigned_into_a_local_keeps_its_value() {
+    assert_runs_with_output(
+        &format!(
+            "{SHOW_OPT}{}",
+            r#"
+fn one(b Option<int>) Option<int>
+    var x Option<int> = Some(4)
+    x = b
+    return x
+
+fn main()
+    println(f"none={show_opt(one(None))} some={show_opt(one(Some(7)))}")
+"#
+        ),
+        "none=None some=Some:7",
+    );
+}
+
+#[test]
+fn test_a_written_option_method_parameter_reassigned_into_a_local_stays_none() {
+    assert_runs_with_output(
+        &format!(
+            "{SHOW_OPT}{}",
+            r#"
+class Holder
+    var seed int
+    fn init(seed int)
+        self.seed = seed
+    fn pick(b Option<int>) Option<int>
+        var x Option<int> = Some(self.seed)
+        x = b
+        return x
+
+fn main()
+    let h = Holder(3)
+    println(f"method={show_opt(h.pick(None))}")
+"#
+        ),
+        "method=None",
+    );
+}
+
+#[test]
+fn test_a_written_option_string_parameter_reassigned_into_a_local_stays_none() {
+    assert_runs_with_output(
+        r#"
+fn pick(b Option<String>) Option<String>
+    var x Option<String> = Some("seed")
+    x = b
+    return x
+
+fn main()
+    let s = "v"
+    match pick(None)
+        Some(v): println(f"got {v}")
+        None: println("got none")
+    match pick(Some(f"{s}-1"))
+        Some(v): println(f"got {v}")
+        None: println("got none")
+"#,
+        "got none\ngot v-1",
+    );
+}
