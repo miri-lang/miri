@@ -30,7 +30,8 @@ pub(crate) type ClassInstantiation = (String, Vec<Type>);
 /// the chain giving the method a body, else the nearest whose trait clauses
 /// supply the default — a default is re-lowered once per implementing class,
 /// under that class's symbol, so the class owns that body as much as a written
-/// method. Returns `class_name` and `type_args` unchanged when that is the
+/// method. A body an abstract class declares is likewise copied into each
+/// concrete class, so a concrete `class_name` owns it. Returns `class_name` and `type_args` unchanged when that is the
 /// class itself. `None` when nothing in the chain declares the method, or when
 /// a link's `extends` arguments do not fill the parent's generic parameters —
 /// there is no instantiation to name in either case.
@@ -41,7 +42,18 @@ pub(crate) fn declaring_class_instantiation(
     method_name: &str,
 ) -> Option<ClassInstantiation> {
     let owner = match resolve_method_source(type_definitions, class_name, method_name)? {
-        MethodSource::Declared { class, .. } | MethodSource::AbstractOnly { class, .. } => class,
+        MethodSource::Declared { class, .. } | MethodSource::AbstractOnly { class, .. } => {
+            // A concrete class compiles its own copy of a body an abstract
+            // class declares, as static dispatch names it, so the copy is
+            // instantiated at the class's own arguments.
+            if is_abstract_class(type_definitions, class)
+                && !is_abstract_class(type_definitions, class_name)
+            {
+                class_name
+            } else {
+                class
+            }
+        }
         MethodSource::Default(default) => default.class_level,
     };
     let mut current = class_name.to_string();
@@ -60,6 +72,11 @@ pub(crate) fn declaring_class_instantiation(
         current_args = base_args;
     }
     None
+}
+
+/// Whether `name` is an abstract class.
+fn is_abstract_class(type_definitions: &HashMap<String, TypeDefinition>, name: &str) -> bool {
+    matches!(type_definitions.get(name), Some(TypeDefinition::Class(class)) if class.is_abstract)
 }
 
 /// The class `class_name` extends and the type arguments it is instantiated at
