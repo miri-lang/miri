@@ -844,3 +844,73 @@ fn main()
         "101 7",
     );
 }
+
+/// A method an abstract class declares is compiled into each concrete class
+/// that runs it, with `self` that class — like a trait default — so a call it
+/// makes on `self` runs the concrete class's method at the instance's
+/// arguments.
+const ABSTRACT_CALLS_SELF: &str = r#"
+use system.io
+
+abstract class Base
+    public fn b() int
+        return 0
+    public fn c() int
+        return self.b() + 1
+    public fn e() int
+        return helper(self)
+
+fn helper(x Base) int
+    return x.b()
+
+class Kid<T> extends Base
+    w T
+    public fn b() int
+        let d = self.w - 1
+        return 9
+"#;
+
+#[test]
+fn an_abstract_bodys_call_on_self_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            ABSTRACT_CALLS_SELF,
+            r#"
+fn main()
+    let k = Kid<String>(w: "x")
+    println(f"{k.c()}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+#[test]
+fn an_abstract_body_handing_on_its_self_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            ABSTRACT_CALLS_SELF,
+            r#"
+fn main()
+    let k = Kid<String>(w: "x")
+    println(f"{k.e()}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+#[test]
+fn an_abstract_bodys_call_on_self_runs_the_override_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            ABSTRACT_CALLS_SELF,
+            r#"
+fn main()
+    let k = Kid<int>(w: 3)
+    println(f"{k.c()} {k.e()}")
+"#,
+        ),
+        "10 9",
+    );
+}

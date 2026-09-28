@@ -591,23 +591,38 @@ impl TypeChecker {
         );
     }
 
-    /// The trait default being checked, when a value of `trait_name` may be
-    /// its `self`: the default belongs to `trait_name` or to a trait below it.
+    /// The body being checked, when it is compiled once per concrete class —
+    /// a trait default, or a method an abstract class declares — and a value
+    /// of `trait_name` may be its `self`: the body belongs to `trait_name` or
+    /// to a type below it.
     fn enclosing_default_of(&self, trait_name: &str, context: &Context) -> Option<GenericBodyId> {
         let owner = context.current_class.as_deref()?;
-        let is_own_trait = owner == trait_name
+        let is_own_type = owner == trait_name
             || self
                 .declaring_types_above(owner, &HashMap::new())
                 .iter()
                 .any(|(above, _)| above == trait_name);
-        let is_trait = matches!(
-            self.type_table.global_type_definitions.get(owner),
-            Some(TypeDefinition::Trait(_))
-        );
-        if !is_trait || !is_own_trait {
+        if !self.is_copied_per_class(owner) || !is_own_type {
             return None;
         }
         self.current_body(context)
+    }
+
+    /// Whether the bodies `type_name` declares are compiled once per concrete
+    /// class that runs them, with `self` that class: a trait's defaults, and
+    /// an abstract class's methods.
+    pub(super) fn is_copied_per_class(&self, type_name: &str) -> bool {
+        match self.type_table.global_type_definitions.get(type_name) {
+            Some(TypeDefinition::Trait(_)) => true,
+            Some(TypeDefinition::Class(class_def)) => class_def.is_abstract,
+            Some(
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => false,
+        }
     }
 
     /// Record that the body being checked calls `method` on a value of type

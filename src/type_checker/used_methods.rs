@@ -273,13 +273,16 @@ impl TypeChecker {
     /// reached unpinned.
     fn record_trait_value_handed_on(&mut self, declared: &str, actual: &Type, context: &Context) {
         let definitions = &self.type_table.global_type_definitions;
-        if !matches!(definitions.get(declared), Some(TypeDefinition::Trait(_))) {
+        if !matches!(
+            definitions.get(declared),
+            Some(TypeDefinition::Trait(_) | TypeDefinition::Class(_))
+        ) {
             return;
         }
         let TypeKind::Custom(actual_name, _) = &actual.kind else {
             return;
         };
-        if matches!(definitions.get(actual_name), Some(TypeDefinition::Trait(_))) {
+        if self.is_copied_per_class(actual_name) {
             self.record_self_conversion_of(actual_name, context);
         }
     }
@@ -345,8 +348,8 @@ impl TypeChecker {
 
     /// Every body a call to `method` on an instance of `class_name` at
     /// `receiver` may run, with what it pins that body's parameters to: the
-    /// class's own and each type above it, a trait's with [`SELF_PIN`] at
-    /// the instance.
+    /// class's own and each type above it, with [`SELF_PIN`] at the instance
+    /// for a trait's or an abstract class's, which is compiled per class.
     pub(super) fn bodies_run_for(
         &self,
         class_name: &str,
@@ -359,10 +362,7 @@ impl TypeChecker {
         std::iter::once(own)
             .chain(above)
             .map(|(declaring, mut pins)| {
-                if matches!(
-                    self.type_table.global_type_definitions.get(&declaring),
-                    Some(TypeDefinition::Trait(_))
-                ) {
+                if self.is_copied_per_class(&declaring) {
                     pins.insert(SELF_PIN.to_string(), receiver.clone());
                 }
                 ((declaring, method.to_string()), pins)

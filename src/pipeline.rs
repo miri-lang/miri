@@ -2047,6 +2047,7 @@ impl Pipeline {
             .body
             .iter()
             .chain(defaults)
+            .chain(Self::abstract_bodies_copied_into(result, class_name))
             .filter_map(|method_stmt| {
                 let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
                     return None;
@@ -2054,6 +2055,40 @@ impl Pipeline {
                 decl.body
                     .is_some()
                     .then_some((method_stmt, decl.name.as_str()))
+            })
+            .collect()
+    }
+
+    /// Every body an abstract ancestor declares that the concrete class
+    /// `class_name` runs, and so compiles a copy of under its own name.
+    fn abstract_bodies_copied_into<'r>(
+        result: &'r PipelineResult,
+        class_name: &str,
+    ) -> Vec<&'r Statement> {
+        let definitions = result.type_checker.type_definitions();
+        let is_concrete = matches!(
+            definitions.get(class_name),
+            Some(TypeDefinition::Class(class_def)) if !class_def.is_abstract
+        );
+        if !is_concrete {
+            return Vec::new();
+        }
+        let abstract_methods = Self::abstract_class_method_bodies(result);
+        crate::type_checker::context::class_ancestry(class_name, definitions)
+            .skip(1)
+            .flat_map(|(base_name, _)| {
+                abstract_methods
+                    .get(base_name)
+                    .into_iter()
+                    .flatten()
+                    .filter(move |method_stmt| {
+                        let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                            return false;
+                        };
+                        Self::runs_inherited_body(result, class_name, &decl.name, base_name)
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
             })
             .collect()
     }
@@ -3043,11 +3078,6 @@ impl Pipeline {
                 {
                     continue;
                 }
-                // TODO: the copy is lowered once with the class's parameters
-                // open, so a `self` call in it names the class's shared body
-                // even for an instance at concrete arguments, and that body
-                // runs unchecked there; it needs a copy per instantiation, with
-                // the use recorded at the instance.
                 let (mir_body, lambdas) = mir::lowering::lower_class_method_with_compilation_ids(
                     method_stmt,
                     self_type.clone(),
