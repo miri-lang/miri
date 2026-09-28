@@ -415,35 +415,6 @@ pub(crate) fn rebuild_class_type_params(
         .collect()
 }
 
-/// True for a type argument whose instantiation is a scalar.
-///
-/// Admits any non-managed scalar: integers of every width, floats (`float`,
-/// `f16`, `f32`, `f64`), and `bool`. A scalar field carries a concrete
-/// store/load width per instantiation and its drop is a genuine no-op, nothing
-/// to reference-count. Managed type arguments are admitted separately by
-/// [`is_monomorphizable_type_argument`], for a different reason.
-pub(crate) fn is_monomorphizable_scalar(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U64
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F16
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Boolean
-    )
-}
-
 /// Whether a per-instantiation body can be named for a receiver typed `kind`.
 ///
 /// Only the class-reference spelling (`Custom("List", Some([...]))`) carries the
@@ -1503,33 +1474,5 @@ mod class_generic_substitution_tests {
         let defs = [generic("T")];
         let plain = Type::new(TypeKind::Custom("Box".to_string(), None), Span::new(0, 0));
         assert!(build_class_generic_substitution(&tc, &defs, &plain).is_empty());
-    }
-
-    #[test]
-    fn monomorphizable_scalar_admits_ints_floats_bool_rejects_managed() {
-        for kind in [
-            TypeKind::Int,
-            TypeKind::I8,
-            TypeKind::U64,
-            TypeKind::I128,
-            TypeKind::Float,
-            TypeKind::F16,
-            TypeKind::F32,
-            TypeKind::F64,
-            TypeKind::Boolean,
-        ] {
-            assert!(is_monomorphizable_scalar(&kind), "{kind:?} should qualify");
-        }
-        for kind in [
-            TypeKind::String,
-            TypeKind::Custom("Box".to_string(), None),
-            TypeKind::RawPtr,
-            TypeKind::Void,
-        ] {
-            assert!(
-                !is_monomorphizable_scalar(&kind),
-                "{kind:?} should not qualify"
-            );
-        }
     }
 }

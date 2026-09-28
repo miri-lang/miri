@@ -15,8 +15,9 @@
 //!   instance's `compare` or `equals`, and a trait default runs the methods
 //!   it calls on `self` at the class it is compiled for; both are derived
 //!   while answering, from the obligations the pinned body is known to state;
-//! - an instance converted to a trait runs, through its vtable, each method
-//!   the program calls through a receiver of that trait.
+//! - an instance converted to a trait, or to a class it extends, runs,
+//!   through its vtable, each method the program calls through a receiver of
+//!   that type.
 //!
 //! All of them become sites on the one requirement rail in
 //! [`super::instantiation_requirements`], answered by the same replay of the
@@ -29,9 +30,9 @@ use super::instantiation_requirements::{
 use super::TypeChecker;
 use crate::ast::expression::Expression;
 use crate::ast::implicit_methods::{
-    operator_method_name, operator_receiver, CONSTRUCTION_METHOD_NAMES,
+    operator_method_name, operator_receiver, CONSTRUCTION_METHOD_NAMES, EQUALS_METHOD_NAME,
 };
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -61,8 +62,9 @@ struct InstanceConversion<'c> {
     trait_substitution: &'c HashMap<String, Type>,
 }
 
-/// A method called through a receiver whose type is a trait, which runs the
-/// vtable slot of whatever instance the receiver holds.
+/// A method called through a receiver whose type is a trait or a class,
+/// which runs the vtable slot of whatever instance converted to that type the
+/// receiver holds.
 #[derive(Debug, PartialEq)]
 pub(crate) struct TraitMethodCall {
     trait_name: String,
@@ -126,8 +128,61 @@ impl TypeChecker {
         );
     }
 
+    /// Record the `equals` a set or map built from, or asked about, values of
+    /// `element` runs: the runtime matches two class elements, or keys, only
+    /// through the class's own `equals`, and an optional one through the
+    /// `equals` of the value it holds.
+    pub(crate) fn record_element_matching(
+        &mut self,
+        element: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        let element = held_value(element);
+        self.record_equality_requirement(element, context);
+        let Some((class_name, substitution)) = self.class_instance(element) else {
+            return;
+        };
+        self.record_receiver_method_sites(
+            &class_name,
+            EQUALS_METHOD_NAME,
+            &substitution,
+            element,
+            span,
+            context,
+        );
+    }
+
+    /// Record the `equals` a membership test `op` on `container` runs, when
+    /// the container is a set or a map: its elements, or keys, are matched
+    /// against the value tested.
+    pub(crate) fn record_membership_sites(
+        &mut self,
+        op: &BinaryOp,
+        container: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        if matches!(op, BinaryOp::In) {
+            self.record_keyed_lookup(container, span, context);
+        }
+    }
+
+    /// Record the `equals` a lookup in `container` runs, when the container
+    /// is a set or a map: the value looked up is matched against its
+    /// elements, or keys.
+    pub(crate) fn record_keyed_lookup(&mut self, container: &Type, span: Span, context: &Context) {
+        let keyed = [BuiltinCollectionKind::Set, BuiltinCollectionKind::Map];
+        let Some(element) = self.container_element_type(container, &keyed) else {
+            return;
+        };
+        self.record_element_matching(&element, span, context);
+    }
+
     /// Record that a value of `actual` is stored where `expected` is declared,
-    /// when that converts a class instance to a trait.
+    /// when that converts a class instance to a trait or to a class it
+    /// extends, whose methods then reach the instance's own by virtual
+    /// dispatch.
     ///
     /// Called where the conversion is committed, never where compatibility is
     /// only asked about, so a conversion recorded here is one the program
@@ -146,15 +201,12 @@ impl TypeChecker {
         let TypeKind::Custom(trait_name, trait_args) = &expected.kind else {
             return;
         };
-        if !matches!(
-            self.type_table.global_type_definitions.get(trait_name),
-            Some(TypeDefinition::Trait(_))
-        ) {
-            return;
-        }
         let Some((class_name, substitution)) = self.class_instance(actual) else {
             return;
         };
+        if !self.dispatches_virtually(trait_name, &class_name) {
+            return;
+        }
         let trait_substitution = self.instance_substitution(trait_name, trait_args.as_deref());
         let conversion = InstanceConversion {
             class_name: &class_name,
@@ -164,6 +216,28 @@ impl TypeChecker {
             trait_substitution: &trait_substitution,
         };
         self.push_trait_conversion(&conversion, span, context);
+    }
+
+    /// Whether a value of `class_name` stored where `declared` is declared
+    /// is reached through `declared`'s methods by virtual dispatch: the
+    /// declared type is a trait, or a class `class_name` extends.
+    fn dispatches_virtually(&self, declared: &str, class_name: &str) -> bool {
+        let definitions = &self.type_table.global_type_definitions;
+        match definitions.get(declared) {
+            Some(TypeDefinition::Trait(_)) => true,
+            Some(TypeDefinition::Class(_)) => {
+                declared != class_name
+                    && super::context::class_ancestry(class_name, definitions)
+                        .any(|(ancestor, _)| ancestor == declared)
+            }
+            Some(
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => false,
+        }
     }
 
     /// Record the sites a call to `method` on an instance of `class_name` at
@@ -207,7 +281,7 @@ impl TypeChecker {
     /// `receiver` may run, with what it pins that body's parameters to: the
     /// class's own and each type above it, a trait's with [`SELF_PIN`] at
     /// the instance.
-    fn bodies_run_for(
+    pub(super) fn bodies_run_for(
         &self,
         class_name: &str,
         method: &str,
@@ -254,7 +328,7 @@ impl TypeChecker {
             .push(TraitConversion { sites, reached });
     }
 
-    /// Record a call to `method` through a receiver of the trait
+    /// Record a call to `method` through a receiver of the trait or class
     /// `trait_name` at `type_args`.
     pub(crate) fn record_trait_method_call(
         &mut self,
@@ -331,6 +405,9 @@ impl TypeChecker {
                 let Some(Pin::Concrete(pinned)) = site.pins.get(parameter) else {
                     continue;
                 };
+                // An optional pinned where the body compares or matches the
+                // parameter runs the `equals` of the value it holds.
+                let pinned = held_value(pinned);
                 let Some((class_name, substitution)) = self.class_instance(pinned) else {
                     continue;
                 };
@@ -645,6 +722,16 @@ fn derived_site(
         span: parent.span,
         caller_parameters: parent.caller_parameters.clone(),
     }
+}
+
+/// The value an optional of `ty`, at any depth of nesting, holds, or `ty`
+/// itself when it is no optional.
+fn held_value(ty: &Type) -> &Type {
+    let mut held = ty;
+    while let TypeKind::Option(inner) = &held.kind {
+        held = inner;
+    }
+    held
 }
 
 /// The constructor at the top of a type: a name for a named type, the kind

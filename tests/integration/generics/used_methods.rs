@@ -466,3 +466,313 @@ fn main()
         "true",
     );
 }
+
+/// A set matches its elements, and a map its keys, through the element
+/// class's own `equals`, so every way a program adds to or looks up in one
+/// runs that `equals` at the element's arguments.
+const MATCHED_BOX: &str = r#"
+use system.io
+use system.collections.list
+use system.collections.set
+use system.collections.map
+
+class Box<T>
+    v T
+    public fn equals(o Self) bool
+        if self.v < 0
+            return false
+        return self.v == o.v
+"#;
+
+#[test]
+fn adding_to_a_set_relying_on_an_elements_equals_is_refused_at_the_elements_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var s = Set<Box<String>>()
+    s.add(Box<String>(v: "x" + "y"))
+    println(f"{s.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_set_literal_of_instances_is_refused_at_the_elements_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    let s = {Box<String>(v: "x" + "y"), Box<String>(v: "x" + "z")}
+    println(f"{s.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_membership_test_on_a_set_is_refused_at_the_elements_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    let s = Set<Box<String>>()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b in s}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn setting_a_map_entry_is_refused_at_the_keys_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var m = Map<Box<String>, int>()
+    m.set(Box<String>(v: "x" + "y"), 1)
+    println(f"{m.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_map_literal_keyed_by_instances_is_refused_at_the_keys_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    let m = {Box<String>(v: "x" + "y"): 1}
+    println(f"{m.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn an_indexed_map_write_is_refused_at_the_keys_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var m = Map<Box<String>, int>()
+    m[Box<String>(v: "x" + "y")] = 3
+    println(f"{m.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn adding_to_a_set_inside_a_generic_function_is_refused_at_the_functions_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn put<T>(s Set<T>, v T)
+    s.add(v)
+
+fn main()
+    var s = Set<Box<String>>()
+    put(s, Box<String>(v: "x" + "y"))
+    println(f"{s.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+/// At `int` the `equals` holds, and the set keeps one of two equal elements:
+/// matching by the elements' bytes would keep both.
+#[test]
+fn a_set_of_instances_matches_them_by_their_equals_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var s = Set<Box<int>>()
+    s.add(Box<int>(v: 3))
+    s.add(Box<int>(v: 3))
+    s.add(Box<int>(v: 4))
+    println(f"{s.length()}")
+"#,
+        ),
+        "2",
+    );
+}
+
+#[test]
+fn a_list_of_instances_never_matched_places_no_requirement_on_equals() {
+    assert_heap_guard_output(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var l = List<Box<String>>()
+    l.push(Box<String>(v: "x" + "y"))
+    println(l[0].v)
+"#,
+        ),
+        "xy",
+    );
+}
+
+/// An optional element is matched through the `equals` of the value it
+/// holds, so a set or map of optional instances runs that `equals` too.
+#[test]
+fn adding_to_a_set_of_optional_instances_is_refused_at_the_held_values_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var s = Set<Box<String>?>()
+    s.add(Box<String>(v: "x" + "y"))
+    println(f"{s.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn setting_a_map_entry_keyed_by_an_optional_instance_is_refused_at_the_held_values_argument() {
+    assert_compiler_error(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var m = Map<Box<String>?, int>()
+    m.set(Box<String>(v: "x" + "y"), 1)
+    println(f"{m.length()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_set_of_optional_instances_matches_them_by_their_equals_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            MATCHED_BOX,
+            r#"
+fn main()
+    var s = Set<Box<int>?>()
+    s.add(Box<int>(v: 3))
+    s.add(Box<int>(v: 3))
+    s.add(Box<int>(v: 4))
+    println(f"{s.length()}")
+"#,
+        ),
+        "2",
+    );
+}
+
+/// An instance stored where a class it extends is declared runs, through
+/// its vtable, each method the program calls through that class.
+const KID: &str = r#"
+use system.io
+
+abstract class Base
+    public fn b() int
+        return 0
+
+class Kid<T> extends Base
+    w T
+    public fn b() int
+        let d = self.w - 1
+        return 9
+"#;
+
+#[test]
+fn an_instance_stored_as_its_base_class_is_refused_where_the_base_calls_its_method() {
+    assert_compiler_error(
+        &with(
+            KID,
+            r#"
+fn main()
+    let k Base = Kid<String>(w: "x")
+    println(f"{k.b()}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+#[test]
+fn an_instance_passed_as_its_base_class_is_refused_where_the_base_calls_its_method() {
+    assert_compiler_error(
+        &with(
+            KID,
+            r#"
+fn show(x Base) int
+    return x.b()
+
+fn main()
+    let n = show(Kid<String>(w: "x"))
+    println(f"{n}")
+"#,
+        ),
+        "Invalid types for arithmetic operation: String and int",
+    );
+}
+
+#[test]
+fn an_instance_stored_as_its_base_class_runs_the_override_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            KID,
+            r#"
+fn main()
+    let k Base = Kid<int>(w: 3)
+    println(f"{k.b()}")
+"#,
+        ),
+        "9",
+    );
+}
+
+/// An element's `equals` reaches the `equals` of what it holds only when a
+/// set, map, or `==` asks for it; building the instance asks for neither.
+#[test]
+fn an_equals_nothing_asks_for_places_no_requirement_through_a_nested_instance() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+class Inner<U>
+    u U
+    public fn equals(o Self) bool
+        if self.u < 0
+            return false
+        return true
+
+class Box<T>
+    v T
+    public fn equals(o Self) bool
+        return self.v == o.v
+
+fn main()
+    let b = Box<Inner<String>>(v: Inner<String>(u: "x"))
+    println("ok")
+"#,
+        "ok",
+    );
+}

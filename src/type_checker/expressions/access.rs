@@ -359,6 +359,7 @@ impl TypeChecker {
                 if BuiltinCollectionKind::from_name(name.as_str())
                     == Some(BuiltinCollectionKind::Map) =>
             {
+                self.record_keyed_lookup(obj_type, span, context);
                 self.infer_index_map(args, index, index_type, context)
             }
             TypeKind::Tuple(ref element_type_exprs) => {
@@ -1192,6 +1193,7 @@ impl TypeChecker {
         };
         let receiver = make_type(TypeKind::Custom(name.to_string(), type_args.clone()));
         self.record_receiver_method_sites(name, prop_name, &pinned, &receiver, span, context);
+        self.record_trait_method_call(name, prop_name, type_args.as_deref());
 
         if let Some(ty) =
             self.search_class_hierarchy(def, name, prop_name, type_args, span, context)

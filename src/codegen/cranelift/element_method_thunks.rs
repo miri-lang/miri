@@ -103,6 +103,21 @@ impl ElementMethod {
         }
     }
 
+    /// Whether elements of `type_name` at `inst_args` answer this question:
+    /// the type answers it, and lowering compiled the body that answers it
+    /// there. A body withheld at an instance is one no container operation
+    /// the program performs asks for, so its elements keep the rule their
+    /// bytes imply.
+    pub(crate) fn is_answered_at(
+        self,
+        type_name: &str,
+        inst_args: Option<&[Type]>,
+        facts: &TypeFacts,
+    ) -> bool {
+        self.is_answered_by(type_name, facts)
+            && !facts.is_withheld(&self.method_symbol(type_name, inst_args, facts))
+    }
+
     /// The symbol of the method body this question calls for `type_name` at
     /// `inst_args`.
     ///
@@ -164,7 +179,7 @@ impl<'a> FunctionTranslator<'a> {
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if !method.is_answered_by(type_name, facts) {
+        if !method.is_answered_at(type_name, inst_args, facts) {
             return Ok(());
         }
         let ptr_type = isa.pointer_type();

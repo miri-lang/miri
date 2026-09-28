@@ -29,7 +29,7 @@ use std::process::Command;
 use crate::ast::BuiltinCollectionKind;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::pins_of;
-use crate::type_checker::{DeclaredFunction, ModuleId, TypeChecker};
+use crate::type_checker::{CompiledInstance, DeclaredFunction, ModuleId, TypeChecker};
 
 /// One generic-class instantiation's substitution: the generic-name→concrete-type
 /// map used to substitute a method body, paired with the ordered name/type pairs
@@ -494,6 +494,10 @@ pub struct PipelineResult {
     /// The slots each vtable fills, settled once lowering has reached every
     /// body; empty until then.
     pub vtable_fills: mir::lowering::vtable_demand::VtableFills,
+    /// The link names of the generic class methods lowering withheld because
+    /// nothing that runs reaches them at an instance their obligations fail
+    /// at; see `ImpliedMethodVerdicts`.
+    pub withheld_methods: std::collections::HashSet<String>,
 }
 
 /// Options controlling the build process.
@@ -587,6 +591,8 @@ fn called_function_names(bodies: &[(Symbol, mir::Body)]) -> std::collections::Ha
 /// as called too; the vtable demand says which, from the reached bodies alone.
 struct CalledNames {
     names: std::collections::HashSet<String>,
+    /// The names a lowered body calls outright, not through a vtable slot.
+    direct: std::collections::HashSet<String>,
     vtables: mir::lowering::vtable_demand::VtableDemand,
     scanned: usize,
 }
@@ -602,6 +608,7 @@ impl CalledNames {
             .chain(std::iter::once("main".to_string()));
         CalledNames {
             names: std::collections::HashSet::new(),
+            direct: std::collections::HashSet::new(),
             vtables: mir::lowering::vtable_demand::VtableDemand::rooted_at(roots),
             scanned: 0,
         }
@@ -616,7 +623,9 @@ impl CalledNames {
         reach: &ReachTables,
     ) -> Result<(), CompilerError> {
         let unscanned = bodies.get(self.scanned..).unwrap_or_default();
-        self.names.extend(called_function_names(unscanned));
+        let direct = called_function_names(unscanned);
+        self.names.extend(direct.iter().cloned());
+        self.direct.extend(direct);
         let link_names: Vec<String> = unscanned
             .iter()
             .map(|(symbol, _)| symbol.link_name())
@@ -640,6 +649,11 @@ impl CalledNames {
 
     fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// Whether a lowered body calls `name` outright.
+    fn is_called(&self, name: &str) -> bool {
+        self.direct.contains(name)
     }
 }
 
@@ -743,6 +757,115 @@ fn statements_with_sites(
     program
         .map(|(index, stmt)| (StatementSite::Program(index), stmt))
         .chain(imported.map(|(index, stmt)| (StatementSite::Imported(index), stmt)))
+}
+
+/// How a lowered program reaches a method of a generic class instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MethodDemand {
+    /// A lowered body calls it by name.
+    Called,
+    /// Only a vtable slot or a container's element thunk names it, which the
+    /// program runs only through a conversion to a trait or a container
+    /// operation the checker pins the method at.
+    Implied,
+}
+
+/// A method of a generic class instance a lowered body reaches that is not
+/// compiled yet.
+struct WantedMethod {
+    class_site: StatementSite,
+    class_name: String,
+    /// Where the method sits among the ones the class compiles under its own
+    /// name.
+    method_index: usize,
+    method_name: String,
+    /// Where the method is declared.
+    span: Span,
+    /// What the instantiation pins the class's parameters to.
+    class_subs: std::collections::HashMap<String, Type>,
+    /// The instantiation's arguments, in the order the class declares them.
+    mangle_args: Vec<(String, Type)>,
+    symbol: Symbol,
+    demand: MethodDemand,
+}
+
+/// Whether a method reached only implicitly is compiled at an instance.
+///
+/// A constructed instance carries a vtable, and a container carries its
+/// elements' `compare` and `equals`, whether or not the program ever
+/// converts that instance to a trait or asks the container to order or match
+/// it. The checker pins a method only where the program does, so such a
+/// method is compiled only where its obligations hold at the instance. One
+/// that fails there is withheld: its vtable slot stays empty and no element
+/// thunk is emitted for it, since nothing that runs reads either.
+#[derive(Default)]
+struct ImpliedMethodVerdicts {
+    verdicts: std::collections::HashMap<Symbol, bool>,
+}
+
+impl ImpliedMethodVerdicts {
+    /// Whether `wanted`'s obligations hold at its instance, answered once.
+    fn accepts(&mut self, result: &mut PipelineResult, wanted: &WantedMethod) -> bool {
+        if let Some(&accepted) = self.verdicts.get(&wanted.symbol) {
+            return accepted;
+        }
+        let receiver = mir::lowering::monomorphized_self_type(
+            &wanted.class_name,
+            &result.type_checker,
+            &wanted.class_subs,
+            wanted.span,
+        );
+        let accepted = result
+            .type_checker
+            .compiled_instance_refusals(&CompiledInstance {
+                class_name: wanted.class_name.clone(),
+                method: wanted.method_name.clone(),
+                substitution: wanted.class_subs.clone(),
+                receiver,
+                span: wanted.span,
+            })
+            .is_empty();
+        self.verdicts.insert(wanted.symbol.clone(), accepted);
+        accepted
+    }
+
+    /// Whether the copy of the trait default `method` that `class_name`, a
+    /// class with no parameters of its own, compiles holds its obligations
+    /// at what the class's clauses pin, answered once.
+    fn accepts_class_copy(
+        &mut self,
+        result: &mut PipelineResult,
+        class_name: &str,
+        method: &str,
+        span: Span,
+    ) -> bool {
+        let symbol = Symbol::method(class_name, &[], method, &[]);
+        if let Some(&accepted) = self.verdicts.get(&symbol) {
+            return accepted;
+        }
+        let receiver = Type::new(TypeKind::Custom(class_name.to_string(), None), span);
+        let accepted = result
+            .type_checker
+            .compiled_instance_refusals(&CompiledInstance {
+                class_name: class_name.to_string(),
+                method: method.to_string(),
+                substitution: std::collections::HashMap::new(),
+                receiver,
+                span,
+            })
+            .is_empty();
+        self.verdicts.insert(symbol, accepted);
+        accepted
+    }
+
+    /// The link names of every refused method nothing compiled after all.
+    fn withheld(&self, symbols: &SymbolTable) -> std::collections::HashSet<String> {
+        self.verdicts
+            .iter()
+            .filter(|(symbol, accepted)| !**accepted && !symbols.is_claimed(symbol))
+            .map(|(symbol, _)| symbol.link_name())
+            .collect()
+    }
 }
 
 /// One default body a trait declares: the trait, the method, its shared
@@ -857,15 +980,6 @@ impl ReachTables {
             ),
         })
     }
-}
-
-/// A concrete class whose inherited trait defaults are being lowered: its
-/// name, the `self` type its copies take, and every type above it with what
-/// its clauses pin that type's parameters to.
-struct InheritingClass<'a> {
-    name: &'a str,
-    self_type: Type,
-    supertypes: Vec<(String, std::collections::HashMap<String, Type>)>,
 }
 
 /// Fill the generic-class instantiation registry with everything the program
@@ -1084,6 +1198,7 @@ fn settled_type_facts(
             .map(|(_, body)| body)
             .filter(|body| !body.is_gpu()),
     )
+    .map(|facts| facts.withholding(pipeline_result.withheld_methods.clone()))
     .map_err(|refusal| drop_instantiation_refusal(refusal, &pipeline_result.ast))
 }
 
@@ -1305,6 +1420,7 @@ impl Pipeline {
             ast,
             type_checker,
             vtable_fills: Default::default(),
+            withheld_methods: Default::default(),
         })
     }
 
@@ -1368,6 +1484,7 @@ impl Pipeline {
             ast,
             type_checker,
             vtable_fills: Default::default(),
+            withheld_methods: Default::default(),
         })
     }
 
@@ -1655,71 +1772,6 @@ impl Pipeline {
         Symbol::method(class_name, class_args, method_name, &[])
     }
 
-    /// Emit a monomorphized method body for each recorded instantiation of a
-    /// generic class.
-    ///
-    /// For every `(class, [type args])` the type checker recorded (see
-    /// `generic_class_instantiations`), each concrete method compiles to a body
-    /// named `Class_method__arg` with the class's generic parameters substituted
-    /// by the instantiation's concrete types. The mangled name matches the symbol
-    /// the dispatcher emits at the call site, byte-for-byte, so the call resolves.
-    ///
-    /// This pass emits every method of a scalar instantiation up front, because a
-    /// scalar type argument changes the field width every method addresses. An
-    /// instantiation at a managed type is emitted on demand instead (see
-    /// [`Self::lower_called_generic_class_methods`]): what it needs is reference
-    /// counting against the concrete type, which only the methods a program
-    /// actually calls require, and a class inherits trait defaults that no
-    /// managed instantiation can compile at all.
-    fn lower_generic_class_instantiations(
-        result: &PipelineResult,
-        class_name: &str,
-        class_data: &ClassData,
-        is_release: bool,
-        bodies: &mut Vec<(Symbol, mir::Body)>,
-        symbols: &mut SymbolTable,
-        compilation_ids: &mir::lowering::SharedCompilationIds,
-    ) -> Result<(), CompilerError> {
-        // A builtin collection's methods are emitted on demand after the main
-        // lowering: most call sites lower to a direct runtime call instead of the
-        // Miri body, so emitting every method for every recorded element type
-        // would compile bodies nothing reaches.
-        if BuiltinCollectionKind::from_name(class_name).is_some() {
-            return Ok(());
-        }
-        for (subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
-            Self::lower_instantiation_methods(
-                result,
-                class_name,
-                class_data,
-                is_release,
-                &subs,
-                &mangle_args,
-                bodies,
-                symbols,
-                compilation_ids,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Build the substitution and mangle-argument pairs for every recorded
-    /// non-managed-scalar instantiation of a generic class.
-    ///
-    /// Each entry maps the class's generic parameters to one instantiation's
-    /// concrete types (both as a name→type map for body substitution and as an
-    /// ordered pair vector for symbol mangling). Instantiations whose arity does
-    /// not match the class generics, or that carry a non-monomorphizable-scalar
-    /// argument, are skipped. Returns empty for a non-generic or unrecorded class.
-    fn scalar_instantiation_subs(
-        result: &PipelineResult,
-        class_name: &str,
-    ) -> Vec<InstantiationSub> {
-        Self::instantiation_subs(result, class_name, &|kind| {
-            mir::lowering::is_monomorphizable_scalar(kind)
-        })
-    }
-
     /// Every recorded instantiation that gets a per-instantiation body, scalar
     /// and managed alike.
     fn monomorphizable_instantiation_subs(
@@ -1770,48 +1822,7 @@ impl Pipeline {
             .collect()
     }
 
-    /// Lower every concrete method of one generic-class instantiation.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_instantiation_methods(
-        result: &PipelineResult,
-        class_name: &str,
-        class_data: &ClassData,
-        is_release: bool,
-        subs: &std::collections::HashMap<String, Type>,
-        mangle_args: &[(String, Type)],
-        bodies: &mut Vec<(Symbol, mir::Body)>,
-        symbols: &mut SymbolTable,
-        compilation_ids: &mir::lowering::SharedCompilationIds,
-    ) -> Result<(), CompilerError> {
-        for method_stmt in &class_data.body {
-            let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node else {
-                continue;
-            };
-            if method_decl.body.is_none() {
-                continue;
-            }
-            Self::lower_one_instantiation_method(
-                result,
-                class_name,
-                method_stmt,
-                &method_decl.name,
-                is_release,
-                subs,
-                mangle_args,
-                bodies,
-                symbols,
-                compilation_ids,
-            )?;
-        }
-        Ok(())
-    }
-
     /// Lower one method statement for a single instantiation into a mangled body.
-    ///
-    /// Shared by the own-method path ([`lower_instantiation_methods`]) and the
-    /// inherited trait-default path ([`lower_trait_default_instantiations`]): both
-    /// need the same mangle-name / re-lower / push sequence, differing only in
-    /// where the method statement comes from.
     ///
     /// `self` is typed at `class_subs`, the class's own arguments; the body
     /// reads what [`mir::lowering::dispatch_symbols::instantiation_substitution`]
@@ -1862,68 +1873,27 @@ impl Pipeline {
         Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)
     }
 
-    /// Emit a per-instantiation monomorphized copy of an inherited trait-default
-    /// method for every recorded non-managed-scalar instantiation of a generic
-    /// class.
-    ///
-    /// The bare `Class_method` body a non-generic class inherits leaves a scalar
-    /// `T` unresolved (it falls back to a pointer-width slot); a generic class
-    /// instantiated at a concrete scalar (`Box<float>`) instead dispatches to a
-    /// mangled `Class_method__float` whose parameter and return types are the
-    /// concrete type. This threads the same substitution the own-method path uses
-    /// into the trait-default body so those mangled symbols exist to link against.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_trait_default_instantiations(
-        result: &PipelineResult,
-        class_name: &str,
-        method_stmt: &Statement,
-        method_name: &str,
-        is_release: bool,
-        bodies: &mut Vec<(Symbol, mir::Body)>,
-        symbols: &mut SymbolTable,
-        compilation_ids: &mir::lowering::SharedCompilationIds,
-    ) -> Result<(), CompilerError> {
-        // A builtin collection's methods are emitted on demand after the main
-        // lowering: most call sites lower to a direct runtime call instead of the
-        // Miri body, so emitting every method for every recorded element type
-        // would compile bodies nothing reaches.
-        if BuiltinCollectionKind::from_name(class_name).is_some() {
-            return Ok(());
-        }
-        for (class_subs, mangle_args) in Self::scalar_instantiation_subs(result, class_name) {
-            Self::lower_one_instantiation_method(
-                result,
-                class_name,
-                method_stmt,
-                method_name,
-                is_release,
-                &class_subs,
-                &mangle_args,
-                bodies,
-                symbols,
-                compilation_ids,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Emit a generic class's remaining monomorphized methods only where a
-    /// lowered body actually calls them.
+    /// Emit a generic class's monomorphized methods only where a lowered body
+    /// reaches them.
     ///
     /// A collection declares dozens of methods and most call sites lower to a
     /// direct runtime call rather than the Miri body, so emitting every method
     /// for every recorded element type compiles bodies nothing can reach — and an
     /// unreachable body still has to satisfy MIR verification. The same holds for
-    /// a class instantiated at a managed type: `Queue<String>` inherits a `sum`
-    /// default that adds its elements, which no program calls and no backend can
-    /// compile. Scan the lowered bodies for mangled symbols, emit just those, and
-    /// repeat until a pass finds nothing new, since a freshly emitted body can
-    /// call another.
+    /// any class instantiation: `Queue<String>` inherits a `sum` default that
+    /// adds its elements, which no program calls and no backend can compile, and
+    /// a method of `Box<int>` nothing calls was never checked at `int`. Scan the
+    /// lowered bodies for mangled symbols, emit just those, and repeat until a
+    /// pass finds nothing new, since a freshly emitted body can call another.
+    ///
+    /// A method only a vtable slot or an element thunk names is emitted only
+    /// where its obligations hold at the instance; see [`ImpliedMethodVerdicts`].
     #[allow(clippy::too_many_arguments)]
     fn lower_called_generic_class_methods(
-        result: &PipelineResult,
+        result: &mut PipelineResult,
         reach: &ReachTables,
         called: &mut CalledNames,
+        verdicts: &mut ImpliedMethodVerdicts,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
@@ -1932,20 +1902,20 @@ impl Pipeline {
         loop {
             called.refresh(bodies, result, reach)?;
             let mut emitted = false;
-            for (_, stmt) in statements_with_sites(result) {
-                let StatementKind::Class(class_data) = &stmt.node else {
+            for wanted in Self::wanted_instance_methods(result, reach, called, symbols) {
+                if wanted.demand == MethodDemand::Implied && !verdicts.accepts(result, &wanted) {
                     continue;
-                };
-                emitted |= Self::lower_called_methods_of_class(
+                }
+                Self::lower_wanted_method(
                     result,
                     reach,
-                    called,
-                    class_data,
+                    &wanted,
                     is_release,
                     bodies,
                     symbols,
                     compilation_ids,
                 )?;
+                emitted = true;
             }
             if !emitted {
                 return Ok(());
@@ -1953,71 +1923,112 @@ impl Pipeline {
         }
     }
 
-    /// Lower, at each of `class_data`'s instantiations, every method it
-    /// compiles under its own name — its own and the trait defaults its clauses
-    /// supply — that a lowered body calls or a container's thunk reaches, with
-    /// the generic functions each reaches. Returns whether anything was lowered.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_called_methods_of_class(
+    /// Every method a class compiles under its own name — its own and the
+    /// trait defaults its clauses supply — that a lowered body reaches at one
+    /// of the class's instantiations and that is not compiled yet.
+    fn wanted_instance_methods(
         result: &PipelineResult,
         reach: &ReachTables,
         called: &CalledNames,
-        class_data: &ClassData,
+        symbols: &SymbolTable,
+    ) -> Vec<WantedMethod> {
+        let mut wanted = Vec::new();
+        for (class_site, stmt) in statements_with_sites(result) {
+            let StatementKind::Class(class_data) = &stmt.node else {
+                continue;
+            };
+            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                continue;
+            };
+            let methods = Self::methods_compiled_under_class_name(
+                result,
+                &reach.trait_defaults,
+                class_data,
+                class_name,
+            );
+            for (class_subs, mangle_args) in
+                Self::monomorphizable_instantiation_subs(result, class_name)
+            {
+                for (method_index, &(method_stmt, method_name)) in methods.iter().enumerate() {
+                    let symbol =
+                        Self::instantiated_method_symbol(class_name, method_name, &mangle_args);
+                    if symbols.is_claimed(&symbol) {
+                        continue;
+                    }
+                    let link_name = symbol.link_name();
+                    let demand = if called.is_called(&link_name) {
+                        MethodDemand::Called
+                    } else if called.contains(&link_name)
+                        || Self::is_element_method_body(result, class_name, method_name)
+                    {
+                        MethodDemand::Implied
+                    } else {
+                        continue;
+                    };
+                    wanted.push(WantedMethod {
+                        class_site,
+                        class_name: class_name.to_string(),
+                        method_index,
+                        method_name: method_name.to_string(),
+                        span: method_stmt.span,
+                        class_subs: class_subs.clone(),
+                        mangle_args: mangle_args.clone(),
+                        symbol,
+                        demand,
+                    });
+                }
+            }
+        }
+        wanted
+    }
+
+    /// Lower `wanted` at its instantiation, with the generic functions it
+    /// reaches.
+    fn lower_wanted_method(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        wanted: &WantedMethod,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
-    ) -> Result<bool, CompilerError> {
-        let Some(class_name) = Self::identifier_name(&class_data.name) else {
-            return Ok(false);
+    ) -> Result<(), CompilerError> {
+        let Some(StatementKind::Class(class_data)) =
+            wanted.class_site.statement(result).map(|stmt| &stmt.node)
+        else {
+            return Ok(());
         };
         let methods = Self::methods_compiled_under_class_name(
             result,
             &reach.trait_defaults,
             class_data,
-            class_name,
+            &wanted.class_name,
         );
-        let mut emitted = false;
-        for (class_subs, mangle_args) in
-            Self::monomorphizable_instantiation_subs(result, class_name)
-        {
-            for &(method_stmt, method_name) in &methods {
-                let symbol =
-                    Self::instantiated_method_symbol(class_name, method_name, &mangle_args);
-                if symbols.is_claimed(&symbol) {
-                    continue;
-                }
-                let reached = called.contains(&symbol.link_name())
-                    || Self::is_element_method_body(result, class_name, method_name);
-                if !reached {
-                    continue;
-                }
-                let first_new = bodies.len();
-                Self::lower_one_instantiation_method(
-                    result,
-                    class_name,
-                    method_stmt,
-                    method_name,
-                    is_release,
-                    &class_subs,
-                    &mangle_args,
-                    bodies,
-                    symbols,
-                    compilation_ids,
-                )?;
-                Self::lower_generic_functions_reached_from(
-                    result,
-                    is_release,
-                    first_new,
-                    &reach.generic_functions,
-                    bodies,
-                    symbols,
-                    compilation_ids,
-                )?;
-                emitted = true;
-            }
-        }
-        Ok(emitted)
+        let Some(&(method_stmt, _)) = methods.get(wanted.method_index) else {
+            return Ok(());
+        };
+        let first_new = bodies.len();
+        Self::lower_one_instantiation_method(
+            result,
+            &wanted.class_name,
+            method_stmt,
+            &wanted.method_name,
+            is_release,
+            &wanted.class_subs,
+            &wanted.mangle_args,
+            bodies,
+            symbols,
+            compilation_ids,
+        )?;
+        Self::lower_generic_functions_reached_from(
+            result,
+            is_release,
+            first_new,
+            &reach.generic_functions,
+            bodies,
+            symbols,
+            compilation_ids,
+        )
     }
 
     /// Every method with a body `class_data` compiles under its own name: the
@@ -2175,9 +2186,11 @@ impl Pipeline {
             &mut symbols,
             &compilation_ids,
         )?;
+        let mut verdicts = ImpliedMethodVerdicts::default();
         Self::lower_trait_default_methods(
             result,
             &reach.trait_defaults,
+            &mut verdicts,
             is_release,
             &mut lowered,
             &mut symbols,
@@ -2202,6 +2215,7 @@ impl Pipeline {
         Self::lower_reached_methods(
             result,
             &reach,
+            &mut verdicts,
             is_release,
             &mut lowered,
             &mut symbols,
@@ -2283,6 +2297,7 @@ impl Pipeline {
     fn lower_reached_methods(
         result: &mut PipelineResult,
         reach: &ReachTables,
+        verdicts: &mut ImpliedMethodVerdicts,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
@@ -2295,6 +2310,7 @@ impl Pipeline {
                 result,
                 reach,
                 &mut called,
+                verdicts,
                 is_release,
                 bodies,
                 symbols,
@@ -2336,10 +2352,107 @@ impl Pipeline {
             )?;
             if !registered && bodies.len() == first_default {
                 refuse_unnameable_generic_calls(result, &reach.generic_functions, bodies, symbols)?;
-                result.vtable_fills = called.vtables.fills();
-                return Ok(());
+                return Self::settle_reached_instances(result, reach, &called, verdicts, symbols);
             }
         }
+    }
+
+    /// Settle what lowering the reached methods decided: each method withheld
+    /// at an instance leaves its vtable slot empty, the vtables are what
+    /// codegen writes, and every instance compiled is answered once more.
+    fn settle_reached_instances(
+        result: &mut PipelineResult,
+        reach: &ReachTables,
+        called: &CalledNames,
+        verdicts: &ImpliedMethodVerdicts,
+        symbols: &SymbolTable,
+    ) -> Result<(), CompilerError> {
+        let withheld = verdicts.withheld(symbols);
+        // TODO: a withheld slot is left null, so a virtual call the checker
+        // failed to pin is an uncoded SIGSEGV rather than a runtime trap; it
+        // needs a trap thunk under a runtime code of its own in its place.
+        let mut fills = called.vtables.fills();
+        fills.retain_slots(|slot| !withheld.contains(&slot.symbol));
+        result.vtable_fills = fills;
+        result.withheld_methods = withheld;
+        Self::refuse_unchecked_compiled_instances(result, reach, symbols)
+    }
+
+    /// Refuse the program where a method was compiled at an instance of its
+    /// class that the method's obligations do not hold at.
+    ///
+    /// The checker answers every obligation at each instance the program
+    /// uses a method at, and lowering compiles a method only where a lowered
+    /// body reaches it, so this finds nothing unless the two disagree about
+    /// what a program reaches. Where they do, the body would otherwise run on
+    /// a type nobody checked it against; the refusal the checker would have
+    /// given is reported instead.
+    fn refuse_unchecked_compiled_instances(
+        result: &mut PipelineResult,
+        reach: &ReachTables,
+        symbols: &SymbolTable,
+    ) -> Result<(), CompilerError> {
+        let compiled = Self::compiled_class_instances(result, reach, symbols);
+        let refusals: Vec<_> = compiled
+            .iter()
+            .flat_map(|instance| result.type_checker.compiled_instance_refusals(instance))
+            .collect();
+        if refusals.is_empty() {
+            return Ok(());
+        }
+        Err(CompilerError::TypeErrors {
+            errors: refusals,
+            warnings: result.type_checker.warnings().to_vec(),
+        })
+    }
+
+    /// Every method lowering compiled at an instantiation of its generic
+    /// class, as the symbol table records it.
+    fn compiled_class_instances(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        symbols: &SymbolTable,
+    ) -> Vec<CompiledInstance> {
+        let mut compiled = Vec::new();
+        for (_, stmt) in statements_with_sites(result) {
+            let StatementKind::Class(class_data) = &stmt.node else {
+                continue;
+            };
+            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                continue;
+            };
+            let methods = Self::methods_compiled_under_class_name(
+                result,
+                &reach.trait_defaults,
+                class_data,
+                class_name,
+            );
+            for (substitution, mangle_args) in
+                Self::monomorphizable_instantiation_subs(result, class_name)
+            {
+                let receiver = mir::lowering::monomorphized_self_type(
+                    class_name,
+                    &result.type_checker,
+                    &substitution,
+                    stmt.span,
+                );
+                for &(method_stmt, method_name) in &methods {
+                    let symbol =
+                        Self::instantiated_method_symbol(class_name, method_name, &mangle_args);
+                    if !symbols.is_claimed(&symbol) {
+                        continue;
+                    }
+                    compiled.push(CompiledInstance {
+                        class_name: class_name.to_string(),
+                        method: method_name.to_string(),
+                        substitution: substitution.clone(),
+                        receiver: receiver.clone(),
+                        span: method_stmt.span,
+                    });
+                }
+            }
+        }
+        compiled
     }
 
     /// Emit the shared `{Trait}_{method}` body of each trait default a lowered
@@ -2577,16 +2690,6 @@ impl Pipeline {
                             Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
-
-                    Self::lower_generic_class_instantiations(
-                        result,
-                        class_name,
-                        class_data,
-                        is_release,
-                        bodies,
-                        symbols,
-                        compilation_ids,
-                    )?;
                 }
                 StatementKind::Struct(name_expr, _generics, _fields, methods, _vis, _) => {
                     // Compile struct methods with bodies as `StructName_methodName`.
@@ -2759,16 +2862,6 @@ impl Pipeline {
                             Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
                         }
                     }
-
-                    Self::lower_generic_class_instantiations(
-                        result,
-                        class_name,
-                        class_data,
-                        is_release,
-                        bodies,
-                        symbols,
-                        compilation_ids,
-                    )?;
                 }
                 StatementKind::Enum(
                     name_expr,
@@ -2942,6 +3035,11 @@ impl Pipeline {
                 {
                     continue;
                 }
+                // TODO: the copy is lowered once with the class's parameters
+                // open, so a `self` call in it names the class's shared body
+                // even for an instance at concrete arguments, and that body
+                // runs unchecked there; it needs a copy per instantiation, with
+                // the use recorded at the instance.
                 let (mir_body, lambdas) = mir::lowering::lower_class_method_with_compilation_ids(
                     method_stmt,
                     self_type.clone(),
@@ -2988,42 +3086,27 @@ impl Pipeline {
     /// Every re-lowering emits the default body's closures again; they are kept
     /// apart because `LoweringContext::closure_symbol` spells the implementing
     /// class after the closure's own base name.
+    ///
+    /// A class with no parameters of its own reads the default at what its
+    /// clauses pin, which is an instance of the default like any other: one
+    /// whose obligations fail there is withheld, as [`ImpliedMethodVerdicts`]
+    /// states. A call written to it was refused by the checker already.
     fn lower_trait_default_methods(
-        result: &PipelineResult,
+        result: &mut PipelineResult,
         trait_defaults: &TraitDefaultBodies,
+        verdicts: &mut ImpliedMethodVerdicts,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let definitions = result.type_checker.type_definitions();
-        for (_, stmt) in statements_with_sites(result) {
-            let StatementKind::Class(class_data) = &stmt.node else {
-                continue;
-            };
-            let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                continue;
-            };
-            let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
-                continue;
-            };
-            if class_def.is_abstract {
-                continue;
-            }
-            let class = InheritingClass {
-                name: class_name,
-                self_type: Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span),
-                supertypes: result.type_checker.declaring_types_above(
-                    class_name,
-                    &mir::lowering::inherited_instantiation::own_parameters_left_open(
-                        definitions,
-                        class_name,
-                    ),
-                ),
-            };
+        for class_name in Self::classes_inheriting_defaults(result) {
+            let accepted =
+                Self::judged_trait_default_copies(result, trait_defaults, verdicts, &class_name);
             Self::lower_class_trait_defaults(
                 result,
-                &class,
+                &class_name,
+                &accepted,
                 trait_defaults,
                 is_release,
                 bodies,
@@ -3034,9 +3117,58 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Lower `class`'s copy of every trait default it inherits, typed at what
-    /// its `extends` and `implements` clauses pin the trait's own parameters
-    /// to, together with each concrete-scalar instantiation's copy.
+    /// Every concrete class the program declares, by name.
+    fn classes_inheriting_defaults(result: &PipelineResult) -> Vec<String> {
+        let definitions = result.type_checker.type_definitions();
+        statements_with_sites(result)
+            .filter_map(|(_, stmt)| {
+                let StatementKind::Class(class_data) = &stmt.node else {
+                    return None;
+                };
+                let class_name = Self::identifier_name(&class_data.name)?;
+                let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
+                    return None;
+                };
+                (!class_def.is_abstract).then(|| class_name.to_string())
+            })
+            .collect()
+    }
+
+    /// The trait defaults `class_name` inherits whose copy is compiled, each
+    /// with the trait supplying it: every one for a generic class, whose
+    /// copy leaves its own parameters open, and for any other class each one
+    /// whose obligations hold at what its clauses pin.
+    fn judged_trait_default_copies(
+        result: &mut PipelineResult,
+        trait_defaults: &TraitDefaultBodies,
+        verdicts: &mut ImpliedMethodVerdicts,
+        class_name: &str,
+    ) -> Vec<(String, String)> {
+        let definitions = result.type_checker.type_definitions();
+        let is_generic = matches!(
+            definitions.get(class_name),
+            Some(TypeDefinition::Class(class_def)) if class_def.generics.is_some()
+        );
+        let inherited: Vec<(String, String, Span)> =
+            mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class_name)
+                .into_iter()
+                .filter_map(|(method, owner)| {
+                    let span = trait_defaults.method(result, owner, method)?.span;
+                    Some((method.to_string(), owner.to_string(), span))
+                })
+                .collect();
+        inherited
+            .into_iter()
+            .filter(|(method, _, span)| {
+                is_generic || verdicts.accepts_class_copy(result, class_name, method, *span)
+            })
+            .map(|(method, owner, _)| (method, owner))
+            .collect()
+    }
+
+    /// Lower `class_name`'s copy of each trait default in `inherited`, typed
+    /// at what its `extends` and `implements` clauses pin the trait's own
+    /// parameters to.
     ///
     /// A parameter only the class's own type arguments would pin is absent
     /// from the pins: the class's bare copy leaves it generic, and each
@@ -3044,7 +3176,8 @@ impl Pipeline {
     #[allow(clippy::too_many_arguments)]
     fn lower_class_trait_defaults(
         result: &PipelineResult,
-        class: &InheritingClass,
+        class_name: &str,
+        inherited: &[(String, String)],
         trait_defaults: &TraitDefaultBodies,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
@@ -3052,24 +3185,33 @@ impl Pipeline {
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
         let definitions = result.type_checker.type_definitions();
+        let self_type = Type::new(
+            TypeKind::Custom(class_name.to_string(), None),
+            Self::class_declaration_site(result, class_name),
+        );
+        let supertypes = result.type_checker.declaring_types_above(
+            class_name,
+            &mir::lowering::inherited_instantiation::own_parameters_left_open(
+                definitions,
+                class_name,
+            ),
+        );
         let unpinned = std::collections::HashMap::new();
-        for (method_name, trait_name) in
-            mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class.name)
-        {
+        for (method_name, trait_name) in inherited {
             let Some(method_stmt) = trait_defaults.method(result, trait_name, method_name) else {
                 continue;
             };
-            let symbol = Symbol::method(class.name, &[], method_name, &[]);
+            let symbol = Symbol::method(class_name, &[], method_name, &[]);
             if !symbols
                 .claim_at(&symbol, method_stmt.span)
                 .map_err(CompilerError::Lowering)?
             {
                 continue;
             }
-            let pinned = pins_of(&class.supertypes, trait_name).unwrap_or(&unpinned);
+            let pinned = pins_of(&supertypes, trait_name).unwrap_or(&unpinned);
             let (mir_body, lambdas) = mir::lowering::lower_class_method_at_with_compilation_ids(
                 method_stmt,
-                class.self_type.clone(),
+                self_type.clone(),
                 &result.type_checker,
                 is_release,
                 pinned,
@@ -3077,23 +3219,20 @@ impl Pipeline {
             )
             .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
             Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
-
-            // A generic class inheriting this default also needs a mangled
-            // copy per concrete-scalar instantiation so a `Box<float>` receiver
-            // links against a body typed at the concrete `float`, not the bare
-            // pointer-width one.
-            Self::lower_trait_default_instantiations(
-                result,
-                class.name,
-                method_stmt,
-                method_name,
-                is_release,
-                bodies,
-                symbols,
-                compilation_ids,
-            )?;
         }
         Ok(())
+    }
+
+    /// Where the class `class_name` is declared.
+    fn class_declaration_site(result: &PipelineResult, class_name: &str) -> Span {
+        statements_with_sites(result)
+            .find_map(|(_, stmt)| {
+                let StatementKind::Class(class_data) = &stmt.node else {
+                    return None;
+                };
+                (Self::identifier_name(&class_data.name) == Some(class_name)).then_some(stmt.span)
+            })
+            .unwrap_or_default()
     }
 
     /// Monomorphize generic functions: collect every generic function call the

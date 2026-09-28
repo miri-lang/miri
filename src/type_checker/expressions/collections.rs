@@ -761,6 +761,7 @@ impl TypeChecker {
         if has_error {
             return make_type(TypeKind::Error);
         }
+        self.record_element_matching(&key_type, first_key.span, context);
 
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
@@ -805,6 +806,8 @@ impl TypeChecker {
                 elements[0].span,
             );
         }
+
+        self.record_element_matching(&first_type, elements[0].span, context);
 
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),

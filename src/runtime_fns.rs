@@ -625,6 +625,28 @@ pub fn orders_its_elements(name: &str) -> bool {
     matches!(name, rt::LIST_SORT | rt::ARRAY_SORT)
 }
 
+/// Whether `name` matches a value against the elements, or keys, of the
+/// container it is handed.
+///
+/// The runtime tells two elements apart only by the rule the compiler
+/// registered for their type, which for a class is the class's own `equals`.
+/// A body that hands its container to one of these therefore runs `equals` on
+/// the element type, and the type checker answers that wherever the element
+/// type is pinned.
+pub fn matches_its_elements(name: &str) -> bool {
+    matches!(
+        name,
+        rt::SET_ADD
+            | rt::SET_CONTAINS
+            | rt::SET_REMOVE
+            | rt::MAP_SET
+            | rt::MAP_GET
+            | rt::MAP_GET_CHECKED
+            | rt::MAP_CONTAINS_KEY
+            | rt::MAP_REMOVE
+    )
+}
+
 /// Whether `name` hands its caller an element.
 ///
 /// These entry points return nothing: the element is written into storage the

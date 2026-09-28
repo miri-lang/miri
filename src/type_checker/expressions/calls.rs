@@ -510,7 +510,7 @@ impl TypeChecker {
             }
             None => declared_return,
         };
-        self.record_element_ordering_for_call(func, positional_args, context);
+        self.record_elements_used_by_call(func, positional_args, context);
         self.refuse_receiver_slots_bound(func, func_data, positional_args, &named, context);
         result
     }
@@ -2184,7 +2184,7 @@ impl TypeChecker {
     /// Only a call written as a bare name carries this: the intrinsics that
     /// order a container's elements are declared as free functions, and the
     /// container they are handed is their first argument.
-    fn record_element_ordering_for_call(
+    fn record_elements_used_by_call(
         &mut self,
         func: &Expression,
         positional_args: &[(&Expression, Type)],
@@ -2196,7 +2196,7 @@ impl TypeChecker {
         let Some((_, container_ty)) = positional_args.first() else {
             return;
         };
-        self.record_elements_a_call_orders(callee, container_ty, context);
+        self.record_elements_a_call_uses(callee, container_ty, context);
     }
 
     #[allow(clippy::too_many_arguments)]

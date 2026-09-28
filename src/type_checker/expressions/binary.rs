@@ -175,6 +175,7 @@ impl TypeChecker {
                     self.record_binary_requirement(&left_ty, op, &right_ty, &result, context);
                 }
                 self.record_operator_method_sites(&left_ty, op, span, context);
+                self.record_membership_sites(op, &right_ty, span, context);
                 result
             }
             Err(msg) => {
