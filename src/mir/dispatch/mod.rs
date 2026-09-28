@@ -18,4 +18,4 @@ pub use vtable::{
 
 pub use crate::type_checker::context::class_needs_vtable;
 
-pub use crate::type_checker::implicit_methods::ELEMENT_METHOD_NAMES;
+pub use crate::ast::implicit_methods::ELEMENT_METHOD_NAMES;

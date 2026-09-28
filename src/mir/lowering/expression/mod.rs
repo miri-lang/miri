@@ -15,9 +15,6 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::statement::lower_statement;
 
-/// The method of the string type a `+` of two strings calls.
-const STRING_CONCAT_METHOD: &str = "concat";
-
 pub mod aggregate_to_string;
 pub mod array_expr;
 pub mod assignment_expr;
@@ -352,7 +349,13 @@ pub(super) fn emit_string_concat(
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
         literal: Literal::Identifier(
-            Symbol::method(STRING_TYPE_NAME, &[], STRING_CONCAT_METHOD, &[]).link_name(),
+            Symbol::method(
+                STRING_TYPE_NAME,
+                &[],
+                crate::ast::implicit_methods::CONCAT_METHOD_NAME,
+                &[],
+            )
+            .link_name(),
         ),
     }));
     let target_bb = ctx.new_basic_block();

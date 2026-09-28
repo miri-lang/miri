@@ -13,6 +13,7 @@ pub mod formatter;
 pub mod gpu_frame_passes;
 pub mod gpu_wire;
 pub mod gpu_writes;
+pub mod implicit_methods;
 pub mod literal;
 pub mod math_intrinsic;
 pub mod node;

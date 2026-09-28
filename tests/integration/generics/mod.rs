@@ -24,4 +24,5 @@ pub mod trait_bounded_parameters;
 pub mod unary_and_cast;
 pub mod unregistered_drop_instantiations;
 pub mod used_methods;
+pub mod used_methods_shapes;
 pub mod written_local_types;

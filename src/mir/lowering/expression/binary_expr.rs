@@ -126,36 +126,22 @@ enum TraitResult {
     AgainstZero(BinOp),
 }
 
-/// The trait method a binary operator dispatches to, as the checker names it,
-/// and how the operator reads that method's result.
+/// The trait method a binary operator dispatches to, as the language names
+/// it, and how the operator reads that method's result.
 fn binary_op_trait_method(
     op: &crate::ast::operator::BinaryOp,
 ) -> Option<(&'static str, TraitResult)> {
-    use crate::ast::operator::BinaryOp;
-    let method = crate::type_checker::implicit_methods::operator_method_name(op)?;
-    let result = match op {
-        BinaryOp::NotEqual => TraitResult::Negated,
-        BinaryOp::LessThan => TraitResult::AgainstZero(BinOp::Lt),
-        BinaryOp::LessThanEqual => TraitResult::AgainstZero(BinOp::Le),
-        BinaryOp::GreaterThan => TraitResult::AgainstZero(BinOp::Gt),
-        BinaryOp::GreaterThanEqual => TraitResult::AgainstZero(BinOp::Ge),
-        BinaryOp::Add
-        | BinaryOp::Mul
-        | BinaryOp::Equal
-        | BinaryOp::Sub
-        | BinaryOp::Div
-        | BinaryOp::Mod
-        | BinaryOp::BitwiseOr
-        | BinaryOp::BitwiseAnd
-        | BinaryOp::BitwiseXor
-        | BinaryOp::Not
-        | BinaryOp::And
-        | BinaryOp::Or
-        | BinaryOp::Range
-        | BinaryOp::In
-        | BinaryOp::NullCoalesce => TraitResult::AsReturned,
+    use crate::ast::implicit_methods::{operator_method, MethodResultReading};
+    let method = operator_method(op)?;
+    let result = match method.reading {
+        MethodResultReading::AsReturned => TraitResult::AsReturned,
+        MethodResultReading::Negated => TraitResult::Negated,
+        MethodResultReading::BelowZero => TraitResult::AgainstZero(BinOp::Lt),
+        MethodResultReading::AtMostZero => TraitResult::AgainstZero(BinOp::Le),
+        MethodResultReading::AboveZero => TraitResult::AgainstZero(BinOp::Gt),
+        MethodResultReading::AtLeastZero => TraitResult::AgainstZero(BinOp::Ge),
     };
-    Some((method, result))
+    Some((method.name, result))
 }
 
 /// The symbol owner and declaration of the body answering `method_name` for

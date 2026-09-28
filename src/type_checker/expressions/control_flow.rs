@@ -476,7 +476,7 @@ impl TypeChecker {
             context,
         );
         for branch in branches {
-            if let StatementKind::Expression(expr) = &branch.body.node {
+            if let Some(expr) = super::types::yielded_expression(&branch.body) {
                 self.record_joined_type(expr, &joined, context);
             }
         }

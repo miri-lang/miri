@@ -104,9 +104,9 @@ fn thunk_role(kind: ThunkKind) -> &'static str {
     match kind {
         ThunkKind::Drop => "drop",
         ThunkKind::Decref => "release",
-        ThunkKind::Clone => "clone",
-        ThunkKind::Compare => "compare",
-        ThunkKind::Equals => "equals",
+        ThunkKind::Clone => crate::ast::implicit_methods::CLONE_METHOD_NAME,
+        ThunkKind::Compare => crate::ast::implicit_methods::ORDERING_METHOD_NAME,
+        ThunkKind::Equals => crate::ast::implicit_methods::EQUALS_METHOD_NAME,
     }
 }
 
