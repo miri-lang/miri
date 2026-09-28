@@ -240,10 +240,13 @@ impl MiriMap {
 
     /// Grows the table and rehashes all entries.
     unsafe fn grow(&mut self) {
+        // Security Invariant: Guard against capacity multiplication overflow
         let new_capacity = if self.capacity == 0 {
             INITIAL_CAPACITY
         } else {
-            self.capacity * 2
+            self.capacity
+                .checked_mul(2)
+                .unwrap_or_else(|| std::process::abort())
         };
 
         let Some((new_states, new_keys, new_values)) =
@@ -324,9 +327,15 @@ impl MiriMap {
     /// Sets a key-value pair, growing the table if necessary.
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set(&mut self, key: *const u8, value: *const u8) {
-        // Check if we need to grow (before insertion to ensure capacity)
+        // Security Invariant: Use checked multiplication to prevent integer overflow during load factor checks
         let need_grow = self.capacity == 0
-            || (self.len + 1) * LOAD_FACTOR_DEN > self.capacity * LOAD_FACTOR_NUM;
+            || match (
+                self.len.saturating_add(1).checked_mul(LOAD_FACTOR_DEN),
+                self.capacity.checked_mul(LOAD_FACTOR_NUM),
+            ) {
+                (Some(l), Some(c)) => l > c,
+                _ => true,
+            };
         if need_grow {
             self.grow();
         }
