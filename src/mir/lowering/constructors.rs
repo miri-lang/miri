@@ -384,28 +384,22 @@ fn lower_class_with_init(
         span: *span,
     });
 
-    let mut call_args = vec![Operand::Copy(destination)];
     let init_arg_watermark = ctx.body.local_decls.len();
-    for (position, arg) in args.iter().enumerate() {
+    let names: Vec<&str> = init_params.iter().map(|(name, _)| name.as_str()).collect();
+    let mut slots = Vec::with_capacity(args.len());
+    for (position, value) in super::dispatch::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        // A named argument names its parameter; every other takes the one in its
-        // own position.
-        let (value, declared) = match &arg.node {
-            ExpressionKind::NamedArgument(name, value) => (
-                value.as_ref(),
-                init_params.iter().find(|(p, _)| p == name).map(|(_, t)| t),
-            ),
-            _ => (arg, init_params.get(position).map(|(_, t)| t)),
-        };
         let op = lower_expression(ctx, value, None)?;
-        let op = match declared {
-            Some(target_ty) => {
+        let op = match init_params.get(position) {
+            Some((_, target_ty)) => {
                 super::dispatch::coerce_arg_to_declared(ctx, op, value, target_ty, watermark)
             }
             None => op,
         };
-        call_args.push(op);
+        super::dispatch::place_at_parameter(&mut slots, position, op);
     }
+    let mut call_args = vec![Operand::Copy(destination)];
+    call_args.extend(super::dispatch::operands_in_parameter_order(slots, *span)?);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }

@@ -2028,9 +2028,10 @@ impl TypeChecker {
         }
 
         for (name, (_, _, span)) in named_args.drain() {
+            let is_param = func_data.params.iter().any(|param| param.name == name);
             self.report_error(
                 DiagnosticCode::TypArgumentCountMismatch,
-                format!("Unknown argument '{}'", name),
+                leftover_named_argument_message(&name, is_param),
                 span,
             );
         }
@@ -3096,9 +3097,10 @@ impl TypeChecker {
         }
 
         for (arg_name, (_, _, arg_span)) in named_args.drain() {
+            let is_param = init_method.params.iter().any(|(name, _)| *name == arg_name);
             self.report_error(
                 DiagnosticCode::TypArgumentCountMismatch,
-                format!("Unknown argument '{}'", arg_name),
+                leftover_named_argument_message(&arg_name, is_param),
                 arg_span,
             );
         }
@@ -3493,4 +3495,15 @@ fn generic_parameter_names(func_data: &crate::ast::types::FunctionTypeData) -> O
             })
             .collect(),
     )
+}
+
+/// The message for a named argument no parameter was left to take: either the
+/// parameter it names was already bound by a positional argument, or no
+/// parameter carries the name at all.
+fn leftover_named_argument_message(name: &str, names_a_parameter: bool) -> String {
+    if names_a_parameter {
+        format!("Argument '{name}' is already given positionally")
+    } else {
+        format!("Unknown argument '{name}'")
+    }
 }

@@ -190,3 +190,61 @@ fn main()
     "#,
     );
 }
+
+#[test]
+fn test_method_named_args_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+class Box
+    var base int
+    fn init(base int)
+        self.base = base
+    fn show(a int, b int)
+        println(f"base={self.base} a={a} b={b}")
+
+fn main()
+    let bx = Box(5)
+    bx.show(b: 2, a: 1)
+    "#,
+        "base=5 a=1 b=2",
+    );
+}
+
+#[test]
+fn test_struct_and_init_less_class_named_fields_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+struct S
+    a int
+    b int
+
+class K
+    var a int
+    var b int
+
+fn main()
+    let s = S(b: 2, a: 1)
+    let k = K(b: 4, a: 3)
+    println(f"s={s.a},{s.b} k={k.a},{k.b}")
+    "#,
+        "s=1,2 k=3,4",
+    );
+}
+
+#[test]
+fn test_constructor_named_arg_duplicating_a_positional_one_is_refused() {
+    assert_compiler_error(
+        r#"
+class P
+    var a int
+    var b int
+    fn init(a int, b int)
+        self.a = a
+        self.b = b
+
+fn main()
+    let p = P(1, a: 2)
+    "#,
+        "Argument 'a' is already given positionally",
+    );
+}
