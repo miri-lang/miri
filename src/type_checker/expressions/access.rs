@@ -748,6 +748,7 @@ impl TypeChecker {
         call_arity: Option<usize>,
     ) -> Type {
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
+        self.record_parameter_method_requirement(obj_type, prop_name, context);
 
         if let Some(name) = &type_name {
             if name == "Kernel" && prop_name == "launch" {
