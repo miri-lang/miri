@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod dead_code;
 pub mod do_while_until;
 pub mod edge_cases;
 pub mod forall_cpu;
