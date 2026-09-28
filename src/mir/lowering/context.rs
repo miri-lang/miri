@@ -757,6 +757,24 @@ impl<'a> LoweringContext<'a> {
         self.current_block = block;
     }
 
+    /// Move to a fresh block when the current one already ends in a
+    /// terminator.
+    ///
+    /// Source written after a `return`, `break` or `continue` is unreachable.
+    /// Lowered into the terminated block, its statements would run before that
+    /// terminator, and a terminator of its own would replace it: a second
+    /// `return` would override the first. A fresh block has no predecessor,
+    /// so what lands in it stays dead.
+    pub fn leave_terminated_block(&mut self) {
+        if self.body.basic_blocks[self.current_block.0]
+            .terminator
+            .is_some()
+        {
+            let unreachable = self.new_basic_block();
+            self.set_current_block(unreachable);
+        }
+    }
+
     pub fn set_terminator(&mut self, terminator: Terminator) {
         let block = &mut self.body.basic_blocks[self.current_block.0];
         block.terminator = Some(terminator);

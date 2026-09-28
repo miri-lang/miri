@@ -37,6 +37,7 @@ use super::variable::lower_variable;
 ///
 /// Returns `LoweringError` if any sub-expression or sub-statement fails to lower.
 pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<(), LoweringError> {
+    ctx.leave_terminated_block();
     match &stmt.node {
         StatementKind::Block(stmts) => lower_block(ctx, stmts, stmt.span),
         StatementKind::Return(ret_expr) => lower_return(ctx, ret_expr.as_deref(), stmt.span),
