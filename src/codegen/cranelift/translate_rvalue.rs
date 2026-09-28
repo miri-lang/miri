@@ -605,9 +605,8 @@ impl<'a> FunctionTranslator<'a> {
         {
             (setters.set_drop)(builder, ctx, container_ptr, addr)?;
         }
-        let shape = Self::classify_element_shape(elem_kind);
         if let Some(addr) =
-            Self::elem_clone_addr_for_shape(builder, ctx, shape, type_ctx.facts, ptr_type)?
+            Self::elem_clone_addr_for_kind(builder, ctx, elem_kind, type_ctx.facts, ptr_type)?
         {
             (setters.set_clone)(builder, ctx, container_ptr, addr)?;
         }

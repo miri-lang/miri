@@ -2061,8 +2061,9 @@ impl Pipeline {
     /// Whether this method is what a container calls on its elements.
     ///
     /// A List or Array sorts through the ordering method of a class that orders
-    /// its values, and a Set or Map matches elements through the `equals` a class
-    /// defines. Both are reached through a thunk codegen registers on the
+    /// its values, a Set or Map matches elements through the `equals` a class
+    /// defines, and every container copies a `Cloneable` class's elements
+    /// through its `clone`. Both are reached through a thunk codegen registers on the
     /// container, which is a reference no MIR body carries — so scanning call
     /// sites never finds it, and the instantiation it needs has to be emitted on
     /// the strength of the class declaring the capability.
@@ -2080,6 +2081,13 @@ impl Pipeline {
         let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
         if method_name == ordering {
             return class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions);
+        }
+        if method_name == crate::ast::types::CLONE_METHOD_NAME {
+            return class_implements_trait(
+                class_name,
+                crate::ast::types::CLONEABLE_TRAIT_NAME,
+                definitions,
+            );
         }
         method_name == equals && class_method_declaration(class_name, equals, definitions).is_some()
     }

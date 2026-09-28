@@ -463,11 +463,10 @@ impl<'a> FunctionTranslator<'a> {
             FunctionTranslator::call_rt_map_set_val_drop_fn(builder, ctx, map_ptr, drop_addr)?;
         }
 
-        let shape = FunctionTranslator::classify_element_shape(&value_ty.kind);
-        if let Some(clone_addr) = FunctionTranslator::elem_clone_addr_for_shape(
+        if let Some(clone_addr) = FunctionTranslator::elem_clone_addr_for_kind(
             builder,
             ctx,
-            shape,
+            &value_ty.kind,
             type_ctx.facts,
             ptr_type,
         )? {
@@ -1077,12 +1076,11 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ListLiteral { list_ptr, elem_ty } = *literal;
         Self::override_list_literal_drop_fn(builder, ctx, literal, type_ctx)?;
-        let shape = FunctionTranslator::classify_element_shape(&elem_ty.kind);
         let ptr_type = type_ctx.ptr_type;
-        if let Some(addr) = FunctionTranslator::elem_clone_addr_for_shape(
+        if let Some(addr) = FunctionTranslator::elem_clone_addr_for_kind(
             builder,
             ctx,
-            shape,
+            &elem_ty.kind,
             type_ctx.facts,
             ptr_type,
         )? {

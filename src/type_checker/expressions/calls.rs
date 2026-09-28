@@ -180,6 +180,7 @@ impl TypeChecker {
         if context.in_gpu_function && callable {
             self.check_gpu_call_types(func, &positional_args, context);
         }
+        self.record_elements_cloned(&result_type, span, context);
 
         if context.in_gpu_function {
             self.reject_optional_result_in_device_code(func, &result_type, span);
