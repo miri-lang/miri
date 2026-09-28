@@ -702,7 +702,9 @@ impl TypeChecker {
             }
         }
 
+        let outer_receiver = self.member_receiver_expr_id.replace(obj.id);
         let obj_type = self.infer_expression(obj, context);
+        self.member_receiver_expr_id = outer_receiver;
 
         if matches!(obj_type.kind, TypeKind::Error) {
             return make_type(TypeKind::Error);
@@ -737,7 +739,24 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         };
 
-        self.infer_member_dispatch(&obj_type, prop_name, span, context, call_arity)
+        let is_parameter = self.names_a_parameter(obj, context);
+        let outer_is_parameter =
+            std::mem::replace(&mut self.member_receiver_is_parameter, is_parameter);
+        let member = self.infer_member_dispatch(&obj_type, prop_name, span, context, call_arity);
+        self.member_receiver_is_parameter = outer_is_parameter;
+        member
+    }
+
+    /// Whether `expr` names a parameter of the function being checked, other
+    /// than `self`, and not a local declared over it.
+    fn names_a_parameter(&self, expr: &Expression, context: &Context) -> bool {
+        let ExpressionKind::Identifier(name, _) = &expr.node else {
+            return false;
+        };
+        name != "self"
+            && context
+                .resolve_info(name)
+                .is_some_and(|info| info.is_parameter)
     }
 
     fn infer_member_dispatch(

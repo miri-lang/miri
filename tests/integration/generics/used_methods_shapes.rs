@@ -501,3 +501,227 @@ fn main()
         "1\ntrue",
     );
 }
+
+/// A default calling a method on a trait-typed parameter runs the method of
+/// whatever instance the caller passed, not its own `self`'s. A default that
+/// hands its `self` on as a trait value is where that instance becomes its
+/// own, so every method called through the trait runs on it.
+const HANDS_ON: &str = r#"
+use system.io
+
+trait Tr
+    fn a() bool
+    fn both(other Tr) bool
+        return other.a()
+    fn go() bool
+        return self.both(self)
+    fn me() Tr
+        return self
+    fn via_alias() bool
+        let me = self
+        return me.a()
+    fn via_helper() bool
+        return helper(self)
+
+fn helper(x Tr) bool
+    return x.a()
+
+class Box<T> implements Tr
+    v T
+    fn a() bool
+        return self.v < 10
+
+class Other implements Tr
+    k int
+    fn a() bool
+        return true
+"#;
+
+#[test]
+fn a_default_calling_a_method_on_a_trait_typed_parameter_is_accepted_for_another_instance() {
+    assert_heap_guard_output(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.both(Other(k: 1))}")
+"#,
+        ),
+        "true",
+    );
+}
+
+#[test]
+fn a_default_passing_its_self_to_its_own_parameter_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.go()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn an_instance_passed_to_a_defaults_trait_typed_parameter_is_refused_at_its_argument() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.both(b)}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_default_returning_its_self_as_the_trait_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    let t = b.me()
+    println(f"{t.a()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_default_calling_through_an_alias_of_its_self_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.via_alias()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_default_passing_its_self_to_a_function_is_refused_at_the_instances_argument() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.via_helper()}")
+"#,
+        ),
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn a_default_handing_on_its_self_runs_at_a_valid_argument() {
+    assert_heap_guard_output(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<int>(v: 3)
+    println(f"{b.go()} {b.via_helper()} {b.me().a()}")
+"#,
+        ),
+        "true true true",
+    );
+}
+
+/// A method declared to return `Self` hands back an instance of the class
+/// the default runs for, typed as the trait, so storing it as the trait hands
+/// that class's instance on just as storing `self` does.
+#[test]
+fn a_default_handing_on_what_a_self_returning_method_gave_it_is_refused_at_the_instances_argument()
+{
+    assert_compiler_error(
+        r#"
+use system.io
+
+trait Tr
+    fn a() bool
+    fn dup() Self
+    fn go(o Tr) bool
+        return o.a()
+    fn start() bool
+        return self.go(self.dup())
+
+class Box<T> implements Tr
+    v T
+    fn a() bool
+        return self.v < 10
+    fn dup() Box<T>
+        return Box<T>(v: self.v)
+
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    println(f"{b.start()}")
+"#,
+        "cannot compare String and int",
+    );
+}
+
+/// The value a lambda body ends on is returned at the lambda's declared
+/// type, which converts an instance returned as a trait.
+#[test]
+fn an_instance_a_lambda_returns_as_a_trait_is_refused_at_its_argument() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+trait Tr
+    fn a() bool
+
+class Box<T> implements Tr
+    v T
+    fn a() bool
+        return self.v < 10
+
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    let f = fn() Tr: b
+    let t = f()
+    println(f"{t.a()}")
+"#,
+        "cannot compare String and int",
+    );
+}
+
+#[test]
+fn an_instance_a_lambda_returns_as_a_trait_runs_at_a_valid_argument() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+trait Tr
+    fn a() bool
+
+class Box<T> implements Tr
+    v T
+    fn a() bool
+        return self.v < 10
+
+fn main()
+    let b = Box<int>(v: 3)
+    let f = fn() Tr: b
+    let t = f()
+    println(f"{t.a()}")
+"#,
+        "true",
+    );
+}

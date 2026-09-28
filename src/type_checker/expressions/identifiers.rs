@@ -85,6 +85,9 @@ impl TypeChecker {
         }
 
         if name == "self" {
+            if self.member_receiver_expr_id != Some(expr_id) {
+                self.record_self_conversion(context);
+            }
             return self.infer_self(span, context);
         }
 
