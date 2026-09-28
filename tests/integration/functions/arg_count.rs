@@ -136,9 +136,112 @@ fn sub(a int, b int) int
     a - b
 
 fn main()
-    println(f"{sub(b: 2, a: 10)}")
+    println(f"result={sub(b: 2, a: 10)}")
     "#,
-        "8",
+        "result=8",
+    );
+}
+
+#[test]
+fn test_function_named_args_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+fn f(a int, b int)
+    println(f"a={a} b={b}")
+
+fn main()
+    f(b: 2, a: 1)
+    "#,
+        "a=1 b=2",
+    );
+}
+
+#[test]
+fn test_function_positional_then_named_args_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+fn f(a int, b int, c int)
+    println(f"a={a} b={b} c={c}")
+
+fn main()
+    f(1, c: 3, b: 2)
+    "#,
+        "a=1 b=2 c=3",
+    );
+}
+
+#[test]
+fn test_function_omitted_default_is_supplied_between_named_args() {
+    assert_runs_with_output(
+        r#"
+fn g(a int, b int = 7, c int = 9)
+    println(f"a={a} b={b} c={c}")
+
+fn main()
+    g(c: 3, a: 1)
+    "#,
+        "a=1 b=7 c=3",
+    );
+}
+
+#[test]
+fn test_function_named_args_are_evaluated_in_written_order() {
+    assert_runs_with_output(
+        r#"
+fn trace(x int) int
+    println(f"eval {x}")
+    return x
+
+fn f(a int, b int)
+    println(f"a={a} b={b}")
+
+fn main()
+    f(b: trace(2), a: trace(1))
+    "#,
+        "eval 2\neval 1\na=1 b=2",
+    );
+}
+
+#[test]
+fn test_function_managed_named_args_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+fn f(a String, b String)
+    println(f"a={a} b={b}")
+
+fn main()
+    let x = "one"
+    f(b: f"{x}-two", a: f"{x}-one")
+    "#,
+        "a=one-one b=one-two",
+    );
+}
+
+#[test]
+fn test_generic_function_named_args_out_of_order_bind_by_name() {
+    assert_runs_with_output(
+        r#"
+fn first<T>(a T, b T) T
+    return a
+
+fn main()
+    println(f"first={first(b: 2, a: 1)}")
+    "#,
+        "first=1",
+    );
+}
+
+#[test]
+fn test_function_named_arg_duplicating_a_positional_one_is_refused() {
+    assert_compiler_error(
+        r#"
+fn f(a int, b int)
+    println(f"a={a} b={b}")
+
+fn main()
+    f(1, a: 2)
+    "#,
+        "Argument 'a' is already given positionally",
     );
 }
 

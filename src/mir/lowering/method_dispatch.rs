@@ -569,22 +569,28 @@ fn lower_method_args(
     method_info: &MethodInfo,
     arg_types: &[Type],
 ) -> Result<Vec<Operand>, LoweringError> {
-    let mut ops = Vec::with_capacity(args.len());
-    for (i, arg) in args.iter().enumerate() {
+    let names: Vec<&str> = method_info
+        .params
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let mut slots = Vec::with_capacity(args.len());
+    for (position, value) in super::dispatch::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        let op = lower_expression(ctx, arg, None)?;
-        let target = arg_types
-            .get(i)
-            .filter(|target| !method_info.is_param_out(i) && names_a_settled_type(ctx, target));
+        let op = lower_expression(ctx, value, None)?;
+        let target = arg_types.get(position).filter(|target| {
+            !method_info.is_param_out(position) && names_a_settled_type(ctx, target)
+        });
         let op = match target {
             Some(target) => {
-                super::dispatch::coerce_arg_to_declared(ctx, op, arg, target, watermark)
+                super::dispatch::coerce_arg_to_declared(ctx, op, value, target, watermark)
             }
             None => op,
         };
-        ops.push(op);
+        super::dispatch::place_at_parameter(&mut slots, position, op);
     }
-    Ok(ops)
+    let span = args.first().map(|arg| arg.span).unwrap_or_default();
+    super::dispatch::operands_in_parameter_order(slots, span)
 }
 
 /// Whether `ty` names a type every part of which is known here: no type

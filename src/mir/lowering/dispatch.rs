@@ -1372,9 +1372,10 @@ fn lower_direct_call(
     } else {
         declared_parameter_types(ctx, &param_types)
     };
-    let mut arg_ops = lower_and_coerce_args(ctx, args, &targets)?;
-
-    fill_default_args(ctx, &mut arg_ops, &param_types)?;
+    let param_names = callee_parameter_names(ctx, func.id);
+    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names)?;
+    fill_default_args(ctx, &mut arg_slots, &param_types)?;
+    let mut arg_ops = operands_in_parameter_order(arg_slots, *span)?;
 
     inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
 
@@ -1707,27 +1708,106 @@ fn generic_call_parameter_types(
         .collect()
 }
 
+/// The name of each parameter of the function `func_id` is typed as, in
+/// declaration order; empty when the callee's type is not a function.
+fn callee_parameter_names(ctx: &LoweringContext, func_id: usize) -> Vec<String> {
+    let Some(TypeKind::Function(signature)) = ctx.type_checker.get_type(func_id).map(|ty| &ty.kind)
+    else {
+        return Vec::new();
+    };
+    signature
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect()
+}
+
+/// The parameter position each written argument binds, with the expression
+/// that supplies its value: a named argument binds the parameter it names,
+/// every other the position it is written in.
+///
+/// The type checker has refused a name no parameter carries, so a name that
+/// matches none here keeps its written position.
+pub(super) fn bind_arguments_to_parameters<'a>(
+    args: &'a [Expression],
+    param_names: &[&str],
+) -> Vec<(usize, &'a Expression)> {
+    args.iter()
+        .enumerate()
+        .map(|(written, arg)| {
+            let ExpressionKind::NamedArgument(name, value) = &arg.node else {
+                return (written, arg);
+            };
+            let position = param_names
+                .iter()
+                .position(|param| *param == name.as_str())
+                .unwrap_or(written);
+            (position, value.as_ref())
+        })
+        .collect()
+}
+
+/// Put an operand lowered for the parameter at `position` into its slot,
+/// growing the slots to reach it.
+pub(super) fn place_at_parameter(slots: &mut Vec<Option<Operand>>, position: usize, op: Operand) {
+    if slots.len() <= position {
+        slots.resize(position + 1, None);
+    }
+    slots[position] = Some(op);
+}
+
+/// The call's operands in parameter order, once every slot up to the last
+/// supplied one holds a value.
+///
+/// A hole means a parameter reached lowering with neither an argument nor a
+/// default, which the type checker refuses.
+pub(super) fn operands_in_parameter_order(
+    slots: Vec<Option<Operand>>,
+    span: Span,
+) -> Result<Vec<Operand>, LoweringError> {
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(position, slot)| {
+            slot.ok_or_else(|| {
+                LoweringError::internal(
+                    DiagnosticCode::MirCustomLoweringError,
+                    format!(
+                        "a call reached lowering with no argument or default for parameter {position}"
+                    ),
+                    span,
+                )
+            })
+        })
+        .collect()
+}
+
+/// Lower a call's written arguments in the order they are written, so their
+/// side effects happen as the source says, and place each at the parameter it
+/// binds, brought to the type that parameter is passed at.
 fn lower_and_coerce_args(
     ctx: &mut LoweringContext,
     args: &[Expression],
     targets: &[Type],
-) -> Result<Vec<Operand>, LoweringError> {
-    let mut arg_ops = Vec::with_capacity(args.len());
-    for (i, arg) in args.iter().enumerate() {
+    param_names: &[String],
+) -> Result<Vec<Option<Operand>>, LoweringError> {
+    let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
+    let mut slots = Vec::with_capacity(args.len());
+    for (position, value) in bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        let mut op = lower_expression(ctx, arg, None)?;
+        let mut op = lower_expression(ctx, value, None)?;
 
-        if let Some(target_ty) = targets.get(i) {
-            op = coerce_arg_to_declared(ctx, op, arg, target_ty, watermark);
+        if let Some(target_ty) = targets.get(position) {
+            op = coerce_arg_to_declared(ctx, op, value, target_ty, watermark);
         }
 
         let op = match op {
             Operand::Move(p) => Operand::Copy(p),
             other => other,
         };
-        arg_ops.push(op);
+        place_at_parameter(&mut slots, position, op);
     }
-    Ok(arg_ops)
+    Ok(slots)
 }
 
 /// Bring a lowered argument to the type the callee declares for it.
@@ -1769,17 +1849,24 @@ pub(super) fn coerce_arg_to_declared(
     Operand::Copy(Place::new(temp))
 }
 
+/// Supply the default of every parameter no written argument bound. A named
+/// argument may skip over a defaulted parameter, so the gap can sit anywhere,
+/// not only after the last written argument.
 fn fill_default_args(
     ctx: &mut LoweringContext,
-    arg_ops: &mut Vec<Operand>,
+    slots: &mut Vec<Option<Operand>>,
     param_types: &Option<Vec<crate::ast::common::Parameter>>,
 ) -> Result<(), LoweringError> {
-    if let Some(params) = param_types {
-        for param in params.iter().skip(arg_ops.len()) {
-            if let Some(default_expr) = &param.default_value {
-                let default_op = lower_expression(ctx, default_expr, None)?;
-                arg_ops.push(default_op);
-            }
+    let Some(params) = param_types else {
+        return Ok(());
+    };
+    for (position, param) in params.iter().enumerate() {
+        if slots.get(position).is_some_and(Option::is_some) {
+            continue;
+        }
+        if let Some(default_expr) = &param.default_value {
+            let default_op = lower_expression(ctx, default_expr, None)?;
+            place_at_parameter(slots, position, default_op);
         }
     }
     Ok(())

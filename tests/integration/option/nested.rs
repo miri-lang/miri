@@ -420,7 +420,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "a named argument is passed in the position it was written rather than the position it names, so arguments given out of declaration order are silently swapped. Independent of optionals and of the boxing this file otherwise covers: two plain int parameters reproduce it, and a plain function call does too, while a struct literal and a class without an init are both correct because they match arguments to fields by name"]
 fn test_a_named_constructor_argument_out_of_declaration_order_binds_by_name() {
     assert_runs_with_output(
         r#"
