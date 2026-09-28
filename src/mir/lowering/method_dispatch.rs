@@ -200,6 +200,7 @@ pub(super) fn emit_virtual_method_call(
     self_op: Operand,
     user_args: &[Expression],
     method_info: &MethodInfo,
+    arg_types: &[Type],
     destination: &Place,
     op: &Operand,
     obj_temp_local: Option<Local>,
@@ -208,9 +209,7 @@ pub(super) fn emit_virtual_method_call(
 ) -> Result<Option<Operand>, LoweringError> {
     let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
-    for arg in user_args {
-        call_args.push(lower_expression(ctx, arg, None)?);
-    }
+    call_args.extend(lower_method_args(ctx, user_args, method_info, arg_types)?);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
@@ -250,6 +249,7 @@ pub(super) fn emit_static_method_call(
     self_op: Operand,
     user_args: &[Expression],
     method_info: &MethodInfo,
+    arg_types: &[Type],
     destination: &Place,
     op: &Operand,
     obj_temp_local: Option<Local>,
@@ -259,9 +259,7 @@ pub(super) fn emit_static_method_call(
     let mangled_name = symbol.to_string();
     let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
-    for arg in user_args {
-        call_args.push(lower_expression(ctx, arg, None)?);
-    }
+    call_args.extend(lower_method_args(ctx, user_args, method_info, arg_types)?);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
@@ -488,6 +486,7 @@ fn emit_resolved_method_call(
         ctx.record_class_instantiations(m.obj_ty);
     }
     let return_ty = call_result_type(ctx, &m, &mono);
+    let arg_types = method_argument_types(ctx, &m);
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
         prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
@@ -506,6 +505,7 @@ fn emit_resolved_method_call(
                 self_op,
                 m.args,
                 m.method_info,
+                &arg_types,
                 &destination,
                 &op,
                 obj_temp_local,
@@ -524,12 +524,77 @@ fn emit_resolved_method_call(
         self_op,
         m.args,
         m.method_info,
+        &arg_types,
         &destination,
         &op,
         obj_temp_local,
         obj_watermark,
         *m.span,
     )
+}
+
+/// The type each parameter of the method `m` calls is passed at: its declared
+/// type with `Self` read as the receiver and the owner's parameters at the
+/// arguments the receiver reaches it at.
+fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type> {
+    let defs = ctx.type_checker.type_definitions();
+    let (owner, owner_subs) = receiver_instantiation(ctx, m.obj_ty)
+        .and_then(|(name, resolved)| instantiated_callee(defs, &name, &resolved, m.method_name))
+        .map(|callee| (callee.owner, callee.owner_subs))
+        .unwrap_or_else(|| (m.defining_class.to_string(), HashMap::new()));
+    // The body's own substitution: a trait default reads the trait's
+    // parameters at what the class's clauses pin, not at a class parameter
+    // that happens to share a name.
+    let body_subs =
+        instantiation_substitution(ctx.type_checker, &owner, m.method_name, &owner_subs);
+    m.method_info
+        .params
+        .iter()
+        .map(|(_, declared)| {
+            let at_receiver = super::substitute_self_type(declared, m.obj_ty);
+            let instantiated = apply_generic_sub(&at_receiver, &body_subs);
+            super::variable::canonical_declared_type(ctx.type_checker, &instantiated)
+        })
+        .collect()
+}
+
+/// Lower a method call's arguments, each brought to the type its parameter is
+/// passed at — a plain value handed to an optional parameter is wrapped, as a
+/// function call's is. An `out` argument is the caller's own place and is
+/// passed as it is, and so is one whose parameter type still names a type
+/// parameter nothing here binds.
+fn lower_method_args(
+    ctx: &mut LoweringContext,
+    args: &[Expression],
+    method_info: &MethodInfo,
+    arg_types: &[Type],
+) -> Result<Vec<Operand>, LoweringError> {
+    let mut ops = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let watermark = ctx.body.local_decls.len();
+        let op = lower_expression(ctx, arg, None)?;
+        let target = arg_types
+            .get(i)
+            .filter(|target| !method_info.is_param_out(i) && names_a_settled_type(ctx, target));
+        let op = match target {
+            Some(target) => {
+                super::dispatch::coerce_arg_to_declared(ctx, op, arg, target, watermark)
+            }
+            None => op,
+        };
+        ops.push(op);
+    }
+    Ok(ops)
+}
+
+/// Whether `ty` names a type every part of which is known here: no type
+/// parameter left unbound, and no name the program does not declare.
+fn names_a_settled_type(ctx: &LoweringContext, ty: &Type) -> bool {
+    let definitions = ctx.type_checker.type_definitions();
+    !crate::type_checker::instantiation_requirements::spells_a_type(&ty.kind, &|kind| {
+        matches!(kind, TypeKind::Generic(..) | TypeKind::Error)
+            || matches!(kind, TypeKind::Custom(name, _) if !definitions.contains_key(name))
+    })
 }
 
 /// The type to give the local that receives a method call's result.

@@ -179,8 +179,8 @@ fn build_assert_eq_preamble(
     let ast_kind = resolve_value_kind(ctx, expr, actual_arg, expected_arg, span)?;
 
     let watermark = ctx.body.local_decls.len();
-    let actual_op = lower_expression(ctx, actual_arg, None)?;
-    let expected_op = lower_expression(ctx, expected_arg, None)?;
+    let actual_op = lower_compared_value(ctx, actual_arg, &ast_kind, span)?;
+    let expected_op = lower_compared_value(ctx, expected_arg, &ast_kind, span)?;
 
     // Prefer the AST-resolved kind unless it is unusable (e.g. a generic `T`
     // that the type-checker never folded down to a primitive — happens when
@@ -218,6 +218,31 @@ fn build_assert_eq_preamble(
         column_op,
         cmp_op,
     })
+}
+
+/// Lower one compared value at the type `T` the assertion is instantiated
+/// at, which may be wider than the value's own: `assert_eq(o, 6)` with `o` an
+/// `int?` compares two optionals, so the plain `6` is wrapped as a parameter
+/// of type `int?` would wrap it. A `T` still spelling a parameter names no
+/// type to bring the value to, and the value is compared as it is.
+fn lower_compared_value(
+    ctx: &mut LoweringContext,
+    arg: &Expression,
+    compared_at: &TypeKind,
+    span: Span,
+) -> Result<Operand, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let op = lower_expression(ctx, arg, None)?;
+    let names_no_type = matches!(compared_at, TypeKind::Generic(..) | TypeKind::Error)
+        || matches!(compared_at, TypeKind::Custom(name, _)
+            if !ctx.type_checker.type_definitions().contains_key(name));
+    if names_no_type {
+        return Ok(op);
+    }
+    let target = Type::new(compared_at.clone(), span);
+    Ok(crate::mir::lowering::dispatch::coerce_arg_to_declared(
+        ctx, op, arg, &target, watermark,
+    ))
 }
 
 struct AssertEqFailArgs {

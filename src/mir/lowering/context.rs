@@ -226,6 +226,23 @@ impl<'a> LoweringContext<'a> {
         Some(super::substitute_call_mapping(mapping, &self.generic_subs))
     }
 
+    /// The type a parameter the callee of a generic call declares is passed
+    /// at: its written type with `Self` resolved and the callee's own
+    /// parameters read at the instantiation `callee_subs` the call reaches.
+    ///
+    /// The caller's substitution is already applied to `callee_subs`; applying
+    /// it to the written type would read the callee's parameters as the
+    /// caller's wherever the two share a name.
+    pub fn callee_parameter_type(
+        &self,
+        expr: &Expression,
+        callee_subs: &HashMap<String, Type>,
+    ) -> Type {
+        let named = super::resolve_type(self.type_checker, expr);
+        let instantiated = super::apply_generic_sub(&self.resolve_self_in(&named), callee_subs);
+        super::variable::canonical_declared_type(self.type_checker, &instantiated)
+    }
+
     /// The type a written type expression names, with `Self` and the active
     /// instantiation substitution both resolved.
     ///

@@ -100,11 +100,6 @@ cells = [
 # drop hooks, release paths and ownership transfer
 [D]
 cells = [
-    "class_field/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "class_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
     "closure_capture/array_string/overwrite/generic_class", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/array_string/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/array_string/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
@@ -249,17 +244,6 @@ cells = [
     "closure_capture/vec3_f32/overwrite/generic_fn", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/inherited", # error[MER_MIR_014]: MIR Validation Failed = 2 MIR invariant violation(s) in 2 function(s):
     "closure_capture/vec3_f32/overwrite/mono", # error[MER_MIR_014]: MIR Validation Failed = 1 MIR invariant violation(s) in 1 function(s):
-    "enum_payload/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "enum_payload/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/option_int/overwrite/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "inherited_field/option_int/write_literal/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "return/option_int/eq/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "return/option_int/render/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
-    "return/option_int/store_read/mono", # MIRI_HEAP_GUARD: leaked 1 allocations: src/rc.rs:257 (class)
 ]
 
 # operator-to-trait dispatch

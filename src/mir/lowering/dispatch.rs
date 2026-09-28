@@ -1367,7 +1367,12 @@ fn lower_direct_call(
     let param_types = resolve_param_types(ctx, func.id, is_generic_call);
 
     let arg_watermark = ctx.body.local_decls.len();
-    let mut arg_ops = lower_and_coerce_args(ctx, args, &param_types)?;
+    let targets = if is_generic_call {
+        generic_call_parameter_types(ctx, func.id, call_expr_id)
+    } else {
+        declared_parameter_types(ctx, &param_types)
+    };
+    let mut arg_ops = lower_and_coerce_args(ctx, args, &targets)?;
 
     fill_default_args(ctx, &mut arg_ops, &param_types)?;
 
@@ -1664,21 +1669,56 @@ fn argument_type(ctx: &LoweringContext, op: &Operand, arg: &Expression) -> Type 
     }
 }
 
+/// The type each parameter of a non-generic callee is passed at.
+fn declared_parameter_types(
+    ctx: &LoweringContext,
+    param_types: &Option<Vec<crate::ast::common::Parameter>>,
+) -> Vec<Type> {
+    param_types
+        .iter()
+        .flatten()
+        .map(|param| ctx.declared_type(&param.typ))
+        .collect()
+}
+
+/// The type each parameter of the generic function a call at `call_expr_id`
+/// reaches is passed at, read at the instantiation the call binds.
+///
+/// A parameter written as a bare `T` is passed at whatever `T` is bound to:
+/// a value handed where `T` is `int?` is passed as an optional, which the
+/// callee reads it as.
+fn generic_call_parameter_types(
+    ctx: &LoweringContext,
+    func_id: usize,
+    call_expr_id: usize,
+) -> Vec<Type> {
+    let Some(mapping) = ctx.instantiated_call_mapping(call_expr_id) else {
+        return Vec::new();
+    };
+    let callee_subs: HashMap<String, Type> = mapping.into_iter().collect();
+    let Some(TypeKind::Function(signature)) = ctx.type_checker.get_type(func_id).map(|ty| &ty.kind)
+    else {
+        return Vec::new();
+    };
+    signature
+        .params
+        .iter()
+        .map(|param| ctx.callee_parameter_type(&param.typ, &callee_subs))
+        .collect()
+}
+
 fn lower_and_coerce_args(
     ctx: &mut LoweringContext,
     args: &[Expression],
-    param_types: &Option<Vec<crate::ast::common::Parameter>>,
+    targets: &[Type],
 ) -> Result<Vec<Operand>, LoweringError> {
     let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let watermark = ctx.body.local_decls.len();
         let mut op = lower_expression(ctx, arg, None)?;
 
-        if let Some(params) = param_types {
-            if i < params.len() {
-                let target_ty = ctx.declared_type(&params[i].typ);
-                op = coerce_arg_to_declared(ctx, op, arg, &target_ty, watermark);
-            }
+        if let Some(target_ty) = targets.get(i) {
+            op = coerce_arg_to_declared(ctx, op, arg, target_ty, watermark);
         }
 
         let op = match op {
@@ -1706,12 +1746,20 @@ pub(super) fn coerce_arg_to_declared(
     target_ty: &Type,
     watermark: usize,
 ) -> Operand {
-    let op_ty = argument_type(ctx, &op, arg);
+    // A binding declared with the written `Option<T>` keeps that spelling;
+    // compared as written it would read as a value the optional wraps.
+    let op_ty =
+        super::variable::canonical_declared_type(ctx.type_checker, &argument_type(ctx, &op, arg));
     if op_ty.kind == target_ty.kind || spellings_of_one_value(&op_ty, target_ty) {
         return op;
     }
     let temp = ctx.push_temp(target_ty.clone(), arg.span);
-    retain_still_held_value(ctx, &op, &op_ty, arg.span);
+    // Wrapping in `Some` builds a new value whose payload Perceus retains
+    // itself wherever the source is read again; only a coercion that re-spells
+    // the value hands its reference on.
+    if !super::helpers::coercion_wraps_in_some(&op_ty, target_ty) {
+        retain_still_held_value(ctx, &op, &op_ty, arg.span);
+    }
     let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, target_ty, arg.span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(temp), rvalue),
