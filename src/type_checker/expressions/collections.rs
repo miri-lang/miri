@@ -181,6 +181,11 @@ impl TypeChecker {
         expr: &Expression,
         context: &mut Context,
     ) -> Option<bool> {
+        if let (ExpressionKind::Tuple(values), TypeKind::Tuple(declared)) =
+            (&expr.node, &expected.kind)
+        {
+            return Some(self.tuple_literal_fits(expected, declared, values, expr, context));
+        }
         let (element_count, values) = literal_values(expr)?;
         let TypeKind::Custom(expected_name, Some(expected_args)) = &expected.kind else {
             return None;
@@ -210,6 +215,39 @@ impl TypeChecker {
         }
         self.type_table.types.insert(expr.id, built);
         Some(true)
+    }
+
+    /// Whether the tuple literal `expr`, with elements `values`, may be built
+    /// at `expected`, whose elements are `declared`: each element is accepted
+    /// at its declared type as a value stored into a typed location is, and
+    /// is converted there when the tuple is built. When every one is, the
+    /// literal is recorded at `expected`, which is the layout lowering builds
+    /// it at. A tuple *value* read from elsewhere is not converted, so it has
+    /// to agree with the declared tuple exactly.
+    fn tuple_literal_fits(
+        &mut self,
+        expected: &Type,
+        declared: &[Expression],
+        values: &[Expression],
+        expr: &Expression,
+        context: &mut Context,
+    ) -> bool {
+        if declared.len() != values.len() {
+            return false;
+        }
+        for (value, declared_element) in values.iter().zip(declared) {
+            let Ok(element) = self.extract_type_from_expression(declared_element) else {
+                return false;
+            };
+            let Some(value_type) = self.get_type(value.id).cloned() else {
+                return false;
+            };
+            if !self.accepts_value_at(&element, &value_type, Some(value), context) {
+                return false;
+            }
+        }
+        self.type_table.types.insert(expr.id, expected.clone());
+        true
     }
 
     /// Whether each element of the literal `expr` — a list, array or set
