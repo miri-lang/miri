@@ -13,7 +13,7 @@ use crate::mir::{
     TerminatorKind,
 };
 
-use super::helpers::{coerce_rvalue_in, release_coerced_source};
+use super::helpers::{coerce_rvalue_in, read_older_local_by_copy, release_coerced_source};
 use super::{lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
@@ -385,7 +385,8 @@ fn assign_variable_initializer(
     }
 
     let watermark = ctx.body.local_decls.len();
-    let op = lower_expression(ctx, init_expr, None)?;
+    let lowered = lower_expression(ctx, init_expr, None)?;
+    let op = read_older_local_by_copy(lowered, watermark);
     let op_ty = op.ty(&ctx.body).clone();
     let target_ty = ctx.body.local_decls[local.0].ty.clone();
     let rvalue = if op_ty.kind != *var_ty_kind {

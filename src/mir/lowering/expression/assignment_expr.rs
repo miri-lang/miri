@@ -21,8 +21,8 @@ use crate::mir::lowering::dispatch::{
 };
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue_in, ensure_place, release_coerced_source, resolve_arg_type,
-    spellings_of_one_value, wrap_for_optional_slot,
+    coerce_rvalue_in, ensure_place, read_older_local_by_copy, release_coerced_source,
+    resolve_arg_type, spellings_of_one_value, wrap_for_optional_slot,
 };
 
 fn assign_to_identifier(
@@ -74,7 +74,8 @@ fn assign_to_var_simple(
     let rhs_ty = val.ty(&ctx.body).clone();
 
     let rvalue = if rhs_ty.kind != lhs_ty.kind && !spellings_of_one_value(&rhs_ty, &lhs_ty) {
-        coerce_rvalue_in(ctx, val.clone(), &rhs_ty, &lhs_ty, expr.span)
+        let val = read_older_local_by_copy(val.clone(), *rhs_watermark);
+        coerce_rvalue_in(ctx, val, &rhs_ty, &lhs_ty, expr.span)
     } else {
         Rvalue::Use(val.clone())
     };

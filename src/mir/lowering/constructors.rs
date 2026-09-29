@@ -142,6 +142,7 @@ fn coerce_to_field(
     if op_ty.kind == target_ty.kind || super::helpers::spellings_of_one_value(&op_ty, &target_ty) {
         return op;
     }
+    let op = super::helpers::read_older_local_by_copy(op, arg_watermark);
     let temp = ctx.push_temp(target_ty.clone(), span);
     let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, span);
     ctx.push_statement(crate::mir::Statement {
