@@ -280,12 +280,10 @@ fn main()
     );
 }
 
-/// A value whose equality is a walk over its fields has no rule the runtime can
-/// apply to bytes, so a set of them keeps matching by address — for the wrapped
-/// element exactly as for the bare one. Pinned so that widening the rule later
-/// is a deliberate change rather than a surprise.
+/// A struct element is matched by its fields, as `==` compares it — for the
+/// wrapped element exactly as for the bare one.
 #[test]
-fn an_optional_struct_element_is_still_matched_by_address() {
+fn an_optional_struct_element_is_matched_by_its_fields() {
     assert_runs_with_output(
         r#"
 use system.collections.set
@@ -303,7 +301,7 @@ fn main()
     bare.add(Point(1, 2))
     println(f"{s.length()} {bare.length()}")
 "#,
-        "2 2",
+        "1 1",
     );
 }
 

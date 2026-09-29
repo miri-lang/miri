@@ -38,22 +38,6 @@ cells = [
     "map_key/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
     "map_key/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
     "map_key/closure/store_read/mono", # accepted; expected refusal MER_TYP_002
-    "map_key/enum/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "map_key/enum/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "map_key/enum/dedup/inherited", # wrong value: got `2`, expected `1`
-    "map_key/enum/dedup/mono", # wrong value: got `2`, expected `1`
-    "map_key/f32/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "map_key/f32/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "map_key/f32/dedup/inherited", # wrong value: got `2`, expected `1`
-    "map_key/f32/dedup/mono", # wrong value: got `2`, expected `1`
-    "map_key/float/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "map_key/float/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "map_key/float/dedup/inherited", # wrong value: got `2`, expected `1`
-    "map_key/float/dedup/mono", # wrong value: got `2`, expected `1`
-    "map_key/struct/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "map_key/struct/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "map_key/struct/dedup/inherited", # wrong value: got `2`, expected `1`
-    "map_key/struct/dedup/mono", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/generic_class", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
@@ -74,22 +58,6 @@ cells = [
     "set_element/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
     "set_element/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
     "set_element/closure/store_read/mono", # accepted; expected refusal MER_TYP_002
-    "set_element/enum/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "set_element/enum/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "set_element/enum/dedup/inherited", # wrong value: got `2`, expected `1`
-    "set_element/enum/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/f32/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "set_element/f32/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "set_element/f32/dedup/inherited", # wrong value: got `2`, expected `1`
-    "set_element/f32/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/float/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "set_element/float/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "set_element/float/dedup/inherited", # wrong value: got `2`, expected `1`
-    "set_element/float/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/struct/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "set_element/struct/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "set_element/struct/dedup/inherited", # wrong value: got `2`, expected `1`
-    "set_element/struct/dedup/mono", # wrong value: got `2`, expected `1`
 ]
 
 # generic instantiation read after substitution
