@@ -307,3 +307,43 @@ fn test_module_alias_binding_without_constant_initializer_is_refused() {
         "'COUNT' has no value at run time",
     );
 }
+
+/// An argument built at run time and handed to a function through a module
+/// alias is released once the call has its own reference, as a direct call's
+/// is; named arguments through the alias bind by name.
+#[test]
+fn test_module_alias_call_releases_a_built_argument_and_binds_named_ones() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.utils.boxes as B\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let b = B.wrap_s(\"a\" + \"b\")\n",
+                    "    println(b.put(\"c\" + \"d\"))\n",
+                    "    println(B.pair(right: \"r\" + \"1\", left: \"l\" + \"1\"))\n",
+                ),
+            ),
+            (
+                "utils/boxes.mi",
+                concat!(
+                    "public class Box<T>\n",
+                    "    public var v T\n",
+                    "    public fn put(x T) T\n",
+                    "        self.v = x\n",
+                    "        return x\n",
+                    "\n",
+                    "public fn wrap_s(s String) Box<String>\n",
+                    "    return Box<String>(v: s)\n",
+                    "\n",
+                    "public fn pair(left String, right String) String\n",
+                    "    return f\"{left}|{right}\"\n",
+                ),
+            ),
+        ],
+        "cd\nl1|r1",
+    );
+}
