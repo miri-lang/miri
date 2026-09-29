@@ -69,3 +69,8 @@
 **Bug:** Negating an `i128` constant value (e.g., `-a` where `a` is `i128::MAX`) during MIR constant propagation produced `1` instead of `-170141183460469231731687303715884105727`.
 **Root cause:** In `fold_unary` (`src/mir/optimization/constant_propagation.rs`), `UnOp::Neg` performed `(-(val as i64)) as i128`, casting the full-width `i128` value down to `i64` before negating and expanding back to `i128`.
 **Lesson:** Optimization passes operating on generic `i128` integer containers must execute operations across the full `i128` width (e.g. `val.wrapping_neg()`) rather than casting through narrower types like `i64`.
+
+## 2026-09-29 - [Unsigned 128-bit constants evaluated as signed i128 in Constant Propagation]
+**Bug:** Constant propagation miscompiled operations on unsigned constants > `i128::MAX` (e.g. `u128::MAX / 2` evaluated to `0` instead of `170141183460469231731687303715884105727`, `u128::MAX > 10` evaluated to `false` instead of `true`, `u128::MAX >> 1` evaluated to `u128::MAX`).
+**Root cause:** In `src/mir/optimization/constant_propagation.rs`, `fold_binary` extracted values using `get_int`, which cast `IntegerLiteral::U128(v)` using `*v as i128`, reinterpreting `u128::MAX` as `-1_i128`. All binary integer operations (`Div`, `Rem`, `Shr`, `Lt`, `Le`, `Gt`, `Ge`) were then computed using signed `i128` arithmetic (`compute_binary_int`).
+**Lesson:** Optimization passes folding constants must distinguish signed vs unsigned integer types and dispatch division, remainder, right shift, and relational comparisons to unsigned arithmetic (`u128`) for unsigned types (`U8`..`U128`).

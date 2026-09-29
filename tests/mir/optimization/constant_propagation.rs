@@ -219,3 +219,179 @@ fn test_const_fold_branch() {
         }
     }
 }
+
+#[test]
+fn test_const_fold_u128_operations() {
+    let mut body = create_test_body();
+    // _1 = u128::MAX
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _2 = 2_u128
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _3 = _1 / _2
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _4 = 10_u128
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _5 = _1 > _4
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::Boolean, Span::default()),
+        Span::default(),
+    ));
+    // _6 = 1_u128
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _7 = _1 >> _6
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U128(u128::MAX)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(2)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U128(2)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(3)),
+            Rvalue::BinaryOp(
+                BinOp::Div,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(2)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(4)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U128(10)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(5)),
+            Rvalue::BinaryOp(
+                BinOp::Gt,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(4)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(6)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U128(1)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(7)),
+            Rvalue::BinaryOp(
+                BinOp::Shr,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(6)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+
+    body.basic_blocks.push(bb0);
+
+    let mut pass = ConstantPropagation;
+    let changed = pass.run(&mut body);
+
+    assert!(changed);
+
+    let bb0 = &body.basic_blocks[0];
+
+    // Check _3 = _1 / _2
+    let stmt2 = &bb0.statements[2];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt2.kind {
+        if let Literal::Integer(IntegerLiteral::U128(val)) = c.literal {
+            assert_eq!(val, u128::MAX / 2);
+        } else {
+            panic!("Expected U128 literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment for div, got {:?}", stmt2.kind);
+    }
+
+    // Check _5 = _1 > _4
+    let stmt4 = &bb0.statements[4];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt4.kind {
+        if let Literal::Boolean(val) = c.literal {
+            assert_eq!(val, true);
+        } else {
+            panic!("Expected Boolean literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment for gt, got {:?}", stmt4.kind);
+    }
+
+    // Check _7 = _1 >> _6
+    let stmt6 = &bb0.statements[6];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt6.kind {
+        if let Literal::Integer(IntegerLiteral::U128(val)) = c.literal {
+            assert_eq!(val, u128::MAX >> 1);
+        } else {
+            panic!("Expected U128 literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment for shr, got {:?}", stmt6.kind);
+    }
+}
