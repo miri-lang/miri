@@ -1339,11 +1339,14 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The kind of field `idx` of a value of kind `container`.
     ///
-    /// Only the two kinds that carry named fields answer: a declared type and a
-    /// closure, whose captures are held in the per-closure table rather than in
-    /// any declaration. The rest — a tuple element, an optional's or a
-    /// result's payload — have no declared field to read, and resolve to
-    /// `Error`: their reader loads at the width of the binding it fills.
+    /// A declared type and a closure answer from their fields (a closure's
+    /// captures are held in the per-closure table rather than in any
+    /// declaration), and a tuple from the element type it spells. A following
+    /// projection is laid out by this answer: read as the tuple instead, a
+    /// struct field of a tuple element (`p.0.n`) would load at the tuple's own
+    /// field offset. The rest — an optional's or a result's payload — have no
+    /// declared field to read, and resolve to `Error`: their reader loads at
+    /// the width of the binding it fills.
     ///
     /// A closure local missing from the capture table, or a capture index past
     /// the ones recorded, is a lowering invariant broken and is reported.
@@ -1368,6 +1371,15 @@ impl<'a> FunctionTranslator<'a> {
                         place.local
                     ))
                 }),
+            TypeKind::Tuple(elements) => Ok(elements
+                .get(idx)
+                .and_then(|element| {
+                    let ExpressionKind::Type(ty, _) = &element.node else {
+                        return None;
+                    };
+                    Some(ty.kind.clone())
+                })
+                .unwrap_or(TypeKind::Error)),
             TypeKind::Int
             | TypeKind::I8
             | TypeKind::I16
@@ -1391,7 +1403,6 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Array(_, _)
             | TypeKind::Map(_, _)
             | TypeKind::Set(_)
-            | TypeKind::Tuple(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Generic(_, _, _)

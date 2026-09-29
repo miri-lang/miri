@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod chained_fields;
 pub mod construction_access;
 pub mod destructuring;
 pub mod edge_cases;
