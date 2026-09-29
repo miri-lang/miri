@@ -363,3 +363,91 @@ fn main()
         "xy",
     );
 }
+
+/// An inherited field constructed by name is stored at the type the
+/// `extends` clause binds it to, so the value handed to it is stored, not
+/// converted, and released exactly once.
+#[test]
+fn an_inherited_field_set_by_name_is_stored_at_the_clause_type() {
+    for clause in [
+        "class W<T> extends Base<Box<T>>",
+        "class W extends Base<Box<int>>",
+    ] {
+        let construct = if clause.contains("<T>") {
+            "W<int>"
+        } else {
+            "W"
+        };
+        assert_heap_guard_output(
+            &format!(
+                r#"
+use system.io
+
+class Box<T>
+    v T
+
+class Base<P>
+    p P
+
+{clause}
+    k int
+
+fn main()
+    let b = Box<int>(v: 3)
+    let w = {construct}(p: b, k: 1)
+    println(f"{{w.k}} {{w.p.v}}")
+"#
+            ),
+            "1 3",
+        );
+    }
+}
+
+#[test]
+fn sorting_nested_generic_classes_reached_through_extends_orders_them() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.ops
+use system.collections.list
+
+class Box<T> implements Comparable
+    v T
+    public fn compare(_other Self) int
+        if self.v < 10
+            return -1
+        return 1
+
+class Holder<T> implements Comparable
+    v T
+    public fn compare(other Self) int
+        if self.v < other.v
+            return -1
+        return 1
+
+class Base<P> implements Comparable
+    p P
+    public fn compare(other Self) int
+        if self.p < other.p
+            return -1
+        return 1
+
+class W<T> extends Base<Holder<Holder<Box<T>>>>
+    k int
+
+fn mk(s int, k int) Holder<W<int>>
+    let b = Box<int>(v: s)
+    let h1 = Holder<Box<int>>(v: b)
+    let h2 = Holder<Holder<Box<int>>>(v: h1)
+    return Holder<W<int>>(v: W<int>(p: h2, k: k))
+
+fn main()
+    var l = List<Holder<W<int>>>()
+    l.push(mk(3, 1))
+    l.push(mk(20, 2))
+    l.sort()
+    println(f"{l[0].v.k}")
+"#,
+        "1",
+    );
+}
