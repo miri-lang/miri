@@ -258,3 +258,27 @@ fn main()
         "Hello, Alice",
     );
 }
+
+#[test]
+fn test_named_args_in_reverse_order_with_a_managed_argument_bind_by_name() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+class Box<T>
+    v T?
+    fn put(a T) T
+        self.v = a
+        return a
+
+fn t2(b Box<String>, n int = 3) String
+    return b.put(f"a{n}")
+
+fn main()
+    let s = "x"
+    println(t2(n: 4, b: Box<String>()))
+    println(t2(b: Box<String>(v: f"{s}y")))
+"#,
+        "a4\na3",
+    );
+}
