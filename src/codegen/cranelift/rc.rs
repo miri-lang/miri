@@ -367,7 +367,7 @@ impl<'a> FunctionTranslator<'a> {
             Self::custom_type_args(elem_kind),
             type_ctx.facts,
         );
-        if !ElementMethod::Compare.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
+        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts) {
             return Ok(None);
         }
         let thunk = Symbol::type_thunk(ThunkKind::Compare, name, recorded.iter().flatten());
@@ -400,7 +400,7 @@ impl<'a> FunctionTranslator<'a> {
             Self::custom_type_args(elem_kind),
             type_ctx.facts,
         );
-        if !ElementMethod::Equals.is_answered_at(name, recorded.as_deref(), type_ctx.facts) {
+        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts) {
             return Ok(None);
         }
         let thunk = Symbol::type_thunk(ThunkKind::Equals, name, recorded.iter().flatten());

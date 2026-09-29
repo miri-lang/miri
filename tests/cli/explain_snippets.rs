@@ -180,6 +180,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_RT_011", "traps while the program runs, which a static check cannot observe"),
     ("MER_RT_012", "traps while the program runs, which a static check cannot observe"),
     ("MER_RT_013", "traps while the program runs, which a static check cannot observe"),
+    ("MER_RT_014", "traps while the program runs, which a static check cannot observe"),
     ("MER_TAR_001", "shadowed: MER_TYP_034 is reported first"),
     ("MER_TAR_003", "needs GPU lowering, which a host check does not perform"),
     ("MER_TAR_010", "raised only by `build --target web-gpu`, which a host check does not perform"),

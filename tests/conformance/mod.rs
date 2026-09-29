@@ -598,6 +598,7 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_RT_008", "An illegal instruction needs a corrupt code page, which no .mi source produces"),
     ("MER_RT_009", "The runtime exits rather than calling abort(), so no source reaches SIGABRT"),
     ("MER_RT_013", "Raised only when a GPU device refuses a launch; fixtures run without an adapter, and tests/integration/gpu/launch_failure.rs covers it on hardware"),
+    ("MER_RT_014", "Raised only where the type checker failed to refuse a call at an instance it did not check; no source reaches it while the checker is complete"),
     ("MER_RT_010", "The catch-all for a signal the host sends; no program kills itself with one"),
     ("MER_TAR_001", "Shadowed by MER_TYP_034 (type error fires first)"),
     ("MER_TAR_003", "GPU-specific error; not reachable without GPU hardware"),

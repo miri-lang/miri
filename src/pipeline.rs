@@ -2401,8 +2401,9 @@ impl Pipeline {
     }
 
     /// Settle what lowering the reached methods decided: each method withheld
-    /// at an instance leaves its vtable slot empty, the vtables are what
-    /// codegen writes, and every instance compiled is answered once more.
+    /// at an instance is recorded, so codegen fills its vtable slot with the
+    /// runtime trap rather than a body; the vtables are what codegen writes,
+    /// and every instance compiled is answered once more.
     fn settle_reached_instances(
         result: &mut PipelineResult,
         reach: &ReachTables,
@@ -2411,12 +2412,11 @@ impl Pipeline {
         symbols: &SymbolTable,
     ) -> Result<(), CompilerError> {
         let withheld = verdicts.withheld(symbols);
-        // TODO: a withheld slot is left null, so a virtual call the checker
-        // failed to pin is an uncoded SIGSEGV rather than a runtime trap; it
-        // needs a trap thunk under a runtime code of its own in its place.
-        let mut fills = called.vtables.fills();
-        fills.retain_slots(|slot| !withheld.contains(&slot.symbol));
-        result.vtable_fills = fills;
+        // A withheld method keeps its slot: codegen fills it with the runtime
+        // trap that reports the method was not checked at this instance, so a
+        // call the checker should have refused stops with a code rather than
+        // jumping through a null slot.
+        result.vtable_fills = called.vtables.fills();
         result.withheld_methods = withheld;
         Self::refuse_unchecked_compiled_instances(result, reach, symbols)
     }

@@ -199,6 +199,10 @@ pub mod rt {
     /// Compiler-internal: reports MER_RT_013 and ends the process after the
     /// GPU runtime refused a kernel launch and printed why.
     pub const GPU_LAUNCH_FAILED_PANIC: &str = "miri_rt_gpu_launch_failed_panic";
+    /// Compiler-internal: reports MER_RT_014 and ends the process. Fills a
+    /// vtable slot, and backs a container's comparison thunk, for a method
+    /// withheld at an instance its obligations were not checked at.
+    pub const METHOD_NOT_CHECKED_PANIC: &str = "miri_rt_method_not_checked_panic";
 
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
