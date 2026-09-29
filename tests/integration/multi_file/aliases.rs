@@ -511,3 +511,31 @@ fn test_same_named_functions_keep_their_own_residency() {
         "4 0",
     );
 }
+
+/// A function read through a module alias as a value is the same function
+/// value its bare name is.
+#[test]
+fn test_a_function_read_through_a_module_alias_is_a_value() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.helper as helper\n",
+                    "\n",
+                    "fn apply(f fn(int) int, x int) int\n",
+                    "    return f(x)\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let g = helper.inc\n",
+                    "    println(f'{g(9)} {apply(helper.inc, 1)}')\n",
+                ),
+            ),
+            (
+                "helper.mi",
+                concat!("public fn inc(x int) int\n", "    return x + 1\n",),
+            ),
+        ],
+        "10 2",
+    );
+}
