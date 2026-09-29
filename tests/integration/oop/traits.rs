@@ -1013,3 +1013,51 @@ fn main()
         "CAT\nDOG",
     );
 }
+
+/// A struct declares no method but `drop`, so a trait method it leaves
+/// abstract is refused as a class missing it is, however the struct is
+/// written; accepted, a call through the trait would jump to no body.
+#[test]
+fn test_a_struct_missing_a_trait_method_is_refused() {
+    for declaration in [
+        "type Z implements Named",
+        "struct Z implements Named\n    v int",
+    ] {
+        assert_compiler_error(
+            &format!(
+                r#"
+trait Named
+    fn name() String
+
+{declaration}
+
+fn take(o Named) String
+    return o.name()
+
+fn main()
+    let z = Z()
+    let s = take(z)
+"#
+            ),
+            "Struct 'Z' must implement method 'name' from trait 'Named'",
+        );
+    }
+}
+
+/// A trait whose only method has a default asks nothing of a struct.
+#[test]
+fn test_a_struct_implementing_a_trait_with_only_defaults_is_accepted() {
+    assert_type_checks(
+        r#"
+trait Tagged
+    fn tag() String
+        return "t"
+
+struct Z implements Tagged
+    v int
+
+fn main()
+    let z = Z(v: 1)
+"#,
+    );
+}

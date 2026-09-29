@@ -732,6 +732,19 @@ impl TypeChecker {
                 }),
             );
 
+            // `type Z implements Named` declares a struct with no fields and
+            // no methods, so every method the trait leaves abstract is one it
+            // does not provide.
+            if *kind == TypeDeclarationKind::Implements {
+                self.check_struct_trait_methods(
+                    name,
+                    std::slice::from_ref(&target_name),
+                    &std::collections::HashMap::new(),
+                    false,
+                    target,
+                );
+            }
+
             let entry = self
                 .type_table
                 .hierarchy
