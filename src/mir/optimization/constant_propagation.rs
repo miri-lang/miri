@@ -160,11 +160,34 @@ fn resolve_operand(op: &mut Operand, constants: &HashMap<Local, Constant>) {
     }
 }
 
+fn is_unsigned(c: &Constant) -> bool {
+    match &c.literal {
+        Literal::Integer(lit) => matches!(
+            lit,
+            IntegerLiteral::U8(_)
+                | IntegerLiteral::U16(_)
+                | IntegerLiteral::U32(_)
+                | IntegerLiteral::U64(_)
+                | IntegerLiteral::U128(_)
+        ),
+        _ => matches!(
+            c.ty.kind,
+            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+        ),
+    }
+}
+
 fn fold_binary(op: crate::mir::BinOp, lhs: &Constant, rhs: &Constant) -> Option<Constant> {
     use crate::mir::BinOp;
-    let l_val = get_int(lhs)?;
-    let r_val = get_int(rhs)?;
-    let res = compute_binary_int(op, l_val, r_val)?;
+    let res = if is_unsigned(lhs) {
+        let l_val = get_uint(lhs)?;
+        let r_val = get_uint(rhs)?;
+        compute_binary_uint(op, l_val, r_val)? as i128
+    } else {
+        let l_val = get_int(lhs)?;
+        let r_val = get_int(rhs)?;
+        compute_binary_int(op, l_val, r_val)?
+    };
 
     let is_comparison = matches!(
         op,
@@ -216,6 +239,39 @@ fn compute_binary_int(op: crate::mir::BinOp, l: i128, r: i128) -> Option<i128> {
         BinOp::Le => i128::from(l <= r),
         BinOp::Gt => i128::from(l > r),
         BinOp::Ge => i128::from(l >= r),
+        BinOp::Offset => return None,
+    })
+}
+
+fn compute_binary_uint(op: crate::mir::BinOp, l: u128, r: u128) -> Option<u128> {
+    use crate::mir::BinOp;
+    Some(match op {
+        BinOp::Add => l.wrapping_add(r),
+        BinOp::Sub => l.wrapping_sub(r),
+        BinOp::Mul => l.wrapping_mul(r),
+        BinOp::Div => {
+            if r == 0 {
+                return None;
+            }
+            l.wrapping_div(r)
+        }
+        BinOp::Rem => {
+            if r == 0 {
+                return None;
+            }
+            l.wrapping_rem(r)
+        }
+        BinOp::BitAnd => l & r,
+        BinOp::BitOr => l | r,
+        BinOp::BitXor => l ^ r,
+        BinOp::Shl => l.wrapping_shl(r as u32),
+        BinOp::Shr => l.wrapping_shr(r as u32),
+        BinOp::Eq => u128::from(l == r),
+        BinOp::Ne => u128::from(l != r),
+        BinOp::Lt => u128::from(l < r),
+        BinOp::Le => u128::from(l <= r),
+        BinOp::Gt => u128::from(l > r),
+        BinOp::Ge => u128::from(l >= r),
         BinOp::Offset => return None,
     })
 }
@@ -304,6 +360,25 @@ fn get_int(c: &Constant) -> Option<i128> {
             IntegerLiteral::U32(v) => *v as i128,
             IntegerLiteral::U64(v) => *v as i128,
             IntegerLiteral::U128(v) => *v as i128,
+        }),
+        Literal::Boolean(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn get_uint(c: &Constant) -> Option<u128> {
+    match &c.literal {
+        Literal::Integer(lit) => Some(match lit {
+            IntegerLiteral::I8(v) => *v as u128,
+            IntegerLiteral::I16(v) => *v as u128,
+            IntegerLiteral::I32(v) => *v as u128,
+            IntegerLiteral::I64(v) => *v as u128,
+            IntegerLiteral::I128(v) => *v as u128,
+            IntegerLiteral::U8(v) => *v as u128,
+            IntegerLiteral::U16(v) => *v as u128,
+            IntegerLiteral::U32(v) => *v as u128,
+            IntegerLiteral::U64(v) => *v as u128,
+            IntegerLiteral::U128(v) => *v,
         }),
         Literal::Boolean(b) => Some(if *b { 1 } else { 0 }),
         _ => None,
