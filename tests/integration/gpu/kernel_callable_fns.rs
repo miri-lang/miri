@@ -369,3 +369,28 @@ fn main()
         "not GPU-compatible",
     );
 }
+
+/// A generic helper has no body until a call instantiates it, and a kernel
+/// cannot instantiate one yet: the call is refused naming the function and
+/// the reason, not with an "Unknown type" for its parameter.
+#[test]
+fn kernel_call_to_a_generic_function_is_refused_as_not_yet_supported() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.gpu
+use system.collections.array
+
+fn dbl<T>(x T) T: x + x
+
+fn main()
+    gpu let src = [1, 2, 3]
+    gpu var dst = [0, 0, 0]
+    gpu forall i in 0..3
+        dst[i] = dbl(src[i])
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]}')
+"#,
+        "Function 'dbl' is generic, and a generic function cannot be called from GPU code yet",
+    );
+}
