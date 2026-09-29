@@ -158,16 +158,11 @@ pub struct TypeChecker {
     /// bare operand (2^63) is one past `i64::MAX`; that magnitude is in range
     /// only in this negated position, so its literal range check is relaxed.
     pub(crate) negated_int_literals: HashSet<usize>,
-    /// Expression ids of integer literals declared with an explicit integer type
-    /// wider than `i64` (`i128`/`u64`/`u128`). Such literals are exempt from the
-    /// default-`int` (i64) range check; their value still fits `i128` (the parser
-    /// rejects anything larger). Runtime lowering of these wide literals is a
-    /// separate, pre-existing limitation, not enforced here.
-    pub(crate) wide_typed_int_literals: HashSet<usize>,
-    /// Integer literals past the default `int` range, held until the type they
-    /// were written into is known. At an argument or element position a literal
-    /// is inferred before that type is resolved, so the bound cannot be applied
-    /// where the check runs; these are judged once the bodies are checked.
+    /// Integer literals held until the type they were written into is known. A
+    /// literal is inferred before the declaration, argument, field, element,
+    /// assignment or return that records its width is resolved, so the bound
+    /// cannot be applied where the check runs; these are judged once the bodies
+    /// are checked.
     pub(crate) deferred_int_literal_ranges:
         Vec<crate::type_checker::expressions::literals::DeferredIntLiteralRange>,
     /// Kernel-code integer literals past `i32::MAX`, held until their recorded
@@ -267,7 +262,6 @@ impl TypeChecker {
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
             negated_int_literals: HashSet::new(),
-            wide_typed_int_literals: HashSet::new(),
             deferred_int_literal_ranges: Vec::new(),
             deferred_gpu_int_literal_ranges: Vec::new(),
             hoisted_top_level: HashSet::new(),

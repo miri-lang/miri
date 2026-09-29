@@ -421,7 +421,7 @@ fn test_integer_literal_min_i64_boundary() {
 fn test_integer_literal_neg_overflow_i64() {
     type_checker_error_test(
         "let x = -9223372036854775809",
-        "Integer literal '9223372036854775809' is out of range for the default int type (i64, max 9223372036854775807)",
+        "Integer literal '-9223372036854775809' is out of range for the default int type (i64, max 9223372036854775807)",
     );
 }
 

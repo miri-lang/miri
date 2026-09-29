@@ -372,3 +372,140 @@ fn main()
         "compile-time constant",
     );
 }
+
+#[test]
+fn test_literal_too_large_for_a_narrow_declaration_is_refused() {
+    assert_compiler_error(
+        "
+fn main()
+    let y i8 = 300
+    println(f'{y}')
+",
+        "Integer literal '300' is out of range for i8 (max 127)",
+    );
+}
+
+#[test]
+fn test_literal_too_large_for_a_narrow_argument_is_refused() {
+    assert_compiler_error(
+        "
+fn take(v i8) i8: v
+
+fn main()
+    println(f'{take(300)}')
+",
+        "Integer literal '300' is out of range for i8 (max 127)",
+    );
+}
+
+#[test]
+fn test_literal_too_large_for_a_narrow_assignment_is_refused() {
+    assert_compiler_error(
+        "
+fn main()
+    var x i8 = 0
+    x = 300
+    println(f'{x}')
+",
+        "Integer literal '300' is out of range for i8 (max 127)",
+    );
+}
+
+#[test]
+fn test_literal_too_large_for_a_narrow_field_or_return_is_refused() {
+    assert_compiler_error(
+        "
+struct Pixel
+    level u8
+
+fn main()
+    let p = Pixel(level: 256)
+    println(f'{p.level}')
+",
+        "Integer literal '256' is out of range for u8 (max 255)",
+    );
+    assert_compiler_error(
+        "
+fn small() i16: 40000
+
+fn main()
+    println(f'{small()}')
+",
+        "Integer literal '40000' is out of range for i16 (max 32767)",
+    );
+}
+
+#[test]
+fn test_the_bottom_of_a_signed_range_is_written_negated() {
+    assert_runs_with_output(
+        "
+fn main()
+    let b i8 = -128
+    let s i16 = -32768
+    let w i32 = -2147483648
+    println(f'{b} {s} {w}')
+",
+        "-128 -32768 -2147483648",
+    );
+    assert_compiler_error(
+        "
+fn main()
+    let b i8 = -129
+    println(f'{b}')
+",
+        "Integer literal '-129' is out of range for i8",
+    );
+}
+
+#[test]
+fn test_a_negative_literal_is_refused_for_an_unsigned_target() {
+    assert_compiler_error(
+        "
+fn main()
+    let b u8 = -1
+    println(f'{b}')
+",
+        "Integer literal '-1' is out of range for u8",
+    );
+    assert_compiler_error(
+        "
+fn main()
+    let b u64 = -1
+    println(f'{b}')
+",
+        "Integer literal '-1' is out of range for u64",
+    );
+}
+
+#[test]
+fn test_the_edges_of_every_narrow_range_are_accepted() {
+    assert_runs_with_output(
+        "
+fn main()
+    let a i8 = 127
+    let b u8 = 255
+    let c i16 = 32767
+    let d u16 = 65535
+    let e i32 = 2147483647
+    let f u32 = 4294967295
+    let g u64 = 18446744073709551615
+    println(f'{a} {b} {c} {d} {e} {f} {g}')
+",
+        "127 255 32767 65535 2147483647 4294967295 18446744073709551615",
+    );
+}
+
+#[test]
+fn test_a_full_width_bit_pattern_still_fills_a_64_bit_slot() {
+    assert_runs_with_output(
+        "
+fn main()
+    let mask u64 = 0xFFFFFFFFFFFFFFFF
+    let all int = 0xFFFFFFFFFFFFFFFF
+    var slot u64 = 0
+    slot = 0xFFFFFFFFFFFFFFFF
+    println(f'{mask} {all} {slot}')
+",
+        "18446744073709551615 -1 18446744073709551615",
+    );
+}
