@@ -574,6 +574,50 @@ impl TypeChecker {
         (trait_names, trait_direct_args)
     }
 
+    /// Refuse a method type parameter named like one its class declares.
+    ///
+    /// Type parameters are told apart by name, so a method's own `T` would be
+    /// read as the class's: its body could return the class's `T` as the
+    /// method's, and a call binding the two differently would be judged
+    /// against the wrong one.
+    fn refuse_shadowed_class_parameters(
+        &mut self,
+        decl: &FunctionDeclarationData,
+        stmt: &Statement,
+        class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
+    ) {
+        let (Some(class_generics), Some(method_generics)) = (class_generics, &decl.generics) else {
+            return;
+        };
+        for generic in method_generics {
+            let ExpressionKind::GenericType(name_expr, _, _) = &generic.node else {
+                continue;
+            };
+            let Ok(name) = self.extract_type_name(name_expr) else {
+                continue;
+            };
+            if class_generics
+                .iter()
+                .any(|class_param| class_param.name == name)
+            {
+                let span = if generic.span.end > generic.span.start {
+                    generic.span
+                } else {
+                    stmt.span
+                };
+                self.report_error(
+                    DiagnosticCode::TypClassDefinition,
+                    format!(
+                        "Method '{}' declares a type parameter '{}' its class already declares; \
+                         give the method's parameter another name",
+                        decl.name, name
+                    ),
+                    span,
+                );
+            }
+        }
+    }
+
     /// Collect fields and method signatures from class body (pass 1)
     #[allow(clippy::type_complexity)]
     fn check_class_collect_members<'a>(
@@ -693,6 +737,7 @@ impl TypeChecker {
         class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     ) {
         self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypClassDefinition);
+        self.refuse_shadowed_class_parameters(decl, stmt, class_generics);
 
         // Check for duplicate method names (instance + static)
         if let Some(existing) = methods.get(&decl.name) {
