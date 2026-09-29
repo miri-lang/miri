@@ -638,3 +638,17 @@ fn main()
         "Undefined method: name",
     );
 }
+
+#[test]
+fn a_generic_function_declared_inside_a_block_is_refused() {
+    assert_compiler_error(
+        "
+fn main()
+    if true
+        fn local_ident<T>(x T) T
+            return x
+        println(f'{local_ident(5)}')
+",
+        "Generic function 'local_ident' is declared inside a block",
+    );
+}
