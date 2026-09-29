@@ -897,20 +897,24 @@ impl TypeChecker {
         err_expr: &Expression,
         mapping: &HashMap<String, Type>,
     ) -> Type {
-        if let (Ok(ok), Ok(err)) = (
+        // The substituted type is spelled as the `Result` enum, as
+        // `resolve_type_kind` spells a written one: the native kind carries no
+        // drop, layout or payload reads past the type checker.
+        let (ok, err) = if let (Ok(ok), Ok(err)) = (
             self.extract_type_from_expression(ok_expr),
             self.extract_type_from_expression(err_expr),
         ) {
-            make_type(TypeKind::Result(
-                Box::new(self.create_type_expression(self.substitute_type(&ok, mapping))),
-                Box::new(self.create_type_expression(self.substitute_type(&err, mapping))),
-            ))
+            (
+                self.create_type_expression(self.substitute_type(&ok, mapping)),
+                self.create_type_expression(self.substitute_type(&err, mapping)),
+            )
         } else {
-            make_type(TypeKind::Result(
-                Box::new(ok_expr.clone()),
-                Box::new(err_expr.clone()),
-            ))
-        }
+            (ok_expr.clone(), err_expr.clone())
+        };
+        make_type(TypeKind::Custom(
+            crate::ast::types::RESULT_TYPE_NAME.to_string(),
+            Some(vec![ok, err]),
+        ))
     }
 
     fn substitute_function(

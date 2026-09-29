@@ -1165,12 +1165,15 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx,
         )? {
             Some(addr) => addr,
-            // TODO: a managed shape with no release thunk (the native `Result`
-            // and `Future` kinds) lands here and is never released. Zero is the
-            // runtime's "release nothing", which leaks rather than reading the
-            // element as a list; once every managed shape resolves an address
-            // this arm should be a `CodegenError`.
-            None => builder.ins().iconst(ptr_type, 0),
+            // Every managed element resolves a release address; a list literal
+            // of one that does not would free nothing, or free it at the wrong
+            // layout, so it is refused rather than compiled.
+            None => {
+                return Err(CodegenError::Internal(format!(
+                    "a list literal of `{}` elements has no release function for them",
+                    elem_ty
+                )))
+            }
         };
         FunctionTranslator::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)
     }
