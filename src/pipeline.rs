@@ -796,8 +796,9 @@ struct WantedMethod {
 /// converts that instance to a trait or asks the container to order or match
 /// it. The checker pins a method only where the program does, so such a
 /// method is compiled only where its obligations hold at the instance. One
-/// that fails there is withheld: its vtable slot stays empty and no element
-/// thunk is emitted for it, since nothing that runs reads either.
+/// that fails there is withheld: nothing that runs reaches it, and its vtable
+/// slot and element thunks are filled with the runtime trap for a method not
+/// checked at its instance (MER_RT_014) in case something does.
 #[derive(Default)]
 struct ImpliedMethodVerdicts {
     verdicts: std::collections::HashMap<Symbol, bool>,
