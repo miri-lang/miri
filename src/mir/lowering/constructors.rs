@@ -70,27 +70,8 @@ pub fn lower_struct_constructor(
             ));
         };
 
-        // Both sides in canonical form: `Option<int>` and `int?` are one type,
-        // and coercing between the two spellings would box the value twice.
-        let op_ty = canonical_declared_type(ctx.type_checker, op.ty(&ctx.body));
-        let target_ty =
-            canonical_declared_type(ctx.type_checker, &apply_generic_sub(field_ty, &field_subs));
-
-        let op = if op_ty.kind != target_ty.kind
-            && !super::helpers::spellings_of_one_value(&op_ty, &target_ty)
-        {
-            let temp = ctx.push_temp(target_ty.clone(), *span);
-            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, &target_ty, *span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), rvalue),
-                span: *span,
-            });
-            Operand::Copy(Place::new(temp))
-        } else {
-            op
-        };
-
-        operands.push(op);
+        let field_ty = apply_generic_sub(field_ty, &field_subs);
+        operands.push(coerce_to_field(ctx, op, &field_ty, arg_watermark, *span));
     }
 
     let struct_ty =
@@ -127,6 +108,36 @@ pub fn lower_struct_constructor(
     }
 
     Ok(result_op)
+}
+
+/// A constructor argument brought to the type of the field it initializes.
+///
+/// Both sides are compared in canonical form: `Option<int>` and `int?` are one
+/// type, and coercing between the two spellings would box the value twice. A
+/// value short of an optional layer is boxed into a temp, and the box retains
+/// the payload it reads; the temp the argument was built in, when this
+/// constructor created it, is then released, or it keeps a reference nothing
+/// ever gives back.
+fn coerce_to_field(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    field_ty: &Type,
+    arg_watermark: usize,
+    span: Span,
+) -> Operand {
+    let op_ty = canonical_declared_type(ctx.type_checker, op.ty(&ctx.body));
+    let target_ty = canonical_declared_type(ctx.type_checker, field_ty);
+    if op_ty.kind == target_ty.kind || super::helpers::spellings_of_one_value(&op_ty, &target_ty) {
+        return op;
+    }
+    let temp = ctx.push_temp(target_ty.clone(), span);
+    let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(temp), rvalue),
+        span,
+    });
+    super::helpers::release_coerced_source(ctx, &op, &op_ty, &target_ty, arg_watermark, span);
+    Operand::Copy(Place::new(temp))
 }
 
 /// Separates positional and named arguments for a constructor call.
@@ -473,20 +484,13 @@ fn lower_class_without_init(
             create_default_value(&field_info.ty, span)
         };
 
-        let op_ty = op.ty(&ctx.body).clone();
-        let op = if op_ty.kind != field_info.ty.kind {
-            let temp = ctx.push_temp(field_info.ty.clone(), *span);
-            let rvalue = coerce_rvalue_in(ctx, op, &op_ty, &field_info.ty, *span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), rvalue),
-                span: *span,
-            });
-            Operand::Copy(Place::new(temp))
-        } else {
-            op
-        };
-
-        operands.push(op);
+        operands.push(coerce_to_field(
+            ctx,
+            op,
+            &field_info.ty,
+            arg_watermark,
+            *span,
+        ));
     }
 
     let (destination, result_op) = constructed_instance_place(ctx, &instance_ty, dest, span);

@@ -258,3 +258,45 @@ fn main()
         "Some(shared) Some(shared)",
     );
 }
+
+/// A computed string stored into a `String?` field is boxed as `Some` on the
+/// way. The box retains the string, so the temp it was built in has to give
+/// its own reference back, whichever way the value is constructed.
+#[test]
+fn test_a_computed_string_stored_into_an_optional_field_is_released_once() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+struct W
+    value String?
+
+class Plain
+    var value String?
+
+class WithInit
+    var value String?
+    fn init(value String?)
+        self.value = value
+
+class Wrapper<T>
+    var value T
+
+fn main()
+    let a = "a"
+    let w = W(value: f"{a}-struct")
+    let p = Plain(value: f"{a}-class")
+    let i = WithInit(f"{a}-init")
+    let g = Wrapper<String?>(value: f"{a}-generic")
+    let n = W(value: None)
+    let q = W(f"{a}-positional")
+    println(w.value ?? "none")
+    println(p.value ?? "none")
+    println(i.value ?? "none")
+    println(g.value ?? "none")
+    println(n.value ?? "none")
+    println(q.value ?? "none")
+"#,
+        "a-struct\na-class\na-init\na-generic\nnone\na-positional",
+    );
+}
