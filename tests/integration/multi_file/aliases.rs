@@ -347,3 +347,24 @@ fn test_module_alias_call_releases_a_built_argument_and_binds_named_ones() {
         "cd\nl1|r1",
     );
 }
+
+/// A module alias with the name of a type the program declares would shadow
+/// it silently, since `M.f` reads the alias first: the clash is refused,
+/// naming both.
+#[test]
+fn test_module_alias_named_like_a_declared_type_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.math as M
+
+class M
+    fn sqrt(x f64) f64
+        return 99.0
+
+fn main()
+    println(f"{M.sqrt(4.0)}")
+"#,
+        "Module alias 'M' for 'system.math' has the name of the type 'M'",
+    );
+}
