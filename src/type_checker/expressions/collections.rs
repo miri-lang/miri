@@ -58,29 +58,14 @@ impl TypeChecker {
             ));
         }
 
-        let first_type = self.infer_expression(&elements[0], context);
-        let mut element_type = first_type.clone();
-        let mut has_error = false;
-
-        for element in &elements[1..] {
-            let next_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &next_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypCollectionElementType,
-                    "Array elements must have the same type".to_string(),
-                    element.span,
-                );
-                has_error = true;
-            }
-            element_type = fill_open_arguments(&element_type, &next_type);
-        }
-
-        if has_error {
+        let elements_ref: Vec<&Expression> = elements.iter().collect();
+        let Some(element_type) = self.join_literal_elements(
+            &elements_ref,
+            "Array elements must have the same type",
+            context,
+        ) else {
             return make_type(TypeKind::Error);
-        }
-        for element in elements {
-            self.record_joined_type(element, &element_type, context);
-        }
+        };
 
         let list = make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
@@ -767,29 +752,14 @@ impl TypeChecker {
             ));
         }
 
-        let first_type = self.infer_expression(&elements[0], context);
-        let mut element_type = first_type.clone();
-        let mut has_error = false;
-
-        for element in &elements[1..] {
-            let next_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &next_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypCollectionElementType,
-                    "Array elements must have the same type".to_string(),
-                    element.span,
-                );
-                has_error = true;
-            }
-            element_type = fill_open_arguments(&element_type, &next_type);
-        }
-
-        if has_error {
+        let elements_ref: Vec<&Expression> = elements.iter().collect();
+        let Some(element_type) = self.join_literal_elements(
+            &elements_ref,
+            "Array elements must have the same type",
+            context,
+        ) else {
             return make_type(TypeKind::Error);
-        }
-        for element in elements {
-            self.record_joined_type(element, &element_type, context);
-        }
+        };
 
         let array = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
@@ -817,36 +787,16 @@ impl TypeChecker {
             ));
         }
 
-        let (first_key, first_val) = &entries[0];
-        let key_type = self.infer_expression(first_key, context);
-        let val_type = self.infer_expression(first_val, context);
-        let mut has_error = false;
-
-        for (key, val) in &entries[1..] {
-            let k_type = self.infer_expression(key, context);
-            let v_type = self.infer_expression(val, context);
-
-            if !self.are_compatible(&key_type, &k_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypCollectionElementType,
-                    "Map keys must have the same type".to_string(),
-                    key.span,
-                );
-                has_error = true;
-            }
-            if !self.are_compatible(&val_type, &v_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypCollectionElementType,
-                    "Map values must have the same type".to_string(),
-                    val.span,
-                );
-                has_error = true;
-            }
-        }
-
-        if has_error {
+        let first_key = &entries[0].0;
+        let keys: Vec<&Expression> = entries.iter().map(|(key, _)| key).collect();
+        let values: Vec<&Expression> = entries.iter().map(|(_, value)| value).collect();
+        let key_type =
+            self.join_literal_elements(&keys, "Map keys must have the same type", context);
+        let val_type =
+            self.join_literal_elements(&values, "Map values must have the same type", context);
+        let (Some(key_type), Some(val_type)) = (key_type, val_type) else {
             return make_type(TypeKind::Error);
-        }
+        };
         self.record_element_matching(&key_type, first_key.span, context);
 
         let map = make_type(TypeKind::Custom(
@@ -868,24 +818,14 @@ impl TypeChecker {
             ));
         }
 
-        let first_type = self.infer_expression(&elements[0], context);
-        let mut has_error = false;
-
-        for element in &elements[1..] {
-            let element_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &element_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypCollectionElementType,
-                    "Set elements must have the same type".to_string(),
-                    element.span,
-                );
-                has_error = true;
-            }
-        }
-
-        if has_error {
+        let elements_ref: Vec<&Expression> = elements.iter().collect();
+        let Some(first_type) = self.join_literal_elements(
+            &elements_ref,
+            "Set elements must have the same type",
+            context,
+        ) else {
             return make_type(TypeKind::Error);
-        }
+        };
 
         if let TypeKind::Option(_) = first_type.kind {
             self.report_error(
@@ -903,6 +843,46 @@ impl TypeChecker {
         ));
         self.record_elements_cloned(&set, elements[0].span, context);
         set
+    }
+
+    /// The type every element of one literal (a list, array or set's
+    /// elements, or a map's keys or its values) is built at: the first
+    /// element's type, with each argument it leaves open filled from a later
+    /// element, and every element recorded at it. `None` once an element is
+    /// refused, with `mismatch`, as a type the first is not.
+    ///
+    /// Typed from its first element alone, a literal mixing `E.L(s)` (an
+    /// `E<String, B>`) with an `E<String, i128>` would lay the second out at
+    /// the first's widths.
+    fn join_literal_elements(
+        &mut self,
+        elements: &[&Expression],
+        mismatch: &str,
+        context: &mut Context,
+    ) -> Option<Type> {
+        let (first, rest) = elements.split_first()?;
+        let first_type = self.infer_expression(first, context);
+        let mut joined = first_type.clone();
+        let mut refused = false;
+        for element in rest {
+            let next_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &next_type, context) {
+                self.report_error(
+                    DiagnosticCode::TypCollectionElementType,
+                    mismatch.to_string(),
+                    element.span,
+                );
+                refused = true;
+            }
+            joined = fill_open_arguments(&joined, &next_type);
+        }
+        if refused {
+            return None;
+        }
+        for element in elements {
+            self.record_joined_type(element, &joined, context);
+        }
+        Some(joined)
     }
 
     pub(crate) fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {
