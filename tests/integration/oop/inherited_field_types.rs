@@ -311,3 +311,55 @@ fn main()
         "expected Y, got X",
     );
 }
+
+/// A field read through `super` reads the instance's own field: the child's
+/// layout begins with its base's, so the base's index finds it.
+#[test]
+fn a_field_read_through_super_reads_the_instances_field() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+class Base
+    first String
+    fn init(first String)
+        self.first = first
+
+class Child extends Base
+    own int
+    fn init()
+        super.init("x" + "y")
+        self.own = 7
+    fn peek() String
+        return super.first
+
+fn main()
+    let c = Child()
+    println(f"{c.peek()} {c.own}")
+"#,
+        "xy 7",
+    );
+}
+
+/// The same through a generic base's clause: the field is read at the type
+/// the clause binds.
+#[test]
+fn a_field_read_through_super_of_a_generic_base_runs() {
+    assert_heap_guard_output(
+        &format!(
+            "{CONCRETE_CLAUSE}{}",
+            r#"
+class Child extends Base<String>
+    fn init()
+        super.init("x" + "y")
+    fn peek() String
+        return super.first
+
+fn main()
+    let c = Child()
+    println(c.peek())
+"#
+        ),
+        "xy",
+    );
+}

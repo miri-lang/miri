@@ -415,6 +415,21 @@ fn release_field_access_base(
 // method's own signature and again as a value returning a pointer, and Cranelift
 // refuses the second declaration. A method value needs either a bound closure
 // over its receiver or a type-check refusal.
+/// The local a field read through `super` reads from: the method's own
+/// `self`.
+///
+/// `super` names the instance the method runs on, seen as its base class. A
+/// class's layout begins with its base's fields in the base's order, so the
+/// field the base's definition indexes sits at that index of `self` too. The
+/// `super` value itself lowers to a marker only method dispatch reads; a field
+/// projected off it would read nothing.
+fn super_receiver(ctx: &LoweringContext, obj: &Expression) -> Option<crate::mir::Local> {
+    if !matches!(obj.node, ExpressionKind::Super) {
+        return None;
+    }
+    ctx.variable_map.get("self").copied()
+}
+
 pub(crate) fn lower_member_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -441,7 +456,10 @@ pub(crate) fn lower_member_expr(
     }
 
     let obj_watermark = ctx.body.local_decls.len();
-    let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
+    let obj_operand = match super_receiver(ctx, obj) {
+        Some(receiver) => Operand::Copy(Place::new(receiver)),
+        None => super::value_copy::lower_projection_base(ctx, obj)?,
+    };
 
     if let Some(result) = try_gpu_intrinsic(ctx, &obj_operand, prop, expr, dest.clone())? {
         return Ok(result);
