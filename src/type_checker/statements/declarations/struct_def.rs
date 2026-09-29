@@ -50,6 +50,7 @@ use crate::type_checker::context::{
 use crate::type_checker::statements::declarations::drop_hook::is_struct_drop_method;
 use crate::type_checker::statements::declarations::func::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
+use std::collections::HashMap;
 
 impl TypeChecker {
     #[allow(clippy::too_many_arguments)]
@@ -73,7 +74,7 @@ impl TypeChecker {
         context.enter_scope();
         let generic_defs = self.collect_struct_generics(generics, context);
         let fields_vec = self.collect_struct_fields(fields, context);
-        let (trait_names, _trait_args) = self.check_class_traits(traits, context);
+        let (trait_names, trait_args) = self.check_class_traits(traits, context);
         context.exit_scope();
 
         if !self.validate_struct_field_types(&name, &fields_vec, name_expr) {
@@ -97,6 +98,7 @@ impl TypeChecker {
         // compiles and never runs that default; only a hook the struct declares
         // itself counts.
         let has_drop = methods.iter().any(is_struct_drop_method);
+        self.check_struct_trait_methods(&name, &trait_names, &trait_args, has_drop, name_expr);
         let struct_def = StructDefinition {
             fields: fields_vec,
             generics: if generic_defs.is_empty() {
@@ -111,6 +113,44 @@ impl TypeChecker {
 
         self.register_struct_definition(&name, struct_def, visibility, context);
         self.check_struct_drop_body(&name, generics, methods, context);
+    }
+
+    /// Refuse a struct that implements a trait requiring a method it does not
+    /// provide, as a class missing one is refused. A struct declares no method
+    /// but `drop`, so every other method a trait leaves abstract is missing:
+    /// accepted, a call through the trait would jump to a method no body
+    /// answers.
+    pub(crate) fn check_struct_trait_methods(
+        &mut self,
+        name: &str,
+        trait_names: &[String],
+        trait_args: &HashMap<String, Vec<Type>>,
+        has_drop: bool,
+        name_expr: &Expression,
+    ) {
+        for trait_name in trait_names {
+            let mut substitutions = HashMap::new();
+            let methods =
+                self.collect_trait_methods_resolved(trait_name, trait_args, &mut substitutions);
+            let mut missing: Vec<(String, String)> = methods
+                .into_iter()
+                .filter(|(method, (info, _))| {
+                    info.is_abstract && !(has_drop && method == DROP_HOOK_NAME)
+                })
+                .map(|(method, (_, origin))| (method, origin))
+                .collect();
+            missing.sort();
+            for (method, origin) in missing {
+                self.report_error(
+                    DiagnosticCode::TypTraitDefinition,
+                    format!(
+                        "Struct '{name}' must implement method '{method}' from trait '{origin}'; \
+                         a struct declares no methods but `drop`, so implement the trait on a class"
+                    ),
+                    name_expr.span,
+                );
+            }
+        }
     }
 
     /// Checks the body of the struct `name`'s drop hook with `self` bound to

@@ -1213,7 +1213,7 @@ impl TypeChecker {
     }
 
     /// Collect all trait methods including parent traits
-    fn collect_trait_methods_resolved(
+    pub(super) fn collect_trait_methods_resolved(
         &mut self,
         trait_name: &str,
         trait_direct_args: &HashMap<String, Vec<Type>>,
