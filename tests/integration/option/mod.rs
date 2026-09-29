@@ -9,6 +9,7 @@ pub mod edge_cases;
 pub mod matching;
 pub mod nested;
 pub mod optional_arguments;
+pub mod optional_elements;
 pub mod optional_fields;
 pub mod rc_managed;
 pub mod widened_payloads;
