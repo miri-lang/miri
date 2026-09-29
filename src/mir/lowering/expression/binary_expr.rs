@@ -563,7 +563,116 @@ pub(crate) fn lower_binary_expr(
         }
     }
 
+    if let Some(result) = try_lower_vector_scalar_op(
+        ctx,
+        op,
+        (lhs, &lhs_op),
+        (rhs, &rhs_op),
+        expr,
+        dest.clone(),
+        arg_watermark,
+    )? {
+        return Ok(result);
+    }
+
     emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest, arg_watermark)
+}
+
+/// Lower an arithmetic operator between a compiler-known vector and a scalar
+/// (`v * 2.0`, `2 * v`) in host code as the operator on each component.
+///
+/// The scalar is converted once to the component type — `v * 2` with a
+/// `Vec3<f32>` scales by `2.0` — and the result is a new vector of the same
+/// type. A GPU body keeps the operator whole: WGSL broadcasts it natively.
+fn try_lower_vector_scalar_op(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    (lhs, lhs_op): (&Expression, &Operand),
+    (rhs, rhs_op): (&Expression, &Operand),
+    expr: &Expression,
+    dest: Option<Place>,
+    operand_watermark: usize,
+) -> Result<Option<Operand>, LoweringError> {
+    use crate::ast::operator::BinaryOp;
+    if ctx.body.execution_model != crate::mir::ExecutionModel::Cpu
+        || !matches!(
+            op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+        )
+    {
+        return Ok(None);
+    }
+    let (Some(lhs_ty), Some(rhs_ty)) = (ctx.recorded_type(lhs.id), ctx.recorded_type(rhs.id))
+    else {
+        return Ok(None);
+    };
+    let lhs_dim = crate::ast::types::vec_type_dim(&lhs_ty.kind);
+    let rhs_dim = crate::ast::types::vec_type_dim(&rhs_ty.kind);
+    let (vector_ty, vector_op, scalar_op, vector_on_left, dim) = match (lhs_dim, rhs_dim) {
+        (Some(dim), None) => (lhs_ty, lhs_op, rhs_op, true, dim),
+        (None, Some(dim)) => (rhs_ty, rhs_op, lhs_op, false, dim),
+        (Some(_), Some(_)) | (None, None) => return Ok(None),
+    };
+    let Some(component_ty) = vector_component_type(&vector_ty) else {
+        return Ok(None);
+    };
+    let bin_op = op_to_binop(op, expr.span)?;
+    let span = expr.span;
+
+    let vector = crate::mir::lowering::helpers::ensure_place(ctx, vector_op.clone(), span);
+    let scalar = ctx.push_temp(component_ty.clone(), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(scalar),
+            Rvalue::Cast(Box::new(scalar_op.clone()), component_ty.clone()),
+        ),
+        span,
+    });
+
+    let mut components = Vec::with_capacity(usize::from(dim));
+    for index in 0..usize::from(dim) {
+        let mut field = vector.clone();
+        field.projection.push(crate::mir::PlaceElem::Field(index));
+        let (left, right) = if vector_on_left {
+            (Operand::Copy(field), Operand::Copy(Place::new(scalar)))
+        } else {
+            (Operand::Copy(Place::new(scalar)), Operand::Copy(field))
+        };
+        let component = ctx.push_temp(component_ty.clone(), span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(component),
+                Rvalue::BinaryOp(bin_op, Box::new(left), Box::new(right)),
+            ),
+            span,
+        });
+        components.push(Operand::Copy(Place::new(component)));
+    }
+
+    let target = dest.unwrap_or_else(|| Place::new(ctx.push_temp(vector_ty.clone(), span)));
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Aggregate(crate::mir::AggregateKind::Struct(vector_ty), components),
+        ),
+        span,
+    });
+    // As for any operator: an operand this expression built is dead once read.
+    for local in [lhs_op, rhs_op].into_iter().filter_map(operand_local) {
+        ctx.emit_temp_drop(local, operand_watermark, span);
+    }
+    Ok(Some(Operand::Copy(target)))
+}
+
+/// The component type a compiler-known vector type is written with.
+fn vector_component_type(vector_ty: &Type) -> Option<Type> {
+    let TypeKind::Custom(_, Some(args)) = &vector_ty.kind else {
+        return None;
+    };
+    match &args.first()?.node {
+        ExpressionKind::Type(component, _) => Some(component.as_ref().clone()),
+        _ => None,
+    }
 }
 
 /// True when the operator is `==` or `!=`.
@@ -708,3 +817,4 @@ fn emit_binary_op(
     }
     Ok(ret_op)
 }
+
