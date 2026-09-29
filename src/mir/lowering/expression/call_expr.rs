@@ -87,6 +87,7 @@ fn try_lower_option_some(
 
     let arg_watermark = ctx.body.local_decls.len();
     let inner_val = lower_expression(ctx, &args[0], None)?;
+    let inner_val = widen_some_payload(ctx, inner_val, &args[0], expr);
     let target = if let Some(d) = dest {
         d
     } else {
@@ -104,6 +105,43 @@ fn try_lower_option_some(
         ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
     }
     Ok(Some(Operand::Copy(target)))
+}
+
+/// A number handed to `Some` where a wider optional is declared
+/// (`let o i64? = Some(b)` with `b i8`) widened to the payload type the
+/// optional was recorded at, as `let x i64 = b` widens it. Stored at its own
+/// width, the payload would be read back at the wider one: `-5` as `251`.
+fn widen_some_payload(
+    ctx: &mut LoweringContext,
+    payload: Operand,
+    arg: &Expression,
+    some_expr: &Expression,
+) -> Operand {
+    let Some(recorded) = ctx.recorded_type(some_expr.id) else {
+        return payload;
+    };
+    let recorded =
+        crate::mir::lowering::variable::canonical_declared_type(ctx.type_checker, &recorded);
+    let TypeKind::Option(payload_ty) = recorded.kind else {
+        return payload;
+    };
+    let Some(arg_ty) = ctx.recorded_type(arg.id) else {
+        return payload;
+    };
+    let numbers = ctx.type_checker.is_numeric_type(&arg_ty.kind)
+        && ctx.type_checker.is_numeric_type(&payload_ty.kind);
+    if !numbers || arg_ty.kind == payload_ty.kind {
+        return payload;
+    }
+    let widened = ctx.push_temp(payload_ty.as_ref().clone(), arg.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(widened),
+            Rvalue::Cast(Box::new(payload), payload_ty.as_ref().clone()),
+        ),
+        span: arg.span,
+    });
+    Operand::Copy(Place::new(widened))
 }
 
 fn try_lower_testing_intrinsic(

@@ -508,6 +508,7 @@ impl TypeChecker {
             }
         } else if self.builds_an_optional(expr, callee) {
             self.record_joined_type(expr, expected, context);
+            self.record_widened_optional(expr, expected);
             if let (TypeKind::Option(inner), [arg]) = (&expected.kind, args.as_slice()) {
                 self.settle_at_expected(arg, inner, context, built_elsewhere);
             }
@@ -542,6 +543,26 @@ impl TypeChecker {
     /// Whether `call` is the built-in variant constructor that builds an
     /// optional, read from the callee fact the checker recorded — a user
     /// binding of the same name records no such fact.
+    /// Record `Some(value)` at `expected` when both are optionals of numbers
+    /// of different widths (`Some(b)` with `b i8` where `i64?` is declared).
+    /// The optional is then built at the declared payload type, which is what
+    /// lowering widens the value to; left at its own, the box would hold the
+    /// narrow payload and be read back at the wider width.
+    fn record_widened_optional(&mut self, expr: &Expression, expected: &Type) {
+        let TypeKind::Option(declared) = &expected.kind else {
+            return;
+        };
+        let Some(TypeKind::Option(built)) = self.get_type(expr.id).map(|ty| &ty.kind) else {
+            return;
+        };
+        let widens = declared.kind != built.kind
+            && self.is_numeric_type(&declared.kind)
+            && self.is_numeric_type(&built.kind);
+        if widens {
+            self.type_table.types.insert(expr.id, expected.clone());
+        }
+    }
+
     fn builds_an_optional(&self, call: &Expression, callee: &Expression) -> bool {
         matches!(
             self.fn_analysis.callee_kinds.get(&callee.id),
