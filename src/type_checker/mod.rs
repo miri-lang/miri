@@ -385,14 +385,34 @@ impl TypeChecker {
         &self.modules.current_module
     }
 
-    /// Returns the function residency verdicts.
-    pub fn fn_residencies(&self) -> &HashMap<String, FnResidency> {
-        &self.fn_analysis.fn_residencies
+    /// The declaration a call's callee expression resolved to: a bare name, or
+    /// a member read through a module alias (`M.f`).
+    pub fn declaration_called_by(&self, callee: &Expression) -> Option<&DeclaredFunction> {
+        match &callee.node {
+            ExpressionKind::Identifier(..) => self.declared_callee(callee.id),
+            ExpressionKind::Member(_, member) => self.declared_callee(member.id),
+            _ => None,
+        }
     }
 
-    /// Returns the function out-parameter flags.
-    pub fn function_out_params(&self) -> &HashMap<String, Vec<bool>> {
-        &self.fn_analysis.function_out_params
+    /// The residency verdict of the function `callee` names.
+    pub fn callee_residency(&self, callee: &Expression) -> Option<FnResidency> {
+        let declared = self.declaration_called_by(callee)?;
+        self.fn_analysis.fn_residencies.get(declared).copied()
+    }
+
+    /// The out-parameter flags of the function `callee` names.
+    pub fn callee_out_params(&self, callee: &Expression) -> Option<&Vec<bool>> {
+        let declared = self.declaration_called_by(callee)?;
+        self.fn_analysis.function_out_params.get(declared)
+    }
+
+    /// The function a declaration named `name` in the module being checked is.
+    pub(crate) fn declared_here(&self, name: &str) -> DeclaredFunction {
+        DeclaredFunction {
+            module: ModuleId::checked_as(&self.modules.current_module),
+            name: name.to_string(),
+        }
     }
 
     /// Returns the type-checking warnings.

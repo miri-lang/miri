@@ -67,7 +67,7 @@ pub(crate) fn residency_specialize_call(
         return Ok(Vec::new());
     };
     if !matches!(
-        ctx.type_checker.fn_residencies().get(func_name.as_str()),
+        ctx.type_checker.callee_residency(func),
         Some(crate::type_checker::FnResidency::GpuLaunchSafe)
     ) {
         return Ok(Vec::new());

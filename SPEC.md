@@ -481,6 +481,8 @@ fn main()
 
 Importing two modules that export the same name produces a compile error with suggestions for resolution (e.g., using aliased imports).
 
+A module imported under an alias is a namespace: `M.f` names the `f` that module declares, whatever the program or another import calls `f`. Its names are also reachable unqualified, except one that something else — the program, or an earlier import — already declares; that name keeps its owner, and the alias is how the module's own is reached. Two modules declaring one name can therefore each be imported under an alias. A module's `private` declarations are never exported, so they collide with nothing.
+
 ### Circular Dependency Detection
 
 If module `a.mi` imports `b.mi` and `b.mi` imports `a.mi`, the compiler reports the circular import chain with clear diagnostics.

@@ -174,23 +174,24 @@ impl TypeChecker {
         context.in_static_method = properties.is_static;
 
         // Store the function body for GPU callability analysis
+        let declared = self.declared_here(name);
         if let Some(body_stmt) = body {
             self.fn_analysis
                 .function_bodies
-                .insert(name.to_string(), std::rc::Rc::new(body_stmt.clone()));
+                .insert(declared.clone(), std::rc::Rc::new(body_stmt.clone()));
 
             // Compute residency verdict for this function
             let residency = self.compute_function_residency(params, body_stmt, context);
             self.fn_analysis
                 .fn_residencies
-                .insert(name.to_string(), residency);
+                .insert(declared.clone(), residency);
         }
 
         // Store the out-param flags for each function (used in GPU kernel launch)
         let out_flags: Vec<bool> = params.iter().map(|p| p.is_out).collect();
         self.fn_analysis
             .function_out_params
-            .insert(name.to_string(), out_flags);
+            .insert(declared, out_flags);
 
         let const_value =
             self.check_function_body(body, name, &return_type, infer_main_return, span, context);

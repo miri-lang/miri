@@ -58,6 +58,12 @@ pub struct ModuleLoader {
     /// unused-import check, which cannot ask what a plain `use module` brought
     /// in without knowing what the module declares.
     pub module_declared_names: HashMap<String, HashSet<String>>,
+    /// For each module path that has been loaded, the symbol of every name the
+    /// module declares at its top level, as its own check registered it. A
+    /// member read through a module alias (`M.f`) resolves here, so it reaches
+    /// the module's `f` even where the program or another import owns the
+    /// unqualified `f`.
+    pub module_symbols: HashMap<String, HashMap<String, crate::type_checker::context::SymbolInfo>>,
     /// Names of classes/traits inserted by the cross-module pre-pass as
     /// partial placeholders so forward references resolve during recursive
     /// module loading. `check_class` / `check_trait` recognize members of
@@ -85,6 +91,7 @@ impl ModuleLoader {
             source_dir: None,
             current_source_override: None,
             module_declared_names: HashMap::new(),
+            module_symbols: HashMap::new(),
             pre_registered_types: HashSet::new(),
         }
     }

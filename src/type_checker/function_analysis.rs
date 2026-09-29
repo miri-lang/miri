@@ -119,16 +119,17 @@ impl DeclaredFunction {
 /// [`TypeChecker`]: super::TypeChecker
 #[derive(Debug)]
 pub(crate) struct FunctionAnalysis {
-    /// Maps user-defined function names to their Statement bodies for GPU callability analysis.
-    pub(crate) function_bodies: HashMap<String, Rc<Statement>>,
-    /// Maps function names to a Vec<bool> of their parameters' `is_out` flags.
-    /// Populated during function declaration checking; used in GPU kernel launch
-    /// to determine which buffers are writable.
-    pub(crate) function_out_params: HashMap<String, Vec<bool>>,
+    /// Each user-defined function's body, for GPU callability analysis. Keyed
+    /// by declaration, so two modules' functions of one name keep their own.
+    pub(crate) function_bodies: HashMap<DeclaredFunction, Rc<Statement>>,
+    /// Each function's parameters' `is_out` flags. Populated during function
+    /// declaration checking; used in GPU kernel launch to determine which
+    /// buffers are writable.
+    pub(crate) function_out_params: HashMap<DeclaredFunction, Vec<bool>>,
     /// Computed residency verdict for each function (HostOnly or PolymorphicSafe).
     /// Populated during function declaration checking; used at call sites to
     /// determine if gpu-resident args are allowed.
-    pub(crate) fn_residencies: HashMap<String, FnResidency>,
+    pub(crate) fn_residencies: HashMap<DeclaredFunction, FnResidency>,
     /// Every identifier expression, by id, that resolved in its scope to a
     /// declaration made `runtime` or `intrinsic` — including one a module body
     /// reaches that the program's own imports leave out of its scope — or to a
