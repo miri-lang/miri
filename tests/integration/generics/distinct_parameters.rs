@@ -412,9 +412,9 @@ fn main()
     );
 }
 
-/// A method's own `T` shadows its class's. The call below binds the class's
-/// `T` to `int` and hands the method a string, which must not reach a body
-/// that returns the class's field as the method's `T`.
+/// A method's own `T` would be read as its class's, so it is refused where it
+/// is declared rather than letting the call below judge a string against the
+/// class's `int`.
 #[test]
 fn a_method_parameter_shadowing_the_class_parameter_lets_no_mismatch_through() {
     assert_compiler_error(
@@ -430,7 +430,7 @@ fn main()
     let b = Box<int>(3)
     println(b.swap("a" + "b"))
 "#,
-        "Type mismatch",
+        "Method 'swap' declares a type parameter 'T' its class already declares",
     );
 }
 
