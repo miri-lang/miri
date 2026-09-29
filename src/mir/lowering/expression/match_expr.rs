@@ -216,20 +216,7 @@ fn emit_guard_and_branch(
 ) -> Result<(), LoweringError> {
     let guard_op = lower_expression(ctx, guard, None)?;
     let guard_true_bb = ctx.new_basic_block();
-
-    let this_is_catchall = this_discrs.is_empty();
-    let mut guard_fail_bb = join_bb;
-    for (next_bb, _, next_discrs) in branch_blocks.iter().skip(arm_idx + 1) {
-        let next_is_catchall = next_discrs.is_empty();
-        if next_is_catchall {
-            guard_fail_bb = *next_bb;
-            break;
-        }
-        if !this_is_catchall && this_discrs.iter().any(|d| next_discrs.contains(d)) {
-            guard_fail_bb = *next_bb;
-            break;
-        }
-    }
+    let guard_fail_bb = arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb);
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
@@ -242,6 +229,68 @@ fn emit_guard_and_branch(
 
     ctx.set_current_block(guard_true_bb);
     Ok(())
+}
+
+/// The block a value goes to when arm `arm_idx` was dispatched to but turned
+/// out not to match — its guard failed, or a pattern nested in its payload did
+/// not match: the next arm that could still match the same discriminant, or a
+/// catch-all arm, or the join when no later arm can.
+fn arm_fallthrough_target(
+    arm_idx: usize,
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
+    this_discrs: &[u128],
+    join_bb: crate::mir::BasicBlock,
+) -> crate::mir::BasicBlock {
+    let this_is_catchall = this_discrs.is_empty();
+    for (next_bb, _, next_discrs) in branch_blocks.iter().skip(arm_idx + 1) {
+        if next_discrs.is_empty() {
+            return *next_bb;
+        }
+        if !this_is_catchall && this_discrs.iter().any(|d| next_discrs.contains(d)) {
+            return *next_bb;
+        }
+    }
+    join_bb
+}
+
+/// Bind an arm's patterns. A pattern nested in a payload is a further test,
+/// which leaves for the arm's fallthrough when it does not match; such an arm
+/// must be a single pattern, since a failing alternative would leave the arm
+/// instead of trying the next alternative.
+fn bind_arm_patterns(
+    ctx: &mut LoweringContext,
+    branch: &crate::ast::pattern::MatchBranch,
+    subject_local: crate::mir::Local,
+    span: crate::error::syntax::Span,
+    fallthrough: crate::mir::BasicBlock,
+) -> Result<(), LoweringError> {
+    let nested = branch
+        .patterns
+        .iter()
+        .any(super::match_nested::has_refutable_payload);
+    if !nested {
+        for pattern in &branch.patterns {
+            bind_pattern(ctx, pattern, subject_local, &span)?;
+        }
+        return Ok(());
+    }
+    let [pattern] = branch.patterns.as_slice() else {
+        // TODO: alternatives with nested payload patterns need each
+        // alternative's failure to try the next one before leaving the arm.
+        return Err(LoweringError::unsupported_expression(
+            "a pattern nested inside another cannot yet be one of several alternatives in an arm",
+            span,
+        ));
+    };
+    let exit = super::match_nested::ArmExit {
+        block: fallthrough,
+        scope: ctx.scope_depth(),
+    };
+    super::match_nested::bind_testing_payloads(ctx, pattern, subject_local, span, exit)
 }
 
 /// Compute discriminant values and switch targets for a pattern in match arms.
@@ -608,10 +657,8 @@ pub(crate) fn lower_match_expr(
         ctx.set_current_block(*branch_bb);
         ctx.push_scope();
 
-        // Bind pattern variables
-        for pattern in &branch.patterns {
-            bind_pattern(ctx, pattern, subject_local, &subject.span)?;
-        }
+        let fallthrough = arm_fallthrough_target(arm_idx, &branch_blocks, this_discrs, join_bb);
+        bind_arm_patterns(ctx, branch, subject_local, subject.span, fallthrough)?;
 
         if let Some(guard) = &branch.guard {
             emit_guard_and_branch(ctx, guard, arm_idx, &branch_blocks, this_discrs, join_bb)?;

@@ -35,6 +35,7 @@ pub mod literal_expr;
 pub mod logical_expr;
 pub mod map_expr;
 pub mod match_expr;
+pub mod match_nested;
 pub mod member_expr;
 pub mod namedargument_expr;
 pub mod range_expr;
