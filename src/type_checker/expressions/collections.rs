@@ -429,6 +429,9 @@ impl TypeChecker {
             ExpressionKind::Call(..) => {
                 self.settle_call_at_expected(expr, expected, context, built_elsewhere)
             }
+            ExpressionKind::Member(..) if self.is_payload_less_variant(expr, expected, context) => {
+                self.type_table.types.insert(expr.id, expected.clone());
+            }
             ExpressionKind::Identifier(..)
             | ExpressionKind::Member(..)
             | ExpressionKind::Index(..) => {
@@ -599,6 +602,26 @@ impl TypeChecker {
         if widens {
             self.type_table.types.insert(expr.id, expected.clone());
         }
+    }
+
+    /// Whether `expr` is a variant of a generic enum carrying no payload
+    /// (`Holder.Nothing`), recorded as the bare enum, written where `expected`
+    /// names an instantiation of that enum. Nothing in the variant says what
+    /// its arguments are, so the location's are its own: recorded bare, it
+    /// would be built and released as no instantiation at all.
+    fn is_payload_less_variant(
+        &self,
+        expr: &Expression,
+        expected: &Type,
+        context: &Context,
+    ) -> bool {
+        if !self.is_variant_constructor(expr, context) {
+            return false;
+        }
+        let Some(TypeKind::Custom(built, None)) = self.get_type(expr.id).map(|ty| &ty.kind) else {
+            return false;
+        };
+        matches!(&expected.kind, TypeKind::Custom(name, Some(_)) if name == built)
     }
 
     fn builds_an_optional(&self, call: &Expression, callee: &Expression) -> bool {
