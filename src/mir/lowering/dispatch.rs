@@ -151,7 +151,15 @@ fn try_lower_module_alias_call(
         return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest.cloned())
             .map(Some);
     }
-    lower_aliased_function_call(ctx, span, call_expr_id, method_expr, args, dest.cloned())
+    lower_aliased_function_call(
+        ctx,
+        span,
+        call_expr_id,
+        func.id,
+        method_expr,
+        args,
+        dest.cloned(),
+    )
 }
 
 /// Lower a call to a static method on a class or enum: `Duration.from_millis(ms)` or `MyEnum.create()`.
@@ -314,10 +322,13 @@ fn lower_math_intrinsic_call(
 }
 
 /// Lower a direct call to the function `callee` names through a module alias.
+/// `signature_id` is the expression the type checker typed as the function
+/// the alias names (`M.foo`); its parameters are what the arguments bind.
 fn lower_aliased_function_call(
     ctx: &mut LoweringContext,
     span: &Span,
     call_expr_id: usize,
+    signature_id: usize,
     callee: &Expression,
     args: &[Expression],
     dest: Option<Place>,
@@ -333,7 +344,12 @@ fn lower_aliased_function_call(
     };
     let func_op = runtime_fn_operand(&mangled, *span);
 
-    let mut arg_ops = lower_plain_args(ctx, args)?;
+    // The arguments are handled as a direct call's are: each brought to its
+    // parameter's type, a named one placed at the parameter it names, an
+    // omitted one given its default, and every temp one built released once
+    // the call has taken its own reference.
+    let arg_watermark = ctx.body.local_decls.len();
+    let mut arg_ops = lower_call_arguments(ctx, signature_id, call_expr_id, args, *span)?;
     if callee_takes_allocator(ctx, callee) {
         push_allocator_arg(ctx, &mut arg_ops);
     }
@@ -346,13 +362,41 @@ fn lower_aliased_function_call(
     emit_call_terminator(
         ctx,
         func_op,
-        arg_ops,
+        arg_ops.clone(),
         Vec::new(),
         Vec::new(),
-        destination,
+        destination.clone(),
         *span,
     );
+    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
     Ok(Some(result_op))
+}
+
+/// A call's argument operands in parameter order, for the function the
+/// callee expression `callee_id` names: each lowered in written order and
+/// brought to its parameter's type, a named one placed at the parameter it
+/// names, and an omitted one given its default.
+fn lower_call_arguments(
+    ctx: &mut LoweringContext,
+    callee_id: usize,
+    call_expr_id: usize,
+    args: &[Expression],
+    span: Span,
+) -> Result<Vec<Operand>, LoweringError> {
+    let is_generic_call = ctx
+        .type_checker
+        .call_generic_mappings
+        .contains_key(&call_expr_id);
+    let param_types = resolve_param_types(ctx, callee_id, is_generic_call);
+    let targets = if is_generic_call {
+        generic_call_parameter_types(ctx, callee_id, call_expr_id)
+    } else {
+        declared_parameter_types(ctx, &param_types)
+    };
+    let param_names = callee_parameter_names(ctx, callee_id);
+    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names)?;
+    fill_default_args(ctx, &mut arg_slots, &param_types)?;
+    operands_in_parameter_order(arg_slots, span)
 }
 
 /// Lower call arguments with plain expression lowering (no coercion).
@@ -1367,15 +1411,7 @@ fn lower_direct_call(
     let param_types = resolve_param_types(ctx, func.id, is_generic_call);
 
     let arg_watermark = ctx.body.local_decls.len();
-    let targets = if is_generic_call {
-        generic_call_parameter_types(ctx, func.id, call_expr_id)
-    } else {
-        declared_parameter_types(ctx, &param_types)
-    };
-    let param_names = callee_parameter_names(ctx, func.id);
-    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names)?;
-    fill_default_args(ctx, &mut arg_slots, &param_types)?;
-    let mut arg_ops = operands_in_parameter_order(arg_slots, *span)?;
+    let mut arg_ops = lower_call_arguments(ctx, func.id, call_expr_id, args, *span)?;
 
     inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
 
