@@ -267,9 +267,13 @@ impl Backend for CraneliftBackend {
             &mut module,
             isa.pointer_type(),
             &self.facts,
-            vtables
-                .iter()
-                .map(|symbol| (symbol.as_str(), self.facts.vtable_fills().slots(symbol))),
+            vtables.iter().map(|(symbol, drop)| {
+                (
+                    symbol.as_str(),
+                    drop.as_str(),
+                    self.facts.vtable_fills().slots(symbol),
+                )
+            }),
         )?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
         let object = self.finalize_object(module)?;
@@ -651,6 +655,28 @@ impl CraneliftBackend {
             .collect();
         managed_names.sort_unstable();
 
+        // A trait has no fields and no drop thunk of its own, but a collection
+        // of trait-typed elements releases each through `miri.Trait.$decref`,
+        // which dispatches on the element's runtime class.
+        let mut trait_names: Vec<&str> = self
+            .facts
+            .definitions()
+            .iter()
+            .filter(|(_, def)| matches!(def, TypeDefinition::Trait(_)))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        trait_names.sort_unstable();
+        for trait_name in trait_names {
+            FunctionTranslator::generate_decref_function(
+                module,
+                ctx,
+                isa,
+                trait_name,
+                &[],
+                rc::Release::Trait,
+            )?;
+        }
+
         for type_name in managed_names {
             // Bare `miri.TypeName.$drop` (+ its `miri.TypeName.$decref` wrapper). For a
             // generic class this thunk backs the collection-element decref path;
@@ -857,7 +883,14 @@ impl CraneliftBackend {
             // per-instantiation drop thunk so the concrete managed field is
             // released. The bare `miri.Box.$decref` would reach only `miri.Box.$drop`,
             // which skips the unresolved generic field.
-            FunctionTranslator::generate_decref_function(module, ctx, isa, type_name, args)?;
+            FunctionTranslator::generate_decref_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                args,
+                rc::Release::of(type_name, &self.facts),
+            )?;
         }
         Ok(())
     }

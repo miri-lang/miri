@@ -279,3 +279,27 @@ fn main()
         "ab -",
     );
 }
+
+/// Held at a trait, the instance is released as the class it was built as,
+/// at the option its argument stands for.
+#[test]
+fn a_generic_class_at_a_nullable_string_held_at_a_trait_is_released_at_the_option() {
+    assert_heap_guard_output(
+        r#"
+trait Get<T>
+    fn get() T
+
+class Cell<T> implements Get<T>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let held Get<String?> = Cell<String?>("c" + "d")
+    println(held.get() ?? "-")
+"#,
+        "cd",
+    );
+}

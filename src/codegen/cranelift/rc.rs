@@ -30,6 +30,33 @@ use cranelift_object::ObjectModule;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+/// How a `$decref` wrapper releases the value whose last reference it drops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Release {
+    /// Through the type's own drop thunk: the value is of exactly that type.
+    Exact,
+    /// Through the drop slot of the vtable the value points at, or the type's
+    /// own drop thunk when it points at none: a class another class extends.
+    ByRuntimeClass,
+    /// Through the drop slot of the vtable the value points at: a trait, which
+    /// has no drop thunk of its own.
+    Trait,
+}
+
+impl Release {
+    /// How a value whose static type is `type_name` is released.
+    pub(crate) fn of(type_name: &str, facts: &TypeFacts) -> Self {
+        let definitions = facts.definitions();
+        match definitions.get(type_name) {
+            Some(TypeDefinition::Trait(_)) => Release::Trait,
+            _ if crate::mir::dispatch::released_by_runtime_class(type_name, definitions) => {
+                Release::ByRuntimeClass
+            }
+            _ => Release::Exact,
+        }
+    }
+}
+
 /// A runtime call recording one pointer-sized setting on a container.
 pub(crate) type ContainerSetter =
     fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>;
@@ -946,11 +973,84 @@ impl<'a> FunctionTranslator<'a> {
         Self::call_libc_free(builder, ctx, header_ptr)
     }
 
-    /// Drop a custom struct/class/enum: dispatch through the type-specific
-    /// `miri.TypeName.$drop` thunk when it carries managed fields or a user-defined
-    /// drop hook; otherwise, for enums, emit field drops inline and free the RC
-    /// block, or just free the block for non-enums.
+    /// Drop a custom struct/class/enum or trait value.
+    ///
+    /// A value whose static type another class may stand for — a trait, or a
+    /// class something extends — is released as its runtime class, through
+    /// the drop slot of the vtable it points at; one pointing at none is of
+    /// the static class and takes the static path below.
     fn emit_drop_custom(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &str,
+        type_args: Option<&[Expression]>,
+        ptr: Value,
+        header_ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let definitions = type_ctx.facts.definitions();
+        if !crate::mir::dispatch::released_by_runtime_class(name, definitions) {
+            return Self::emit_drop_custom_static(
+                builder, ctx, name, type_args, ptr, header_ptr, type_ctx,
+            );
+        }
+        let is_trait = matches!(definitions.get(name), Some(TypeDefinition::Trait(_)));
+        Self::emit_release_by_runtime_class(builder, ctx, ptr, type_ctx.ptr_type, |builder, ctx| {
+            if is_trait {
+                Self::call_libc_free(builder, ctx, header_ptr)
+            } else {
+                Self::emit_drop_custom_static(
+                    builder, ctx, name, type_args, ptr, header_ptr, type_ctx,
+                )
+            }
+        })
+    }
+
+    /// Release the instance at `ptr` through the drop slot of the vtable it
+    /// points at, or, when its vtable word is null, through `static_release`.
+    fn emit_release_by_runtime_class(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+        ptr_type: cl_types::Type,
+        static_release: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
+    ) -> Result<(), CodegenError> {
+        let vtable = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
+        let has_vtable_block = builder.create_block();
+        let static_block = builder.create_block();
+        let done_block = builder.create_block();
+        builder
+            .ins()
+            .brif(vtable, has_vtable_block, &[], static_block, &[]);
+
+        builder.switch_to_block(has_vtable_block);
+        builder.seal_block(has_vtable_block);
+        let slot_offset = (crate::mir::dispatch::DROP_SLOT * ptr_type.bytes() as usize) as i32;
+        let drop_fn = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), vtable, slot_offset);
+        let mut signature = Signature::new(builder.func.signature.call_conv);
+        signature.params.push(AbiParam::new(ptr_type));
+        let signature_ref = builder.import_signature(signature);
+        builder.ins().call_indirect(signature_ref, drop_fn, &[ptr]);
+        builder.ins().jump(done_block, &[]);
+
+        builder.switch_to_block(static_block);
+        builder.seal_block(static_block);
+        static_release(builder, ctx)?;
+        builder.ins().jump(done_block, &[]);
+
+        builder.switch_to_block(done_block);
+        builder.seal_block(done_block);
+        Ok(())
+    }
+
+    /// Drop a custom struct/class/enum known to be of exactly `name`: dispatch
+    /// through the type-specific `miri.TypeName.$drop` thunk when it carries
+    /// managed fields or a user-defined drop hook; otherwise, for enums, emit
+    /// field drops inline and free the RC block, or just free the block for
+    /// non-enums.
+    fn emit_drop_custom_static(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
@@ -1669,14 +1769,18 @@ impl<'a> FunctionTranslator<'a> {
             // Route a recorded generic-class instantiation (`Box<String>`) to its
             // per-instantiation `miri.Box$String.$decref` wrapper so the concrete
             // managed field is released; other classes use the bare name.
-            // TODO: an element typed at a trait (`List<Op<String>>`) names a
-            // `miri.Op.$decref` that `generate_type_drop_functions` never emits, as
-            // it emits wrappers for structs, classes and enums only, so such a
-            // collection does not link. Its release has to dispatch through the
-            // element's vtable to the concrete class's drop.
-            let per_instantiation =
+            // A trait's one `$decref` dispatches on the element's runtime
+            // class, whatever arguments the trait is written at.
+            let is_trait = matches!(
+                type_ctx.facts.definitions().get(class_name),
+                Some(TypeDefinition::Trait(_))
+            );
+            let per_instantiation = if is_trait {
+                None
+            } else {
                 Self::drop_thunk(class_name, Self::custom_type_args(elem_type_kind), type_ctx)?
-                    .per_instantiation();
+                    .per_instantiation()
+            };
             let decref_name = Symbol::type_thunk(
                 ThunkKind::Decref,
                 class_name,
@@ -1876,7 +1980,14 @@ impl<'a> FunctionTranslator<'a> {
         }
         // Generate miri.TypeName.$decref: the RC-decrement wrapper used as
         // elem_drop_fn for collections holding custom-type elements.
-        Self::generate_decref_function(module, ctx, isa, type_name, &[])
+        Self::generate_decref_function(
+            module,
+            ctx,
+            isa,
+            type_name,
+            &[],
+            Release::of(type_name, facts),
+        )
     }
 
     /// Emit the body of `miri.TypeName.$drop(ptr)`:
@@ -2003,12 +2114,18 @@ impl<'a> FunctionTranslator<'a> {
         isa: &Arc<dyn TargetIsa>,
         type_name: &str,
         type_args: &[Type],
+        release: Release,
     ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
 
         let decref_name = Symbol::type_thunk(ThunkKind::Decref, type_name, type_args).link_name();
-        let drop_thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, type_args);
+        let drop_thunk = match release {
+            Release::Trait => None,
+            Release::Exact | Release::ByRuntimeClass => {
+                Some(Symbol::type_thunk(ThunkKind::Drop, type_name, type_args))
+            }
+        };
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -2021,7 +2138,15 @@ impl<'a> FunctionTranslator<'a> {
         );
 
         let mut builder_ctx = FunctionBuilderContext::new();
-        Self::emit_decref_body(module, ctx, &mut builder_ctx, &drop_thunk, ptr_type, &sig)?;
+        Self::emit_decref_body(
+            module,
+            ctx,
+            &mut builder_ctx,
+            drop_thunk.as_ref(),
+            release,
+            ptr_type,
+            &sig,
+        )?;
 
         module
             .define_function(func_id, ctx)
@@ -2111,11 +2236,13 @@ impl<'a> FunctionTranslator<'a> {
     /// Emit the body of a decref thunk: null guard → heap-guard release check →
     /// immortal guard → decrement RC → when RC hits zero call `drop_thunk(ptr)`
     /// → return.
+    #[allow(clippy::too_many_arguments)]
     fn emit_decref_body(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
-        drop_thunk: &Symbol,
+        drop_thunk: Option<&Symbol>,
+        release: Release,
         ptr_type: cl_types::Type,
         sig: &Signature,
     ) -> Result<(), CodegenError> {
@@ -2175,7 +2302,21 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(free_block);
         builder.seal_block(free_block);
-        Self::call_type_drop(&mut builder, module_ctx.module, drop_thunk, sig, ptr)?;
+        let static_release =
+            |builder: &mut FunctionBuilder, module_ctx: &mut ModuleCtx| match drop_thunk {
+                Some(thunk) => Self::call_type_drop(builder, module_ctx.module, thunk, sig, ptr),
+                None => Self::call_libc_free(builder, module_ctx, header_ptr),
+            };
+        match release {
+            Release::Exact => static_release(&mut builder, &mut module_ctx)?,
+            Release::ByRuntimeClass | Release::Trait => Self::emit_release_by_runtime_class(
+                &mut builder,
+                &mut module_ctx,
+                ptr,
+                ptr_type,
+                static_release,
+            )?,
+        }
         builder.ins().jump(merge_block, &[]);
 
         builder.switch_to_block(merge_block);

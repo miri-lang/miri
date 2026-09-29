@@ -560,30 +560,21 @@ fn trait_default_among<'a>(
         .find_map(|trait_name| find_trait_default_method(type_defs, trait_name, method_name))
 }
 
-/// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract,
-/// or if the class (or any ancestor) implements at least one trait.
+/// Returns `true` if an instance of `class_name` stores a vtable pointer as the
+/// first word (offset 0) of its heap payload.
 ///
-/// Both abstract classes and trait-implementing classes use vtable-based virtual dispatch
-/// and store a vtable pointer as the first word (offset 0) of their heap payload.
+/// A class that is abstract or implements a trait uses it for virtual
+/// dispatch. A class that extends another uses it to be released as what it
+/// is: held at its base class, it is released through its own vtable's drop
+/// slot, which knows the fields the base does not. So a class with a null
+/// vtable word is never held at a type other than its own, bar a trait's.
 pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
-    let mut current: &str = class_name;
-    // Bounded for the same reason the sibling walks are: a circular `extends`
-    // must not outlive the report made where the class is declared.
-    for _ in 0..=type_defs.len() {
-        match type_defs.get(current) {
-            Some(TypeDefinition::Class(cd)) => {
-                if cd.is_abstract || !cd.traits.is_empty() {
-                    return true;
-                }
-                match &cd.base_class {
-                    Some(base) => current = base,
-                    None => return false,
-                }
-            }
-            _ => return false,
+    match type_defs.get(class_name) {
+        Some(TypeDefinition::Class(cd)) => {
+            cd.is_abstract || !cd.traits.is_empty() || cd.base_class.is_some()
         }
+        _ => false,
     }
-    false
 }
 
 /// `trait_name` and every trait it extends, each once, breadth-first with each

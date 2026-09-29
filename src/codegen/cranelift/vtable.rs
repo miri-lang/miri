@@ -11,20 +11,23 @@
 
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
-use crate::mir::dispatch::{FilledSlot, VtableLayout};
+use crate::mir::dispatch::{FilledSlot, VtableLayout, DROP_SLOT};
 use crate::mir::type_facts::TypeFacts;
 
 use cranelift_module::Module;
 use cranelift_object::ObjectModule;
 
 impl<'a> FunctionTranslator<'a> {
-    /// Define each of `vtables`, a symbol with the slots it fills, in order.
+    /// Define each of `vtables`, a symbol with the drop thunk of its class and
+    /// the slots it fills, in order.
     ///
     /// Every vtable is an array of function pointers laid out by the one
-    /// program-wide [`VtableLayout`] the lowered `VirtualCall`s index by. A
-    /// slot the pipeline filled points to the body it names, or, where
-    /// lowering withheld that body at this instance, to the runtime trap that
-    /// reports it; every other slot is null, and no reached call reads it.
+    /// program-wide [`VtableLayout`] the lowered `VirtualCall`s index by. Its
+    /// [`DROP_SLOT`] points to the drop thunk, through which an instance held
+    /// at a base class or a trait is released. A method slot the pipeline
+    /// filled points to the body it names, or, where lowering withheld that
+    /// body at this instance, to the runtime trap that reports it; every other
+    /// slot is null, and no reached call reads it.
     ///
     /// Must be called AFTER all function bodies are compiled: a slot names a
     /// body the module already defines, and one it does not is reported.
@@ -32,23 +35,25 @@ impl<'a> FunctionTranslator<'a> {
         module: &mut ObjectModule,
         ptr_type: cranelift_codegen::ir::Type,
         facts: &TypeFacts,
-        vtables: impl IntoIterator<Item = (&'v str, &'v [FilledSlot])>,
+        vtables: impl IntoIterator<Item = (&'v str, &'v str, &'v [FilledSlot])>,
     ) -> Result<(), CodegenError> {
         let slot_count = VtableLayout::of(facts.definitions()).slot_count();
-        for (symbol, slots) in vtables {
-            Self::emit_vtable(module, ptr_type, slot_count, symbol, slots, facts)?;
+        for (symbol, drop, slots) in vtables {
+            Self::emit_vtable(module, ptr_type, slot_count, symbol, drop, slots, facts)?;
         }
         Ok(())
     }
 
     /// Declare-and-define the vtable data symbol `symbol` with `slot_count`
-    /// pointer slots, each of `slots` holding the address of the function it
-    /// names for its method and every other one null.
+    /// pointer slots: the drop slot holding the address of `drop`, each of
+    /// `slots` the address of the function it names for its method, and every
+    /// other one null.
     fn emit_vtable(
         module: &mut ObjectModule,
         ptr_type: cranelift_codegen::ir::Type,
         slot_count: usize,
         symbol: &str,
+        drop: &str,
         slots: &[FilledSlot],
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
@@ -61,6 +66,10 @@ impl<'a> FunctionTranslator<'a> {
         let mut desc = cranelift_module::DataDescription::new();
         desc.set_align(ptr_size as u64);
         desc.define(vec![0u8; slot_count * ptr_size].into_boxed_slice());
+
+        let drop_id = Self::drop_thunk_func_id(module, ptr_type, drop)?;
+        let drop_ref = module.declare_func_in_data(drop_id, &mut desc);
+        desc.write_function_addr((DROP_SLOT * ptr_size) as u32, drop_ref);
 
         for filled in slots {
             let func_id = if facts.is_withheld(&filled.symbol) {
@@ -85,6 +94,23 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<cranelift_module::FuncId, CodegenError> {
         let name = crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC;
         let signature = module.make_signature();
+        module
+            .declare_function(name, cranelift_module::Linkage::Import, &signature)
+            .map_err(|e| CodegenError::declare_function(name.to_string(), e.to_string()))
+    }
+
+    /// The drop thunk `name`, taking the payload pointer of the instance it
+    /// releases. The thunks are generated once every body is compiled, so it
+    /// is declared here and defined with the others.
+    fn drop_thunk_func_id(
+        module: &mut ObjectModule,
+        ptr_type: cranelift_codegen::ir::Type,
+        name: &str,
+    ) -> Result<cranelift_module::FuncId, CodegenError> {
+        let mut signature = module.make_signature();
+        signature
+            .params
+            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
         module
             .declare_function(name, cranelift_module::Linkage::Import, &signature)
             .map_err(|e| CodegenError::declare_function(name.to_string(), e.to_string()))
@@ -154,7 +180,7 @@ mod tests {
     fn a_withheld_slot_names_the_method_not_checked_trap() {
         let mut module = host_module();
         let slots = [FilledSlot {
-            slot: 0,
+            slot: 1,
             method: "bad".to_string(),
             symbol: "miri.A.bad".to_string(),
         }];
@@ -162,8 +188,9 @@ mod tests {
         let emitted = FunctionTranslator::emit_vtable(
             &mut module,
             cranelift_codegen::ir::types::I64,
-            1,
+            2,
             "vt",
+            "miri.A.$drop",
             &slots,
             &facts,
         );
@@ -182,7 +209,7 @@ mod tests {
     fn a_slot_naming_no_compiled_body_is_reported() {
         let mut module = host_module();
         let slots = [FilledSlot {
-            slot: 0,
+            slot: 1,
             method: "keep".to_string(),
             symbol: "miri.A.keep".to_string(),
         }];
@@ -190,8 +217,9 @@ mod tests {
         let emitted = FunctionTranslator::emit_vtable(
             &mut module,
             cranelift_codegen::ir::types::I64,
-            1,
+            2,
             "vt",
+            "miri.A.$drop",
             &slots,
             &facts,
         );

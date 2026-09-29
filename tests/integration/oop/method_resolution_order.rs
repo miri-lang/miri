@@ -239,8 +239,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "releasing a class instance through a trait-typed binding runs no drop hook at all, \
-            not even one the class declares itself"]
 fn test_base_drop_hook_beats_a_subclass_trait_default_drop_through_the_trait() {
     assert_heap_guard_output(
         &program(&[
