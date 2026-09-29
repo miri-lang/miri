@@ -396,6 +396,12 @@ impl Perceus {
     }
 
     /// Handles RC for cast operations.
+    ///
+    /// A cast that reads its source by copy — a class value handed on at a
+    /// trait or abstract type, or a managed field read out of an aggregate —
+    /// leaves the source's holder and the destination each owning the value, so
+    /// the source is retained exactly as a plain copy is. A cast that moves its
+    /// source transfers the reference it held.
     fn handle_cast(
         &self,
         operand: &Operand,
@@ -405,10 +411,12 @@ impl Perceus {
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
         if let Operand::Copy(place) = operand {
-            if place
-                .projection
-                .iter()
-                .any(|e| matches!(e, PlaceElem::Field(_)))
+            let aliases_managed_source = is_place_managed(place, ctx)
+                || place
+                    .projection
+                    .iter()
+                    .any(|e| matches!(e, PlaceElem::Field(_)));
+            if aliases_managed_source
                 && MirType::from_type_kind(&target_ty.kind)
                     .is_managed(ctx.unmanaged_type_names, ctx.type_params)
             {

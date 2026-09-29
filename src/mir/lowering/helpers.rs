@@ -478,6 +478,9 @@ pub fn coercion_wraps_in_some(op_ty: &Type, target_ty: &Type) -> bool {
 /// Release the temp a retaining coercion read, when the expression being lowered
 /// is what created it.
 ///
+/// A coercion retains its source when it boxes it into an optional, or when it
+/// casts a value it reads by copy; a cast that moves its source takes over the
+/// reference the temp held, and releasing the temp as well would free it twice.
 /// `emit_temp_drop` leaves named locals, borrowed temps and scope-owned locals
 /// untouched, so a value some other holder still owns keeps its reference.
 pub fn release_coerced_source(
@@ -488,12 +491,14 @@ pub fn release_coerced_source(
     watermark: usize,
     span: Span,
 ) {
-    if !coercion_wraps_in_some(op_ty, target_ty) {
-        return;
-    }
-    if let Operand::Copy(place) | Operand::Move(place) = operand {
-        ctx.emit_temp_drop(place.local, watermark, span);
-    }
+    let place = match operand {
+        Operand::Copy(place) if op_ty.kind != target_ty.kind => place,
+        Operand::Copy(place) | Operand::Move(place) if coercion_wraps_in_some(op_ty, target_ty) => {
+            place
+        }
+        _ => return,
+    };
+    ctx.emit_temp_drop(place.local, watermark, span);
 }
 
 /// Wrap a bare value about to be stored into an optional slot as `Some(value)`.
@@ -619,6 +624,23 @@ pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue
     }
 }
 
+/// Read `operand` by copy when it moves out of a local that existed before the
+/// expression being lowered, whose first local is `watermark`.
+///
+/// Such a local — a named binding, a match-arm binding, an enclosing variable —
+/// is released when its own scope ends, and moving out of it does not cancel
+/// that release. Read by copy, the value handed on is retained for its new
+/// holder instead of being freed out from under it. A temp the expression built
+/// itself has no other holder, so moving out of it stays a transfer.
+pub fn read_older_local_by_copy(operand: Operand, watermark: usize) -> Operand {
+    match operand {
+        Operand::Move(place) if place.local.0 < watermark && place.projection.is_empty() => {
+            Operand::Copy(place)
+        }
+        already_usable => already_usable,
+    }
+}
+
 /// Helper to lower a statement and assign the result expression to a target local.
 /// This is used for match branches where each branch result should be assigned to result_local.
 /// Lower an expression statement and copy its value into `target_local`,
@@ -630,16 +652,7 @@ fn assign_expr_to_local(
 ) -> Result<(), LoweringError> {
     let watermark = ctx.body.local_decls.len();
     let lowered = lower_expression(ctx, expr, None)?;
-    // A local that already existed before this expression — a match-arm binding
-    // or an enclosing variable — is released when its scope ends, and moving out
-    // of it does not cancel that release. Read it by copy so the value handed to
-    // `target_local` is retained rather than freed out from under the target.
-    let operand = match lowered {
-        Operand::Move(place) if place.local.0 < watermark && place.projection.is_empty() => {
-            Operand::Copy(place)
-        }
-        already_usable => already_usable,
-    };
+    let operand = read_older_local_by_copy(lowered, watermark);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand.clone())),
         span: expr.span,
@@ -723,17 +736,15 @@ fn lower_return_expression(
         lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
     } else {
         let watermark = ctx.body.local_decls.len();
-        let operand = lower_expression(ctx, expr, None)?;
+        let lowered = lower_expression(ctx, expr, None)?;
+        let operand = read_older_local_by_copy(lowered, watermark);
         let op_ty = operand.ty(&ctx.body).clone();
         let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, ret_ty, expr.span);
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
             span: expr.span,
         });
-        // Drop any managed temp created during the expression.
-        if let Operand::Copy(place) | Operand::Move(place) = &operand {
-            ctx.emit_temp_drop(place.local, watermark, expr.span);
-        }
+        release_coerced_source(ctx, &operand, &op_ty, ret_ty, watermark, expr.span);
     }
     Ok(())
 }
