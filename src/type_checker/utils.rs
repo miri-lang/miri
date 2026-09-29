@@ -2897,6 +2897,41 @@ impl TypeChecker {
         }
     }
 
+    /// Report the type mismatch `message` at `value`, which was refused for a
+    /// location of type `expected`, with a help when `value` is an array
+    /// literal and `expected` a list or set: `[1, 2, 3]` is always an array,
+    /// and the collection it was meant to be is built from it.
+    pub(crate) fn report_mismatch_at(
+        &mut self,
+        message: String,
+        value: &Expression,
+        expected: &Type,
+    ) {
+        let wants_a_collection_of_the_literal = matches!(value.node, ExpressionKind::Array(..))
+            && matches!(
+                &expected.kind,
+                TypeKind::Custom(name, _)
+                    if matches!(
+                        BuiltinCollectionKind::from_name(name),
+                        Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
+                    )
+            );
+        if !wants_a_collection_of_the_literal {
+            self.report_error(DiagnosticCode::TypTypeMismatch, message, value.span);
+            return;
+        }
+        let collection = match &expected.kind {
+            TypeKind::Custom(name, _) => name.clone(),
+            _ => String::new(),
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypTypeMismatch,
+            message,
+            value.span,
+            format!("`[...]` is an array literal; build the {collection} from it with `{collection}([...])`"),
+        );
+    }
+
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(
         &mut self,

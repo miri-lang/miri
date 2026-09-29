@@ -452,3 +452,58 @@ fn main()
         "200|7",
     );
 }
+
+/// An array literal is an array wherever it is written; a list parameter or
+/// binding is refused it, at the literal, with the list to build instead.
+#[test]
+fn an_array_literal_where_a_list_is_expected_names_the_list_to_build() {
+    assert_compiler_error(
+        r#"
+fn keep<T>(xs [T], f fn(T) bool) int
+    var n = 0
+    for x in xs
+        if f(x)
+            n = n + 1
+    return n
+
+fn count_all<T>(xs [T]) int
+    return keep(xs, fn(v T) bool: true)
+
+fn main()
+    println(f"{count_all([1, 2, 3])}")
+"#,
+        "build the List from it with `List([...])`",
+    );
+    assert_compiler_error(
+        r#"
+fn main()
+    let xs [int] = [1, 2, 3]
+    println(f"{xs.length()}")
+"#,
+        "build the List from it with `List([...])`",
+    );
+}
+
+/// The list built from the literal is accepted where a generic list is.
+#[test]
+fn a_list_built_from_a_literal_is_passed_to_a_generic_list_parameter() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn keep<T>(xs [T], f fn(T) bool) int
+    var n = 0
+    for x in xs
+        if f(x)
+            n = n + 1
+    return n
+
+fn count_all<T>(xs [T]) int
+    return keep(xs, fn(v T) bool: true)
+
+fn main()
+    println(f"{count_all(List([1, 2, 3]))}")
+"#,
+        "3",
+    );
+}
