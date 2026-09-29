@@ -270,3 +270,27 @@ fn main()
         "2.0 6.0 2",
     );
 }
+
+/// A key built in the index expression is released once the lookup has read
+/// it, whatever it is.
+#[test]
+fn a_key_built_in_the_index_expression_is_released_after_the_read() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+enum Tag
+    Named(String)
+    Id(int)
+
+fn main()
+    var m = Map<String, int>()
+    m["a" + ""] = 1
+    let v = m["a" + ""]
+    var tags = Map<Tag, int>()
+    tags[Tag.Id(1)] = 7
+    println(f"{v} {m['a' + '']} {tags[Tag.Id(1)]}")
+"#,
+        "1 1 7",
+    );
+}
