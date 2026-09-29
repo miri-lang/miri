@@ -34,6 +34,15 @@ pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
 /// comparator codegen registers all name one trait.
 pub const ORDERING_TRAIT_NAME: &str = "Comparable";
 
+/// The trait whose `concat` answers `+`.
+pub const ADDING_TRAIT_NAME: &str = "Addable";
+
+/// The trait whose `repeat` answers `*`.
+pub const REPEATING_TRAIT_NAME: &str = "Multiplicable";
+
+/// The trait whose `equals` answers `==` and `!=`.
+pub const EQUALITY_TRAIT_NAME: &str = "Equatable";
+
 /// The method [`ORDERING_TRAIT_NAME`] declares: it answers which of two values
 /// sorts first, as a negative, zero or positive number.
 pub const ORDERING_METHOD_NAME: &str = "compare";

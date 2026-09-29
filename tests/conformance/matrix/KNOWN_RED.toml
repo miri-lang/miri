@@ -30,10 +30,6 @@ cells = [
     "map_key/closure/dedup/generic_fn", # accepted; expected refusal MER_TYP_002
     "map_key/closure/dedup/inherited", # accepted; expected refusal MER_TYP_002
     "map_key/closure/dedup/mono", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/eq/mono", # accepted; expected refusal MER_TYP_002
     "map_key/closure/store_read/generic_class", # accepted; expected refusal MER_TYP_002
     "map_key/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
     "map_key/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
@@ -50,10 +46,6 @@ cells = [
     "set_element/closure/dedup/generic_fn", # accepted; expected refusal MER_TYP_002
     "set_element/closure/dedup/inherited", # accepted; expected refusal MER_TYP_002
     "set_element/closure/dedup/mono", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/eq/mono", # accepted; expected refusal MER_TYP_002
     "set_element/closure/store_read/generic_class", # accepted; expected refusal MER_TYP_002
     "set_element/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
     "set_element/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
@@ -217,63 +209,6 @@ cells = [
 # operator-to-trait dispatch
 [E]
 cells = [
-    "array_element/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/contains/mono", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "array_element/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "class_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "closure_capture/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "closure_capture/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "closure_capture/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "closure_capture/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "enum_payload/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "enum_payload/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "enum_payload/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "enum_payload/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "generic_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "inherited_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/contains/mono", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "list_element/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "local/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "local/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "local/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "local/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "local/closure/eq/trait_default", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "map_value/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "parameter/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "parameter/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "parameter/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "parameter/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "return/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "return/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "return/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "return/closure/eq/mono", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/eq/generic_class", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/eq/generic_fn", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/eq/inherited", # accepted; expected refusal MER_TYP_002
-    "struct_field/closure/eq/mono", # accepted; expected refusal MER_TYP_002
 ]
 
 # outside the five families: each cell is its own defect, described by its comment

@@ -817,4 +817,3 @@ fn emit_binary_op(
     }
     Ok(ret_op)
 }
-
