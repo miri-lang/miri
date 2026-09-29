@@ -9,8 +9,10 @@
 //! generation reads as data. How a slot's target is resolved — the rules of
 //! method dispatch — stays with MIR lowering.
 
+mod element_equality;
 mod vtable;
 
+pub use element_equality::{matched_element_types, synthesized_equality_symbol};
 pub(crate) use vtable::{constructed_class, dispatched_method_names, takes_vtable_slot};
 pub use vtable::{
     constructed_vtable_symbols, released_by_runtime_class, FilledSlot, VtableFills, VtableInstance,

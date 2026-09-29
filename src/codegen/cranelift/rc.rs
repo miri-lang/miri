@@ -79,6 +79,8 @@ pub(crate) enum ElementRule {
     Bytes,
     /// The value points at a string, matched by its content.
     StringContent,
+    /// The value is a float of this kind, matched by the number it holds.
+    FloatValue(i64),
     /// The value's type answers `equals`, reached through the thunk at this
     /// address.
     OwnEquals(Value),
@@ -419,6 +421,19 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
+        // A struct or enum is matched through the equality the pipeline
+        // synthesized from its `==`, lowered for every one a set or map holds.
+        if let Some(thunk) = crate::mir::dispatch::synthesized_equality_symbol(
+            elem_kind,
+            type_ctx.facts.definitions(),
+        ) {
+            return Ok(Some(Self::get_custom_equals_thunk_addr(
+                builder,
+                ctx,
+                &thunk,
+                type_ctx.ptr_type,
+            )?));
+        }
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
@@ -482,14 +497,12 @@ impl<'a> FunctionTranslator<'a> {
     /// The rule matching two values of `value_kind` the way `==` compares them,
     /// or `None` when no rule the runtime can apply does.
     ///
-    /// A type whose equality is a structural walk over its fields — a struct, an
-    /// enum, a collection — has no such rule: the runtime sees only bytes, and
-    /// its bytes are an address.
+    /// A struct or an enum is matched through the equality the pipeline
+    /// synthesized from its `==`.
     ///
-    /// TODO: so a set of structs holds two values its own `==` calls one, and
-    /// finds neither by an equal value built separately, with nothing reported.
-    /// Reaching the walk needs it to have a linkable symbol, which no
-    /// synthesized equality has today.
+    /// TODO: a collection element (`Set<Array<String, 2>>`) is still matched
+    /// by its bytes, which are an address, so a set keeps two arrays `==` calls
+    /// one; it needs the same synthesized equality, lowered for collections.
     fn value_identity_rule(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -504,6 +517,15 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::String
         ) {
             return Ok(Some(ElementRule::StringContent));
+        }
+        let float_kind = match value_kind {
+            TypeKind::F16 => Some(Self::F16_VALUE_ELEMENT_KIND),
+            TypeKind::F32 => Some(Self::F32_VALUE_ELEMENT_KIND),
+            TypeKind::Float | TypeKind::F64 => Some(Self::F64_VALUE_ELEMENT_KIND),
+            _ => None,
+        };
+        if let Some(kind) = float_kind {
+            return Ok(Some(ElementRule::FloatValue(kind)));
         }
         Ok(Self::is_matched_by_bytes(value_kind).then_some(ElementRule::Bytes))
     }
@@ -520,6 +542,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Option<i64> {
         let base = match rule {
             ElementRule::StringContent => Self::STRING_CONTENT_ELEMENT_KIND,
+            ElementRule::FloatValue(kind) => kind,
             ElementRule::Bytes | ElementRule::OwnEquals(_) => Self::BYTES_ELEMENT_KIND,
         };
         if depth == 0 {

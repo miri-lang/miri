@@ -19,6 +19,7 @@ pub mod control_flow;
 pub mod dispatch;
 pub mod dispatch_symbols;
 mod drop_hook_call;
+pub mod element_equality;
 pub mod expression;
 pub mod forall_cpu;
 pub mod forall_gpu;
@@ -1099,6 +1100,24 @@ fn collect_generic_names_from_type(
     }
 }
 
+/// Bind the allocator every call made in this body passes on to a local
+/// holding zero, for a body whose own signature carries none: the entry point,
+/// and a body the runtime calls with a fixed signature. Initialized so no call
+/// reads an undefined value.
+pub(crate) fn bind_null_allocator(ctx: &mut LoweringContext, span: crate::error::syntax::Span) {
+    let allocator_type = Type::new(TypeKind::Int, span);
+    let alloc_local = ctx.push_local("allocator".to_string(), allocator_type.clone(), span);
+    let null_allocator = Operand::Constant(Box::new(Constant {
+        span,
+        ty: allocator_type,
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(alloc_local), Rvalue::Use(null_allocator)),
+        span,
+    });
+}
+
 /// Inject an allocator parameter into the lowering context.
 ///
 /// For `main`, creates a local variable initialized to 0 (cannot inject a parameter
@@ -1113,21 +1132,8 @@ fn inject_allocator_param(
 
     if function_name == "main" {
         // For main, create a local variable instead of a parameter to preserve
-        // the entry point ABI. Initialize to 0 to avoid uninitialized reads.
-        let alloc_local = ctx.push_local("allocator".to_string(), allocator_type.clone(), span);
-
-        let dummy_allocator = Operand::Constant(Box::new(Constant {
-            span,
-            ty: allocator_type,
-            literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I32(0),
-            ),
-        }));
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(Place::new(alloc_local), Rvalue::Use(dummy_allocator)),
-            span,
-        });
+        // the entry point ABI.
+        bind_null_allocator(ctx, span);
     } else {
         ctx.push_param("allocator".to_string(), allocator_type, span);
         ctx.body.arg_count += 1;

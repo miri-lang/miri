@@ -6,10 +6,12 @@
 //! A set asks it of its elements and a map of its keys, and both must answer
 //! the way `==` does for the element type, or a membership test disagrees with
 //! the comparison the program would write by hand. The runtime knows an element
-//! only by its size, so the compiler tells it which of three rules applies:
+//! only by its size, so the compiler tells it which of four rules applies:
 //!
-//! - an element whose bytes *are* its value — an integer, a float, a boolean —
-//!   is the same element when its bytes are;
+//! - an element whose bytes *are* its value — an integer, a boolean — is the
+//!   same element when its bytes are;
+//! - a float is the same element when it is the same number: `-0.0` and `0.0`
+//!   are one element, and so is every NaN, so a NaN stored can be found again;
 //! - an element whose bytes point at a string is the same element when the two
 //!   strings hold the same content, wherever each was allocated;
 //! - an element whose type defines its own equality is compared through a
@@ -39,6 +41,28 @@ pub const BY_BYTES: usize = 0;
 
 /// The element's bytes point at a `MiriString`, matched by its content.
 pub const BY_STRING_CONTENT: usize = 1;
+
+/// The element is an IEEE half-precision float, matched by the number it
+/// holds. A float is read at its own width from the start of its slot, which
+/// may be wider.
+pub const BY_F16_VALUE: usize = 2;
+
+/// The element is an IEEE single-precision float, matched by its number.
+pub const BY_F32_VALUE: usize = 3;
+
+/// The element is an IEEE double-precision float, matched by its number.
+pub const BY_F64_VALUE: usize = 4;
+
+/// The width in bytes of the float `rule` matches by number, or `None` when
+/// `rule` matches something else.
+fn float_width(rule: usize) -> Option<usize> {
+    match rule {
+        BY_F16_VALUE => Some(2),
+        BY_F32_VALUE => Some(4),
+        BY_F64_VALUE => Some(8),
+        _ => None,
+    }
+}
 
 /// Width of the field holding the rule that settles a resolved value.
 const RULE_BITS: u32 = 8;
@@ -180,6 +204,10 @@ impl ElementIdentity {
             let (data, len) = string_content(at);
             return crate::hash::fnv1a(data, len);
         }
+        if let Some(width) = float_width(self.rule()) {
+            let bits = float_value_bits(at, width).to_ne_bytes();
+            return crate::hash::fnv1a(bits.as_ptr(), bits.len());
+        }
         crate::hash::fnv1a(at, size)
     }
 
@@ -212,6 +240,9 @@ impl ElementIdentity {
             let (b_data, b_len) = string_content(b);
             return a_len == b_len && bytes_equal(a_data, b_data, a_len);
         }
+        if let Some(width) = float_width(self.rule()) {
+            return float_value_bits(a, width) == float_value_bits(b, width);
+        }
         bytes_equal(a, b, size)
     }
 
@@ -235,6 +266,48 @@ unsafe fn string_content(slot: *const u8) -> (*const u8, usize) {
         return (std::ptr::null(), 0);
     }
     ((*string).data, (*string).len)
+}
+
+/// The bits of the float `size` bytes wide at `at`, with every representation of
+/// one number made the same: a negative zero reads as the positive one, and
+/// every NaN as the one quiet NaN of its width. Two floats a set or map treats
+/// as one element have equal results, which is what both hashing and matching
+/// compare.
+unsafe fn float_value_bits(at: *const u8, size: usize) -> u64 {
+    match size {
+        2 => normalized_float_bits(
+            u64::from((at as *const u16).read_unaligned()),
+            15,
+            0x7c00,
+            0x7e00,
+        ),
+        4 => normalized_float_bits(
+            u64::from((at as *const u32).read_unaligned()),
+            31,
+            0x7f80_0000,
+            0x7fc0_0000,
+        ),
+        _ => normalized_float_bits(
+            (at as *const u64).read_unaligned(),
+            63,
+            0x7ff0_0000_0000_0000,
+            0x7ff8_0000_0000_0000,
+        ),
+    }
+}
+
+/// `bits` of a float whose sign is bit `sign_bit`, whose infinity has the
+/// magnitude bits `infinity`, and whose canonical quiet NaN is `quiet_nan`,
+/// with a negative zero read as zero and any NaN as `quiet_nan`.
+fn normalized_float_bits(bits: u64, sign_bit: u32, infinity: u64, quiet_nan: u64) -> u64 {
+    let magnitude = bits & ((1u64 << sign_bit) - 1);
+    if magnitude == 0 {
+        0
+    } else if magnitude > infinity {
+        quiet_nan
+    } else {
+        bits
+    }
 }
 
 /// Compares two byte sequences of `len` bytes for equality.

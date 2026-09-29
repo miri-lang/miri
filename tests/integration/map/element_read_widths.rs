@@ -271,6 +271,47 @@ fn main()
     );
 }
 
+/// A map keyed by floats finds the value stored under `0.0` by `-0.0`.
+#[test]
+fn a_float_key_is_found_by_the_other_zero() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn negate(x float) float: -x
+
+fn main()
+    var m = Map<float, int>()
+    m[0.0] = 1
+    m[negate(0.0)] = 2
+    println(f"{m.length()} {m[0.0]}")
+"#,
+        "1 2",
+    );
+}
+
+/// A struct key is found by an equal struct built separately.
+#[test]
+fn a_struct_key_is_found_by_an_equal_struct() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+struct Key
+    id int
+    tag String
+
+fn main()
+    var m = Map<Key, int>()
+    m[Key(id: 1, tag: "x" + "y")] = 10
+    m[Key(id: 1, tag: "x" + "y")] = 20
+    let probe = Key(id: 1, tag: "xy")
+    println(f"{m.length()} {m[probe]}")
+"#,
+        "1 20",
+    );
+}
+
 /// A key built in the index expression is released once the lookup has read
 /// it, whatever it is.
 #[test]

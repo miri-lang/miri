@@ -321,7 +321,7 @@ Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, 
 
 The `get` method returns an option type (`V?`) — use pattern matching to handle missing keys safely.
 
-Two keys are the same key when `==` says so: strings match by content, a class that defines or inherits `equals` matches through that method, and a value type matches by value. A class with no `equals` of its own or from a class it extends matches only the same instance.
+Two keys are the same key when `==` says so: strings match by content, a class that defines or inherits `equals` matches through that method, and a value type matches by value. A class with no `equals` of its own or from a class it extends matches only the same instance. A float key matches by the number it holds: `-0.0` and `0.0` are one key, and every NaN is one key — a NaN never equals itself under `==`, but a NaN stored in a map or set can be found and removed again.
 
 ### Set
 

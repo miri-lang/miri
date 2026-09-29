@@ -2265,8 +2265,51 @@ impl Pipeline {
             &mut symbols,
             &compilation_ids,
         )?;
+        Self::lower_element_equalities(result, &mut lowered, &mut symbols)?;
 
         Ok(lowered)
+    }
+
+    /// Lower the equality each set or map in `bodies` matches its struct
+    /// elements or keys through, once per instantiation.
+    fn lower_element_equalities(
+        result: &PipelineResult,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+    ) -> Result<(), CompilerError> {
+        let type_defs = result.type_checker.type_definitions();
+        let mut elements = Vec::new();
+        for (_, body) in bodies.iter() {
+            for decl in &body.local_decls {
+                mir::dispatch::matched_element_types(&decl.ty, &mut elements);
+            }
+        }
+        let mut wanted = std::collections::BTreeMap::new();
+        for element in elements {
+            if let Some(symbol) =
+                mir::dispatch::synthesized_equality_symbol(&element.kind, type_defs)
+            {
+                wanted
+                    .entry(symbol.link_name())
+                    .or_insert((symbol, element));
+            }
+        }
+        for (_, (symbol, element)) in wanted {
+            if !symbols
+                .claim_at(&symbol, element.span)
+                .map_err(CompilerError::Lowering)?
+            {
+                continue;
+            }
+            let body = mir::lowering::element_equality::lower_element_equality(
+                &result.type_checker,
+                &element,
+                element.span,
+            )
+            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+            bodies.push((symbol, body));
+        }
+        Ok(())
     }
 
     /// Lower every body the program needs.

@@ -9,7 +9,7 @@
 //! literals share one pooled allocation, so a literal would match by address
 //! and hide a set that never looks past the pointer.
 
-use super::utils::{assert_runs, assert_runs_with_output};
+use super::utils::{assert_compiler_error, assert_runs, assert_runs_with_output};
 
 #[test]
 fn set_finds_a_string_built_at_run_time_by_its_content() {
@@ -311,5 +311,201 @@ fn main()
     s.clear()
     s.add(Point(9))
 "#,
+    );
+}
+
+/// `-0.0 == 0.0`, so a set holds them as one element, whichever came first.
+#[test]
+fn set_holds_a_negative_and_a_positive_zero_as_one_float() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn negate(x float) float: -x
+
+fn main()
+    let zero = 0.0
+    var s = Set<float>()
+    s.add(negate(zero))
+    s.add(zero)
+    var t = Set<f32>()
+    let small f32 = 0.0
+    t.add(small)
+    t.add(-small)
+    println(f"{s.length()} {s.contains(zero)} {t.length()} {t.contains(-small)}")
+"#,
+        "1 true 1 true",
+    );
+}
+
+/// Every NaN is one element: one stored is found again and not added twice.
+#[test]
+fn set_finds_a_nan_it_holds() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn nan(zero float) float: zero / zero
+
+fn main()
+    var s = Set<float>()
+    s.add(nan(0.0))
+    s.add(nan(0.0))
+    s.add(1.5)
+    println(f"{s.length()} {s.contains(nan(0.0))}")
+"#,
+        "2 true",
+    );
+}
+
+/// An optional float is matched by the number inside it.
+#[test]
+fn set_of_optional_floats_matches_the_zeros_as_one() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn negate(x float) float: -x
+
+fn main()
+    var s = Set<float?>()
+    s.add(negate(0.0))
+    s.add(0.0)
+    s.add(None)
+    println(f"{s.length()}")
+"#,
+        "2",
+    );
+}
+
+/// A struct element is matched field by field, as `==` compares it, not by
+/// the address of the instance.
+#[test]
+fn set_matches_struct_elements_by_their_fields() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+struct Point
+    x int
+    name String
+
+fn main()
+    var s = Set<Point>()
+    s.add(Point(x: 1, name: "a" + "b"))
+    s.add(Point(x: 1, name: "a" + "b"))
+    s.add(Point(x: 2, name: "a" + "b"))
+    let probe = Point(x: 2, name: "ab")
+    println(f"{s.length()} {s.contains(probe)} {probe in s}")
+"#,
+        "2 true true",
+    );
+}
+
+/// Each instantiation of a generic struct is matched by its own fields.
+#[test]
+fn set_matches_generic_struct_elements_by_their_fields() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+struct Pair<T>
+    left T
+    right T
+
+fn main()
+    var words = Set<Pair<String>>()
+    words.add(Pair<String>(left: "a" + "", right: "b" + ""))
+    words.add(Pair<String>(left: "a" + "", right: "b" + ""))
+    var numbers = Set<Pair<int>>()
+    numbers.add(Pair<int>(left: 1, right: 2))
+    numbers.add(Pair<int>(left: 1, right: 3))
+    println(f"{words.length()} {numbers.length()}")
+"#,
+        "1 2",
+    );
+}
+
+const HOLDER_WITH_EQUALS: &str = r#"
+use system.collections.set
+use system.collections.map
+
+enum Holder<T>
+    One(T)
+    Two(T, T)
+
+    fn size() int
+        match self
+            Holder.One(_): 1
+            Holder.Two(_, _): 2
+
+    fn equals(other Holder<T>) bool
+        return self.size() == other.size()
+"#;
+
+/// An enum that declares `equals` has that method decide which elements are
+/// the same, at every instantiation, as a set element and as a map key.
+#[test]
+fn set_and_map_match_enum_elements_through_their_own_equals() {
+    assert_runs_with_output(
+        &format!(
+            "{HOLDER_WITH_EQUALS}\n{}",
+            r#"
+fn main()
+    var s = Set<Holder<int>>()
+    s.add(Holder.One(1))
+    s.add(Holder.One(2))
+    var wide = Set<Holder<i128>>()
+    wide.add(Holder.Two(1, 2))
+    wide.add(Holder.Two(3, 4))
+    wide.add(Holder.One(5))
+    var m = Map<Holder<String>, int>()
+    m[Holder.One("a" + "")] = 1
+    m[Holder.One("b" + "")] = 2
+    println(f"{s.length()} {wide.length()} {m.length()} {m[Holder.One('z')]}")
+"#
+        ),
+        "1 2 1 2",
+    );
+}
+
+/// An enum without `equals` is matched by `==`: its variant and payload.
+#[test]
+fn set_matches_enum_elements_by_variant_and_payload() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+enum Token
+    Word(String)
+    Number(int)
+    End
+
+fn main()
+    var s = Set<Token>()
+    s.add(Token.Word("a" + "b"))
+    s.add(Token.Word("a" + "b"))
+    s.add(Token.Number(1))
+    s.add(Token.End)
+    s.add(Token.End)
+    println(f"{s.length()} {s.contains(Token.Word('ab'))}")
+"#,
+        "3 true",
+    );
+}
+
+/// A struct cannot declare `equals`, so its `==` is always the walk over its
+/// fields, and that is what a set of structs matches by.
+#[test]
+fn a_struct_cannot_declare_its_own_equals() {
+    assert_compiler_error(
+        r#"
+struct Named
+    id int
+
+    fn equals(other Named) bool
+        return self.id == other.id
+"#,
+        "cannot define methods other than 'drop'",
     );
 }

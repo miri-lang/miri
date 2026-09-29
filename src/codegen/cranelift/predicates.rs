@@ -126,6 +126,14 @@ impl<'a> FunctionTranslator<'a> {
     /// `element_identity::BY_STRING_CONTENT`.
     pub(crate) const STRING_CONTENT_ELEMENT_KIND: i64 = 1;
 
+    /// The element kinds that make a set match its float elements, or a map
+    /// its float keys, by the number they hold, so `-0.0` and `0.0` are one
+    /// key and every NaN is one key: one per float width. Mirror the runtime's
+    /// `element_identity::BY_F16_VALUE`, `BY_F32_VALUE` and `BY_F64_VALUE`.
+    pub(crate) const F16_VALUE_ELEMENT_KIND: i64 = 2;
+    pub(crate) const F32_VALUE_ELEMENT_KIND: i64 = 3;
+    pub(crate) const F64_VALUE_ELEMENT_KIND: i64 = 4;
+
     /// Bits the element kind reserves for the rule that settles a value.
     /// Mirrors the runtime's `element_identity`, which reads the word back.
     const ELEMENT_RULE_BITS: u32 = 8;
