@@ -29,6 +29,9 @@ pub(crate) mod code {
     pub(crate) const EXPLICIT_PANIC: &str = "MER_RT_012";
     /// A GPU kernel launch the runtime or the device refused.
     pub(crate) const GPU_LAUNCH_FAILED: &str = "MER_RT_013";
+    /// A method reached at an instance of its class the compiler withheld it
+    /// at, because its obligations were not checked there.
+    pub(crate) const METHOD_NOT_CHECKED: &str = "MER_RT_014";
 }
 
 /// Report a runtime fault under `code` and end the process.

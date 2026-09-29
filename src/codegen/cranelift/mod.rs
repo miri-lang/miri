@@ -266,7 +266,7 @@ impl Backend for CraneliftBackend {
         FunctionTranslator::generate_vtables(
             &mut module,
             isa.pointer_type(),
-            self.facts.definitions(),
+            &self.facts,
             vtables
                 .iter()
                 .map(|symbol| (symbol.as_str(), self.facts.vtable_fills().slots(symbol))),

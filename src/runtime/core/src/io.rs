@@ -469,6 +469,24 @@ pub mod ffi {
         );
     }
 
+    /// Reports MER_RT_014 and ends the process: a method was reached at an
+    /// instance of its class the compiler withheld it at.
+    ///
+    /// The compiler compiles a generic class's method only at the instances
+    /// its obligations were checked at, and fills a vtable slot or a container
+    /// comparison it withheld with this function instead, so a call the
+    /// checker should have refused stops with a code rather than jumping
+    /// through a null slot or comparing bytes. It takes no arguments and is
+    /// called with whatever the slot's signature passes, which it ignores.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_method_not_checked_panic() {
+        trap(
+            code::METHOD_NOT_CHECKED,
+            "a method was called at an instance of its class it was not checked at",
+        );
+    }
+
     /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
     ///
     /// The closure layout is `[fn_ptr][dtor_ptr][captures...]`; `closure_ptr`

@@ -103,21 +103,6 @@ impl ElementMethod {
         }
     }
 
-    /// Whether elements of `type_name` at `inst_args` answer this question:
-    /// the type answers it, and lowering compiled the body that answers it
-    /// there. A body withheld at an instance is one no container operation
-    /// the program performs asks for, so its elements keep the rule their
-    /// bytes imply.
-    pub(crate) fn is_answered_at(
-        self,
-        type_name: &str,
-        inst_args: Option<&[Type]>,
-        facts: &TypeFacts,
-    ) -> bool {
-        self.is_answered_by(type_name, facts)
-            && !facts.is_withheld(&self.method_symbol(type_name, inst_args, facts))
-    }
-
     /// The symbol of the method body this question calls for `type_name` at
     /// `inst_args`.
     ///
@@ -179,7 +164,7 @@ impl<'a> FunctionTranslator<'a> {
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if !method.is_answered_at(type_name, inst_args, facts) {
+        if !method.is_answered_by(type_name, facts) {
             return Ok(());
         }
         let ptr_type = isa.pointer_type();
@@ -205,9 +190,11 @@ impl<'a> FunctionTranslator<'a> {
             sig,
         );
 
+        let symbol = method.method_symbol(type_name, inst_args, facts);
         let callee = MethodCallee {
             method,
-            symbol: method.method_symbol(type_name, inst_args, facts),
+            withheld: facts.is_withheld(&symbol),
+            symbol,
             ptr_type,
             call_conv,
         };
@@ -225,6 +212,9 @@ impl<'a> FunctionTranslator<'a> {
 /// The user method a thunk calls, and the ABI it calls it with.
 struct MethodCallee {
     method: ElementMethod,
+    /// Lowering withheld the method at this instance, so no body answers it:
+    /// the thunk reports that at run time instead of calling it.
+    withheld: bool,
     symbol: String,
     ptr_type: cl_types::Type,
     call_conv: CallConv,
@@ -299,6 +289,9 @@ fn null_element_answer(
 
 /// Call the user's compiled method on two element values and hand back its
 /// answer. A method always takes the allocator after its declared parameters.
+///
+/// A method withheld at this instance has no body to call: the runtime trap
+/// that reports it is called instead, and the answer after it is never read.
 fn emit_user_method_call(
     module: &mut ObjectModule,
     builder: &mut FunctionBuilder,
@@ -306,6 +299,12 @@ fn emit_user_method_call(
     [left, right]: [Value; 2],
 ) -> Result<Value, CodegenError> {
     let ptr_type = callee.ptr_type;
+    if callee.withheld {
+        let trap = FunctionTranslator::method_not_checked_trap(module)?;
+        let local_trap = module.declare_func_in_func(trap, builder.func);
+        builder.ins().call(local_trap, &[]);
+        return Ok(builder.ins().iconst(callee.method.answer_type(ptr_type), 0));
+    }
     let mut sig = Signature::new(callee.call_conv);
     sig.params.push(AbiParam::new(ptr_type)); // self
     sig.params.push(AbiParam::new(ptr_type)); // other

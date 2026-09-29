@@ -1246,7 +1246,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (13 codes: 001-013)
+    // RT — Runtime traps and assertion failures (14 codes: 001-014)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1335,6 +1335,13 @@ diagnostics!(
     "013",
     RtGpuLaunchFailed,
     "GPU Launch Failed",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "RT",
+    "014",
+    RtMethodNotChecked,
+    "Method Not Checked at Instance",
     Severity::Error,
     false,
     FixSafety::LocalEdit,
