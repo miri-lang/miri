@@ -243,3 +243,45 @@ fn check(a int) Result<int, String>
         "Missing return statement",
     );
 }
+
+/// Reassigning a must-use binding stores the new value; it discards nothing,
+/// and the value is used by what reads the binding next.
+#[test]
+fn test_reassigning_a_must_use_binding_is_not_an_unused_value() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn fetch() Result<String, String>
+    return Result.Err("bo" + "om")
+
+fn main()
+    var r = fetch()
+    match r
+        Result.Ok(v): println(v)
+        Result.Err(e): println(e)
+    r = fetch()
+    match r
+        Result.Ok(v): println(v)
+        Result.Err(e): println(e)
+"#,
+        "boom\nboom",
+    );
+}
+
+/// A must-use value computed and dropped as a statement is still refused.
+#[test]
+fn test_a_discarded_must_use_call_is_still_refused_beside_a_reassignment() {
+    assert_compiler_error(
+        r#"
+fn fetch() Result<String, String>
+    return Result.Err("x")
+
+fn main()
+    var r = fetch()
+    r = fetch()
+    fetch()
+"#,
+        "this value must be used",
+    );
+}
