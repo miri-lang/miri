@@ -533,6 +533,18 @@ impl TypeChecker {
     fn register_module_alias(&mut self, path_str: &str, alias: &Option<Box<Expression>>) {
         if let Some(alias_box) = alias {
             if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
+                // `M.f` reads the alias first, so a type of the same name
+                // would never be reached through it: refused rather than
+                // silently shadowed.
+                if self.type_table.visible_type_names.contains(alias_name) {
+                    self.report_error(
+                        DiagnosticCode::TypTypeAlreadyDefined,
+                        format!(
+                            "Module alias '{alias_name}' for '{path_str}' has the name of the type '{alias_name}'; rename the alias or the type"
+                        ),
+                        alias_box.span,
+                    );
+                }
                 self.modules
                     .module_aliases
                     .insert(alias_name.clone(), path_str.to_string());
