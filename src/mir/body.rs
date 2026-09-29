@@ -248,7 +248,20 @@ impl Body {
             }
         }
 
-        // 3. Check reachability (optional check, for now just ensure internal consistency)
+        // 3. The type checker spells every `Result` as the `Result` enum, whose
+        //    drop, layout and payload reads the backends know. The native kind
+        //    has none of them, so a local typed at it would never be released.
+        if let Some(index) = self
+            .local_decls
+            .iter()
+            .position(|decl| matches!(decl.ty.kind, crate::ast::types::TypeKind::Result(..)))
+        {
+            return Err(format!(
+                "local _{index} is typed at the native Result kind rather than the Result enum"
+            ));
+        }
+
+        // 4. Check reachability (optional check, for now just ensure internal consistency)
         // We do not fail validation if blocks are unreachable, as that is valid MIR (dead code).
         // Use find_unreachable_blocks() if you need to detect them.
         Ok(())

@@ -4,5 +4,6 @@
 pub use crate::integration::utils;
 
 pub mod basic;
+pub mod managed_payloads;
 pub mod methods;
 pub mod must_use;

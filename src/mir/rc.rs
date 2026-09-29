@@ -90,6 +90,13 @@ pub fn is_managed_type(
 /// a collection element or an aggregate field holding one releases it. A
 /// closure's captures are one-word slots and are decided by
 /// [`is_word_slot_managed`] instead.
+///
+/// The native `Result` and `Future` kinds answer `false` because no value of
+/// either reaches a body: the type checker spells every `Result` as the
+/// `Result` enum (a `Custom`, managed here) and `Body::validate` refuses a
+/// local left at the native kind, while an `async` call is typed at its
+/// result, so a `Future` slot is only ever written as an annotation and never
+/// holds a value.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, args) = kind {
         // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
