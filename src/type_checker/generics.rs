@@ -43,14 +43,17 @@ thread_local! {
 ///
 /// A field typed as a bare generic parameter (`TypeKind::Generic("T", …)` or
 /// `TypeKind::Custom("T", None)`) is replaced by the concrete type argument at
-/// the parameter's declaration position, so a `Box<float>` field lays out at
-/// the concrete scalar width instead of a pointer slot. Fields with a concrete
-/// type, or an unresolved generic (no matching argument), are returned
-/// unchanged — callers that must distinguish the two use
-/// [`is_generic_parameter_kind`] on the result.
+/// the parameter's declaration position. Fields with a concrete type, or an
+/// unresolved generic (no matching argument), are returned unchanged — callers
+/// that must distinguish the two use [`is_generic_parameter_kind`] on the
+/// result.
 ///
-/// Used for class and struct fields during layout, and for enum variant
-/// payloads on both sides of the store/load pair.
+/// Only a bare parameter is substituted, and a nullable argument is not
+/// folded into the optional it denotes. That is enough for the type checker's
+/// own questions about a payload — whether it can be compared structurally or
+/// interpolated — but not for storage: every layout, binding and release
+/// reads a member at an instantiation through
+/// `mir::instantiation::member_type_at`, which substitutes the whole type.
 pub(crate) fn substitute_generic_field_kind(
     field_kind: &TypeKind,
     type_args: Option<&[Expression]>,
