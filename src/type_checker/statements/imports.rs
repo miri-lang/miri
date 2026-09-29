@@ -44,7 +44,7 @@ use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -310,9 +310,8 @@ impl TypeChecker {
         import_kind: &ImportPathKind,
         span: Span,
     ) {
-        let pre_import_globals: HashMap<String, String> = self
-            .type_table
-            .global_scope
+        let pre_import_scope: HashMap<String, SymbolInfo> = self.type_table.global_scope.clone();
+        let pre_import_globals: HashMap<String, String> = pre_import_scope
             .iter()
             .map(|(k, v)| (k.clone(), v.module.clone()))
             .collect();
@@ -325,6 +324,16 @@ impl TypeChecker {
 
         self.type_check_module(path_str, file_path, source, module_ast, alias, context);
 
+        // A module imported under an alias is reached through it, so a name it
+        // shares with something already in scope is no conflict.
+        if alias.is_none() {
+            self.detect_namespace_collisions(
+                &Self::selected_import_names(import_kind),
+                path_str,
+                &pre_import_globals,
+                span,
+            );
+        }
         self.restrict_visibility(
             path_str,
             import_kind,
@@ -333,6 +342,47 @@ impl TypeChecker {
             span,
             context,
         );
+        self.restore_names_the_module_does_not_take(
+            path_str,
+            &pre_import_scope,
+            alias.is_some(),
+            context,
+        );
+    }
+
+    /// Gives back the unqualified names a module's load overwrote but does not
+    /// take over: those it declares private, which are not exported at all,
+    /// and — when it is imported under an alias — every name something else
+    /// already owned, which the alias reaches instead (`M.helper`).
+    fn restore_names_the_module_does_not_take(
+        &mut self,
+        path_str: &str,
+        pre_import_scope: &HashMap<String, SymbolInfo>,
+        aliased: bool,
+        context: &mut Context,
+    ) {
+        for (name, previous) in pre_import_scope {
+            let overwritten = self
+                .type_table
+                .global_scope
+                .get(name)
+                .is_some_and(|info| info.module == path_str && previous.module != path_str);
+            let Some(module_info) = self.type_table.global_scope.get(name) else {
+                continue;
+            };
+            let not_taken = aliased || matches!(module_info.visibility, MemberVisibility::Private);
+            if !(overwritten && not_taken) {
+                continue;
+            }
+            self.type_table
+                .global_scope
+                .insert(name.clone(), previous.clone());
+            if let Some(scope) = context.scopes.last_mut() {
+                if scope.get(name).is_some_and(|info| info.module == path_str) {
+                    scope.insert(name.clone(), previous.clone());
+                }
+            }
+        }
     }
 
     fn load_and_parse_module(
@@ -432,6 +482,7 @@ impl TypeChecker {
         }
 
         self.modules.current_source_override = old_source_override;
+        self.record_module_symbols(path_str);
         self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
         self.record_declaring_modules(
@@ -471,6 +522,21 @@ impl TypeChecker {
     /// A `use module` line binds no name of its own, so the only way to ask
     /// whether it is used is to ask whether any of these names is. Private
     /// declarations are left out: an import cannot reach them.
+    /// Records the symbol of every top-level name the module at `path_str`
+    /// declared, while the global scope still holds the module's own entries.
+    fn record_module_symbols(&mut self, path_str: &str) {
+        let symbols = self
+            .type_table
+            .global_scope
+            .iter()
+            .filter(|(_, info)| info.module == path_str)
+            .map(|(name, info)| (name.clone(), info.clone()))
+            .collect();
+        self.modules
+            .module_symbols
+            .insert(path_str.to_string(), symbols);
+    }
+
     fn record_module_declared_names(&mut self, path_str: &str, module_ast: &Program) {
         let mut names: HashSet<String> =
             crate::type_checker::hygiene::exported_names_of(&module_ast.body);
@@ -561,27 +627,8 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) {
-        let selected_names: Option<HashMap<String, Span>> =
-            if let ImportPathKind::Multi(ref items) = import_kind {
-                Some(
-                    items
-                        .iter()
-                        .filter_map(|(expr, _alias)| {
-                            if let ExpressionKind::Identifier(name, _) = &expr.node {
-                                Some((name.clone(), expr.span))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-
+        let selected_names = Self::selected_import_names(import_kind);
         let module_name = path_str;
-
-        self.detect_namespace_collisions(&selected_names, module_name, pre_import_globals, span);
 
         let should_be_visible = |name: &str, def_module: Option<&str>| -> bool {
             let is_from_this_module = def_module.is_none_or(|m| m == module_name);
@@ -598,6 +645,23 @@ impl TypeChecker {
         self.filter_type_definitions(pre_import_global_types, &should_be_visible);
         self.register_item_aliases(import_kind);
         self.validate_selected_exports(&selected_names, module_name, span);
+    }
+
+    /// The names a selective import (`use m.{a, b}`) selects, each where it is
+    /// written; `None` for an import of the whole module.
+    fn selected_import_names(import_kind: &ImportPathKind) -> Option<HashMap<String, Span>> {
+        let ImportPathKind::Multi(items) = import_kind else {
+            return None;
+        };
+        Some(
+            items
+                .iter()
+                .filter_map(|(expr, _alias)| match &expr.node {
+                    ExpressionKind::Identifier(name, _) => Some((name.clone(), expr.span)),
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     fn detect_namespace_collisions(
@@ -629,7 +693,8 @@ impl TypeChecker {
         } else {
             let mut collisions: Vec<(String, String)> = Vec::new();
             for (name, info) in &self.type_table.global_scope {
-                if info.module == module_name {
+                let exported = !matches!(info.visibility, MemberVisibility::Private);
+                if info.module == module_name && exported {
                     if let Some(old_module) = pre_import_globals.get(name) {
                         if old_module != module_name {
                             collisions.push((name.clone(), old_module.clone()));

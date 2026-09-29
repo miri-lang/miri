@@ -368,3 +368,146 @@ fn main()
         "Module alias 'M' for 'system.math' has the name of the type 'M'",
     );
 }
+
+/// A member read through an alias reaches the module's declaration, even when
+/// the program declares a function of the same name.
+#[test]
+fn test_module_alias_reaches_the_module_function_over_a_same_named_program_function() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.m6 as S\n",
+                    "\n",
+                    "fn lt<T>(a T) bool\n",
+                    "    return a < 10\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{S.lt(5)} {lt(5)}')\n",
+                ),
+            ),
+            (
+                "m6.mi",
+                concat!("fn lt<T>(a T) bool\n", "    return false\n",),
+            ),
+        ],
+        "false true",
+    );
+}
+
+/// Two modules declaring one name can each be imported under an alias, and
+/// each alias reaches its own module's function.
+#[test]
+fn test_two_aliased_modules_may_declare_the_same_name() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.m7 as A\n",
+                    "use local.m8 as B\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{A.helper()} {B.helper()}')\n",
+                ),
+            ),
+            ("m7.mi", concat!("fn helper() int\n", "    return 7\n",)),
+            ("m8.mi", concat!("fn helper() int\n", "    return 8\n",)),
+        ],
+        "7 8",
+    );
+}
+
+/// A module's private function shares no name with the program: declared
+/// before or after the `use`, the program's own function is the one called.
+#[test]
+fn test_a_modules_private_function_does_not_replace_the_programs() {
+    let module = (
+        "m10.mi",
+        concat!(
+            "private fn helper() int\n",
+            "    return 10\n",
+            "\n",
+            "public fn wrapped() int\n",
+            "    return helper()\n",
+        ),
+    );
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "fn helper() int\n",
+                    "    return 1\n",
+                    "\n",
+                    "use local.m10\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{helper()} {wrapped()}')\n",
+                ),
+            ),
+            module,
+        ],
+        "1 10",
+    );
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.m10\n",
+                    "\n",
+                    "fn helper() int\n",
+                    "    return 1\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{helper()} {wrapped()}')\n",
+                ),
+            ),
+            module,
+        ],
+        "1 10",
+    );
+}
+
+/// Each function's residency verdict is its own: a module's host-only `len_of`
+/// does not make the program's residency-polymorphic `len_of` refuse a
+/// gpu-resident argument.
+#[test]
+fn test_same_named_functions_keep_their_own_residency() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.gpu\n",
+                    "use system.collections.array\n",
+                    "\n",
+                    "fn len_of(a Array<int,4>) int\n",
+                    "    return a.length()\n",
+                    "\n",
+                    "use local.dbg\n",
+                    "\n",
+                    "fn main()\n",
+                    "    gpu var g = [1, 2, 3, 4]\n",
+                    "    println(f'{len_of(g)} {first([5, 6, 7, 8])}')\n",
+                ),
+            ),
+            (
+                "dbg.mi",
+                concat!(
+                    "use system.collections.array\n",
+                    "\n",
+                    "private fn len_of(a Array<int,4>) int\n",
+                    "    println(f'{a[0]}')\n",
+                    "    return 0\n",
+                    "\n",
+                    "public fn first(a Array<int,4>) int\n",
+                    "    return len_of(a)\n",
+                ),
+            ),
+        ],
+        "4 0",
+    );
+}

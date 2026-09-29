@@ -918,12 +918,20 @@ impl TypeChecker {
             .types
             .insert(obj.id, make_type(TypeKind::Identifier));
 
-        if let Some(info) = self
-            .type_table
-            .global_scope
-            .get(prop_name.as_str())
-            .cloned()
-        {
+        // The module's own declaration first: the unqualified name may belong
+        // to the program or to another import.
+        let declared_by_module = self
+            .modules
+            .module_symbols
+            .get(module_path)
+            .and_then(|symbols| symbols.get(prop_name.as_str()))
+            .cloned();
+        if let Some(info) = declared_by_module.or_else(|| {
+            self.type_table
+                .global_scope
+                .get(prop_name.as_str())
+                .cloned()
+        }) {
             self.record_callee(prop.id, &prop_name, &info);
             if declares_type_parameters(&info) && self.callee_expr_id != Some(prop.id) {
                 self.refuse_generic_function_value(&prop_name, span);

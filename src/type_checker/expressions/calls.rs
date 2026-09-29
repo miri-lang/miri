@@ -55,6 +55,7 @@ use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
+use crate::type_checker::DeclaredFunction;
 use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
 
@@ -1265,9 +1266,12 @@ impl TypeChecker {
         // Analyze the function body for GPU compatibility (host-only calls, recursion).
         // This requires walking the body AST, which is stored in `function_bodies`.
         // Clone the body Rc to avoid borrow checker issues with `&mut self`.
-        let body_opt = self.fn_analysis.function_bodies.get(func_name).cloned();
+        let Some(declared) = self.declaration_called_by(func).cloned() else {
+            return;
+        };
+        let body_opt = self.fn_analysis.function_bodies.get(&declared).cloned();
         if let Some(body) = body_opt {
-            self.validate_gpu_function_body(func_name, &body, func.span);
+            self.validate_gpu_function_body(&declared, &body, func.span);
         }
     }
 
@@ -1278,13 +1282,13 @@ impl TypeChecker {
     /// restrictions apply.
     fn validate_gpu_function_body(
         &mut self,
-        func_name: &str,
+        declared: &DeclaredFunction,
         body: &std::rc::Rc<crate::ast::Statement>,
         call_span: Span,
     ) {
         // Check for recursion
         let mut visited = std::collections::HashSet::new();
-        if self.check_recursion(func_name, &mut visited) {
+        if self.check_recursion(declared, &mut visited) {
             self.report_error(
                 DiagnosticCode::TarGpuCodeRestriction,
                 "recursion is not allowed in GPU code".to_string(),
@@ -1308,16 +1312,16 @@ impl TypeChecker {
     /// Checks if a function has direct or indirect recursion.
     fn check_recursion(
         &self,
-        func_name: &str,
-        visited: &mut std::collections::HashSet<String>,
+        declared: &DeclaredFunction,
+        visited: &mut std::collections::HashSet<DeclaredFunction>,
     ) -> bool {
-        if !visited.insert(func_name.to_string()) {
+        if !visited.insert(declared.clone()) {
             // Already in the path - recursion detected
             return true;
         }
 
-        let Some(body) = self.fn_analysis.function_bodies.get(func_name) else {
-            visited.remove(func_name);
+        let Some(body) = self.fn_analysis.function_bodies.get(declared) else {
+            visited.remove(declared);
             return false;
         };
 
@@ -1325,18 +1329,18 @@ impl TypeChecker {
         let mut callees = Vec::new();
         self.collect_callees(body, &mut callees);
 
-        for callee_name in callees {
-            if self.check_recursion(&callee_name, visited) {
+        for callee in callees {
+            if self.check_recursion(&callee, visited) {
                 return true;
             }
         }
 
-        visited.remove(func_name);
+        visited.remove(declared);
         false
     }
 
-    /// Collects all direct function call names in a statement.
-    fn collect_callees(&self, stmt: &crate::ast::Statement, callees: &mut Vec<String>) {
+    /// Collects the declaration of every function a statement calls directly.
+    fn collect_callees(&self, stmt: &crate::ast::Statement, callees: &mut Vec<DeclaredFunction>) {
         use crate::ast::StatementKind;
 
         match &stmt.node {
@@ -1378,13 +1382,17 @@ impl TypeChecker {
     }
 
     /// Recursively collects direct callees from an expression.
-    fn collect_callees_expr(&self, expr: &crate::ast::Expression, callees: &mut Vec<String>) {
+    fn collect_callees_expr(
+        &self,
+        expr: &crate::ast::Expression,
+        callees: &mut Vec<DeclaredFunction>,
+    ) {
         use crate::ast::ExpressionKind;
 
         match &expr.node {
             ExpressionKind::Call(func_expr, args) => {
-                if let ExpressionKind::Identifier(name, _) = &func_expr.node {
-                    callees.push(name.clone());
+                if let Some(declared) = self.declaration_called_by(func_expr) {
+                    callees.push(declared.clone());
                 }
                 for arg in args {
                     self.collect_callees_expr(arg, callees);
@@ -1825,8 +1833,7 @@ impl TypeChecker {
         }
 
         // For user-defined functions, check the computed residency verdict
-        let callee_residency =
-            callee_name.and_then(|name| self.fn_analysis.fn_residencies.get(name).copied());
+        let callee_residency = self.callee_residency(func);
 
         let callee = match &func.node {
             ExpressionKind::Identifier(name, _) => name.clone(),

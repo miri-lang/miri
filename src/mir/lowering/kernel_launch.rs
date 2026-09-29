@@ -33,7 +33,7 @@ pub(super) struct GpuFnArgs {
     pub(super) scalar_args: Vec<Operand>,
 }
 
-/// Lowers the arguments of a call to the `gpu fn` `func_name`: a buffer must be
+/// Lowers the arguments of a call to the `gpu fn` `callee` names: a buffer must be
 /// a gpu-resident place, and a scalar is any type the GPU wire format gives a
 /// uniform lane ([`scalar_capture_wire`]). Any other argument is an internal
 /// error rather than a silently dropped binding: the type checker refuses a
@@ -44,14 +44,13 @@ pub(super) struct GpuFnArgs {
 // signature.
 pub(super) fn process_gpu_fn_args(
     ctx: &mut LoweringContext,
-    func_name: &str,
+    callee: &Expression,
     call_args: &[Expression],
     span: Span,
 ) -> Result<GpuFnArgs, LoweringError> {
     let out_params = ctx
         .type_checker
-        .function_out_params()
-        .get(func_name)
+        .callee_out_params(callee)
         .cloned()
         .unwrap_or_default();
 
@@ -74,8 +73,9 @@ pub(super) fn process_gpu_fn_args(
             return Err(LoweringError::internal(
                 DiagnosticCode::MirGpuLaunchMetadataMismatch,
                 format!(
-                    "argument {arg_idx} of the launch of '{func_name}' has type '{arg_ty}', \
-                     which binds neither as a buffer nor as a scalar input"
+                    "argument {arg_idx} of the launch of '{}' has type '{arg_ty}', \
+                     which binds neither as a buffer nor as a scalar input",
+                    callee.node
                 ),
                 arg.span,
             ));
@@ -157,14 +157,14 @@ pub(super) fn thread_gpu_fn_args(
 ) -> Result<ThreadedGpuFnArgs, LoweringError> {
     let (kernel_op, kernel_name) = super::dispatch::resolve_kernel_operand(ctx, callee, span)?;
 
-    let ExpressionKind::Identifier(func_name, _) = &callee.node else {
+    if !matches!(callee.node, ExpressionKind::Identifier(..)) {
         return Err(LoweringError::unsupported_expression(
             "gpu fn must be called by name".to_string(),
             span,
         ));
-    };
+    }
 
-    let args = process_gpu_fn_args(ctx, func_name, call_args, span)?;
+    let args = process_gpu_fn_args(ctx, callee, call_args, span)?;
     Ok(ThreadedGpuFnArgs {
         kernel_op,
         kernel_name,
