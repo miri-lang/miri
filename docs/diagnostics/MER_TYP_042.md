@@ -8,7 +8,6 @@ An assignment was attempted to a variable or field declared as immutable. Variab
 - `Cannot assign to field of immutable variable`
 - `Cannot assign to element of immutable variable`
 - `Invalid assignment target`
-- `Type mismatch in assignment: cannot assign {actual} to {expected}`
 - `expected mutable variable for 'out' parameter '{param}': '{var}' is immutable (declare with 'var')`
 
 ## Before

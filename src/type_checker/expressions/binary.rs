@@ -416,7 +416,7 @@ impl TypeChecker {
         let stored_expr = matches!(op, AssignmentOp::Assign).then_some(rhs);
         if !self.accepts_value_at(&lhs_type, &stored_type, stored_expr, context) {
             self.report_error(
-                DiagnosticCode::TypImmutabilityViolation,
+                DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
                     stored_type, lhs_type

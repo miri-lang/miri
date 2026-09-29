@@ -99,6 +99,38 @@ fn main()
     );
 }
 
+/// A value of the wrong type stored into a mutable location is a type
+/// mismatch, not an immutability violation: the location may be written.
+#[test]
+fn a_mistyped_store_to_an_inherited_field_reports_a_type_mismatch() {
+    assert_compiler_error(
+        r#"
+class Base<A, B>
+    first A
+    second B
+    fn init(first A, second B)
+        self.first = first
+        self.second = second
+
+class Child<X, Y> extends Base<Y, X>
+    fn init(first X, second Y)
+        super.init(second, first)
+    fn bad(x X)
+        self.first = x
+"#,
+        "MER_TYP_002",
+    );
+    assert_compiler_error(
+        r#"
+fn main()
+    var x = 1
+    x = "a"
+    println(f"{x}")
+"#,
+        "MER_TYP_002",
+    );
+}
+
 /// A string literal inside an interpolation is the commonest way to reach
 /// `MER_LEX_012`: the quote closes the f-string where it stands, so the `{`
 /// that opened the interpolation never meets a `}`. The help has to say that,

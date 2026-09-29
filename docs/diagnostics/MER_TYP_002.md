@@ -18,6 +18,7 @@ The same code covers operands an operator cannot combine. `+` never converts bet
 - `Too many positional arguments: expected {expected}, got {actual}`
 - `Member property must be an identifier`
 - `Type mismatch for variable '{name}': expected {expected}, got {actual}`
+- `Type mismatch in assignment: cannot assign {actual} to {expected}`
 - `If condition must be a boolean, got {type}`
 - `While condition must be a boolean, got {type}`
 - `Type mismatch for loop variable '{name}': expected Int, got {actual}`
