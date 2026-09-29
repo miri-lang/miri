@@ -244,3 +244,43 @@ fn main()
         "GPU-only",
     );
 }
+
+/// An atomic writes through the buffer it is handed and keeps nothing, so the
+/// buffer is still readable afterwards, at a script's top level as inside
+/// `main`.
+#[test]
+fn an_atomic_call_leaves_its_buffer_usable() {
+    let result = crate::utils::miri_check(
+        "
+use system.gpu
+use system.gpu.atomic
+use system.collections.array
+
+gpu var hist = Array<Atomic<u32>, 4>()
+gpu forall i in 0..4
+    atomic_add(hist, i, 1 as u32)
+let host = hist
+",
+    );
+    assert!(result.success, "{}", result.output());
+}
+
+/// Every published web demo passes `miri check`, not only `miri build`.
+#[test]
+fn every_web_demo_passes_check() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/gpu/web");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        panic!("the web demos are in {}", dir.display());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("mi") {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            panic!("{} reads", path.display());
+        };
+        let result = crate::utils::miri_check(&source);
+        assert!(result.success, "{}: {}", path.display(), result.output());
+    }
+}
