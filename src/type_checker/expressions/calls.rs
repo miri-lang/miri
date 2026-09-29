@@ -2124,15 +2124,15 @@ impl TypeChecker {
             Some(expr) => self.settled_value_type(expr, arg_type),
             None => arg_type,
         };
-        self.report_error(
-            DiagnosticCode::TypTypeMismatch,
-            format!(
-                "Type mismatch for argument '{param_name}': expected {}, got {}",
-                spelled(expected),
-                spelled(&arg_type)
-            ),
-            arg_expr.map_or(span, |e| e.span),
+        let message = format!(
+            "Type mismatch for argument '{param_name}': expected {}, got {}",
+            spelled(expected),
+            spelled(&arg_type)
         );
+        match arg_expr {
+            Some(value) => self.report_mismatch_at(message, value, expected),
+            None => self.report_error(DiagnosticCode::TypTypeMismatch, message, span),
+        }
     }
 
     fn declared_return_type(

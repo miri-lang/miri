@@ -3,14 +3,14 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn list_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.eat_token(&Token::LBracket)?;
+        let open = self.eat_token(&Token::LBracket)?;
 
         let mut elements = vec![];
         while self.match_lookahead_type(|t| t != &Token::RBracket) {
@@ -21,18 +21,28 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::Comma)?;
         }
 
-        self.eat_token(&Token::RBracket)?;
+        let close = self.eat_token(&Token::RBracket)?;
         let size = ast::int_literal_expression(elements.len() as i128);
-        Ok(ast::array(elements, Box::new(size)))
+        let mut literal = ast::array(elements, Box::new(size));
+        literal.span = Span::new(open.1.start, close.1.end);
+        Ok(literal)
     }
 
+    /// A map or set literal, spanning its braces.
     pub(crate) fn brace_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.eat_token(&Token::LBrace)?;
+        let open = self.eat_token(&Token::LBrace)?;
+        let (mut literal, end) = self.brace_literal()?;
+        literal.span = Span::new(open.1.start, end);
+        Ok(literal)
+    }
 
+    /// The map or set after its opening brace, with where its closing brace
+    /// ends.
+    fn brace_literal(&mut self) -> Result<(Expression, usize), SyntaxError> {
         // If the next token is a closing brace, it's an empty map.
         if self.match_lookahead_type(|t| t == &Token::RBrace) {
-            self.eat_token(&Token::RBrace)?;
-            return Ok(ast::map(vec![]));
+            let close = self.eat_token(&Token::RBrace)?;
+            return Ok((ast::map(vec![]), close.1.end));
         }
 
         // Parse the first expression.
@@ -55,8 +65,8 @@ impl<'source> Parser<'source> {
                 let value = self.expression()?;
                 pairs.push((key, value));
             }
-            self.eat_token(&Token::RBrace)?;
-            Ok(ast::map(pairs))
+            let close = self.eat_token(&Token::RBrace)?;
+            Ok((ast::map(pairs), close.1.end))
         } else {
             // It's a set.
             let mut elements = vec![first_expr];
@@ -67,8 +77,8 @@ impl<'source> Parser<'source> {
                 } // Trailing comma
                 elements.push(self.expression()?);
             }
-            self.eat_token(&Token::RBrace)?;
-            Ok(ast::set(elements))
+            let close = self.eat_token(&Token::RBrace)?;
+            Ok((ast::set(elements), close.1.end))
         }
     }
 

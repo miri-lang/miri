@@ -616,16 +616,13 @@ impl TypeChecker {
                 }
 
                 if !compatible {
-                    self.report_error(
-                        DiagnosticCode::TypTypeMismatch,
-                        format!(
-                            "Type mismatch for variable '{}': expected {}, got {}",
-                            decl.name,
-                            spelled(&declared_type),
-                            spelled(&inferred_type)
-                        ),
-                        init.span,
+                    let message = format!(
+                        "Type mismatch for variable '{}': expected {}, got {}",
+                        decl.name,
+                        spelled(&declared_type),
+                        spelled(&inferred_type)
                     );
+                    self.report_mismatch_at(message, init, &declared_type);
                 }
             } else {
                 // Check for warning: assigning non-optional to optional immutable variable
