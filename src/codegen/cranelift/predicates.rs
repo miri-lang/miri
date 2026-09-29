@@ -183,18 +183,11 @@ impl<'a> FunctionTranslator<'a> {
         (depth, inner)
     }
 
-    /// True when an element of `kind` is the same element as another exactly
-    /// when their bytes agree: a scalar, whose bytes are its value.
+    /// True when an element of `kind` is a scalar, whose bytes are its value.
     ///
-    /// A float is one of them, on the same terms a container of bare floats
-    /// already matches on: its bytes settle it, so a negative zero is not the
-    /// zero `==` says it equals and a NaN is the NaN `==` says it is not. The
-    /// wrapped element answers as the bare one does, which is what makes the
-    /// two containers agree with each other.
-    ///
-    /// TODO: settling those two cases needs a float rule of its own beside the
-    /// byte and content rules, and first a decision on whether membership
-    /// follows `==` or identity of value.
+    /// A float is one, but a set or map takes the float-value rule for it
+    /// before this one is asked (`value_identity_rule`), so `-0.0` and `0.0`
+    /// are one element and every NaN is one element.
     pub(crate) fn is_matched_by_bytes(kind: &TypeKind) -> bool {
         match kind {
             TypeKind::Int

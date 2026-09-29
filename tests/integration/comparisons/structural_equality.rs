@@ -599,3 +599,29 @@ fn main()
         "nested equal\nnested differs",
     );
 }
+
+/// A function value has no equality: `==` on two of them is refused rather
+/// than answered from their addresses, and so is a search that needs it.
+#[test]
+fn function_values_cannot_be_compared() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let f = fn(x int) int: x + 1
+    let g = fn(x int) int: x + 1
+    println(f"{f == g}")
+"#,
+        "function values cannot be compared with `==`",
+    );
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+fn main()
+    let f = fn(x int) int: x + 1
+    let fs = List([f])
+    println(f"{fs.contains(f)}")
+"#,
+        "function values cannot be compared",
+    );
+}

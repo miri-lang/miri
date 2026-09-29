@@ -13,7 +13,10 @@
 
 use crate::ast::operator::BinaryOp;
 pub use crate::ast::statement::DROP_HOOK_NAME;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{
+    Type, TypeKind, ADDING_TRAIT_NAME, EQUALITY_TRAIT_NAME, ORDERING_TRAIT_NAME,
+    REPEATING_TRAIT_NAME,
+};
 pub use crate::ast::types::{CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
 
 /// The method a construction runs to initialise an instance.
@@ -65,11 +68,12 @@ pub enum MethodResultReading {
     AtLeastZero,
 }
 
-/// The method an operator dispatches to, and how the operator reads its
-/// result.
+/// The method an operator dispatches to, the trait that declares it, and how
+/// the operator reads its result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperatorMethod {
     pub name: &'static str,
+    pub trait_name: &'static str,
     pub reading: MethodResultReading,
 }
 
@@ -79,15 +83,47 @@ pub struct OperatorMethod {
 /// One `compare` answers all four ordering operators and one `equals` answers
 /// both equality operators.
 pub fn operator_method(op: &BinaryOp) -> Option<OperatorMethod> {
-    let (name, reading) = match op {
-        BinaryOp::Add => (CONCAT_METHOD_NAME, MethodResultReading::AsReturned),
-        BinaryOp::Mul => (REPEAT_METHOD_NAME, MethodResultReading::AsReturned),
-        BinaryOp::Equal => (EQUALS_METHOD_NAME, MethodResultReading::AsReturned),
-        BinaryOp::NotEqual => (EQUALS_METHOD_NAME, MethodResultReading::Negated),
-        BinaryOp::LessThan => (ORDERING_METHOD_NAME, MethodResultReading::BelowZero),
-        BinaryOp::LessThanEqual => (ORDERING_METHOD_NAME, MethodResultReading::AtMostZero),
-        BinaryOp::GreaterThan => (ORDERING_METHOD_NAME, MethodResultReading::AboveZero),
-        BinaryOp::GreaterThanEqual => (ORDERING_METHOD_NAME, MethodResultReading::AtLeastZero),
+    let (name, trait_name, reading) = match op {
+        BinaryOp::Add => (
+            CONCAT_METHOD_NAME,
+            ADDING_TRAIT_NAME,
+            MethodResultReading::AsReturned,
+        ),
+        BinaryOp::Mul => (
+            REPEAT_METHOD_NAME,
+            REPEATING_TRAIT_NAME,
+            MethodResultReading::AsReturned,
+        ),
+        BinaryOp::Equal => (
+            EQUALS_METHOD_NAME,
+            EQUALITY_TRAIT_NAME,
+            MethodResultReading::AsReturned,
+        ),
+        BinaryOp::NotEqual => (
+            EQUALS_METHOD_NAME,
+            EQUALITY_TRAIT_NAME,
+            MethodResultReading::Negated,
+        ),
+        BinaryOp::LessThan => (
+            ORDERING_METHOD_NAME,
+            ORDERING_TRAIT_NAME,
+            MethodResultReading::BelowZero,
+        ),
+        BinaryOp::LessThanEqual => (
+            ORDERING_METHOD_NAME,
+            ORDERING_TRAIT_NAME,
+            MethodResultReading::AtMostZero,
+        ),
+        BinaryOp::GreaterThan => (
+            ORDERING_METHOD_NAME,
+            ORDERING_TRAIT_NAME,
+            MethodResultReading::AboveZero,
+        ),
+        BinaryOp::GreaterThanEqual => (
+            ORDERING_METHOD_NAME,
+            ORDERING_TRAIT_NAME,
+            MethodResultReading::AtLeastZero,
+        ),
         BinaryOp::Sub
         | BinaryOp::Div
         | BinaryOp::Mod
@@ -101,7 +137,17 @@ pub fn operator_method(op: &BinaryOp) -> Option<OperatorMethod> {
         | BinaryOp::In
         | BinaryOp::NullCoalesce => return None,
     };
-    Some(OperatorMethod { name, reading })
+    Some(OperatorMethod {
+        name,
+        trait_name,
+        reading,
+    })
+}
+
+/// The trait whose method answers `op`, or `None` for an operator no method
+/// answers.
+pub fn operator_trait_name(op: &BinaryOp) -> Option<&'static str> {
+    operator_method(op).map(|method| method.trait_name)
 }
 
 /// The name of the method `op` dispatches to, or `None` for an operator no
@@ -155,9 +201,25 @@ mod tests {
             operator_method(&BinaryOp::NotEqual),
             Some(OperatorMethod {
                 name: EQUALS_METHOD_NAME,
+                trait_name: EQUALITY_TRAIT_NAME,
                 reading: MethodResultReading::Negated
             })
         );
+    }
+
+    /// Each operator's trait comes from the same table as its method.
+    #[test]
+    fn an_operator_names_the_trait_that_declares_its_method() {
+        assert_eq!(operator_trait_name(&BinaryOp::Add), Some(ADDING_TRAIT_NAME));
+        assert_eq!(
+            operator_trait_name(&BinaryOp::Mul),
+            Some(REPEATING_TRAIT_NAME)
+        );
+        assert_eq!(
+            operator_trait_name(&BinaryOp::LessThan),
+            Some(ORDERING_TRAIT_NAME)
+        );
+        assert_eq!(operator_trait_name(&BinaryOp::Sub), None);
     }
 
     fn optional(inner: Type) -> Type {

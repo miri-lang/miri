@@ -162,7 +162,7 @@ impl TypeChecker {
         }
 
         // Trait-based Add: if left implements Addable and types are compatible
-        if matches!(op, BinaryOp::Add) && self.type_implements_trait(left, "Addable") {
+        if matches!(op, BinaryOp::Add) && self.implements_operator_trait(left, &BinaryOp::Add) {
             if self.are_compatible(left, right, context) {
                 return Ok(left.clone());
             }
@@ -172,7 +172,7 @@ impl TypeChecker {
             ));
         }
         // Trait-based Mul: if left implements Multiplicable and right is int
-        if matches!(op, BinaryOp::Mul) && self.type_implements_trait(left, "Multiplicable") {
+        if matches!(op, BinaryOp::Mul) && self.implements_operator_trait(left, &BinaryOp::Mul) {
             if self.is_numeric(right) {
                 return Ok(left.clone());
             }
@@ -254,7 +254,7 @@ impl TypeChecker {
         }
 
         // Trait-based Equatable: if left implements Equatable
-        if self.type_implements_trait(left, "Equatable")
+        if self.implements_operator_trait(left, &BinaryOp::Equal)
             && self.are_compatible(left, right, context)
         {
             return Ok(bool_type());
@@ -574,6 +574,13 @@ impl TypeChecker {
     ///
     /// Maps `TypeKind::String` to class `"String"`, `TypeKind::Custom(name, _)` to `name`,
     /// and returns `false` for primitive types.
+    /// Whether `ty` implements the trait whose method answers `op`, read from
+    /// the one operator table lowering dispatches by.
+    fn implements_operator_trait(&self, ty: &Type, op: &BinaryOp) -> bool {
+        crate::ast::implicit_methods::operator_trait_name(op)
+            .is_some_and(|trait_name| self.type_implements_trait(ty, trait_name))
+    }
+
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
         let class_name = match &ty.kind {
             TypeKind::String => STRING_TYPE_NAME,
@@ -631,6 +638,14 @@ impl TypeChecker {
             TypeKind::Custom(name, args) => {
                 self.check_named_type_comparability(name, args.as_deref(), visiting, depth)
             }
+            // Two function values carry code and captures, not a value `==`
+            // could compare: one lambda written twice is two functions, and
+            // comparing addresses would answer from allocation order.
+            TypeKind::Function(_) => Err(
+                "Type mismatch: function values cannot be compared with `==`; compare what \
+                 they compute instead"
+                    .to_string(),
+            ),
             _ => Ok(()),
         }
     }
