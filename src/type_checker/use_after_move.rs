@@ -34,6 +34,16 @@ pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value 
 pub(crate) const BORROWED_DROP_HELP: &str =
     "call drop() on the local variable that owns the value, or let its owner release it";
 
+/// Whether `callee` names a GPU atomic built-in (`atomic_add`, …), which the
+/// compiler lowers itself rather than calling a declared function.
+fn is_gpu_atomic_builtin(callee: &Expression) -> bool {
+    matches!(
+        &callee.node,
+        ExpressionKind::Identifier(name, _)
+            if crate::gpu_target::GpuAtomicOp::from_builtin_name(name).is_some()
+    )
+}
+
 /// What a consumed argument was handed to.
 enum Sink {
     /// A function, whose escape summary can explain why the argument escapes.
@@ -568,6 +578,12 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.check_expr(callee, consumed);
         for arg in args {
             self.check_expr(arg, consumed);
+        }
+
+        // A GPU atomic built-in writes through the buffer it is handed and
+        // keeps nothing, so the buffer stays usable after the call.
+        if method_summary.is_none() && free_fn_summary.is_none() && is_gpu_atomic_builtin(callee) {
+            return;
         }
 
         let params: Vec<Parameter> = self
