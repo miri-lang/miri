@@ -13,7 +13,8 @@ mod vtable;
 
 pub(crate) use vtable::{constructed_class, dispatched_method_names, takes_vtable_slot};
 pub use vtable::{
-    constructed_vtable_symbols, FilledSlot, VtableFills, VtableInstance, VtableLayout,
+    constructed_vtable_symbols, released_by_runtime_class, FilledSlot, VtableFills, VtableInstance,
+    VtableLayout, DROP_SLOT,
 };
 
 pub use crate::type_checker::context::class_needs_vtable;

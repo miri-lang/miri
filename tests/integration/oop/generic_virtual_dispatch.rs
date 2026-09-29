@@ -235,9 +235,6 @@ fn main()
 
 /// Receivers kept in a list and called in a loop reach each element's body.
 #[test]
-#[ignore = "a collection of trait-typed elements does not link: its element \
-            release names a `__decref_{Trait}` helper that is never generated, \
-            whatever the implementing classes are"]
 fn test_trait_receivers_in_a_list_reach_their_generic_class_bodies() {
     assert_heap_guard_output(
         r#"
@@ -272,9 +269,6 @@ fn main()
 /// Releasing a trait receiver that holds a generic class instance releases the
 /// managed field the instance keeps at its own argument.
 #[test]
-#[ignore = "releasing a class instance through a trait-typed binding frees the \
-            object but none of its managed fields, for a generic and a plain \
-            class alike: the release has no per-instance drop to dispatch to"]
 fn test_releasing_a_trait_receiver_releases_the_generic_instance_fields() {
     assert_heap_guard_output(
         r#"

@@ -6,7 +6,7 @@
 
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
-use crate::mir::symbol::Symbol;
+use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -77,14 +77,21 @@ impl VtableInstance {
     pub fn symbol(&self) -> String {
         Symbol::vtable(&self.class, &self.args).link_name()
     }
+
+    /// The symbol of the drop thunk that releases an instance of this vtable's
+    /// class at its arguments, which [`DROP_SLOT`] points at: the thunk of the
+    /// instantiation for one built at arguments, the shared one otherwise.
+    pub fn drop_symbol(&self) -> String {
+        Symbol::type_thunk(ThunkKind::Drop, &self.class, self.args.iter()).link_name()
+    }
 }
 
-/// The symbol of every vtable an instance constructed in `bodies` points at,
-/// in order.
+/// Every vtable an instance constructed in `bodies` points at, in order of
+/// symbol: its symbol, and the drop thunk its [`DROP_SLOT`] points at.
 pub fn constructed_vtable_symbols<'b>(
     bodies: impl IntoIterator<Item = &'b Body>,
     type_defs: &HashMap<String, TypeDefinition>,
-) -> BTreeSet<String> {
+) -> BTreeMap<String, String> {
     bodies
         .into_iter()
         .flat_map(|body| &body.basic_blocks)
@@ -101,7 +108,7 @@ pub fn constructed_vtable_symbols<'b>(
             | StatementKind::Dealloc(_) => None,
         })
         .filter_map(|ty| VtableInstance::of(ty, type_defs))
-        .map(|instance| instance.symbol())
+        .map(|instance| (instance.symbol(), instance.drop_symbol()))
         .collect()
 }
 
@@ -115,12 +122,14 @@ pub(crate) fn constructed_class(rvalue: &Rvalue) -> Option<&Type> {
 
 /// The slot numbering every vtable in the program shares.
 ///
-/// A slot stands for one method name: the sorted set of every instance method
-/// a trait or an abstract class declares, constructors and statics aside.
-/// Every vtable has one slot per name, filled where the class gives that
-/// method a body and null elsewhere; a class has one method per name, so a
-/// call through any trait or abstract base it is reached by finds its own
-/// body at the one index the method's name takes.
+/// Slot [`DROP_SLOT`] holds the routine that releases an instance of the
+/// vtable's own class, which a value held at a base class or a trait is
+/// released through. Every other slot stands for one method name: the sorted
+/// set of every instance method a trait or an abstract class declares,
+/// constructors and statics aside. Every vtable has one slot per name, filled
+/// where the class gives that method a body and null elsewhere; a class has
+/// one method per name, so a call through any trait or abstract base it is
+/// reached by finds its own body at the one index the method's name takes.
 ///
 /// The numbering depends on method names alone, which registering a generic
 /// instantiation never adds to, so one layout serves a whole compilation.
@@ -142,9 +151,9 @@ impl VtableLayout {
         }
     }
 
-    /// The number of slots in every vtable.
+    /// The number of slots in every vtable, the drop slot included.
     pub fn slot_count(&self) -> usize {
-        self.selectors.len()
+        self.selectors.len() + 1
     }
 
     /// The slot `method_name` takes, or `None` when no trait or abstract class
@@ -153,6 +162,32 @@ impl VtableLayout {
         self.selectors
             .binary_search_by(|selector| (**selector).cmp(method_name))
             .ok()
+            .map(|index| index + 1)
+    }
+}
+
+/// The vtable slot holding the routine that releases an instance of the
+/// vtable's class: its drop hook, its managed fields, its allocation.
+pub const DROP_SLOT: usize = 0;
+
+/// Whether a value whose static type is `name` may be an instance of another
+/// class, and so has to be released as its runtime class through the drop
+/// slot of the vtable it points at: a trait, or a class another class
+/// extends. Every class that extends another carries a vtable
+/// ([`class_needs_vtable`]), so an instance with none is of the static class.
+pub fn released_by_runtime_class(name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    match type_defs.get(name) {
+        Some(TypeDefinition::Trait(_)) => true,
+        Some(TypeDefinition::Class(_)) => type_defs.values().any(|definition| {
+            matches!(definition, TypeDefinition::Class(class) if class.base_class.as_deref() == Some(name))
+        }),
+        Some(
+            TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => false,
     }
 }
 

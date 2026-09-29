@@ -322,21 +322,32 @@ fn two_traits_one_class() -> HashMap<String, TypeDefinition> {
 #[test]
 fn vtable_slot_index_numbers_a_trait_method_across_every_trait() {
     let defs = two_traits_one_class();
-    assert_eq!(slot_of("A", "zeta", &defs), Some(1));
-    assert_eq!(slot_of("B", "alpha", &defs), Some(0));
+    assert_eq!(slot_of("A", "zeta", &defs), Some(2));
+    assert_eq!(slot_of("B", "alpha", &defs), Some(1));
 }
 
 #[test]
 fn vtable_slot_index_agrees_with_the_slot_the_layout_fills() {
     let defs = two_traits_one_class();
     let layout = VtableLayout::of(&defs);
-    assert_eq!(layout.slot_count(), 2);
+    assert_eq!(layout.slot_count(), 3);
     for method in collect_vtable_methods("C", &defs) {
         let receiver = if method == "zeta" { "A" } else { "B" };
         assert_eq!(
             vtable_slot_index(&layout, receiver, method, &defs),
             layout.slot(method)
         );
+    }
+}
+
+/// The first slot of every vtable is the drop routine, so no method takes it.
+#[test]
+fn vtable_layout_reserves_the_drop_slot_before_every_method() {
+    let defs = two_traits_one_class();
+    let layout = VtableLayout::of(&defs);
+    assert_eq!(miri::mir::dispatch::DROP_SLOT, 0);
+    for method in collect_vtable_methods("C", &defs) {
+        assert_ne!(layout.slot(method), Some(miri::mir::dispatch::DROP_SLOT));
     }
 }
 
@@ -362,9 +373,9 @@ fn vtable_layout_gives_statics_and_constructors_no_slot() {
     );
     let defs = make_defs([("Base".to_string(), TypeDefinition::Class(base))]);
     let layout = VtableLayout::of(&defs);
-    assert_eq!(layout.slot_count(), 1);
+    assert_eq!(layout.slot_count(), 2);
     assert_eq!(layout.slot("apex"), None);
-    assert_eq!(slot_of("Base", "area", &defs), Some(0));
+    assert_eq!(slot_of("Base", "area", &defs), Some(1));
     assert_eq!(slot_of("Base", "apex", &defs), None);
 }
 
@@ -391,9 +402,9 @@ fn vtable_layout_counts_an_abstract_receivers_inherited_trait_methods() {
         ("Base".to_string(), TypeDefinition::Class(base)),
         ("Plain".to_string(), TypeDefinition::Class(plain)),
     ]);
-    assert_eq!(VtableLayout::of(&defs).slot_count(), 3);
-    assert_eq!(slot_of("Base", "greet", &defs), Some(0));
-    assert_eq!(slot_of("Base", "shout", &defs), Some(2));
+    assert_eq!(VtableLayout::of(&defs).slot_count(), 4);
+    assert_eq!(slot_of("Base", "greet", &defs), Some(1));
+    assert_eq!(slot_of("Base", "shout", &defs), Some(3));
 }
 
 fn generic(mut class_def: ClassDefinition, param: &str) -> ClassDefinition {
