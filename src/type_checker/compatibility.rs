@@ -623,7 +623,12 @@ impl TypeChecker {
                 let b = self
                     .extract_type_from_expression(b_expr)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
-                if !self.are_compatible(&a, &b, context) {
+                // Invariant, like every other type argument: a tuple is stored
+                // element by element at its own layout, and nothing converts a
+                // tuple value, so `(int, String)` read as `(int?, String)`
+                // takes its bare word for a box. A tuple literal still builds
+                // at a wider declared type, through `literal_fits`.
+                if !self.type_arguments_agree(&a, &b, context) {
                     return Some(false);
                 }
             }

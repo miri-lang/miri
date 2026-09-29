@@ -159,6 +159,17 @@ fn resolve_alias_target(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Typ
 /// needs, and whether the value is reference counted all then answer wrongly.
 pub(crate) fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
     let resolved = resolve_alias_target(tc, ty);
+    // A tuple's elements carry their nullable flag the way a generic
+    // argument does, so each is folded the same way: left as a flag, the
+    // drop path reads `(int?, String)` as holding a bare `int` and never
+    // releases the optional's box.
+    if let TypeKind::Tuple(elements) = &resolved.kind {
+        let canonical_elements = elements
+            .iter()
+            .map(|element| canonical_type_argument(tc, element))
+            .collect();
+        return Type::new(TypeKind::Tuple(canonical_elements), resolved.span);
+    }
     let TypeKind::Custom(name, Some(args)) = &resolved.kind else {
         return resolved;
     };

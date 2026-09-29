@@ -7,6 +7,7 @@ pub mod chained_fields;
 pub mod construction_access;
 pub mod destructuring;
 pub mod edge_cases;
+pub mod element_conversion;
 pub mod errors;
 pub mod functions;
 pub mod iteration;
