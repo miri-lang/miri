@@ -119,6 +119,20 @@ impl TypeChecker {
             is_member,
         } = info;
 
+        // A generic function is compiled once per instantiation its calls
+        // reach, which only a top-level declaration is given; one declared in
+        // a block would be called at an instantiation nothing compiles.
+        if context.in_function && !is_member && generics.as_ref().is_some_and(|g| !g.is_empty()) {
+            self.report_error(
+                DiagnosticCode::TypFunctionSignature,
+                format!(
+                    "Generic function '{name}' is declared inside a block; declare it at the \
+                     top level of the module"
+                ),
+                span,
+            );
+        }
+
         self.register_function_symbol(
             RegisteredFunction {
                 name,
