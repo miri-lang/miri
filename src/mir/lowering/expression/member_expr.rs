@@ -196,9 +196,9 @@ fn lower_zero_arg_method_as_property(
     Ok(op)
 }
 
-/// Lower `M.NAME`, a module binding read through the module's alias, exactly
-/// as the bare `NAME` a plain import reads. Any other member — a function, a
-/// type — is left to the general member path.
+/// Lower `M.NAME`, a module binding or function read through the module's
+/// alias, exactly as the bare `NAME` a plain import reads. Any other member —
+/// a type — is left to the general member path.
 fn try_module_alias_binding(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -213,6 +213,11 @@ fn try_module_alias_binding(
     };
     if !ctx.type_checker.read_as_module_alias(obj) {
         return Ok(None);
+    }
+    if let Some(reference) =
+        super::function_reference::try_lower_module_member_reference(ctx, expr, prop, dest.clone())?
+    {
+        return Ok(Some(reference));
     }
     let is_binding = ctx
         .type_checker

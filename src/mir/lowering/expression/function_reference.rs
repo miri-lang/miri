@@ -74,14 +74,58 @@ pub(crate) fn try_lower_function_reference(
     let declared = super::identifier_expr::declared_name(info, name);
     let target = super::identifier_expr::global_function_link_name(ctx, expr, declared)?;
     Ok(Some(lower_function_reference(
-        ctx, expr, &target, &fn_ty, &func_data, dest,
+        ctx, expr, expr, &target, &fn_ty, &func_data, dest,
+    )))
+}
+
+/// Lower `M.name`, a function read as a value through the module alias `M`,
+/// as the bare `name` a plain import reads. `member` is the whole expression
+/// and `name` the member it names, which carries the declaration the checker
+/// resolved it to. `None` when that is not a function the program declares.
+pub(crate) fn try_lower_module_member_reference(
+    ctx: &mut LoweringContext,
+    member: &Expression,
+    name: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let Some(declared) = ctx.type_checker.declared_callee(name.id).cloned() else {
+        return Ok(None);
+    };
+    let Some(fn_ty) = ctx.type_checker.get_type(member.id).cloned() else {
+        return Ok(None);
+    };
+    let TypeKind::Function(func_data) = &fn_ty.kind else {
+        return Ok(None);
+    };
+    if func_data
+        .generics
+        .as_ref()
+        .is_some_and(|generics| !generics.is_empty())
+    {
+        return Err(LoweringError::internal(
+            DiagnosticCode::MirInvalidInstantiationArgument,
+            format!(
+                "the generic function `{}` reached lowering as a value",
+                declared.name
+            ),
+            member.span,
+        ));
+    }
+    let func_data = func_data.clone();
+    let target = Symbol::declared_function(&declared.module, &declared.name).link_name();
+    Ok(Some(lower_function_reference(
+        ctx, member, name, &target, &fn_ty, &func_data, dest,
     )))
 }
 
 /// Build the closure value and register the thunk body it points at.
+/// `callee` is the expression naming the function, which says whether it
+/// takes an allocator.
+#[allow(clippy::too_many_arguments)]
 fn lower_function_reference(
     ctx: &mut LoweringContext,
     expr: &Expression,
+    callee: &Expression,
     symbol: &str,
     fn_ty: &Type,
     func_data: &FunctionTypeData,
@@ -92,7 +136,7 @@ fn lower_function_reference(
     let thunk_symbol =
         ctx.closure_symbol(ClosureKind::FunctionReference(symbol.to_string()), expr.id);
     let thunk_name: std::rc::Rc<str> = thunk_symbol.link_name().into();
-    let forwarded_allocator = forwarded_allocator(ctx, expr);
+    let forwarded_allocator = forwarded_allocator(ctx, callee);
     let thunk = build_forwarding_thunk(
         ctx,
         expr,
