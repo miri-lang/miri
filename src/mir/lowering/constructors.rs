@@ -268,16 +268,34 @@ pub fn lower_class_constructor(
         }
     };
 
-    let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> = {
+    // Each field is stored at the type the instance reaches it at. An
+    // inherited field is written in its declaring ancestor's parameters and
+    // bound through the `extends` clauses, which the class's own substitution
+    // does not cover: read at the bare ancestor parameter, a value stored
+    // into it would be converted to a type it is not, and released twice.
+    let instance_args = if let Some(TypeKind::Custom(_, args)) = resolved_ty.map(|ty| &ty.kind) {
+        args.as_deref()
+    } else {
+        None
+    };
+    let reached = crate::mir::instantiation::field_types(
+        ctx.type_checker.type_definitions(),
+        class_name,
+        instance_args,
+    );
+    let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> =
         collect_class_fields_all(def, ctx.type_checker.type_definitions())
             .into_iter()
-            .map(|(n, f)| {
+            .enumerate()
+            .map(|(position, (n, f))| {
                 let mut fi = f.clone();
-                fi.ty = apply_generic_sub(&fi.ty, &field_subs);
+                fi.ty = match reached.as_ref().and_then(|types| types.get(position)) {
+                    Some(ty) => apply_generic_sub(ty, &ctx.generic_subs),
+                    None => apply_generic_sub(&fi.ty, &field_subs),
+                };
                 (n.to_string(), fi)
             })
-            .collect()
-    };
+            .collect();
 
     let instance_ty = constructed_instance_type(class_name, resolved_ty, span);
     if let Some((init_class, init_params)) = init_site {
