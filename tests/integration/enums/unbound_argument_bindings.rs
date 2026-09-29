@@ -192,3 +192,52 @@ fn main()
         "s\nef",
     );
 }
+
+#[test]
+fn a_map_literal_joins_its_values() {
+    assert_heap_guard_output(
+        &with_e(
+            r#"
+use system.collections.map
+
+fn main()
+    let m = {1: E.L("s" + ""), 2: make()}
+    show(m[1])
+    show(m[2])
+"#,
+        ),
+        "l s\nr tu",
+    );
+}
+
+#[test]
+fn a_map_literal_joins_its_keys() {
+    assert_heap_guard_output(
+        &with_e(
+            r#"
+use system.collections.map
+
+fn main()
+    let m = {Result.Err("e" + "1"): 1, Result.Ok("o" + "k"): 2}
+    println(f"{m.length()}")
+"#,
+        ),
+        "2",
+    );
+}
+
+#[test]
+fn a_set_literal_joins_its_elements() {
+    assert_heap_guard_output(
+        &with_e(
+            r#"
+use system.collections.set
+
+fn main()
+    let s = {Result.Err("e" + "1"), Result.Ok("o" + "k")}
+    println(f"{s.length()}")
+"#,
+        ),
+        "2",
+    );
+}
