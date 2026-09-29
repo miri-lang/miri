@@ -188,7 +188,15 @@ fn lex_expression_into(
     tokens: &mut Vec<TokenSpan>,
 ) -> Result<(), SyntaxError> {
     for token_result in Lexer::new(expression) {
-        let (token, span) = token_result?;
+        // The expression is lexed on its own, so an error's span is relative to
+        // it until it is moved back onto the file.
+        let (token, span) = token_result.map_err(|mut error| {
+            error.span = Span::new(
+                absolute_start + error.span.start,
+                absolute_start + error.span.end,
+            );
+            error
+        })?;
         tokens.push((
             token,
             Span::new(absolute_start + span.start, absolute_start + span.end),

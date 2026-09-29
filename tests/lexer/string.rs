@@ -492,3 +492,13 @@ fn test_an_f_strings_tokens_span_the_whole_literal() {
         );
     }
 }
+
+#[test]
+fn test_an_invalid_literal_inside_an_interpolation_is_reported_where_it_is_written() {
+    let source = "x = f\"{g(0xFG)}\"";
+    let error = Lexer::new(source)
+        .find_map(Result::err)
+        .expect("0xFG is not a hex literal");
+    assert_eq!(error.kind, SyntaxErrorKind::InvalidHexLiteral);
+    assert_eq!(&source[error.span.start..error.span.end], "0xFG");
+}

@@ -269,15 +269,18 @@ pub enum Token {
     #[regex("0[oO][0-7_]+", priority = 2)]
     OctalNumber,
 
-    #[regex("0[bB](?:[0-1_]*[^0-1_\\s]+)?")]
+    // A base-N literal is invalid when its digit run is empty or runs into a
+    // letter or out-of-base digit; the invalid token spans that whole word. A
+    // literal followed by punctuation (`0xFF)`, `0b1,`) ends at its last digit.
+    #[regex("0[bB](?:[0-1_]*[2-9a-zA-Z][0-9a-zA-Z_]*)?")]
     #[regex("0[bB]_+[0-1_]*")]
     InvalidBinaryNumber,
 
-    #[regex("0[xX](?:[0-9a-fA-F_]*[^0-9a-fA-F_\\s]+)?")]
+    #[regex("0[xX](?:[0-9a-fA-F_]*[g-zG-Z][0-9a-zA-Z_]*)?")]
     #[regex("0[xX]_+[0-9a-fA-F_]*")]
     InvalidHexNumber,
 
-    #[regex("0[oO](?:[0-7_]*[^0-7_\\s]+)?")]
+    #[regex("0[oO](?:[0-7_]*[89a-zA-Z][0-9a-zA-Z_]*)?")]
     #[regex("0[oO]_+[0-7_]*")]
     InvalidOctalNumber,
 

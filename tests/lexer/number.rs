@@ -229,3 +229,24 @@ fn test_number_in_range() {
         ),
     ]);
 }
+
+#[test]
+fn test_base_n_numbers_end_at_punctuation() {
+    run_lexer_tests(vec![
+        (
+            "(0xFF)",
+            vec![Token::LParen, Token::HexNumber, Token::RParen],
+        ),
+        (
+            "[0b1, 0o7]",
+            vec![
+                Token::LBracket,
+                Token::BinaryNumber,
+                Token::Comma,
+                Token::OctalNumber,
+                Token::RBracket,
+            ],
+        ),
+        ("0xFF+1", vec![Token::HexNumber, Token::Plus, Token::Int]),
+    ]);
+}

@@ -509,3 +509,20 @@ fn main()
         "18446744073709551615 -1 18446744073709551615",
     );
 }
+
+#[test]
+fn test_base_n_literals_are_written_inside_brackets() {
+    assert_runs_with_output(
+        "
+use system.collections.list
+
+fn keep(v u64) u64: v
+
+fn main()
+    let k = (0xFF)
+    let l = [0b101, 0o17]
+    println(f'{k} {l[0]} {l[1]} {keep(0xFFFFFFFFFFFFFFFF)}')
+",
+        "255 5 15 18446744073709551615",
+    );
+}
