@@ -207,24 +207,8 @@ pub fn bind_pattern(
         }
         Pattern::EnumVariant(parent, bindings) => {
             // Handle Option Some(x) pattern — bind subject directly (identity, like unwrap)
-            let is_option_some = {
-                let subject_ty = &ctx.body.local_decls[subject_local.0].ty;
-                if matches!(subject_ty.kind, TypeKind::Option(_)) {
-                    match parent.as_ref() {
-                        Pattern::Identifier(name) => name == "Some",
-                        Pattern::Member(enum_pat, variant) => {
-                            matches!(
-                                enum_pat.as_ref(),
-                                Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-                            ) && variant == "Some"
-                        }
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            };
-            if is_option_some {
+            let subject_ty = &ctx.body.local_decls[subject_local.0].ty;
+            if is_option_some_pattern(subject_ty, parent) {
                 if let Some(Pattern::Identifier(name)) = bindings
                     .first()
                     .filter(|first| !matches!(first, Pattern::Identifier(n) if is_discard(n)))
@@ -294,6 +278,28 @@ pub fn bind_pattern(
     Ok(())
 }
 
+/// Whether a variant pattern whose variant is written `parent` is `Some(..)`
+/// matched against an optional of type `subject_ty`.
+pub(crate) fn is_option_some_pattern(subject_ty: &Type, parent: &Pattern) -> bool {
+    if !matches!(subject_ty.kind, TypeKind::Option(_)) {
+        return false;
+    }
+    match parent {
+        Pattern::Identifier(name) => name == "Some",
+        Pattern::Member(enum_pat, variant) => {
+            matches!(
+                enum_pat.as_ref(),
+                Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+            ) && variant == "Some"
+        }
+        Pattern::Literal(_)
+        | Pattern::EnumVariant(..)
+        | Pattern::Tuple(_)
+        | Pattern::Regex(_)
+        | Pattern::Default => false,
+    }
+}
+
 /// The payload types a variant pattern binds, so the bound locals are typed
 /// from the enum definition (e.g. `int` rather than `void`) instead of
 /// defaulting to a pointer slot.
@@ -303,7 +309,7 @@ pub fn bind_pattern(
 /// payload would be typed `T` and read back at pointer width instead of the
 /// float width it was stored at. Returns `None` when the pattern does not name
 /// a known enum variant.
-fn variant_payload_types(
+pub(crate) fn variant_payload_types(
     ctx: &LoweringContext,
     parent: &Pattern,
     subject_local: crate::mir::Local,
