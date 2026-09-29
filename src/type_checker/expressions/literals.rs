@@ -73,8 +73,7 @@ struct EnumInterpolateState {
     visited: std::collections::HashSet<String>,
 }
 
-/// An integer literal past the default `int` range, held until the type it was
-/// written into is known.
+/// An integer literal held until the type it was written into is known.
 #[derive(Debug)]
 pub(crate) struct DeferredIntLiteralRange {
     /// The literal expression, so its finally-recorded type can be looked up.
@@ -128,6 +127,29 @@ fn integer_kind_holds(kind: &TypeKind, value: i128) -> bool {
     }
 }
 
+/// True when the integer type a literal was recorded at holds the value the
+/// source wrote: `value`, or its negation when the literal sits directly under
+/// a unary minus.
+///
+/// A decimal literal is never negative on its own; a negative `value` not under
+/// a minus is a hex, binary or octal bit pattern above `i64::MAX` that the
+/// parser read as the 64-bit signed value sharing its bits
+/// (`0xFFFF_FFFF_FFFF_FFFF` is `-1`). Every 64-bit and wider integer type holds
+/// such a pattern whole — an unsigned one as the value those bits spell — and
+/// no narrower type does.
+fn literal_holds(kind: &TypeKind, value: i128, negated: bool) -> bool {
+    if negated {
+        return integer_kind_holds(kind, -value);
+    }
+    if value < 0 {
+        return matches!(
+            kind,
+            TypeKind::Int | TypeKind::I64 | TypeKind::I128 | TypeKind::U64 | TypeKind::U128
+        );
+    }
+    integer_kind_holds(kind, value)
+}
+
 /// The name and maximum of the integer type a literal was written into, or
 /// `None` when nothing typed it and the default `int` is the bound.
 ///
@@ -150,13 +172,9 @@ fn integer_kind_bound(kind: &TypeKind) -> Option<(&'static str, String)> {
 }
 
 impl TypeChecker {
-    /// Rejects an integer literal whose value does not fit the default `int`
-    /// type (`i64`), which would otherwise be silently truncated to a garbage
-    /// value during MIR lowering and codegen.
-    ///
-    /// A literal directly under a unary negation may reach `|i64::MIN|`
-    /// (`i64::MAX + 1`), since `i64::MIN` can only be spelled
-    /// `-9223372036854775808`; a bare positive literal may reach only `i64::MAX`.
+    /// Holds an integer literal for [`Self::report_deferred_int_literal_ranges`],
+    /// which rejects one whose value the integer type it is written into cannot
+    /// hold; codegen would otherwise truncate it to a different value silently.
     pub(crate) fn check_integer_literal_range(
         &mut self,
         lit: &Literal,
@@ -175,38 +193,18 @@ impl TypeChecker {
             self.hold_gpu_int_literal_range(expr_id, value, above_i128, span);
             return;
         }
-        // A literal explicitly declared with a wider integer type keeps its full
-        // i128-representable range. One above `i128::MAX` is still judged,
-        // against the type it was written into: only a `u128` holds it.
-        if self.wide_typed_int_literals.contains(&expr_id) && above_i128.is_none() {
-            return;
-        }
-
-        // The bound cannot be decided here: at an argument or element position
-        // the literal is inferred before the type it is written into is known,
-        // so a value past the default `int` is only *provisionally* out of
-        // range. It is held and judged against the type finally recorded for it,
-        // once the widening pass has had its say.
-        //
-        // TODO: only a literal past the default `int` is held, so one inside it
-        // that a declaration, argument or assignment then records at a narrower
-        // width (`let y i8 = 300`) is never judged and is truncated silently.
-        // Holding every decimal literal needs the hex/binary/octal bit-pattern
-        // literals exempted, which is why it is not done here.
-        let max = if self.negated_int_literals.contains(&expr_id) {
-            i64::MAX as i128 + 1
-        } else {
-            i64::MAX as i128
-        };
-        if value > max || above_i128.is_some() {
-            self.deferred_int_literal_ranges
-                .push(DeferredIntLiteralRange {
-                    expr_id,
-                    value,
-                    above_i128,
-                    span,
-                });
-        }
+        // The bound cannot be decided here: a literal is inferred before the
+        // type it is written into is known — a declaration, argument, field,
+        // element, assignment or return may record it at any integer width.
+        // Every literal is held and judged against the type finally recorded
+        // for it, once the widening pass has had its say.
+        self.deferred_int_literal_ranges
+            .push(DeferredIntLiteralRange {
+                expr_id,
+                value,
+                above_i128,
+                span,
+            });
     }
 
     /// Reports every held integer literal that the type finally recorded for it
@@ -223,13 +221,10 @@ impl TypeChecker {
                 .get(&held.expr_id)
                 .map(|ty| ty.kind.clone())
                 .unwrap_or(TypeKind::Int);
+            let negated = self.negated_int_literals.contains(&held.expr_id);
             let holds = match held.above_i128 {
-                Some(magnitude) => integer_kind_holds_above_i128(
-                    &recorded,
-                    magnitude,
-                    self.negated_int_literals.contains(&held.expr_id),
-                ),
-                None => integer_kind_holds(&recorded, held.value),
+                Some(magnitude) => integer_kind_holds_above_i128(&recorded, magnitude, negated),
+                None => literal_holds(&recorded, held.value, negated),
             };
             if holds {
                 continue;
@@ -237,16 +232,19 @@ impl TypeChecker {
             // The type the source asked for is named where there is one, so the
             // bound in the message is the one that actually applies. A literal
             // nothing typed keeps the wording it always had.
+            let written = if negated {
+                format!("-{}", held.written())
+            } else {
+                held.written()
+            };
             let message = match integer_kind_bound(&recorded) {
                 Some((name, max)) => format!(
                     "Integer literal '{}' is out of range for {} (max {})",
-                    held.written(),
-                    name,
-                    max
+                    written, name, max
                 ),
                 None => format!(
                     "Integer literal '{}' is out of range for the default int type (i64, max {})",
-                    held.written(),
+                    written,
                     i64::MAX
                 ),
             };
