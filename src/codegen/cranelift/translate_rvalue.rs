@@ -215,9 +215,90 @@ impl<'a> FunctionTranslator<'a> {
 
         let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
         let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
-        let is_unsigned =
-            Self::operand_is_unsigned(lhs, type_ctx)? || Self::operand_is_unsigned(rhs, type_ctx)?;
-        Self::translate_binop(builder, ctx, op, lhs_val, rhs_val, is_unsigned)
+        let lhs_unsigned = Self::operand_is_unsigned(lhs, type_ctx)?;
+        let rhs_unsigned = Self::operand_is_unsigned(rhs, type_ctx)?;
+        let is_comparison = matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        );
+        let both_integers = builder.func.dfg.value_type(lhs_val).is_int()
+            && builder.func.dfg.value_type(rhs_val).is_int();
+        if is_comparison && both_integers && lhs_unsigned != rhs_unsigned {
+            return Ok(Self::compare_across_signedness(
+                builder,
+                op,
+                (lhs_val, lhs_unsigned),
+                (rhs_val, rhs_unsigned),
+            ));
+        }
+        Self::translate_binop(
+            builder,
+            ctx,
+            op,
+            lhs_val,
+            rhs_val,
+            lhs_unsigned || rhs_unsigned,
+        )
+    }
+
+    /// Compare an unsigned and a signed integer by the numbers they hold:
+    /// `u64::MAX > -1` is true, where comparing their bits either way is not.
+    ///
+    /// Each operand is widened to 128 bits by its own signedness. Where the
+    /// unsigned one is narrower than that, both values fit a signed 128-bit
+    /// integer and are compared there. A 128-bit unsigned operand does not
+    /// fit, but then a negative signed operand is below it whatever it holds,
+    /// and a non-negative one compares with it as an unsigned value.
+    fn compare_across_signedness(
+        builder: &mut FunctionBuilder,
+        op: BinOp,
+        (lhs, lhs_unsigned): (Value, bool),
+        (rhs, rhs_unsigned): (Value, bool),
+    ) -> Value {
+        let wide = cl_types::I128;
+        let unsigned_width = if lhs_unsigned {
+            builder.func.dfg.value_type(lhs).bits()
+        } else {
+            builder.func.dfg.value_type(rhs).bits()
+        };
+        let mut widen = |value: Value, unsigned: bool| {
+            if builder.func.dfg.value_type(value) == wide {
+                value
+            } else if unsigned {
+                builder.ins().uextend(wide, value)
+            } else {
+                builder.ins().sextend(wide, value)
+            }
+        };
+        let lhs = widen(lhs, lhs_unsigned);
+        let rhs = widen(rhs, rhs_unsigned);
+        if unsigned_width < wide.bits() {
+            return Self::translate_binop_cmp(builder, op, lhs, rhs, false, false);
+        }
+        let signed = if lhs_unsigned { rhs } else { lhs };
+        let negative = builder.ins().icmp_imm(IntCC::SignedLessThan, signed, 0);
+        let as_unsigned = Self::translate_binop_cmp(builder, op, lhs, rhs, false, true);
+        // A negative signed operand is below the unsigned one.
+        let lhs_is_below = !lhs_unsigned;
+        let when_negative = match op {
+            BinOp::Ne => true,
+            BinOp::Lt | BinOp::Le => lhs_is_below,
+            BinOp::Gt | BinOp::Ge => !lhs_is_below,
+            BinOp::Eq
+            | BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::BitXor
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::Offset => false,
+        };
+        let settled = builder.ins().iconst(cl_types::I8, i64::from(when_negative));
+        builder.ins().select(negative, settled, as_unsigned)
     }
 
     /// Returns the field-wise equality result for `lhs == rhs` when both

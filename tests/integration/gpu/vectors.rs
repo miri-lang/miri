@@ -1362,3 +1362,24 @@ fn main()
         "true\nfalse\ntrue\nfalse",
     );
 }
+
+/// On the host a vector and a scalar combine component by component, the
+/// scalar converted to the component type, on either side of the operator.
+#[test]
+fn a_vector_and_a_scalar_combine_by_component_on_the_host() {
+    assert_heap_guard_output(
+        r#"
+use system.gpu.vector
+
+fn main()
+    let v = Vec3<f32>(1.0, 2.0, 3.0)
+    let s f32 = 2.0
+    let a = v * 2
+    let b = v * s
+    let c = 10.0 - v
+    let d = Vec2<int>(7, 9) % 4
+    println(f"{a.x} {a.y} {a.z} {b.z} {c.x} {c.z} {d.x} {d.y}")
+"#,
+        "2.0 4.0 6.0 6.0 9.0 7.0 3 1",
+    );
+}
