@@ -408,9 +408,12 @@ impl TypeChecker {
 
     fn check_expr_stmt(&mut self, expr: &Expression, context: &mut Context, span: Span) {
         let expr_type = self.infer_expression(expr, context);
+        // An assignment stores its value rather than discarding it, so the
+        // value it evaluates to is never an unused one.
+        let stores_its_value = matches!(expr.node, ExpressionKind::Assignment(..));
         if context.must_use_exempt_spans.contains(&span) {
             self.check_tail_expression_type(expr, &expr_type, context);
-        } else {
+        } else if !stores_its_value {
             if let TypeKind::Custom(type_name, _) = &expr_type.kind {
                 if let Some(TypeDefinition::Enum(def)) = self
                     .type_table
