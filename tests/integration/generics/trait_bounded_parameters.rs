@@ -413,3 +413,72 @@ fn main()
     );
     assert_compiler_error(&code, "Type P does not satisfy constraint implements Named");
 }
+
+const BOUNDED_CLASS: &str = r#"
+trait Named
+    fn name() String
+
+class P implements Named
+    fn name() String
+        return "p"
+
+class A<X implements Named>
+    val X
+    fn init(v X)
+        self.val = v
+    fn nm() String
+        return self.val.name()
+"#;
+
+/// A class's parameter bound is checked where the class is constructed, as
+/// it is in an annotation: a body is never compiled at a type the bound
+/// excludes.
+#[test]
+fn a_construction_at_an_argument_breaking_the_class_bound_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{BOUNDED_CLASS}{}",
+            r#"
+fn main()
+    let b = A<int>(3)
+    let s = b.nm()
+"#
+        ),
+        "Type int does not satisfy constraint implements Named",
+    );
+}
+
+#[test]
+fn a_clause_argument_breaking_the_class_bound_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{BOUNDED_CLASS}{}",
+            r#"
+class B extends A<int>
+    fn init()
+        super.init(3)
+
+fn main()
+    let b = B()
+"#
+        ),
+        "does not satisfy constraint implements Named",
+    );
+}
+
+#[test]
+fn a_construction_at_an_argument_meeting_the_class_bound_runs() {
+    assert_runs_with_output(
+        &format!(
+            "{BOUNDED_CLASS}{}",
+            r#"
+use system.io
+
+fn main()
+    let b = A<P>(P())
+    println(b.nm())
+"#
+        ),
+        "p",
+    );
+}

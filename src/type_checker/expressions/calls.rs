@@ -2340,7 +2340,7 @@ impl TypeChecker {
                     return ty;
                 }
 
-                self.validate_class_generics(def, name, type_args, span);
+                self.validate_class_generics(def, name, type_args, span, context);
 
                 if def.generics.is_some() {
                     if let Some(args) = type_args {
@@ -2836,6 +2836,7 @@ impl TypeChecker {
         name: &str,
         type_args: &Option<Vec<Expression>>,
         span: Span,
+        context: &Context,
     ) {
         if let Some(generics) = &def.generics {
             let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
@@ -2853,6 +2854,12 @@ impl TypeChecker {
                         ),
                         span,
                     );
+                } else {
+                    // Each argument meets the bound its parameter declares, as
+                    // one written in an annotation must: `A<int>` for
+                    // `class A<X implements Named>` is refused here, before a
+                    // body is compiled at a type the bound excludes.
+                    self.validate_generics(type_args, &def.generics, context, span);
                 }
             } else {
                 self.report_error(

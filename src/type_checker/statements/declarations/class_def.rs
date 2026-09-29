@@ -216,7 +216,8 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Option<Vec<Type>> {
         base_class.as_ref().and_then(|be| {
-            if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &be.node {
+            if let ExpressionKind::TypeDeclaration(base_name, Some(args), _, _) = &be.node {
+                self.validate_base_clause_bounds(base_name, args, context, be.span);
                 Some(
                     args.iter()
                         .map(|arg| self.resolve_type_expression(arg, context))
@@ -226,6 +227,30 @@ impl TypeChecker {
                 None
             }
         })
+    }
+
+    /// Check each argument an `extends` clause writes against the bound the
+    /// base class declares on that parameter, as a construction or an
+    /// annotation of the base is checked: `class B extends A<int>` for
+    /// `class A<X implements Named>` is refused.
+    fn validate_base_clause_bounds(
+        &mut self,
+        base_name: &Expression,
+        args: &[Expression],
+        context: &Context,
+        span: Span,
+    ) {
+        let Ok(name) = self.extract_name(base_name) else {
+            return;
+        };
+        let Some(TypeDefinition::Class(base)) = self.type_table.global_type_definitions.get(name)
+        else {
+            return;
+        };
+        let generics = base.generics.clone();
+        if generics.as_ref().map_or(0, Vec::len) == args.len() {
+            self.validate_generics(&Some(args.to_vec()), &generics, context, span);
+        }
     }
 
     fn register_class_hierarchy(
