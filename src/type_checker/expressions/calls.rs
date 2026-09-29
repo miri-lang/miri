@@ -1181,6 +1181,28 @@ impl TypeChecker {
             return; // Not a function type
         };
 
+        // A kernel is emitted with one WGSL function per callee name, and a
+        // generic function has no body until a call instantiates it, so device
+        // code cannot call one yet. Said here, rather than left to resolving
+        // its signature outside its own parameters ("Unknown type: T").
+        // TODO: instantiating generic helpers for kernels needs per-instantiation
+        // WGSL names, which the emitter does not produce.
+        if func_data
+            .generics
+            .as_ref()
+            .is_some_and(|generics| !generics.is_empty())
+        {
+            self.report_error(
+                DiagnosticCode::TarGpuIncompatibleSignature,
+                format!(
+                    "Function '{}' is generic, and a generic function cannot be called from GPU code yet; write it for the element type the kernel uses",
+                    func_name
+                ),
+                func.span,
+            );
+            return;
+        }
+
         // Validate return type is a GPU-compatible scalar. A function with no
         // declared return type returns `void`, which has no WGSL representation.
         let Some(ret_type_expr) = &func_data.return_type else {
