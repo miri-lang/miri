@@ -150,9 +150,14 @@ fn lower_map_index_read(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_op = lower_expression(ctx, obj, None)?;
+    let key_watermark = ctx.body.local_decls.len();
     let key_op = lower_expression(ctx, key_expr, None)?;
 
     let key_op = conform_lookup_operand(ctx, key_op, key_expr, obj);
+    let key_place = match &key_op {
+        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+        Operand::Constant(_) => None,
+    };
 
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
@@ -199,6 +204,11 @@ fn lower_map_index_read(
         expr.span,
     ));
     ctx.set_current_block(target_bb);
+    // The lookup only reads the key, so a key the index expression built is
+    // released here; one some binding holds is left to it.
+    if let Some(key_local) = key_place {
+        ctx.emit_temp_drop(key_local, key_watermark, expr.span);
+    }
 
     match dest {
         Some(d) if borrows => {
