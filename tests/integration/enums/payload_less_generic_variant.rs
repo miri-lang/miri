@@ -163,3 +163,56 @@ fn main()
         "true",
     );
 }
+
+/// A payload-less variant of an enum whose other variant holds a managed
+/// value takes the instantiation of every location it is written into, so the
+/// enum values beside it are released at that instantiation too.
+#[test]
+fn a_payload_less_variant_beside_managed_payloads_is_released_at_its_slot() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum Slot<T>
+    Full(T)
+    Empty
+
+class Box
+    var slot Slot<String>
+
+fn show(s Slot<String>) String
+    match s
+        Slot.Full(v): v
+        Slot.Empty: "empty"
+
+fn main()
+    let a = "a"
+    var xs = List<Slot<String>>()
+    xs.push(Slot.Full(f"{a}1"))
+    xs.push(Slot.Empty)
+    var b = Box(slot: Slot.Full(f"{a}2"))
+    b.slot = Slot.Empty
+    println(f"{show(xs[0])} {show(xs[1])} {show(b.slot)} {show(Slot.Empty)}")
+"#,
+        "a1 empty empty empty",
+    );
+}
+
+/// An error built with no annotation leaves the ok type unbound; the value
+/// holds only the error, which is released.
+#[test]
+fn an_unannotated_err_releases_its_managed_payload() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn main()
+    let r = Result.Err("e" + "rr")
+    match r
+        Result.Ok(v): println("ok")
+        Result.Err(e): println(e)
+"#,
+        "err",
+    );
+}

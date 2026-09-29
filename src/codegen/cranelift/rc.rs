@@ -1107,16 +1107,23 @@ impl<'a> FunctionTranslator<'a> {
         if !is_generic {
             return Ok(DropThunk::Shared);
         }
-        // TODO: a generic value released with no type arguments at all reaches
-        // here from concrete bodies too, not only shared ones: an enum value
-        // built without an expected type (`let r = Result.Ok(0.5)` in `main`),
-        // a payload-less generic variant (`Slot.Empty`) stored into a field or
-        // list element, and a collection of such results. Its type is recorded
-        // as the bare enum (`Custom("Result", None)`), so the shared thunk
-        // releases it and skips every payload written at a parameter. Lowering
-        // has to record those values at the instantiation they are used at
-        // before this can refuse.
+        // A generic value typed with no arguments at all is released through
+        // the shared body, which skips every field written at a parameter. In
+        // a body that leaves parameters open that is the body's own value. In
+        // a concrete body the only such value is a payload-less enum variant
+        // written where no location names an instantiation
+        // (`let n = Holder.Nothing`): the checker refuses to store a payload
+        // into a binding typed that way, so nothing is skipped. Anything else
+        // typed bare there was built at no instantiation, and releasing it
+        // would leak what its parameter-typed fields hold.
         let Some(arg_exprs) = type_args.filter(|args| !args.is_empty()) else {
+            let is_enum = matches!(facts.definitions().get(name), Some(TypeDefinition::Enum(_)));
+            if type_ctx.open_params.is_empty() && !is_enum {
+                return Err(CodegenError::Internal(format!(
+                    "a `{name}` value is released in a concrete body with no type arguments, \
+                     so the fields written at its parameters would never be released"
+                )));
+            }
             return Ok(DropThunk::SharedBody);
         };
         let (args, open) = Self::instantiation_arguments(name, arg_exprs, facts)?;
@@ -2579,11 +2586,19 @@ mod drop_thunk_tests {
     }
 
     #[test]
-    fn a_generic_type_without_arguments_is_released_by_the_shared_body_thunk() {
+    fn a_generic_type_without_arguments_is_released_by_the_shared_body_thunk_where_left_open() {
         assert_eq!(
-            choose(&facts(), "Box", None).ok(),
+            choose_in(&facts(), "Box", None, &["T"]).ok(),
             Some(DropThunk::SharedBody)
         );
+    }
+
+    #[test]
+    fn a_generic_class_without_arguments_in_a_concrete_body_is_refused() {
+        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", None) else {
+            panic!("a bare generic class in a concrete body must be reported");
+        };
+        assert!(message.contains("no type arguments"), "{message}");
     }
 
     #[test]

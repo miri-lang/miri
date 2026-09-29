@@ -74,8 +74,20 @@ pub fn lower_struct_constructor(
         operands.push(coerce_to_field(ctx, op, &field_ty, arg_watermark, *span));
     }
 
-    let struct_ty =
-        build_struct_constructor_type(struct_name, is_vec, concrete_elem_type.as_ref(), *span);
+    let struct_ty = if is_vec || def.generics.is_none() {
+        build_struct_constructor_type(struct_name, is_vec, concrete_elem_type.as_ref(), *span)
+    } else {
+        // A generic struct is built at the instantiation the call was recorded
+        // at: typed bare, its temp is released through the shared thunk,
+        // which skips every field written at a parameter.
+        Type::new(
+            TypeKind::Custom(
+                struct_name.to_string(),
+                type_args.map(<[Expression]>::to_vec),
+            ),
+            *span,
+        )
+    };
 
     let destination = if let Some(d) = dest {
         d
