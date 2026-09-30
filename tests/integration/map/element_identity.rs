@@ -327,3 +327,37 @@ fn main()
         "59 -1 76",
     );
 }
+
+/// A map matches its keys by `==`, which cannot compare two functions, so a
+/// function type is refused as a key; as a value it stays allowed.
+#[test]
+fn a_function_is_refused_as_a_map_key_but_not_as_a_value() {
+    assert_compiler_error(
+        r#"
+use system.collections.map
+
+fn adder(k int) fn(int) int
+    return fn(n int) int: n + k
+
+fn main()
+    var m = Map<fn(int) int, int>()
+    m[adder(10)] = 1
+"#,
+        "cannot be a Map key, which is matched by `==`",
+    );
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn adder(k int) fn(int) int
+    return fn(n int) int: n + k
+
+fn main()
+    var m = Map<int, fn(int) int>()
+    m[1] = adder(10)
+    let f = m[1]
+    println(f"{f(1)}")
+"#,
+        "11",
+    );
+}

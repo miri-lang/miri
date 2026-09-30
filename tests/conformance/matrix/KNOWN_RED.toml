@@ -22,34 +22,10 @@ cells = [
     "map_key/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "map_key/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
     "map_key/array_string/dedup/mono", # wrong value: got `2`, expected `1`
-    "map_key/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/contains/mono", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/dedup/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/dedup/generic_fn", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/dedup/inherited", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/dedup/mono", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/store_read/generic_class", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
-    "map_key/closure/store_read/mono", # accepted; expected refusal MER_TYP_002
     "set_element/array_string/dedup/generic_class", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
     "set_element/array_string/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/closure/contains/generic_class", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/contains/generic_fn", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/contains/inherited", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/contains/mono", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/dedup/generic_class", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/dedup/generic_fn", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/dedup/inherited", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/dedup/mono", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/store_read/generic_class", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/store_read/generic_fn", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/store_read/inherited", # accepted; expected refusal MER_TYP_002
-    "set_element/closure/store_read/mono", # accepted; expected refusal MER_TYP_002
 ]
 
 # generic instantiation read after substitution

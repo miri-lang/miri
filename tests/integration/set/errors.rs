@@ -105,3 +105,31 @@ fn main()
         "1",
     );
 }
+
+/// A set matches its elements by `==`, which cannot compare two functions,
+/// so a function type is refused as an element, constructed or declared.
+#[test]
+fn a_function_is_refused_as_a_set_element() {
+    assert_compiler_error(
+        r#"
+use system.collections.set
+
+fn adder(k int) fn(int) int
+    return fn(n int) int: n + k
+
+fn main()
+    var s = Set<fn(int) int>()
+    s.add(adder(10))
+"#,
+        "cannot be a Set element, which is matched by `==`",
+    );
+    assert_compiler_error(
+        r#"
+use system.collections.set
+
+fn main()
+    let s Set<fn(int) int> = Set<fn(int) int>()
+"#,
+        "MER_TYP_002",
+    );
+}

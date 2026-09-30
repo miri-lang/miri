@@ -2,11 +2,13 @@
 
 The compiler enforces type compatibility at assignment, return, and function-call sites. When the type of a value does not match the declared or inferred type expected at that location, a type mismatch error is raised.
 
-The same code covers operands an operator cannot combine. `+` never converts between types, so joining text to a number is a mismatch rather than a conversion; an f-string is what renders a value into text. An optional is likewise not a number: it must be given a default with `??` or matched on before it takes part in arithmetic.
+The same code covers operands an operator cannot combine. `+` never converts between types, so joining text to a number is a mismatch rather than a conversion; an f-string is what renders a value into text. An optional is likewise not a number: it must be given a default with `??` or matched on before it takes part in arithmetic. A Set matches its elements, and a Map its keys, by `==`, so neither may be instantiated at a type `==` cannot compare — a function value, or a type holding one — whether the type is written at the construction or bound to a type parameter the construction is written with.
 
 ## Messages
 
 - `Type mismatch: cannot add {left} and {right} (both must be the same type)`
+- `` `{type}` cannot be a Set element, which is matched by `==`: {reason} ``
+- `` `{type}` cannot be a Map key, which is matched by `==`: {reason} ``
 - `Type mismatch: cannot {op} a float to an integer`
 - `Type mismatch: cannot multiply {left} by {right} (right operand must be an integer)`
 - `Type mismatch: {left} and {right} are not compatible for arithmetic operation`
