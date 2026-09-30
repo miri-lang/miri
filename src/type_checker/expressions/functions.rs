@@ -151,7 +151,7 @@ impl TypeChecker {
                 for (i, stmt) in stmts.iter().enumerate() {
                     if i == stmts.len() - 1 {
                         if let StatementKind::Expression(expr) = &stmt.node {
-                            last_type = self.infer_expression(expr, context);
+                            last_type = self.infer_trailing_expression(expr, context);
                         } else {
                             self.check_statement(stmt, context);
                         }
@@ -162,12 +162,23 @@ impl TypeChecker {
                 context.exit_scope();
                 last_type
             }
-            StatementKind::Expression(expr) => self.infer_expression(expr, context),
+            StatementKind::Expression(expr) => self.infer_trailing_expression(expr, context),
             _ => {
                 self.check_statement(body, context);
                 make_type(TypeKind::Void)
             }
         }
+    }
+
+    /// The type a lambda's trailing expression gives it: the expression's own
+    /// type, except that an assignment is a statement in intent — `fn()` ending
+    /// in `n = 5` returns nothing, not the value stored.
+    fn infer_trailing_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
+        let ty = self.infer_expression(expr, context);
+        if matches!(expr.node, ExpressionKind::Assignment(..)) {
+            return make_type(TypeKind::Void);
+        }
+        ty
     }
 
     fn finalize_lambda_return_type(

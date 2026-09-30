@@ -158,19 +158,31 @@ pub(crate) fn lower_closure(
     Ok(emit_closure_aggregate(ctx, closure, &captures, dest))
 }
 
+/// The return type the function type `ty` states, read at the enclosing
+/// body's substitution; `None` when `ty` is not a function type or states
+/// none.
+fn inferred_return_type(ty: &Type, ctx: &LoweringContext) -> Option<Type> {
+    let TypeKind::Function(data) = &ty.kind else {
+        return None;
+    };
+    data.return_type
+        .as_deref()
+        .map(|return_type| ctx.declared_type(return_type))
+}
+
 /// Lower the closure's body, returning it with the captures it keeps.
 fn lower_closure_body(
     ctx: &mut LoweringContext,
     closure: &ClosureSource,
 ) -> Result<(Body, Vec<CapturedVar>), LoweringError> {
     let span = closure.span;
-    // TODO: an unannotated lambda is lowered as `void` here, but the type
-    // checker infers its return type from the body's last expression, so a
-    // body ending in `x + 1` is called as returning `int` and codegen refuses
-    // the two signatures. Read the checker's recorded type for the lambda.
+    // An unannotated lambda returns what the checker inferred from its body,
+    // which is the return type of the function type its value is recorded at:
+    // lowered as `void` instead, it would disagree with every call of it.
     let ret_ty = match closure.return_type {
         Some(ret_expr) => ctx.declared_type(ret_expr),
-        None => Type::new(TypeKind::Void, span),
+        None => inferred_return_type(&closure.ty, ctx)
+            .unwrap_or_else(|| Type::new(TypeKind::Void, span)),
     };
     let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
 
