@@ -157,7 +157,7 @@ fn a_wgsl_name_joins_the_parts_of_a_symbol_with_underscores() {
             &[ty(TypeKind::Int)]
         )
         .wgsl_name(),
-        "Base_map__List_String__int"
+        "m__t4Base3map__List_String__int"
     );
     assert_eq!(
         Symbol::function(&ModuleId::Program, "scale", &[])
@@ -225,7 +225,7 @@ fn a_module_function_s_wgsl_name_carries_its_module_path() {
 
 #[test]
 fn a_program_function_keeps_its_name_as_its_wgsl_name() {
-    for name in ["helper", "m_helper", "m_", "main2", "_m__x", "mm__x"] {
+    for name in ["helper", "m_helper", "m_", "main2", "_m_x", "a_b_c"] {
         assert_eq!(
             Symbol::function(&ModuleId::Program, name, &[]).wgsl_name(),
             name
@@ -239,6 +239,9 @@ fn a_program_function_named_with_a_reserved_prefix_has_its_wgsl_name_escaped() {
         ("__h", "m__0___h"),
         ("__", "m__0___"),
         ("___x", "m__0____x"),
+        ("_m__x", "m__0__m__x"),
+        ("mm__x", "m__0_mm__x"),
+        ("pick__int", "m__0_pick__int"),
     ] {
         assert_eq!(
             Symbol::function(&ModuleId::Program, name, &[]).wgsl_name(),
@@ -569,23 +572,65 @@ fn a_collision_is_refused_with_the_symbol_collision_code() {
     );
 }
 
-/// Two methods whose link names differ can still share a WGSL spelling; a
+/// Two symbols whose link names differ can still share a WGSL spelling: a
+/// program function may be named exactly like a kernel the compiler makes. A
 /// table keyed on that spelling refuses the second.
 #[test]
 fn a_wgsl_table_refuses_two_symbols_sharing_a_wgsl_name() {
     let mut table = SymbolTable::new(Namespace::Wgsl);
-    let existing = Symbol::method("A", &[], "b_c", &[]);
-    let incoming = Symbol::method("A_b", &[], "c", &[]);
+    let existing = Symbol::gpu_kernel(GpuKernelKind::Forall, 0);
+    let incoming = Symbol::function(&ModuleId::Program, &existing.wgsl_name(), &[]);
     assert_ne!(existing.link_name(), incoming.link_name());
     assert_eq!(table.claim(&existing), Ok(Claim::New));
     assert_eq!(
         table.claim(&incoming),
         Err(Box::new(ClaimRefusal::Collision(SymbolCollision {
+            name: existing.wgsl_name(),
             existing,
             incoming,
-            name: "A_b_c".to_string(),
             namespace: Namespace::Wgsl,
         })))
+    );
+}
+
+/// A method is spelled by its owner and its name, each length-prefixed, after
+/// a prefix no function spelling has: methods that differ only in where an
+/// underscore falls between owner and name spell apart, and an owner
+/// beginning with the prefix WGSL reserves does not make the spelling begin
+/// with it.
+#[test]
+fn a_method_s_wgsl_name_is_injective_and_never_reserved() {
+    let a_b_c = Symbol::method("A", &[], "b_c", &[]).wgsl_name();
+    let a_b_dot_c = Symbol::method("A_b", &[], "c", &[]).wgsl_name();
+    assert_eq!(a_b_c, "m__t1A3b_c");
+    assert_eq!(a_b_dot_c, "m__t3A_b1c");
+    assert_eq!(
+        Symbol::method("__X", &[], "m", &[]).wgsl_name(),
+        "m__t3__X1m"
+    );
+    assert_ne!(
+        Symbol::method("P", &[], "norm", &[]).wgsl_name(),
+        Symbol::function(&ModuleId::Program, "m__tP4norm", &[]).wgsl_name()
+    );
+}
+
+/// A generic function's argument tokens follow the first `__` of its
+/// spelling, so a program function whose own name holds `__` is escaped, and
+/// an imported one's name is length-prefixed: neither reads as an
+/// instantiation.
+#[test]
+fn a_function_named_like_an_instantiation_has_its_own_wgsl_name() {
+    let pick_int = Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]);
+    let pick_escaped = Symbol::function(&ModuleId::Program, "pick__int", &[]);
+    assert_eq!(pick_int.wgsl_name(), "pick__int");
+    assert_eq!(pick_escaped.wgsl_name(), "m__0_pick__int");
+    let util = module("local.util");
+    let imported_pick_int = Symbol::function(&util, "pick", &[ty(TypeKind::Int)]);
+    let imported_pick_prefixed = Symbol::function(&util, "pick__int", &[]);
+    assert_eq!(imported_pick_int.wgsl_name(), "m__5local4util_pick__int");
+    assert_eq!(
+        imported_pick_prefixed.wgsl_name(),
+        "m__5local4util_9pick__int"
     );
 }
 

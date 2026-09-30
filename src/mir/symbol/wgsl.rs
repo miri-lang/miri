@@ -11,33 +11,39 @@
 //! is what keeps every compiled body apart, and the GPU name table refuses two
 //! definitions that share it.
 //!
-//! A top-level function is spelled by its declaring module and its name,
-//! followed by `__` and each argument token:
+//! A top-level function is spelled by its declaring module and its name, and
+//! a method by its owner and its name, each followed by `__` and each argument
+//! token:
 //!
 //! ```text
 //! function  = program | escaped | imported
-//! program   = name                  (name begins with neither `m__` nor `__`)
-//! escaped   = "m__0_" name          (name begins with `m__` or `__`)
-//! imported  = "m__" { length ident }+ "_" name
-//! length    = decimal length of the ident, no leading zero
+//! program   = name                  (name holds no `__` and begins with no `m__`)
+//! escaped   = "m__0_" name          (name holds `__` or begins with `m__`)
+//! imported  = "m__" { length ident }+ "_" imported_name
+//! imported_name = name              (name holds no `__`)
+//!               | length name       (name holds `__`)
+//! method    = "m__t" length owner length name
+//! length    = decimal length of what follows, no leading zero
 //! ```
 //!
 //! The program's own `helper` is spelled `helper`, its `m__x` is `m__0_m__x`,
 //! its `__h` is `m__0___h`, and the `helper` of `system.math` is
-//! `m__6system4math_helper`. WGSL reserves identifiers beginning `__`; no
-//! function spelling begins that way, since a `program` name that would is
-//! escaped and every other spelling begins `m__`.
+//! `m__6system4math_helper`. The method `norm` of `P` is `m__t1P4norm`. WGSL
+//! reserves identifiers beginning `__`; no spelling begins that way, since a
+//! `program` name that would is escaped and every other spelling begins `m__`.
 //!
-//! Without argument tokens this is injective. Only `program` spellings lack
-//! the `m__` prefix, and on them the spelling is the name itself. After the
-//! prefix, `escaped` continues with `0` while `imported` continues with the
-//! first digit of a non-empty identifier's length, never `0`. An `imported`
-//! spelling decodes one way: an identifier never begins with a digit, so each
-//! length ends where its identifier begins, the identifier is exactly that
-//! many bytes, and the path ends at the first `_` found where a length would
-//! begin. Argument tokens are appended after `__`, which a name may itself
-//! contain, and other kinds of symbol share this identifier space; the GPU
-//! name table is the backstop for both.
+//! This is injective up to argument tokens. Only `program` spellings lack the
+//! `m__` prefix, and a `program` name holds no `__`, so its first `__` begins
+//! its argument tokens. After the prefix, `escaped` continues with `0`,
+//! `method` with `t`, and `imported` with the first digit of a non-empty
+//! identifier's length, never `0`. An identifier never begins with a digit,
+//! so each length ends where what it counts begins: an `imported` path ends at
+//! the first `_` found where a length would begin, the name after it is
+//! length-prefixed exactly when it holds `__`, and a method's owner and name
+//! are each exactly as long as their lengths say. Argument tokens are joined
+//! with `__`, which a type's spelling may itself hold, and other kinds of
+//! symbol share this identifier space; the GPU name table is the backstop for
+//! both.
 
 use std::fmt;
 
@@ -50,8 +56,13 @@ use crate::type_checker::ModuleId;
 /// The separator between a name and each of its argument tokens.
 const ARGUMENT_SEPARATOR: &str = "__";
 
-/// Begins the spelling of a function an imported module declares.
+/// Begins the spelling of a function an imported module declares, and of
+/// every other spelling that is not a program function's own name.
 const MODULE_PREFIX: &str = "m__";
+
+/// Follows [`MODULE_PREFIX`] in the spelling of a method; a module path
+/// identifier's length never begins with a letter.
+const METHOD_MARK: &str = "t";
 
 /// Follows [`MODULE_PREFIX`] in the spelling of a program function whose name
 /// begins with that prefix or with [`RESERVED_PREFIX`]; a module path
@@ -84,7 +95,12 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             method,
             method_args,
         } => {
-            write!(f, "{owner}_{method}")?;
+            write!(
+                f,
+                "{MODULE_PREFIX}{METHOD_MARK}{}{owner}{}{method}",
+                owner.len(),
+                method.len()
+            )?;
             write_arguments(f, owner_args)?;
             write_arguments(f, method_args)
         }
@@ -125,16 +141,23 @@ fn write_function_name(f: &mut fmt::Formatter<'_>, module: &ModuleId, name: &str
             f.write_str(MODULE_PREFIX)?;
             path.iter()
                 .try_for_each(|segment| write!(f, "{}{segment}", segment.len()))?;
-            write!(f, "_{name}")
+            f.write_str("_")?;
+            if name.contains(ARGUMENT_SEPARATOR) {
+                write!(f, "{}", name.len())?;
+            }
+            f.write_str(name)
         }
     }
 }
 
 /// Whether a program function named `name` is spelled escaped: its name
-/// would otherwise read as a module function's spelling or begin with the
-/// prefix WGSL reserves.
+/// would otherwise read as another spelling that begins with the module
+/// prefix, begin with the prefix WGSL reserves, or read as a name followed by
+/// argument tokens.
 fn is_escaped_program_name(name: &str) -> bool {
-    name.starts_with(MODULE_PREFIX) || name.starts_with(RESERVED_PREFIX)
+    name.starts_with(MODULE_PREFIX)
+        || name.starts_with(RESERVED_PREFIX)
+        || name.contains(ARGUMENT_SEPARATOR)
 }
 
 fn thunk_prefix(kind: ThunkKind) -> &'static str {

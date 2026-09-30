@@ -282,13 +282,12 @@ fn main()
     );
 }
 
-/// Kernel-side names join a definition's parts with `_`, so two static
-/// methods whose owner and method names run together are declared under one
-/// WGSL name when both are called from GPU code: the program is refused at
-/// build time rather than at kernel launch.
+/// Kernel-side names length-prefix a method's owner and name, so two static
+/// methods whose owner and method names run together each keep their own
+/// declaration when both are called from GPU code.
 #[test]
-fn static_methods_spelled_alike_in_gpu_code_are_refused() {
-    assert_build_error(
+fn static_methods_spelled_alike_in_gpu_code_run_apart() {
+    crate::integration::gpu::device::assert_gpu_runs_with_output(
         r#"
 use system.gpu
 use system.collections.array
@@ -309,15 +308,15 @@ fn main()
     let host = dst
     println(f'{host[0]}')
 "#,
-        "`A.b_c` and `A_b.c` are both reached from GPU code, where both are declared as `A_b_c`",
+        "2101",
     );
 }
 
 /// A static method and a function spelled like its owner and name joined by
-/// `_` share a WGSL name when a kernel calls both.
+/// `_` keep apart when a kernel calls both.
 #[test]
-fn static_method_and_function_spelled_alike_in_gpu_code_are_refused() {
-    assert_build_error(
+fn static_method_and_function_spelled_alike_in_gpu_code_run_apart() {
+    crate::integration::gpu::device::assert_gpu_runs_with_output(
         r#"
 use system.io
 
@@ -335,7 +334,30 @@ fn main()
     let h = a
     println(f"{h[0]}")
 "#,
-        "MER_MIR_018",
+        "5",
+    );
+}
+
+/// A program function named exactly like the kernel a `forall` is compiled
+/// to shares that kernel's WGSL name when the kernel calls it: the program is
+/// refused at build time rather than at kernel launch.
+#[test]
+fn function_named_like_its_calling_kernel_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+fn miri_gpu_forall_0(x int) int
+    return x + 1
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    gpu forall i in 0..4
+        a[i] = miri_gpu_forall_0(a[i])
+    let h = a
+    println(f"{h[0]}")
+"#,
+        "a `forall` kernel and `miri_gpu_forall_0` are both reached from GPU code, where both are declared as `miri_gpu_forall_0`",
     );
 }
 
