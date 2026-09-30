@@ -461,6 +461,7 @@ impl TypeChecker {
                     }
                 })
                 .collect();
+            self.refuse_unmatchable_collection_argument(name, &resolved_args, args, span, context);
             make_type(TypeKind::Meta(Box::new(make_type(TypeKind::Custom(
                 name.clone(),
                 Some(resolved_args),

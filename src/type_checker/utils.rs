@@ -2252,6 +2252,7 @@ impl TypeChecker {
                 args[0].span,
             );
         }
+        self.refuse_unmatchable_element(MatchedBy::MapKey, &k, args[0].span, context);
         let v = self.resolve_type_expression(&args[1], context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
@@ -2317,10 +2318,75 @@ impl TypeChecker {
                 args[0].span,
             );
         }
+        self.refuse_unmatchable_element(MatchedBy::SetElement, &t, args[0].span, context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(t)]),
         )))
+    }
+
+    /// Refuse the element a constructed Set, or the key a constructed Map, is
+    /// instantiated at when `==` cannot compare two of its values, the way the
+    /// same type written as an annotation is refused.
+    ///
+    /// `span` is the written instantiation, reported where the argument
+    /// itself carries no position.
+    pub(crate) fn refuse_unmatchable_collection_argument(
+        &mut self,
+        class: &str,
+        resolved_args: &[Expression],
+        written_args: &[Expression],
+        span: Span,
+        context: &Context,
+    ) {
+        let role = match BuiltinCollectionKind::from_name(class) {
+            Some(BuiltinCollectionKind::Set) => MatchedBy::SetElement,
+            Some(BuiltinCollectionKind::Map) => MatchedBy::MapKey,
+            Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List) | None => return,
+        };
+        let (Some(resolved), Some(written)) = (resolved_args.first(), written_args.first()) else {
+            return;
+        };
+        let at = if written.span == Span::default() {
+            span
+        } else {
+            written.span
+        };
+        if let Ok(ty) = self.extract_type_from_expression(resolved) {
+            self.refuse_unmatchable_element(role, &ty, at, context);
+        }
+    }
+
+    /// Refuse `ty` as `role` — a Set element or a Map key — when `==` cannot
+    /// compare two of its values: the collection matches what it holds by
+    /// `==`, so a value it cannot compare could be added twice and never found.
+    ///
+    /// A type spelling one of the body's own parameters is decided where the
+    /// parameter is bound, so the comparison the collection runs is recorded
+    /// as one the body makes, and each instantiation answers it.
+    fn refuse_unmatchable_element(
+        &mut self,
+        role: MatchedBy,
+        ty: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        if let Err(reason) = self.check_type_structurally_comparable(ty) {
+            let reason = reason.trim_start_matches("Type mismatch: ");
+            let message = match role {
+                MatchedBy::SetElement => {
+                    format!("`{ty}` cannot be a Set element, which is matched by `==`: {reason}")
+                }
+                MatchedBy::MapKey => {
+                    format!("`{ty}` cannot be a Map key, which is matched by `==`: {reason}")
+                }
+            };
+            self.report_error(DiagnosticCode::TypTypeMismatch, message, span);
+            return;
+        }
+        let equal = crate::ast::operator::BinaryOp::Equal;
+        let result = make_type(TypeKind::Boolean);
+        self.record_binary_requirement(ty, &equal, ty, &result, context);
     }
 
     fn resolve_alias_range(
@@ -3134,4 +3200,13 @@ impl TypeChecker {
             _ => false,
         }
     }
+}
+
+/// What a collection matches a value by `==` as.
+#[derive(Clone, Copy)]
+enum MatchedBy {
+    /// An element of a Set.
+    SetElement,
+    /// A key of a Map.
+    MapKey,
 }
