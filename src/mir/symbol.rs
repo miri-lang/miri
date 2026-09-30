@@ -663,6 +663,23 @@ fn write_residency(
         .try_for_each(|(position, handle)| write!(f, "{MARKER}p{position}h{}", handle.0))
 }
 
+/// The types a body is lowered at — its receiver, then its substitution in a
+/// stable order — spelled as the tokens a symbol's arguments are.
+///
+/// A body written once is lowered once per instantiation, and what it lowers
+/// out of itself differs between those lowerings wherever they differ in
+/// these types. Two lowerings share a key exactly where a symbol built from
+/// the same types would be shared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct InstantiationKey(Vec<Token>);
+
+impl InstantiationKey {
+    /// The key of a lowering at `types`, in the order given.
+    pub fn of<'t>(types: impl IntoIterator<Item = &'t Type>) -> Self {
+        Self(tokens(types))
+    }
+}
+
 fn tokens<'t>(types: impl IntoIterator<Item = &'t Type>) -> Vec<Token> {
     types
         .into_iter()

@@ -27,6 +27,7 @@
 //! type table once, on the first call that needs it, and shared from then on.
 
 use super::dispatch_symbols::VtableLayout;
+use crate::mir::symbol::InstantiationKey;
 use crate::type_checker::context::TypeDefinition;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,8 +50,9 @@ pub fn new_shared_compilation_ids() -> SharedCompilationIds {
 /// compilation so that the same source always produces the same ids.
 #[derive(Debug)]
 pub struct CompilationIds {
-    /// AST node id → assigned kernel index, keeping assignment idempotent per node.
-    assigned: HashMap<usize, usize>,
+    /// A kernel-bearing AST node and the instantiation it is lowered at →
+    /// its assigned kernel index, keeping assignment idempotent per pair.
+    assigned: HashMap<(usize, InstantiationKey), usize>,
     /// Next kernel index to hand out, in first-seen order.
     next: usize,
     /// Next device handle to hand out. The runtime reserves `0` as the
@@ -73,16 +75,23 @@ impl Default for CompilationIds {
 }
 
 impl CompilationIds {
-    /// Returns the compilation-local index for `ast_id`, assigning the next
-    /// sequential index the first time this node is seen and returning the same
-    /// index on any later lookup of the same node.
-    pub fn index_for(&mut self, ast_id: usize) -> usize {
-        if let Some(&index) = self.assigned.get(&ast_id) {
+    /// Returns the compilation-local index for `ast_id` lowered at
+    /// `instantiation`, assigning the next sequential index the first time the
+    /// pair is seen and returning the same index on any later lookup of it.
+    ///
+    /// The node alone is not the key: a kernel written in a generic body is
+    /// lowered once per instantiation, and each may emit different WGSL, so
+    /// each needs a name of its own. Lowerings at one instantiation — the
+    /// residency specializations of one function — emit the same kernel and
+    /// share it.
+    pub fn index_for(&mut self, ast_id: usize, instantiation: &InstantiationKey) -> usize {
+        let key = (ast_id, instantiation.clone());
+        if let Some(&index) = self.assigned.get(&key) {
             return index;
         }
         let index = self.next;
         self.next += 1;
-        self.assigned.insert(ast_id, index);
+        self.assigned.insert(key, index);
         index
     }
 
