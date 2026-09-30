@@ -172,6 +172,20 @@ impl<'a> LoweringContext<'a> {
         ctx
     }
 
+    /// A context lowering the device body `kernel` of a kernel written inside
+    /// the body `parent` lowers.
+    ///
+    /// The kernel's statements are written in the parent's scope, so they read
+    /// their types at the instantiation the parent is lowered at: a binding
+    /// declared `T` inside a `forall` in a generic function is typed at the
+    /// instantiation, not at the parameter, which no device type represents.
+    pub fn for_kernel(kernel: Body, parent: &LoweringContext<'a>) -> Self {
+        let mut ctx = Self::new(kernel, parent.type_checker, parent.is_release);
+        ctx.generic_subs = parent.generic_subs.clone();
+        ctx.self_type = parent.self_type.clone();
+        ctx
+    }
+
     /// The type the type checker recorded for an expression, with the active
     /// instantiation substitution applied.
     ///

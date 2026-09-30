@@ -3544,12 +3544,15 @@ impl Pipeline {
             {
                 continue;
             }
+            let subs: std::collections::HashMap<String, Type> =
+                call.type_args.iter().cloned().collect();
             let (body, lambdas) =
                 mir::lowering::lower_residency_instantiation_with_compilation_ids(
                     ast_stmt,
                     &result.type_checker,
                     is_release,
                     true,
+                    &subs,
                     &call.arg_handles,
                     compilation_ids.clone(),
                 )

@@ -527,17 +527,18 @@ pub fn lower_generic_instantiation_with_compilation_ids(
 /// that parameter received a gpu-resident buffer at the call site. Stamping the
 /// handle (and `Gpu` residency) on the parameter local before the body is
 /// lowered means the body's `forall` capture resolves to that same device
-/// buffer — the whole GPU launch path is reused unchanged. No generic
-/// substitution applies (`subs` is empty); the specialization axis is residency.
-/// The closures written in the body are emitted again for each specialization,
-/// so `param_handles` reaches their symbols too: a specialized free function
-/// substitutes no generic and has no receiver, leaving the residency pattern as
-/// the only thing that tells one lowering's copies from another's.
+/// buffer — the whole GPU launch path is reused unchanged. A generic function
+/// is specialized at the instantiation `subs` the call reaches, so its kernels
+/// are compiled at those types; `subs` is empty for a function that is not
+/// generic. The closures written in the body are emitted again for each
+/// specialization, so `param_handles` reaches their symbols too: the residency
+/// pattern tells apart the copies of lowerings at one instantiation.
 pub fn lower_residency_instantiation_with_compilation_ids(
     ast_func: &Statement,
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
+    subs: &HashMap<String, Type>,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
     compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
@@ -546,7 +547,7 @@ pub fn lower_residency_instantiation_with_compilation_ids(
         tc,
         is_release,
         inject_allocator,
-        &HashMap::new(),
+        subs,
         param_handles,
         compilation_ids,
     )
