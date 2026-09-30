@@ -794,6 +794,20 @@ impl TypeChecker {
             TypeKind::Meta(inner_type) => {
                 self.infer_member_meta(inner_type, prop_name, span, context)
             }
+            _ if self.is_numeric(obj_type) || matches!(obj_type.kind, TypeKind::Boolean) => {
+                // A number or a boolean has no methods: text is built from one
+                // by interpolating it, the way `+` on text says too.
+                self.report_error_with_help(
+                    DiagnosticCode::TypFieldNotFound,
+                    format!("Type '{}' does not have members", obj_type),
+                    span,
+                    format!(
+                        "a '{obj_type}' has no methods or fields; to turn it into text, \
+                         interpolate it in an f-string, e.g. f\"{{x}}\""
+                    ),
+                );
+                make_type(TypeKind::Error)
+            }
             _ => {
                 self.report_error(
                     DiagnosticCode::TypFieldNotFound,
