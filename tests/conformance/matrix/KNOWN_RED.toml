@@ -60,6 +60,18 @@ cells = [
 # drop hooks, release paths and ownership transfer
 [D]
 cells = [
+    "resource/class/consume_in_loop/generic_fn", # accepted; expected refusal MER_OWN_003
+    "resource/class/consume_in_loop/mono", # accepted; expected refusal MER_OWN_003
+    "resource/enum/consume_in_loop/generic_fn", # accepted; expected refusal MER_OWN_003
+    "resource/enum/consume_in_loop/mono", # accepted; expected refusal MER_OWN_003
+    "resource/enum/move_into_slot/generic_fn", # printed `moved`, expected `moved | drop 1`
+    "resource/enum/move_into_slot/mono", # printed `moved`, expected `moved | drop 1`
+    "resource/enum/scope_exit/generic_fn", # printed `inside`, expected `inside | drop 1`
+    "resource/enum/scope_exit/mono", # printed `inside`, expected `inside | drop 1`
+    "resource/struct/consume_in_loop/generic_fn", # accepted; expected refusal MER_OWN_003
+    "resource/struct/consume_in_loop/mono", # accepted; expected refusal MER_OWN_003
+    "resource/struct/release_through_trait/generic_fn", # error[MER_TYP_002]: Type Mismatch
+    "resource/struct/release_through_trait/mono", # error[MER_TYP_002]: Type Mismatch
 ]
 
 # operator-to-trait dispatch
