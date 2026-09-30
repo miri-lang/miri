@@ -16,9 +16,15 @@ use miri::pipeline::Pipeline;
 /// which runs the GpuDevice helper-clone pass) so the emitted module contains
 /// exactly the helper functions a real launch would — no test-only divergence.
 pub fn compile_to_wgsl(source: &str) -> String {
+    compile_to_wgsl_in(source, false)
+}
+
+/// [`compile_to_wgsl`] as a `release` build lowers it, where locals carry no
+/// names.
+pub fn compile_to_wgsl_in(source: &str, release: bool) -> String {
     let pipeline = Pipeline::new();
     let bodies = pipeline
-        .get_gpu_mir_bodies(source)
+        .get_gpu_mir_bodies_in(source, release)
         .expect("lowering failed");
 
     // Mirror `build_kernel_registry`: every kernel module also carries the
@@ -42,7 +48,12 @@ pub fn compile_to_wgsl(source: &str) -> String {
 
 /// Compile to WGSL and validate with `naga`. Panics if parse or validate fails.
 pub fn assert_gpu_wgsl_valid(source: &str) {
-    let wgsl = compile_to_wgsl(source);
+    assert_gpu_wgsl_valid_in(source, false);
+}
+
+/// [`assert_gpu_wgsl_valid`] as a `release` build lowers the source.
+pub fn assert_gpu_wgsl_valid_in(source: &str, release: bool) {
+    let wgsl = compile_to_wgsl_in(source, release);
     let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|err| {
         panic!(
             "naga parse failed: {}\nWGSL:\n{}",

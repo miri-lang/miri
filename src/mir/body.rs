@@ -143,6 +143,14 @@ pub struct Body {
     /// rather than reading back every time, and the verifier takes a flag found
     /// clear as a fence.
     pub device_stale_flags: HashMap<Local, DeviceHandleId>,
+    /// The local holding the allocator the CPU ABI threads through every call:
+    /// the trailing parameter every Miri-defined function takes, or a local
+    /// bound to zero in a body whose signature carries none. `None` for a body
+    /// with no allocator at all. Recorded by position rather than read off the
+    /// local's name, which a release build does not keep; GPU code has no
+    /// allocator, so the WGSL backend drops this parameter and every argument
+    /// read from it.
+    pub allocator: Option<Local>,
 }
 
 /// One generic class at concrete type arguments.
@@ -207,6 +215,7 @@ impl Body {
             residency_function_calls: Vec::new(),
             generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
+            allocator: None,
         }
     }
 
