@@ -155,7 +155,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_MIR_012 | Accepted counterpart of MER_MIR_012: Missing Struct Field does not fire. |
 | MER_MIR_016 | Accepted counterpart of MER_MIR_016: a class that calls itself through a trait at its own type argument is compiled once. |
 | MER_MIR_017 | Accepted counterpart of MER_MIR_017: a value argument computed from the class's own folds to the instantiation it names. |
-| MER_MIR_018 | Accepted counterpart of MER_MIR_018: two functions named apart are both reached from GPU code. |
+| MER_MIR_018 | Accepted counterpart of MER_MIR_018: the function is named apart from the kernel that calls it. |
 | MER_NAM_001 | Accepted counterpart of MER_NAM_001: Deprecated Kernel Context Identifier does not fire. |
 | MER_NAM_002 | Accepted counterpart of MER_NAM_002: Module Not Found does not fire. |
 | MER_NAM_003 | Accepted counterpart of MER_NAM_003: Invalid Import Path does not fire. |

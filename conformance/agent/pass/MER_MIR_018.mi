@@ -1,19 +1,16 @@
-// summary: Accepted counterpart of MER_MIR_018: two functions named apart are both reached from GPU code.
+// summary: Accepted counterpart of MER_MIR_018: the function is named apart from the kernel that calls it.
 // command: build
 // The kernel dispatches to the GPU, so running this would need a device the
 // machine may not have. Building carries the program past the lowering that
 // raises the diagnostic and stops before dispatch.
 use system.io
 
-fn plus_one(x int) int
+fn bump(x int) int
     return x + 1
-
-fn plus_two(x int) int
-    return x + 2
 
 fn main()
     gpu var a = [1, 2, 3, 4]
     gpu forall i in 0..4
-        a[i] = plus_one(a[i]) + plus_two(a[i])
+        a[i] = bump(a[i])
     let h = a
     println(f"{h[0]}")

@@ -460,3 +460,51 @@ fn main()
         true,
     );
 }
+
+/// `A.b_c` and `A_b.c` differ only in where the underscore falls between
+/// owner and method; both are called from one kernel and each gives its own
+/// result.
+#[test]
+fn kernel_calls_methods_differing_only_in_underscore_placement() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.collections.array
+
+class A
+    static fn b_c(x int) int
+        return x + 1
+
+class A_b
+    static fn c(x int) int
+        return x + 100
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..a.length()
+        a[i] = A.b_c(a[i]) + A_b.c(a[i])
+    let h = a
+    println(f"{h[0]} {h[3]}")
+"#,
+        "103 109",
+    );
+}
+
+/// WGSL reserves identifiers beginning `__`; a method of a class so named is
+/// still declared under a name the module may use.
+#[test]
+fn kernel_calls_method_of_a_class_named_with_the_reserved_prefix_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        r#"
+use system.collections.array
+
+class __X
+    static fn m(x int) int
+        return x * 2
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..a.length()
+        a[i] = __X.m(a[i])
+"#,
+    );
+}
