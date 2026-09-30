@@ -370,12 +370,11 @@ fn main()
     );
 }
 
-/// A generic helper has no body until a call instantiates it, and a kernel
-/// cannot instantiate one yet: the call is refused naming the function and
-/// the reason, not with an "Unknown type" for its parameter.
+/// A generic helper is instantiated at the type each kernel call passes, and
+/// that instantiation is declared in the kernel's module like any helper.
 #[test]
-fn kernel_call_to_a_generic_function_is_refused_as_not_yet_supported() {
-    assert_compiler_error(
+fn kernel_calls_a_generic_function() {
+    assert_gpu_runs_with_output(
         r#"
 use system.io
 use system.gpu
@@ -391,7 +390,49 @@ fn main()
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 "#,
-        "Function 'dbl' is generic, and a generic function cannot be called from GPU code yet",
+        "2 4 6",
+    );
+}
+
+/// Two instantiations of one generic helper reached from one kernel are two
+/// helpers, each at its own type.
+#[test]
+fn kernel_calls_a_generic_function_at_two_types_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        r#"
+use system.gpu
+use system.collections.array
+
+fn dbl<T>(x T) T: x + x
+
+fn main()
+    gpu var ints = [1, 2, 3]
+    gpu var floats [f32; 3] = [0.5, 1.5, 2.5]
+    gpu forall i in 0..3
+        ints[i] = dbl(ints[i])
+        floats[i] = dbl(floats[i])
+"#,
+    );
+}
+
+/// A generic helper instantiated at a type GPU code cannot hold is refused
+/// naming that type, not the parameter it was written as.
+#[test]
+fn kernel_call_to_a_generic_function_at_a_host_type_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.gpu
+use system.collections.array
+
+fn first<T>(x T, _y int) T: x
+
+fn main()
+    gpu var dst = [0, 0, 0]
+    gpu forall i in 0..3
+        let s = first("a", i)
+        dst[i] = i
+"#,
+        "Type 'String' is not GPU-compatible",
     );
 }
 

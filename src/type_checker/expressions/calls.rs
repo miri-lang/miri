@@ -179,7 +179,7 @@ impl TypeChecker {
         }
 
         if context.in_gpu_function && callable {
-            self.check_gpu_call_types(func, &positional_args, context);
+            self.check_gpu_call_types(func, &positional_args, call_id, context);
         }
         self.record_elements_cloned(&result_type, span, context);
 
@@ -1124,6 +1124,7 @@ impl TypeChecker {
         &mut self,
         func: &Expression,
         positional_args: &[(&Expression, Type)],
+        call_id: usize,
         context: &Context,
     ) {
         // Check argument types
@@ -1143,7 +1144,7 @@ impl TypeChecker {
         }
 
         // Check callee definition
-        self.validate_gpu_callee(func, context);
+        self.validate_gpu_callee(func, call_id, context);
     }
 
     /// Validates that a callee function is GPU-compatible.
@@ -1152,7 +1153,11 @@ impl TypeChecker {
     /// - No `out` parameters
     /// - A body that only calls other GPU-compatible functions or GPU/math intrinsics
     /// - No direct or indirect recursion
-    fn validate_gpu_callee(&mut self, func: &Expression, context: &Context) {
+    ///
+    /// A generic callee is checked at the instantiation `call_id` reaches: its
+    /// signature is read with the call's type arguments in place of its own
+    /// parameters, which are not in scope here.
+    fn validate_gpu_callee(&mut self, func: &Expression, call_id: usize, context: &Context) {
         // Extract the function name from the expression.
         let func_name = match &func.node {
             ExpressionKind::Identifier(name, _) => name.as_str(),
@@ -1182,27 +1187,16 @@ impl TypeChecker {
             return; // Not a function type
         };
 
-        // A kernel is emitted with one WGSL function per callee name, and a
-        // generic function has no body until a call instantiates it, so device
-        // code cannot call one yet. Said here, rather than left to resolving
-        // its signature outside its own parameters ("Unknown type: T").
-        // TODO: instantiating generic helpers for kernels needs per-instantiation
-        // WGSL names, which the emitter does not produce.
-        if func_data
+        let instantiation: Option<HashMap<String, Type>> = func_data
             .generics
             .as_ref()
             .is_some_and(|generics| !generics.is_empty())
-        {
-            self.report_error(
-                DiagnosticCode::TarGpuIncompatibleSignature,
-                format!(
-                    "Function '{}' is generic, and a generic function cannot be called from GPU code yet; write it for the element type the kernel uses",
-                    func_name
-                ),
-                func.span,
-            );
-            return;
-        }
+            .then(|| {
+                self.call_generic_mappings
+                    .get(&call_id)
+                    .map(|mapping| mapping.iter().cloned().collect())
+                    .unwrap_or_default()
+            });
 
         // Validate return type is a GPU-compatible scalar. A function with no
         // declared return type returns `void`, which has no WGSL representation.
@@ -1218,7 +1212,7 @@ impl TypeChecker {
             return;
         };
         {
-            let ret_type = self.resolve_type_expression(ret_type_expr, context);
+            let ret_type = self.gpu_callee_type(ret_type_expr, instantiation.as_ref(), context);
             if !self.is_gpu_scalar(&ret_type.kind) {
                 self.report_error(
                     DiagnosticCode::TarGpuIncompatibleSignature,
@@ -1234,7 +1228,7 @@ impl TypeChecker {
 
         // Validate parameter types and out-parameter constraints
         for param in &func_data.params {
-            let param_type = self.resolve_type_expression(&param.typ, context);
+            let param_type = self.gpu_callee_type(&param.typ, instantiation.as_ref(), context);
 
             // Reject out parameters in GPU callees
             if param.is_out {
@@ -1272,6 +1266,25 @@ impl TypeChecker {
         let body_opt = self.fn_analysis.function_bodies.get(&declared).cloned();
         if let Some(body) = body_opt {
             self.validate_gpu_function_body(&declared, &body, func.span);
+        }
+    }
+
+    /// The type a GPU callee's signature writes as `written`: resolved in the
+    /// caller's scope for a plain function, and for a generic one read with the
+    /// type arguments of the instantiation the call reaches in place of the
+    /// callee's own parameters.
+    fn gpu_callee_type(
+        &mut self,
+        written: &Expression,
+        instantiation: Option<&HashMap<String, Type>>,
+        context: &Context,
+    ) -> Type {
+        match instantiation {
+            None => self.resolve_type_expression(written, context),
+            Some(mapping) => self
+                .extract_type_from_expression(written)
+                .map(|declared| self.substitute_type(&declared, mapping))
+                .unwrap_or_else(|_| make_type(TypeKind::Error)),
         }
     }
 
