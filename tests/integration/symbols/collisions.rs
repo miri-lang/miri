@@ -344,7 +344,9 @@ fn main()
 /// their link names differ.
 #[test]
 fn static_method_and_function_spelled_alike_run_apart_when_one_stays_on_the_host() {
-    assert_runs_with_output(
+    // The kernel launches, so the run needs an adapter; without one the
+    // value check is skipped, as for every GPU value test.
+    crate::integration::gpu::device::assert_gpu_runs_with_output(
         r#"
 use system.io
 
