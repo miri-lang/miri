@@ -389,3 +389,50 @@ fn main()
         "an uncalled default failing at the class's pins must not be compiled: {names:?}"
     );
 }
+
+/// A body the type checker never judged at the types its operands have — a
+/// generic method lowered where nothing checked it — applies an operator to a
+/// string. Lowering it as a machine instruction would compare the string's
+/// address as a number; it is lowered as the trap an unchecked method
+/// reports instead, and no body keeps an arithmetic or ordering instruction
+/// on a string.
+#[test]
+fn an_operator_nothing_checked_on_a_string_is_lowered_as_a_trap() {
+    let bodies = Pipeline::new()
+        .get_gpu_mir_bodies(
+            r#"
+use system.io
+
+class Box<T>
+    v T
+    fn lt() bool
+        return self.v < "a"
+    fn get() T
+        return self.v
+
+fn main()
+    let b = Box<int>(v: 3)
+    println(f"{b.get()}")
+"#,
+        )
+        .expect("lowering");
+    let text: Vec<(String, String)> = bodies
+        .iter()
+        .map(|(name, body)| (name.clone(), body.to_string()))
+        .collect();
+    let lt: Vec<&(String, String)> = text
+        .iter()
+        .filter(|(name, _)| name.ends_with(".lt"))
+        .collect();
+    assert!(
+        !lt.is_empty(),
+        "a body of `lt` is lowered: {:?}",
+        text.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+    for (name, body) in lt {
+        assert!(
+            body.contains("miri_rt_method_not_checked_panic"),
+            "{name} reports the unchecked operator:\n{body}"
+        );
+    }
+}

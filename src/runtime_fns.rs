@@ -436,6 +436,7 @@ pub mod rt {
         DIV_BY_ZERO_PANIC,
         REM_BY_ZERO_PANIC,
         GPU_LAUNCH_FAILED_PANIC,
+        METHOD_NOT_CHECKED_PANIC,
         // Filesystem
         FS_STATUS,
         FS_ERROR_MESSAGE,
@@ -698,6 +699,7 @@ pub fn diverges(name: &str) -> bool {
             | rt::DIV_BY_ZERO_PANIC
             | rt::REM_BY_ZERO_PANIC
             | rt::GPU_LAUNCH_FAILED_PANIC
+            | rt::METHOD_NOT_CHECKED_PANIC
     )
 }
 
