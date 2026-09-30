@@ -156,3 +156,25 @@ fn main()
         "quote inside the braces closes the f-string",
     );
 }
+
+/// A number has no methods; asking one for `to_string()` names the f-string as
+/// the way to render it, and other member-less types keep the plain report.
+#[test]
+fn a_method_asked_of_a_number_names_the_f_string() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let x int = 5
+    println(x.to_string())
+"#,
+        "interpolate it in an f-string",
+    );
+    assert_compiler_error(
+        r#"
+fn main()
+    let big i128 = 5
+    println(big.to_string())
+"#,
+        "MER_TYP_033",
+    );
+}
