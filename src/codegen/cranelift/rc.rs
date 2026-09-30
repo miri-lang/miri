@@ -2064,6 +2064,15 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
+            // The instance's count is already zero. The hook borrows `self`,
+            // but a body that reads it as a whole value (`match self`) retains
+            // and releases it, and that release would drop it again from
+            // inside its own hook. Marked immortal, both leave it alone.
+            let header_ptr = builder.ins().iadd_imm(ptr, -i64::from(ptr_type.bytes()));
+            let immortal = builder.ins().iconst(ptr_type, -1);
+            builder
+                .ins()
+                .store(MemFlags::new(), immortal, header_ptr, 0);
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,

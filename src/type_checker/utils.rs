@@ -68,7 +68,7 @@ fn generic_substitution(
 
 /// Whether releasing the last reference to a `type_name` value runs a drop hook.
 ///
-/// A struct runs the hook it declares. A class runs the `drop`
+/// A struct or an enum runs the hook it declares. A class runs the `drop`
 /// [`resolve_method_source`] resolves for it, the order every inherited method
 /// follows: the nearest class in its chain declaring `drop` with a body, else
 /// a default a trait in its chain supplies. So a subclass inherits its base's
@@ -87,10 +87,11 @@ pub fn has_drop_hook(
             resolve_method_source(type_definitions, type_name, DROP_HOOK_NAME)
                 .is_some_and(|source| is_drop_hook_signature(source.info()))
         }
-        // TODO: an enum that declares `fn drop(self)` compiles and never runs
-        // it; an enum drop hook is neither run nor refused.
+        Some(TypeDefinition::Enum(def)) => def
+            .methods
+            .get(DROP_HOOK_NAME)
+            .is_some_and(is_drop_hook_signature),
         None
-        | Some(TypeDefinition::Enum(_))
         | Some(TypeDefinition::Generic(_))
         | Some(TypeDefinition::Alias(_))
         | Some(TypeDefinition::Trait(_)) => false,
@@ -175,6 +176,7 @@ fn is_resource_inner<'a>(
                         .iter()
                         .any(|(_, fi)| is_resource_inner(&fi.ty.kind, type_definitions, visited))
                 }
+                Some(TypeDefinition::Enum(_)) => has_drop_hook(name, type_definitions),
                 _ => false,
             }
         }

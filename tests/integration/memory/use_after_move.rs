@@ -923,3 +923,80 @@ fn main()
         "was consumed by",
     );
 }
+
+const HANDLE: &str = r#"
+class Handle
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+
+fn close(h Handle)
+    println("closing")
+"#;
+
+/// A resource consumed on every pass of a loop is used again on the second
+/// pass, after the first consumed it.
+#[test]
+fn a_resource_consumed_inside_a_loop_is_refused_on_the_next_pass() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        close(h)
+        i = i + 1
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// Consuming it on the way out of the loop leaves no next pass to use it.
+#[test]
+fn a_resource_consumed_before_leaving_a_loop_is_accepted() {
+    assert_runs_with_output(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        if i == 0
+            close(h)
+            break
+        i = i + 1
+    println("done")
+"#
+        ),
+        "closing\ndone",
+    );
+}
+
+/// An enum's drop hook runs once when its value is released, even when the
+/// hook reads `self` as a whole value.
+#[test]
+fn an_enums_drop_hook_runs_once_at_release() {
+    assert_heap_guard_output(
+        r#"
+enum Res
+    Tag(int)
+
+    fn drop(self)
+        match self
+            Res.Tag(n): println(f"drop {n}")
+
+fn main()
+    if true
+        let r = Res.Tag(1)
+        println("inside")
+    println("end")
+"#,
+        "inside\ndrop 1\nend",
+    );
+}
