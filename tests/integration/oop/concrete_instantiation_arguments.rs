@@ -229,6 +229,32 @@ fn main()
     );
 }
 
+/// A value argument that reaches zero once its parameter is bound counts
+/// nothing, and is refused at that instance.
+#[test]
+fn test_a_value_argument_reaching_zero_at_its_instantiation_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+    fn smaller() T
+        let b = Buf<T, Size - 1>(self.v)
+        return b.get()
+
+fn main()
+    let b = Buf<String, 1>("a" + "b")
+    println(b.smaller())
+"#,
+        "instantiating `Buf<String, 0>`: `0` is not greater than zero",
+    );
+}
+
 /// A value argument past the signed 128-bit range, grown from a written
 /// unsigned one, is refused.
 #[test]
@@ -253,11 +279,11 @@ fn main()
     );
 }
 
-/// A value argument that stays in range, even a negative one, names its own
-/// instantiation and runs its own body.
+/// A value argument that folds below zero at its instantiation is refused
+/// like one that reaches zero.
 #[test]
-fn test_a_value_argument_folding_below_zero_runs_its_own_body() {
-    assert_heap_guard_output(
+fn test_a_value_argument_folding_below_zero_is_refused() {
+    assert_build_error(
         r#"
 use system.io
 
@@ -275,7 +301,7 @@ fn main()
     let b = Buf<String, 1>("a" + "b")
     println(b.shrunk())
 "#,
-        "ab",
+        "instantiating `Buf<String, -2>`: `-2` is not greater than zero",
     );
 }
 

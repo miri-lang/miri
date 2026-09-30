@@ -60,10 +60,9 @@ fn main()
     );
 }
 
-/// A GPU buffer whose const size expression underflows (`A - B` with `A < B`)
-/// is rejected rather than silently folding to a zero-length buffer. The size
-/// folder uses checked subtraction, so the underflow leaves the size
-/// unresolved and the buffer fails to type-check.
+/// A GPU buffer whose const size expression folds below zero (`A - B` with
+/// `A < B`) is rejected rather than silently folding to a zero-length buffer:
+/// a value argument must be greater than zero.
 #[test]
 fn gpu_buffer_const_size_underflow_is_rejected() {
     assert_build_error(
@@ -76,7 +75,7 @@ const B = 5
 fn main()
     gpu var buf = Array<f32, A - B>()
 ",
-        "non-negative",
+        "MER_TYP_077",
     );
 }
 

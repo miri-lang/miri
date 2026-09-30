@@ -629,3 +629,82 @@ fn main()
         "ab\n1.5",
     );
 }
+
+/// A value argument counts something an instance holds, so it is at least
+/// one: a zero is refused where it is written.
+#[test]
+fn a_zero_value_argument_is_refused() {
+    assert_compiler_error(
+        r#"
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let _b = Buf<String, 0>("a" + "b")
+"#,
+        "MER_TYP_077",
+    );
+}
+
+/// A negative value argument is refused like a zero.
+#[test]
+fn a_negative_value_argument_is_refused() {
+    assert_compiler_error(
+        r#"
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let _b = Buf<String, -1>("a" + "b")
+"#,
+        "MER_TYP_077",
+    );
+}
+
+/// A `const` that is zero is refused like the literal it stands for.
+#[test]
+fn a_value_argument_naming_a_zero_const_is_refused() {
+    assert_compiler_error(
+        r#"
+const Z = 0
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let _b = Buf<String, Z>("a" + "b")
+"#,
+        "MER_TYP_077",
+    );
+}
+
+/// The smallest value argument, one, builds and runs.
+#[test]
+fn a_value_argument_of_one_runs() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+    fn smaller() T
+        let b = Buf<T, Size - 1>(self.v)
+        return b.get()
+
+fn main()
+    let b = Buf<String, 2>("a" + "b")
+    println(b.smaller())
+"#,
+        "ab",
+    );
+}

@@ -435,30 +435,31 @@ let a = Array<Color, 4>()
     );
 }
 
+/// A size counts the elements each array holds, so a sized constructor at
+/// zero is refused; the empty literal `[]` is the empty array.
 #[test]
-fn test_array_sized_zero_length() {
-    assert_runs_with_output(
+fn test_array_sized_zero_is_refused() {
+    assert_compiler_error(
         "
 use system.collections.array
 
 let a = Array<int, 0>()
 println(f\"{a.length()}\")
 ",
-        "0",
+        "MER_TYP_077",
     );
 }
 
 #[test]
-fn test_array_sized_zero_elements() {
-    assert_runs_with_output(
+fn test_array_sized_negative_is_refused() {
+    assert_compiler_error(
         "
 use system.collections.array
 
-let a = Array<f32, 0>()
-if a.length() == 0
-    println(\"zero elements\")
+let a = Array<f32, -2>()
+println(f\"{a.length()}\")
 ",
-        "zero elements",
+        "MER_TYP_077",
     );
 }
 

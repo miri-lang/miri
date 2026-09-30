@@ -430,12 +430,21 @@ impl TypeChecker {
             let resolved_args: Vec<Expression> = args
                 .iter()
                 .map(|arg| {
-                    // A named integer `const` in a value-generic slot
-                    // (`Array<float, SIZE>`) folds to its literal value so the
+                    // A constant value argument (`Array<float, SIZE>`,
+                    // `Array<T, W * W>`) folds to its literal value so the
                     // downstream sized-constructor const-eval sees an integer
-                    // literal instead of an unknown type name.
-                    if let Some(folded) = self.fold_value_generic_const(arg, context) {
-                        return folded;
+                    // literal instead of an unknown type name. A value
+                    // argument counts what an instance holds, so one that is
+                    // not positive is refused.
+                    if let Some(value) = TypeChecker::try_eval_const_int_with_context(arg, context)
+                    {
+                        if value <= 0 {
+                            self.report_non_positive_value_argument(name, arg, value);
+                        }
+                        return ast_factory::literal_with_span(
+                            ast_factory::int_literal(value),
+                            arg.span,
+                        );
                     }
                     // Type generics resolve through the normal `Type → Type`
                     // pipeline; value generics (a literal `3` in
@@ -476,21 +485,6 @@ impl TypeChecker {
             self.report_non_constant_value_argument(class, operand);
         }
         inlined
-    }
-
-    /// Folds a const-foldable integer value-generic slot (`Array<T, SIZE>`,
-    /// `Array<T, W * W>`) to its literal value so the downstream context-free
-    /// const-eval in MIR sees an integer literal.
-    ///
-    /// Returns `None` for type-position arguments, non-constant bindings, and
-    /// non-integer expressions, so a genuine type argument (`Foo<Bar>`) and a
-    /// `var` size still fall through to their normal handling.
-    fn fold_value_generic_const(&self, arg: &Expression, context: &Context) -> Option<Expression> {
-        let value = TypeChecker::try_eval_const_int_with_context(arg, context)?;
-        Some(ast_factory::literal_with_span(
-            ast_factory::int_literal(value),
-            arg.span,
-        ))
     }
 
     pub(crate) fn infer_statement_type(&mut self, stmt: &Statement, context: &mut Context) -> Type {
