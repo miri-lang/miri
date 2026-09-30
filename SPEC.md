@@ -908,3 +908,15 @@ class Box<T>
 let b = Box<int>(v: 99)
 println(f"{b.get()}")   // 99
 ```
+
+A generic parameter may stand for an integer instead of a type: a **value parameter**, like `Size` in `Buf<T, Size>`. Its argument is a compile-time constant — built from integer literals, `const`s and the value parameters in scope — and each distinct value names its own instantiation. A value argument counts what each instance holds, so it must be **greater than zero**: `Buf<String, 0>` and `Buf<String, -1>` are refused (MER_TYP_077), and an argument computed from a value parameter (`Buf<T, Size - 1>`) that reaches zero or below at an instantiation is refused there (MER_MIR_017). A count that may be zero or negative is an ordinary constructor argument. The type `[T; 0]` of the empty array literal `[]` is not a written argument and stays valid.
+
+```miri
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+let b = Buf<String, 2>("ab")    // ok
+let z = Buf<String, 0>("ab")    // MER_TYP_077
+```

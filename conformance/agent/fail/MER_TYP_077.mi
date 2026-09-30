@@ -1,0 +1,14 @@
+// expect: MER_TYP_077
+// summary: Triggers MER_TYP_077: a value argument is zero.
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn get() T
+        return self.v
+
+fn main()
+    let b = Buf<String, 0>("a" + "b")
+    println(b.get())

@@ -65,7 +65,7 @@ pub const DEPTH_HELP: &str = "the type argument grows on every call; bound the r
 pub const VALUE_HELP: &str = "the value argument changes on every call; bound the recursion, or keep one value (e.g. store the size in a field instead of in the type)";
 
 /// The help for a value argument that has no value at its instantiation.
-pub const VALUE_ARGUMENT_HELP: &str = "a value argument must fold to an integer within the signed 128-bit range; bound the value, or keep it in a field instead of in the type";
+pub const VALUE_ARGUMENT_HELP: &str = "a value argument must fold to an integer from 1 up to the signed 128-bit maximum; bound the value, or keep it in a field instead of in the type";
 
 /// The help for a type argument the compiler has no name for.
 pub const TYPE_ARGUMENT_HELP: &str = "instantiate the class at a type the compiler can name; wrap the value in a class or struct and instantiate at that";
@@ -197,12 +197,19 @@ pub(crate) fn invalid_value_argument(
         UnfoldableValue::OutOfRange => "does not fit in a 128-bit integer",
         UnfoldableValue::DivisionByZero => "divides by zero",
         UnfoldableValue::UnsupportedOperator => "uses an operator a value argument cannot fold",
+        UnfoldableValue::NotPositive => "is not greater than zero",
+    };
+    // An argument the substitution already folded names no parameter: the
+    // instance it spells is then the whole story.
+    let at = if bound.is_empty() {
+        String::new()
+    } else {
+        format!(" at `{}`", bound.join(", "))
     };
     LoweringError::coded(
         DiagnosticCode::MirInvalidInstantiationArgument,
         format!(
-            "instantiating `{instance}` at `{}`: `{}` {why}",
-            bound.join(", "),
+            "instantiating `{instance}`{at}: `{}` {why}",
             expression_text(argument)
         ),
         span,

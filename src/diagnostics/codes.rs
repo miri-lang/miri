@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (76 codes: 001-076)
+    // TYP — Type checker (77 codes: 001-077)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1023,6 +1023,13 @@ diagnostics!(
     "076",
     TypNonConstantValueArgument,
     "Non-Constant Value Argument",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "077",
+    TypNonPositiveValueArgument,
+    "Non-Positive Value Argument",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

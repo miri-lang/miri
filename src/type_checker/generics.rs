@@ -188,7 +188,7 @@ pub(crate) fn fold_value_generic_arithmetic(
     ))
 }
 
-/// Why a value argument whose every parameter is bound has no value.
+/// Why a value argument whose every parameter is bound has no valid value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnfoldableValue {
     /// An operand that is neither an integer nor a value parameter of the
@@ -200,10 +200,13 @@ pub(crate) enum UnfoldableValue {
     UnsupportedOperator,
     /// A result, or an operand, outside the signed 128-bit range.
     OutOfRange,
+    /// A result of zero or below: a value argument counts what an instance
+    /// holds.
+    NotPositive,
 }
 
-/// Why the value argument `expr` has no value once `mapping` binds every
-/// parameter it names. `None` when it folds, or when it names a parameter of
+/// Why the value argument `expr` has no valid value once `mapping` binds every
+/// parameter it names. `None` when it folds to a value above zero, or when it names a parameter of
 /// `open` — one the body declares and `mapping` leaves unbound — since then it
 /// is not yet a value at all. An operand that is neither an integer, a
 /// parameter `mapping` binds to a value, nor one of `open` has no value
@@ -219,8 +222,10 @@ pub(crate) fn unfoldable_value_argument(
         ValueOperands::Bound => {}
     }
     let substituted = substitute_value_names(expr, mapping)?;
-    if TypeChecker::try_eval_const_int(&substituted).is_some() {
-        return None;
+    match TypeChecker::try_eval_const_int(&substituted) {
+        Some(value) if value > 0 => return None,
+        Some(_) => return Some(UnfoldableValue::NotPositive),
+        None => {}
     }
     Some(if divides_by_zero(&substituted) {
         UnfoldableValue::DivisionByZero
@@ -472,7 +477,28 @@ impl TypeChecker {
             NON_CONSTANT_VALUE_HELP.to_string(),
         );
     }
+
+    /// Report `arg`, a value argument of `class` that folds to `value`, as not
+    /// being greater than zero; the span under `arg` shows which argument.
+    pub(crate) fn report_non_positive_value_argument(
+        &mut self,
+        class: &str,
+        arg: &Expression,
+        value: i128,
+    ) {
+        self.report_error_with_help(
+            DiagnosticCode::TypNonPositiveValueArgument,
+            format!(
+                "the value argument of `{class}` is {value}; a value argument must be greater than zero"
+            ),
+            arg.span,
+            NON_POSITIVE_VALUE_HELP.to_string(),
+        );
+    }
 }
+
+/// The help a non-positive value argument is reported with.
+const NON_POSITIVE_VALUE_HELP: &str = "a value argument counts what each instance holds, so it is at least 1; pass a count that may be zero or negative to the constructor instead";
 
 /// The help a non-constant value argument is reported with.
 const NON_CONSTANT_VALUE_HELP: &str = "build a value argument from integer literals, `const`s and the value parameters in scope; keep a value known only while the program runs in a field instead of in the type";
