@@ -102,6 +102,34 @@ impl TypeChecker {
     /// Infers the type of a binary operation.
     ///
     /// Checks compatibility of operands and determines the result type.
+    /// The type a literal operand takes beside `other`, the other operand's
+    /// type: a whole-number literal next to a 64-bit-or-wider integer takes
+    /// that integer's width, so `big == 170141183460469231731687303715884105727`
+    /// compares at `i128` rather than refusing the literal for the default
+    /// `int`. Anything else keeps the type it was inferred at.
+    fn literal_operand_at_width(
+        &mut self,
+        operand: &Expression,
+        inferred: &Type,
+        other: &Type,
+    ) -> Type {
+        let takes_integer_width = matches!(
+            other.kind,
+            TypeKind::I64 | TypeKind::U64 | TypeKind::I128 | TypeKind::U128
+        );
+        // A negative literal beside an unsigned operand keeps its own type: the
+        // comparison is then made between the two numbers (`u64::MAX > -1`),
+        // not between the literal wrapped into the unsigned range.
+        let negated = matches!(operand.node, ExpressionKind::Unary(UnaryOp::Negate, _));
+        let unsigned_other = matches!(other.kind, TypeKind::U64 | TypeKind::U128);
+        if takes_integer_width && !(negated && unsigned_other) {
+            if let Some(widened) = self.widen_int_literals(operand, other, inferred) {
+                return widened;
+            }
+        }
+        inferred.clone()
+    }
+
     pub(crate) fn infer_binary(
         &mut self,
         left: &Expression,
@@ -140,6 +168,9 @@ impl TypeChecker {
         if matches!(left_ty.kind, TypeKind::Error) || matches!(right_ty.kind, TypeKind::Error) {
             return ast_factory::make_type(TypeKind::Error);
         }
+
+        let left_ty = self.literal_operand_at_width(left, &left_ty, &right_ty);
+        let right_ty = self.literal_operand_at_width(right, &right_ty, &left_ty);
 
         // A bare float literal defaults to `f32`/`f64`, so `f16_elem * 2.0` would
         // otherwise fail as a scalar-width mismatch. Narrow the literal operand to

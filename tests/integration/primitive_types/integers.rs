@@ -526,3 +526,34 @@ fn main()
         "255 5 15 18446744073709551615",
     );
 }
+
+/// A literal beside a 128-bit operand takes its width: the comparison and the
+/// arithmetic run over all 128 bits, which the low-word twin (`-1` shares every
+/// bit of `i128::MAX`'s low word) tells apart from a 64-bit reading.
+#[test]
+fn a_literal_beside_a_wide_operand_takes_its_width() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let big i128 = 170141183460469231731687303715884105727
+    let twin i128 = -1
+    let top u128 = 340282366920938463463374607431768211455
+    let one = big - 170141183460469231731687303715884105726
+    println(f"{big == 170141183460469231731687303715884105727} {twin == 170141183460469231731687303715884105727} {one == 1} {top > 18446744073709551616}")
+"#,
+        "true false true true",
+    );
+}
+
+/// A literal past the wide operand's own range is still refused, naming it.
+#[test]
+fn a_literal_past_the_wide_operands_range_is_refused() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let small u64 = 1
+    println(f"{small == 18446744073709551616}")
+"#,
+        "out of range for u64",
+    );
+}
