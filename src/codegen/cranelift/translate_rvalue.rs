@@ -1709,7 +1709,10 @@ impl<'a> FunctionTranslator<'a> {
             Literal::Boolean(val) => {
                 Ok(builder.ins().iconst(cl_types::I8, if *val { 1 } else { 0 }))
             }
-            Literal::None => Ok(builder.ins().iconst(cl_types::I8, 0)),
+            // `None` is the null optional, a pointer-sized word. Written at a
+            // narrower width it would fill one byte of the slot it is stored
+            // in, and a read of the whole word would see the rest as a pointer.
+            Literal::None => Ok(builder.ins().iconst(ptr_type, 0)),
             Literal::String(s) => Self::translate_string_literal(builder, ctx, s, ptr_type),
             Literal::Identifier(name) => {
                 Self::translate_identifier_literal(builder, ctx, name, constant, ptr_type)

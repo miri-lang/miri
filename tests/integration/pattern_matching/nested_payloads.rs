@@ -181,3 +181,30 @@ fn main()
         "both 1 2|left 3|right 4|neither",
     );
 }
+
+/// A `None` payload fills the whole word of its slot. Written one byte wide,
+/// the other bytes kept what the allocator left there, and releasing the value
+/// read them as a pointer: invisible where fresh memory is zero, a crash where
+/// it is not. `MallocScribble` makes every fresh block non-zero on macOS, which
+/// is how glibc hands blocks back.
+#[test]
+fn a_none_payload_is_released_whatever_memory_held_before() {
+    let result = crate::utils::miri_run_with_env(
+        r#"
+enum Box
+    Wrap(String?)
+    Empty
+
+fn main()
+    let w = Box.Wrap(None)
+    match w
+        Box.Wrap(None): println("wrap none")
+        Box.Wrap(Some(s)): println(s)
+        Box.Empty: println("empty")
+"#,
+        "MallocScribble",
+        "1",
+    );
+    assert!(result.success, "{}", result.output());
+    assert!(result.stdout.contains("wrap none"), "{}", result.output());
+}
