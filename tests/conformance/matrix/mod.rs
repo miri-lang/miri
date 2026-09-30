@@ -20,6 +20,7 @@
 
 mod cells;
 mod known_red;
+mod ownership;
 mod program;
 mod runner;
 mod source;
@@ -34,10 +35,16 @@ use std::path::PathBuf;
 /// `KNOWN_RED.toml`: a red cell it does not list, or a listed cell that is
 /// now green.
 fn check_slot(slot: Slot) {
-    let known = known_red::load().unwrap_or_else(|e| panic!("{e}"));
     let red = observe_slot(slot);
-    record_observation(slot, &red);
-    let prefix = format!("{}/", slot.token());
+    record_observation(slot.token(), &red);
+    check_against_known_red(slot.token(), &red);
+}
+
+/// Fails on any disagreement between the red cells observed under `token`
+/// and the ones `KNOWN_RED.toml` lists there.
+fn check_against_known_red(token: &str, red: &[(String, Reason)]) {
+    let known = known_red::load().unwrap_or_else(|e| panic!("{e}"));
+    let prefix = format!("{token}/");
     let red_names: BTreeSet<&str> = red.iter().map(|(name, _)| name.as_str()).collect();
     let unlisted: Vec<String> = red
         .iter()
@@ -54,7 +61,7 @@ fn check_slot(slot: Slot) {
         "conformance matrix for `{}` disagrees with {}\n\
          red but not listed ({}): add each under its family, or fix it\n{}\n\
          listed but green ({}): remove each, the family fixed it\n{}",
-        slot.token(),
+        token,
         known_red::path().display(),
         unlisted.len(),
         unlisted.join("\n"),
@@ -81,14 +88,14 @@ fn observe_slot(slot: Slot) -> Vec<(String, Reason)> {
 
 /// Writes the observed red cells where a person updating `KNOWN_RED.toml`
 /// can copy them from. Failing to write it never fails the gate.
-fn record_observation(slot: Slot, red: &[(String, Reason)]) {
+fn record_observation(token: &str, red: &[(String, Reason)]) {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/conformance-matrix");
     let lines: String = red
         .iter()
         .map(|(name, reason)| format!("    \"{name}\", # {reason}\n"))
         .collect();
     let _ = std::fs::create_dir_all(&directory);
-    let _ = std::fs::write(directory.join(format!("{}.toml", slot.token())), lines);
+    let _ = std::fs::write(directory.join(format!("{token}.toml")), lines);
 }
 
 #[test]
@@ -102,6 +109,11 @@ fn matrix_known_red_lists_only_real_cells() {
                 .flat_map(move |&context| cells_for(slot, context))
         })
         .map(|cell| cell.name)
+        .chain(
+            ownership::resource_cells()
+                .into_iter()
+                .map(|cell| cell.name),
+        )
         .collect();
     let unknown: Vec<&String> = known.keys().filter(|name| !real.contains(*name)).collect();
     assert!(
@@ -194,4 +206,14 @@ fn matrix_closure_capture() {
 #[test]
 fn matrix_generic_field() {
     check_slot(Slot::GenericField);
+}
+
+/// Every resource cell: when a drop hook runs along each ownership path.
+#[test]
+fn matrix_resource() {
+    let red = ownership::red_resource_cells(&ownership::resource_cells());
+    let mut red: Vec<(String, Reason)> = red;
+    red.sort();
+    record_observation("resource", &red);
+    check_against_known_red("resource", &red);
 }
