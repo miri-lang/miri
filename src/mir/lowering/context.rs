@@ -10,7 +10,7 @@ use crate::mir::declaration::Declaration;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
-use crate::mir::symbol::{ClosureKind, Symbol};
+use crate::mir::symbol::{ClosureKind, InstantiationKey, Symbol};
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
 use crate::type_checker::{CalleeKind, DeclaredFunction};
 use std::collections::HashMap;
@@ -283,13 +283,19 @@ impl<'a> LoweringContext<'a> {
     /// specialized for, the same suffix the specialized function itself
     /// carries.
     pub fn closure_symbol(&self, kind: ClosureKind, id: usize) -> Symbol {
+        Symbol::closure(kind, id, self.instantiation_types())
+            .with_residency(&self.residency_handles)
+    }
+
+    /// The types this body is lowered at: the receiver, then the substitution
+    /// ordered by parameter name, so the order is stable across builds.
+    fn instantiation_types(&self) -> Vec<&Type> {
         let mut substitution: Vec<(&String, &Type)> = self.generic_subs.iter().collect();
         substitution.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        let context_args = self
-            .self_type
+        self.self_type
             .iter()
-            .chain(substitution.into_iter().map(|(_, ty)| ty));
-        Symbol::closure(kind, id, context_args).with_residency(&self.residency_handles)
+            .chain(substitution.into_iter().map(|(_, ty)| ty))
+            .collect()
     }
 
     /// Resolve the `Self` keyword in `ty` against the enclosing class.
@@ -319,9 +325,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Allocate (or reuse) the deterministic, compilation-local kernel-name
-    /// index for the kernel-bearing AST node `ast_id`.
+    /// index for the kernel-bearing AST node `ast_id` as this body lowers it:
+    /// each instantiation of a generic body gets its own kernel, and the
+    /// residency specializations of one body share theirs.
     pub fn kernel_index(&self, ast_id: usize) -> usize {
-        self.compilation_ids.borrow_mut().index_for(ast_id)
+        let instantiation = InstantiationKey::of(self.instantiation_types());
+        self.compilation_ids
+            .borrow_mut()
+            .index_for(ast_id, &instantiation)
     }
 
     /// Compute a 1-based line number for the given byte offset within
