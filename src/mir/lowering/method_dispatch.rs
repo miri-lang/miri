@@ -56,8 +56,13 @@ fn gpu_resident_call_args(
 /// Only a `GpuLaunchSafe` callee is specialized: its buffer touches occur solely
 /// inside `forall` (device) context, so the passed buffer is never read on the
 /// host — the very property the type checker's residency gate enforces.
+///
+/// A generic callee is specialized at the instantiation the call `call_expr_id`
+/// reaches: the specialization is named by its type arguments and lowered with
+/// them, so each instantiation's kernels are compiled at its own types.
 pub(crate) fn residency_specialize_call(
     ctx: &mut LoweringContext,
+    call_expr_id: usize,
     func: &Expression,
     args: &[Expression],
     func_op: &mut Operand,
@@ -87,14 +92,22 @@ pub(crate) fn residency_specialize_call(
     if let Operand::Constant(constant) = &*func_op {
         if let crate::ast::literal::Literal::Identifier(_) = &constant.literal {
             let function = ctx.declared_callee(func, func_name)?.clone();
-            let symbol =
-                Symbol::function(&function.module, &function.name, &[]).with_residency(&gpu_args);
+            let type_args = ctx
+                .instantiated_call_mapping(call_expr_id)
+                .unwrap_or_default();
+            let symbol = Symbol::function(
+                &function.module,
+                &function.name,
+                type_args.iter().map(|(_, ty)| ty),
+            )
+            .with_residency(&gpu_args);
             *func_op = super::dispatch::runtime_fn_operand(&symbol.link_name(), func.span);
             ctx.body
                 .residency_function_calls
                 .push(crate::mir::body::ResidencyFunctionCall {
                     symbol,
                     function,
+                    type_args,
                     arg_handles: handles.clone(),
                 });
         }

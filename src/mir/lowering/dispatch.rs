@@ -1419,7 +1419,8 @@ fn lower_direct_call(
     // to a `GpuLaunchSafe` callee, retarget the call to a residency-specialized
     // body (lowered by the pipeline monomorph driver) and record each argument's
     // device handle so that body's kernel launches on the same persistent buffer.
-    let arg_handles = residency_specialize_call(ctx, func, args, &mut func_op, &arg_ops)?;
+    let arg_handles =
+        residency_specialize_call(ctx, call_expr_id, func, args, &mut func_op, &arg_ops)?;
 
     // Read through the active instantiation substitution: a call inside an
     // instantiated generic body is recorded once against that body's own

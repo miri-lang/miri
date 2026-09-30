@@ -927,7 +927,7 @@ fn build_gpu_reduce_kernel(
 
     kernel.out_params = vec![false, false, true];
 
-    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    let mut ctx = LoweringContext::for_kernel(kernel, parent);
 
     let (input_local, init_local, output_local, sdata_local, thread_idx, ws) =
         setup_reduce_kernel_params(&mut ctx, obj_ty, span)?;

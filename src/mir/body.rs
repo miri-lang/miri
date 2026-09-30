@@ -181,6 +181,9 @@ pub struct ResidencyFunctionCall {
     pub symbol: Symbol,
     /// The function the specialization is lowered from.
     pub function: DeclaredFunction,
+    /// Each generic parameter of the function paired with the type the call
+    /// instantiates it at; empty for a function that is not generic.
+    pub type_args: Vec<(String, Type)>,
     /// The device handle each positional argument carries, `None` for an
     /// argument that is not a gpu-resident buffer.
     pub arg_handles: Vec<Option<DeviceHandleId>>,

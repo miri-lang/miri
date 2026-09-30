@@ -191,9 +191,7 @@ pub fn lower_forall_gpu(
     // Lowerings of this `forall` at one instantiation name its kernel alike:
     // residency specializations of one function emit identical WGSL, so the
     // symbol table keeps the first and the rest share it. Each instantiation
-    // of a generic body gets a kernel of its own.
-    // TODO: a generic function holding a `forall` lowers its kernel at the
-    // unsubstituted type parameter, which the WGSL backend cannot represent.
+    // of a generic body gets a kernel of its own, compiled at its types.
     let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id));
     let kernel_name = kernel_symbol.link_name();
 
@@ -704,7 +702,7 @@ fn build_kernel_body_nd(
         uniform_count + scalar_captures.len(),
     );
 
-    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    let mut ctx = LoweringContext::for_kernel(kernel, parent);
 
     let uniforms = push_kernel_params(
         &mut ctx,

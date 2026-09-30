@@ -748,7 +748,7 @@ fn build_frame_kernel_literal(
     param_written.resize(kernel.out_params.len(), false);
     kernel.param_written = param_written;
 
-    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    let mut ctx = LoweringContext::for_kernel(kernel, parent);
 
     for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
@@ -860,7 +860,7 @@ fn build_frame_kernel_runtime(
     param_written.resize(kernel.out_params.len(), false);
     kernel.param_written = param_written;
 
-    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    let mut ctx = LoweringContext::for_kernel(kernel, parent);
 
     let uniform_param = register_frame_runtime_params(
         &mut ctx,

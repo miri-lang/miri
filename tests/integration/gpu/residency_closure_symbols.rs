@@ -115,3 +115,54 @@ fn main()
         "2 2 2 16 2 16",
     );
 }
+
+/// A generic function holding a `forall` is lowered once per instantiation,
+/// and each instantiation's kernel is compiled at its own element type.
+#[test]
+fn a_generic_function_holding_a_forall_runs_a_kernel_per_instantiation() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.collections.array
+
+fn scale<T>(a out Array<T,4>, k T)
+    forall i in 0..a.length()
+        a[i] = a[i] * k
+
+fn main()
+    gpu var ints = [1, 2, 3, 4]
+    gpu var floats [f32; 4] = [1.5, 2.5, 3.5, 4.5]
+    scale(ints, 2)
+    scale(floats, 2.0)
+    let i = ints
+    let f = floats
+    println(f"{i[0]} {i[3]} {f[0]} {f[3]}")
+"#,
+        "2 8 3.0 9.0",
+    );
+}
+
+/// A binding written at the type parameter inside the `forall` is typed at
+/// the instantiation too, since the kernel body is lowered under it.
+#[test]
+fn a_forall_in_a_generic_function_types_its_locals_at_the_instantiation() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.collections.array
+
+fn scale<T>(a out Array<T,4>, k T)
+    forall i in 0..a.length()
+        let scaled T = a[i] * k
+        a[i] = scaled + k
+
+fn main()
+    gpu var ints = [1, 2, 3, 4]
+    gpu var floats [f32; 4] = [1.5, 2.5, 3.5, 4.5]
+    scale(ints, 2)
+    scale(floats, 2.0)
+    let i = ints
+    let f = floats
+    println(f"{i[0]} {i[3]} {f[0]} {f[3]}")
+"#,
+        "4 10 5.0 11.0",
+    );
+}
