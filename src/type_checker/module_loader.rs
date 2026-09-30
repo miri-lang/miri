@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The module name the program's own file is checked under. Every module a
 /// `use` loads is named by the path that `use` wrote, whose segments are
@@ -69,6 +70,11 @@ pub struct ModuleLoader {
     /// module loading. `check_class` / `check_trait` recognize members of
     /// this set as overwritable and remove the name on full registration.
     pub pre_registered_types: HashSet<String>,
+    /// The file every function declared in an imported module was read from,
+    /// as (file_path, source_text), keyed by the declaration's statement id.
+    /// A span is an offset into the file that holds it, so a diagnostic raised
+    /// on an imported body after checking is rendered against this file.
+    pub declaration_sources: HashMap<usize, Arc<(String, String)>>,
 }
 
 impl Default for ModuleLoader {
@@ -93,6 +99,7 @@ impl ModuleLoader {
             module_declared_names: HashMap::new(),
             module_symbols: HashMap::new(),
             pre_registered_types: HashSet::new(),
+            declaration_sources: HashMap::new(),
         }
     }
 

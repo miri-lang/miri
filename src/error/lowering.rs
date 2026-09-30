@@ -14,6 +14,9 @@ use crate::error::syntax::Span;
 pub struct LoweringError {
     pub kind: LoweringErrorKind,
     pub span: Span,
+    /// The (file_path, source_text) `span` indexes into, when the body being
+    /// lowered was declared in an imported file rather than the program's own.
+    pub source_override: Option<Box<(String, String)>>,
 }
 
 /// All possible error variants produced during MIR lowering.
@@ -156,20 +159,33 @@ impl LoweringErrorKind {
 impl LoweringError {
     /// Creates a new lowering error of the given kind at the given span.
     pub fn new(kind: LoweringErrorKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            source_override: None,
+        }
     }
 
     /// Creates a lowering error under the given registry code.
     pub fn coded(code: DiagnosticCode, message: String, span: Span, help: Option<String>) -> Self {
-        Self {
-            kind: LoweringErrorKind::Coded {
+        Self::new(
+            LoweringErrorKind::Coded {
                 code,
                 message,
                 help,
                 notes: Vec::new(),
             },
             span,
+        )
+    }
+
+    /// This error rendered against `source` — the (file_path, source_text) of
+    /// the body it was raised in — unless a nested body already named its own.
+    pub fn in_source(mut self, source: Option<(String, String)>) -> Self {
+        if self.source_override.is_none() {
+            self.source_override = source.map(Box::new);
         }
+        self
     }
 
     /// This error with `note` shown beneath its message. Only a coded error
@@ -297,7 +313,11 @@ impl LoweringError {
 
 impl Reportable for LoweringError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let mut diagnostic = Diagnostic::from_props(self.kind.properties(), Some(self.span), None);
+        let mut diagnostic = Diagnostic::from_props(
+            self.kind.properties(),
+            Some(self.span),
+            self.source_override.as_deref().cloned(),
+        );
         if let LoweringErrorKind::Coded { notes, .. } = &self.kind {
             diagnostic
                 .notes
