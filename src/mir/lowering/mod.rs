@@ -136,6 +136,28 @@ pub fn lower_function_with_compilation_ids(
     inject_allocator: bool,
     compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_function_body(ast_func, tc, is_release, inject_allocator, compilation_ids)
+        .map_err(|error| in_declaring_file(error, ast_func, tc))
+}
+
+/// `error`, raised lowering the body of `declaration`, rendered against the
+/// file that declares it: a span indexes the file it was read from, and an
+/// imported body's span means nothing against the program's own file.
+fn in_declaring_file(
+    error: LoweringError,
+    declaration: &Statement,
+    tc: &TypeChecker,
+) -> LoweringError {
+    error.in_source(tc.declaration_source(declaration.id))
+}
+
+fn lower_function_body(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    compilation_ids: SharedCompilationIds,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -542,6 +564,27 @@ fn lower_instantiation_core(
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
     compilation_ids: SharedCompilationIds,
 ) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_instantiation_body(
+        ast_func,
+        tc,
+        is_release,
+        inject_allocator,
+        subs,
+        param_handles,
+        compilation_ids,
+    )
+    .map_err(|error| in_declaring_file(error, ast_func, tc))
+}
+
+fn lower_instantiation_body(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+    inject_allocator: bool,
+    subs: &HashMap<String, Type>,
+    param_handles: &[Option<crate::mir::body::DeviceHandleId>],
+    compilation_ids: SharedCompilationIds,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -780,6 +823,18 @@ pub fn monomorphized_self_type(
 }
 
 fn lower_class_method_impl(
+    ast_method: &Statement,
+    self_type: Type,
+    tc: &TypeChecker,
+    is_release: bool,
+    subs: &HashMap<String, Type>,
+    compilation_ids: SharedCompilationIds,
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+    lower_class_method_body(ast_method, self_type, tc, is_release, subs, compilation_ids)
+        .map_err(|error| in_declaring_file(error, ast_method, tc))
+}
+
+fn lower_class_method_body(
     ast_method: &Statement,
     self_type: Type,
     tc: &TypeChecker,

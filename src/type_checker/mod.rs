@@ -351,6 +351,16 @@ impl TypeChecker {
         self.fn_analysis.declaring_modules.get(&statement_id)
     }
 
+    /// The (file_path, source_text) of the imported file that declares the
+    /// function `statement_id`. `None` for the program's own functions, whose
+    /// spans index the program's file.
+    pub fn declaration_source(&self, statement_id: usize) -> Option<(String, String)> {
+        self.modules
+            .declaration_sources
+            .get(&statement_id)
+            .map(|source| source.as_ref().clone())
+    }
+
     /// Record the callee the identifier expression `expr_id`, written as
     /// `written`, names, having resolved to the declaration `info`.
     pub(crate) fn record_callee(&mut self, expr_id: usize, written: &str, info: &SymbolInfo) {

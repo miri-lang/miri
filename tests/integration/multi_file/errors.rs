@@ -200,3 +200,37 @@ fn test_local_selective_import_rejects_non_imported_type() {
         "Undefined",
     );
 }
+
+/// A diagnostic raised while lowering an imported body points into the file
+/// that declares it: its span indexes that file, not the program's.
+#[test]
+fn test_lowering_error_in_an_imported_body_names_the_module_file() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.k.buf.{Buf}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let b = Buf<String, 85070591730234615865843651857942052864>(\"a\" + \"b\")\n",
+                    "    println(f\"{b.doubled()}\")\n",
+                ),
+            ),
+            (
+                "k/buf.mi",
+                concat!(
+                    "public class Buf<T, Size>\n",
+                    "    v T\n",
+                    "    fn init(v T)\n",
+                    "        self.v = v\n",
+                    "    public fn doubled() int\n",
+                    "        let b = Buf<T, Size * 2>(self.v)\n",
+                    "        return 1\n",
+                ),
+            ),
+        ],
+        "buf.mi:6:17",
+    );
+}

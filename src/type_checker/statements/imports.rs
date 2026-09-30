@@ -490,6 +490,7 @@ impl TypeChecker {
         }
 
         self.modules.current_source_override = old_source_override;
+        self.record_declaration_sources(file_path, source, module_ast);
         self.record_module_symbols(path_str);
         self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
@@ -504,6 +505,21 @@ impl TypeChecker {
     /// Records `module` as the module each top-level function of
     /// `module_ast` is declared in, which the symbol its body is compiled
     /// under carries.
+    /// Remembers `file_path` as the file of every function the module declares,
+    /// its types' methods included, so a lowering diagnostic raised on one of
+    /// their bodies is rendered against the file its span indexes.
+    fn record_declaration_sources(&mut self, file_path: &Path, source: &str, module_ast: &Program) {
+        let file =
+            std::sync::Arc::new((file_path.to_string_lossy().to_string(), source.to_string()));
+        let mut ids = Vec::new();
+        collect_function_declarations(&module_ast.body, &mut ids);
+        for id in ids {
+            self.modules
+                .declaration_sources
+                .insert(id, std::sync::Arc::clone(&file));
+        }
+    }
+
     pub(crate) fn record_declaring_modules(
         &mut self,
         module: crate::type_checker::ModuleId,
@@ -1528,4 +1544,24 @@ fn module_path_of(path: &Path, base: &Path) -> Option<String> {
     let last = parts.pop()?;
     parts.push(last.trim_end_matches(".mi").to_string());
     Some(parts.join("."))
+}
+
+/// The statement ids of every function declared in `stmts`: top-level ones and
+/// the methods of the classes, structs, enums and traits declared there.
+fn collect_function_declarations(stmts: &[Statement], ids: &mut Vec<usize>) {
+    for stmt in stmts {
+        match &stmt.node {
+            StatementKind::FunctionDeclaration(_) => ids.push(stmt.id),
+            StatementKind::Block(members) => collect_function_declarations(members, ids),
+            StatementKind::Class(class_data) => {
+                collect_function_declarations(&class_data.body, ids)
+            }
+            StatementKind::Struct(_, _, _, methods, _, _)
+            | StatementKind::Enum(_, _, _, methods, _, _)
+            | StatementKind::Trait(_, _, _, methods, _) => {
+                collect_function_declarations(methods, ids)
+            }
+            _ => {}
+        }
+    }
 }

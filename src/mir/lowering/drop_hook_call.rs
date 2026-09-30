@@ -19,7 +19,7 @@ use crate::ast::literal::Literal;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
-use crate::error::lowering::{LoweringError, LoweringErrorKind};
+use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{Constant, Operand, Place, Rvalue, Statement, StatementKind};
 use crate::type_checker::use_after_move::{BORROWED_DROP_HELP, BORROWED_DROP_MESSAGE};
@@ -123,15 +123,12 @@ fn drop_hook_receiver_type(
 }
 
 fn borrowed_receiver_error(span: Span) -> LoweringError {
-    LoweringError {
-        kind: LoweringErrorKind::Coded {
-            code: DiagnosticCode::OwnDropOfBorrowedValue,
-            message: BORROWED_DROP_MESSAGE.to_string(),
-            help: Some(BORROWED_DROP_HELP.to_string()),
-            notes: Vec::new(),
-        },
+    LoweringError::coded(
+        DiagnosticCode::OwnDropOfBorrowedValue,
+        BORROWED_DROP_MESSAGE.to_string(),
         span,
-    }
+        Some(BORROWED_DROP_HELP.to_string()),
+    )
 }
 
 /// A null reference of `ty`, which a release skips.
