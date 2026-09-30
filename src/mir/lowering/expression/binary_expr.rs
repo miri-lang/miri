@@ -575,7 +575,112 @@ pub(crate) fn lower_binary_expr(
         return Ok(result);
     }
 
+    if reaches_machine_op_unchecked(ctx, op, lhs, rhs) {
+        return Ok(emit_unchecked_operator_trap(ctx, op, expr, dest));
+    }
+
     emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest, arg_watermark)
+}
+
+/// Whether `lhs op rhs` would reach a machine instruction on a value that is
+/// not a machine value: a string, a collection, or an instance of a class,
+/// struct or trait, none of which answered the operator with a method.
+///
+/// The type checker decides which operators a type supports, and a program it
+/// accepts never gets here. A body it never judged at this instantiation does
+/// — the pipeline lowers every method of a generic class at each instance and
+/// withholds afterwards the ones nothing checked there — and so would any site
+/// the checker failed to record. On the host, the instruction would read the
+/// operand's address as a number; the operation is lowered as a trap instead.
+/// An open type parameter, an alias and an enum are left to the instruction:
+/// the first stands for whatever the instantiation binds, and the others may
+/// be machine values.
+fn reaches_machine_op_unchecked(
+    ctx: &LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    lhs: &Expression,
+    rhs: &Expression,
+) -> bool {
+    ctx.body.execution_model == crate::mir::ExecutionModel::Cpu
+        && !is_equality_operator(op)
+        && [lhs, rhs].into_iter().any(|operand| {
+            ctx.recorded_type(operand.id)
+                .is_some_and(|ty| is_never_a_machine_value(ctx, &ty.kind))
+        })
+}
+
+/// Whether a value of `kind` is always a reference to a heap object, never a
+/// number an instruction can operate on.
+fn is_never_a_machine_value(ctx: &LoweringContext, kind: &TypeKind) -> bool {
+    use crate::type_checker::context::TypeDefinition;
+    match kind {
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(..)
+        | TypeKind::Map(..)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Function(_)
+        | TypeKind::Result(..)
+        | TypeKind::Future(_) => true,
+        TypeKind::Custom(name, _) => {
+            crate::ast::types::vec_type_dim(kind).is_none()
+                && matches!(
+                    ctx.type_checker.type_definitions().get(name),
+                    Some(
+                        TypeDefinition::Class(_)
+                            | TypeDefinition::Struct(_)
+                            | TypeDefinition::Trait(_)
+                    )
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Lower an operator the type checker never judged at these operand types as
+/// the trap a method withheld at an unchecked instance reports. The call
+/// never returns; the result is bound to its type's default so the rest of the
+/// body still reads a defined value.
+fn emit_unchecked_operator_trap(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Operand {
+    let span = expr.span;
+    let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    let after = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: crate::mir::lowering::dispatch::runtime_fn_operand(
+                crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC,
+                span,
+            ),
+            args: Vec::new(),
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(void_temp),
+            target: Some(after),
+        },
+        span,
+    ));
+    ctx.set_current_block(after);
+    let result_ty = binary_result_type(ctx, op, expr);
+    let target = match dest {
+        Some(place) => place,
+        None => Place::new(ctx.push_temp(result_ty.clone(), span)),
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Use(crate::mir::lowering::constructors::create_default_value(
+                &result_ty, &span,
+            )),
+        ),
+        span,
+    });
+    Operand::Copy(target)
 }
 
 /// Lower an arithmetic operator between a compiler-known vector and a scalar
