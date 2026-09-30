@@ -10,6 +10,7 @@
 //! is substituted — so the residency pattern itself has to reach the symbol,
 //! or the second copy is refused as a duplicate definition.
 
+use super::device::assert_gpu_runs_with_output;
 use super::utils::*;
 
 #[test]
@@ -35,17 +36,11 @@ fn main()
 }
 
 /// Two gpu-resident buffers reach the same collision one symbol along: each
-/// specialization carries the `forall`'s kernel, and both name it the same
-/// thing. The kernel index is keyed by the AST node so its name stays put
-/// across builds, and that key is shared by the two lowerings.
-///
-/// Ignored until kernel names carry the residency pattern too. That is a wider
-/// change than this one — kernel names are asserted by the determinism gate and
-/// vendored into the website's demo bundles.
+/// specialization carries the `forall`'s kernel, so the kernel's name carries
+/// the residency pattern too, and each buffer is doubled by its own kernel.
 #[test]
-#[ignore]
-fn two_gpu_resident_buffers_through_one_function_emit_distinct_lambda_symbols() {
-    assert_builds(
+fn two_gpu_resident_buffers_through_one_function_emit_distinct_kernels() {
+    assert_gpu_runs_with_output(
         r#"
 use system.collections.array
 
@@ -57,11 +52,14 @@ fn scale(a out Array<int,8>) int
 
 fn main()
     gpu var first = [1, 2, 3, 4, 5, 6, 7, 8]
-    gpu var second = [9, 9, 9, 9, 9, 9, 9, 9]
+    gpu var second = [9, 9, 9, 9, 9, 9, 9, 10]
     let a = scale(first)
     let b = scale(second)
-    println(f"{a} {b}")
+    let one = first
+    let two = second
+    println(f"{a} {b} {one[0]} {one[7]} {two[0]} {two[7]}")
 "#,
+        "2 2 2 16 18 20",
     );
 }
 
