@@ -147,13 +147,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::If(cond, then, else_, _) => {
                 self.check_if_stmt(cond, then, else_.as_deref(), consumed);
             }
-            // TODO: a loop body is analysed once, so a resource consumed inside
-            // it (`sink(h)` or `h.drop()` in a `while`) is not reported as used
-            // again on the next pass. The body needs a second visit with the
-            // state its first pass leaves, or a fixpoint over the loop edge.
             StatementKind::While(cond, body, _) => {
                 self.check_expr(cond, consumed);
-                self.check_stmt(body, consumed);
+                self.check_loop_body(body, &HashSet::new(), consumed);
             }
             StatementKind::For(decls, iter, body) | StatementKind::GpuFrame(decls, iter, body) => {
                 self.check_for_stmt(decls, iter, body, consumed);
@@ -271,6 +267,52 @@ impl<'a> UseAfterMoveChecker<'a> {
             .collect();
     }
 
+    /// Check a loop's body, then again from the state its first pass leaves,
+    /// since the next iteration starts there: a resource the body consumes and
+    /// uses again is used after it was consumed on the pass before.
+    ///
+    /// Only the second pass's new use-after-consume errors are kept; anything
+    /// else it reports the first pass already did. A body that can leave the
+    /// loop (`break`, `return`) may consume a resource on its way out, which no
+    /// next pass sees, so it is checked once.
+    fn check_loop_body(
+        &mut self,
+        body: &Statement,
+        loop_variables: &HashSet<String>,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let before: HashSet<String> = consumed.keys().cloned().collect();
+        self.check_stmt(body, consumed);
+        let consumed_this_pass = consumed.keys().any(|name| !before.contains(name));
+        if !consumed_this_pass || can_leave_the_loop(body) {
+            return;
+        }
+        let (errors_before, warnings_before) = (self.errors.len(), self.warnings.len());
+        // A name the body declares is bound afresh on every pass, so what the
+        // first pass consumed of it does not carry into the next.
+        let mut next_pass = consumed.clone();
+        let mut declared: Vec<String> = loop_variables.iter().cloned().collect();
+        names_declared_in(body, &mut declared);
+        for name in &declared {
+            if !before.contains(name) {
+                next_pass.remove(name);
+            }
+        }
+        self.check_stmt(body, &mut next_pass);
+        self.warnings.truncate(warnings_before);
+        let reported: HashSet<String> = self.errors[..errors_before]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let mut seen = reported;
+        let new_errors: Vec<TypeError> = self
+            .errors
+            .drain(errors_before..)
+            .filter(|error| seen.insert(error.to_string()))
+            .collect();
+        self.errors.extend(new_errors);
+    }
+
     fn check_for_stmt(
         &mut self,
         decls: &[crate::ast::statement::VariableDeclaration],
@@ -286,7 +328,17 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.fn_bindings.insert(d.name.clone());
             self.owned_locals.remove(d.name.as_str());
         }
-        self.check_stmt(body, consumed);
+        let loop_variables: HashSet<String> = decls.iter().map(|d| d.name.clone()).collect();
+        let mut outside = consumed.clone();
+        for name in &loop_variables {
+            outside.remove(name);
+        }
+        self.check_loop_body(body, &loop_variables, &mut outside);
+        for (name, info) in outside {
+            if !loop_variables.contains(&name) {
+                consumed.insert(name, info);
+            }
+        }
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
@@ -1190,5 +1242,61 @@ impl<'a> UseAfterMoveChecker<'a> {
             | Some(TypeDefinition::Alias(_))
             | None => None,
         }
+    }
+}
+
+/// Whether `body` holds a `break` or `return` that leaves the loop it is the
+/// body of. A nested function or class is not part of the loop's control flow.
+fn can_leave_the_loop(body: &Statement) -> bool {
+    match &body.node {
+        StatementKind::Break | StatementKind::Return(_) => true,
+        StatementKind::Block(statements) => statements.iter().any(can_leave_the_loop),
+        StatementKind::If(_, then, else_, _) => {
+            can_leave_the_loop(then) || else_.as_deref().is_some_and(can_leave_the_loop)
+        }
+        StatementKind::While(_, inner, _) | StatementKind::For(_, _, inner) => {
+            contains_return(inner)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `statement` holds a `return`, which leaves every loop around it.
+fn contains_return(statement: &Statement) -> bool {
+    match &statement.node {
+        StatementKind::Return(_) => true,
+        StatementKind::Block(statements) => statements.iter().any(contains_return),
+        StatementKind::If(_, then, else_, _) => {
+            contains_return(then) || else_.as_deref().is_some_and(contains_return)
+        }
+        StatementKind::While(_, inner, _) | StatementKind::For(_, _, inner) => {
+            contains_return(inner)
+        }
+        _ => false,
+    }
+}
+
+/// Every name a `let`/`var` or a loop in `statement` declares, nested blocks
+/// included.
+fn names_declared_in(statement: &Statement, declared: &mut Vec<String>) {
+    match &statement.node {
+        StatementKind::Variable(decls, _) => declared.extend(decls.iter().map(|d| d.name.clone())),
+        StatementKind::Block(statements) => {
+            for inner in statements {
+                names_declared_in(inner, declared);
+            }
+        }
+        StatementKind::If(_, then, else_, _) => {
+            names_declared_in(then, declared);
+            if let Some(else_) = else_ {
+                names_declared_in(else_, declared);
+            }
+        }
+        StatementKind::While(_, inner, _) => names_declared_in(inner, declared),
+        StatementKind::For(decls, _, inner) => {
+            declared.extend(decls.iter().map(|d| d.name.clone()));
+            names_declared_in(inner, declared);
+        }
+        _ => {}
     }
 }
