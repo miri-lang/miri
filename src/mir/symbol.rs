@@ -474,7 +474,11 @@ impl Symbol {
 
     /// The name the linker knows this symbol by.
     pub fn link_name(&self) -> String {
-        self.to_string()
+        // Pre-allocate a reasonable capacity (64 bytes) to prevent intermediate
+        // heap reallocations during Display formatting of symbol names on hot lowering paths.
+        let mut name = String::with_capacity(64);
+        let _ = write!(name, "{}", self);
+        name
     }
 
     /// The name a WGSL module declares this symbol under, spelled with
