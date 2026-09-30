@@ -11,7 +11,7 @@
 //! entry points), allowing the kernel entry to invoke them.
 
 use super::device::assert_gpu_runs_with_output;
-use super::helpers::assert_gpu_wgsl_valid;
+use super::helpers::{assert_gpu_wgsl_valid, assert_gpu_wgsl_valid_in};
 use super::utils::*;
 
 /// Simplest case: kernel calls a trivial user function.
@@ -392,5 +392,71 @@ fn main()
     println(f'{host[0]} {host[1]} {host[2]}')
 "#,
         "Function 'dbl' is generic, and a generic function cannot be called from GPU code yet",
+    );
+}
+
+/// A static method is a helper like a free function: its WGSL signature drops
+/// the allocator every Miri function carries on the CPU, as its call does.
+#[test]
+fn kernel_calls_static_method_emits_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        r#"
+use system.collections.array
+
+class P
+    static fn norm(x int) int
+        return x * 3
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..a.length()
+        a[i] = P.norm(a[i])
+"#,
+    );
+}
+
+/// The static method's result reaches every element.
+#[test]
+fn kernel_calls_static_method() {
+    assert_gpu_runs_with_output(
+        r#"
+use system.collections.array
+
+class P
+    static fn norm(x int) int
+        return x * 3
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..a.length()
+        a[i] = P.norm(a[i])
+    let h = a
+    println(f"{h[0]} {h[3]}")
+"#,
+        "3 12",
+    );
+}
+
+/// A release build names no locals, so the allocator is told apart by where
+/// the body keeps it, not by its name: a helper calling a helper stays valid.
+#[test]
+fn kernel_helpers_emit_valid_wgsl_in_a_release_build() {
+    assert_gpu_wgsl_valid_in(
+        r#"
+use system.collections.array
+
+class P
+    static fn norm(x int) int
+        return x * 3
+
+fn add_one(x int) int: x + 1
+fn norm_then_add_one(x int) int: add_one(P.norm(x))
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..a.length()
+        a[i] = norm_then_add_one(a[i])
+"#,
+        true,
     );
 }

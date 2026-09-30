@@ -3584,8 +3584,18 @@ impl Pipeline {
         &self,
         source: &str,
     ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
+        self.get_gpu_mir_bodies_in(source, false)
+    }
+
+    /// [`Self::get_gpu_mir_bodies`] lowered the way `release` builds lower,
+    /// where locals carry no names.
+    pub fn get_gpu_mir_bodies_in(
+        &self,
+        source: &str,
+        release: bool,
+    ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
         let mut result = self.frontend(source)?;
-        self.lower_to_mir(&mut result, false)
+        self.lower_to_mir(&mut result, release)
     }
 
     /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.

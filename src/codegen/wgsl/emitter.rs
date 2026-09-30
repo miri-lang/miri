@@ -279,9 +279,9 @@ impl Emitter {
         write!(self.output, "fn {}(", name).map_err(emit_err)?;
 
         // Parameters are locals 1..=arg_count, named to match how the body
-        // references them (`_1`, `_2`, ...). The implicit trailing `allocator`
-        // param belongs to the CPU/Perceus ABI and has no GPU counterpart, so
-        // it is skipped — GPU call sites never pass it.
+        // references them (`_1`, `_2`, ...). The body's allocator belongs to
+        // the CPU/Perceus ABI and has no GPU counterpart, so it is skipped —
+        // GPU call sites never pass it.
         let mut emitted = 0;
         for i in 1..=body.arg_count {
             let local_decl = body.local_decls.get(i).ok_or_else(|| {
@@ -290,7 +290,7 @@ impl Emitter {
                     i
                 ))
             })?;
-            if local_decl.name.as_deref() == Some("allocator") {
+            if body.allocator == Some(Local(i)) {
                 continue;
             }
             if emitted > 0 {
@@ -1457,21 +1457,15 @@ impl<'a> BodyEmitter<'a> {
             .is_some_and(|decl| is_fixed_array(&decl.ty.kind))
     }
 
-    /// True when the operand reads the body's implicit `allocator` local, which
-    /// is part of the CPU ABI and must not appear in a GPU call.
+    /// True when the operand reads the body's allocator, which is part of the
+    /// CPU ABI and must not appear in a GPU call.
     fn is_allocator_operand(&self, op: &Operand) -> bool {
-        let place = match op {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            Operand::Constant(_) => return false,
-        };
-        if !place.projection.is_empty() {
-            return false;
+        match op {
+            Operand::Copy(place) | Operand::Move(place) => {
+                place.projection.is_empty() && self.body.allocator == Some(place.local)
+            }
+            Operand::Constant(_) => false,
         }
-        self.body
-            .local_decls
-            .get(place.local.0)
-            .and_then(|d| d.name.as_deref())
-            == Some("allocator")
     }
 
     /// Emit a statement.

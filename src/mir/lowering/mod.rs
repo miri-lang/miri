@@ -941,6 +941,7 @@ fn lower_class_method_body(
     let allocator_decl = LocalDecl::new(Type::new(TypeKind::Int, ast_method.span), ast_method.span);
     let alloc_local = ctx.body.new_local(allocator_decl);
     ctx.variable_map.insert("allocator".into(), alloc_local);
+    ctx.body.allocator = Some(alloc_local);
     ctx.body.arg_count += 1;
     out_params.push(false);
     ctx.body.out_params = out_params;
@@ -1162,6 +1163,7 @@ fn collect_generic_names_from_type(
 pub(crate) fn bind_null_allocator(ctx: &mut LoweringContext, span: crate::error::syntax::Span) {
     let allocator_type = Type::new(TypeKind::Int, span);
     let alloc_local = ctx.push_local("allocator".to_string(), allocator_type.clone(), span);
+    ctx.body.allocator = Some(alloc_local);
     let null_allocator = Operand::Constant(Box::new(Constant {
         span,
         ty: allocator_type,
@@ -1190,7 +1192,8 @@ fn inject_allocator_param(
         // the entry point ABI.
         bind_null_allocator(ctx, span);
     } else {
-        ctx.push_param("allocator".to_string(), allocator_type, span);
+        let alloc_local = ctx.push_param("allocator".to_string(), allocator_type, span);
+        ctx.body.allocator = Some(alloc_local);
         ctx.body.arg_count += 1;
     }
 }
