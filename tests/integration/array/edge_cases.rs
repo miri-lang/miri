@@ -92,7 +92,8 @@ fn main()
 
 #[test]
 fn test_array_deep_nested_contains_and_index_of() {
-    // Tests if `==` logic properly compares struct/array types, or if it errors out correctly during codegen.
+    // `==` on arrays compares their elements, so a nested array is found by
+    // content, not by being the same array.
     assert_runs_with_output(
         r#"
 use system.collections.array
@@ -107,7 +108,7 @@ fn main()
         None
             println(f"{c} none")
     "#,
-        "false none",
+        "true 1",
     );
 }
 

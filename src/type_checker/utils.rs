@@ -2387,6 +2387,7 @@ impl TypeChecker {
         let equal = crate::ast::operator::BinaryOp::Equal;
         let result = make_type(TypeKind::Boolean);
         self.record_binary_requirement(ty, &equal, ty, &result, context);
+        self.record_element_matching(ty, span, context);
     }
 
     fn resolve_alias_range(

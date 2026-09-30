@@ -736,7 +736,14 @@ impl CraneliftBackend {
             .definitions()
             .keys()
             .map(String::as_str)
-            .filter(|name| BuiltinCollectionKind::from_name(name).is_none())
+            .filter(|name| {
+                // An array or list answers `equals` element by element; a set
+                // or map answers neither question.
+                !matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
+                )
+            })
             .collect();
         names.sort_unstable();
         for method in ElementMethod::ALL {

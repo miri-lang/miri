@@ -23,7 +23,7 @@ use system.accelerator
 ///     l.push(20)
 ///     println(f"{l.length()}")  // 2
 ///     println(f"{l.get(0)}")    // 10
-public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
+public class List<T> implements Equatable, Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)
@@ -41,6 +41,18 @@ public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transforma
 
     /// Returns the number of elements in the list.
     public fn length() int: miri_rt_list_len(self)
+
+    /// Two lists are equal when they hold equal elements in the same order.
+    /// This is what `==` and `!=` compare, and how a Set matches lists it
+    /// holds, and a Map its lists keys.
+    public fn equals(other Self) bool
+        let len = self.length()
+        if len != other.length(): return false
+        var i = 0
+        while i < len
+            if self[i] != other[i]: return false
+            i += 1
+        return true
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in list`.

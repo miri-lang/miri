@@ -434,8 +434,16 @@ impl<'a> FunctionTranslator<'a> {
                 type_ctx.ptr_type,
             )?));
         }
-        let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
-            return Ok(None);
+        let name = match Self::classify_element_shape(elem_kind) {
+            ElementShape::UserClass(name) => name,
+            // An array or list is matched element by element, through the
+            // `equals` its class declares, the comparison `==` makes.
+            ElementShape::Builtin(
+                kind @ (BuiltinCollectionKind::Array | BuiltinCollectionKind::List),
+            ) => kind.name(),
+            ElementShape::Builtin(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
+            | ElementShape::String
+            | ElementShape::Other => return Ok(None),
         };
         let recorded = Self::element_method_instantiation(
             name,
@@ -1143,13 +1151,15 @@ impl<'a> FunctionTranslator<'a> {
         type_args: Option<&[Expression]>,
         facts: &TypeFacts,
     ) -> Option<Vec<Type>> {
-        // Every argument has to be a written type: a body is monomorphized for
-        // types, so an instantiation carrying a value — the size of a value
-        // generic — gets no per-instantiation method body and must be named at
-        // the shared one.
+        // A value argument — the size of a value generic — is read the way
+        // the instantiation registry records it, wrapped in a marker type, so
+        // an `Array<String, 2>` reaches the body lowered at `String` and `2`.
         let written = match type_args {
             None => Vec::new(),
-            Some(args) => crate::mir::instantiation::type_arguments(args)?,
+            Some(args) => args
+                .iter()
+                .map(crate::mir::instantiation::instantiation_argument)
+                .collect::<Option<Vec<Type>>>()?,
         };
         let monomorphized = written.iter().all(|arg| {
             crate::mir::instantiation::is_monomorphizable_type_argument(

@@ -7,6 +7,7 @@ pub mod bounds_checked;
 pub mod chained_transforms;
 pub mod creation;
 pub mod edge_cases;
+pub mod equality;
 pub mod errors;
 pub mod float_assignment;
 pub mod indexing;
