@@ -539,3 +539,92 @@ fn test_a_function_read_through_a_module_alias_is_a_value() {
         "10 2",
     );
 }
+
+/// A module already loaded by one import keeps the aliases a later import
+/// gives its items.
+#[test]
+fn test_an_already_loaded_module_keeps_a_later_item_alias() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.api.{api}\n",
+                    "use local.deep.{deep}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{api()} {deep()}')\n",
+                ),
+            ),
+            (
+                "api.mi",
+                concat!("public fn api() int\n", "    return 50\n",),
+            ),
+            (
+                "deep.mi",
+                concat!(
+                    "use local.api.{api as mapi}\n",
+                    "\n",
+                    "public fn deep() int\n",
+                    "    return mapi() + 7\n",
+                ),
+            ),
+        ],
+        "50 57",
+    );
+}
+
+/// Two modules' items of one name can each be imported under an alias of its
+/// own, as the conflict's help recommends.
+#[test]
+fn test_same_named_items_imported_under_two_aliases() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.x.{gen as xgen}\n",
+                    "use local.y.{gen as ygen}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f'{xgen()} {ygen()}')\n",
+                ),
+            ),
+            ("x.mi", concat!("public fn gen() int\n", "    return 1\n",)),
+            ("y.mi", concat!("public fn gen() int\n", "    return 2\n",)),
+        ],
+        "1 2",
+    );
+}
+
+/// A module reached a second time through a symlinked path keeps the alias
+/// that import gives its item.
+#[cfg(unix)]
+#[test]
+fn test_a_module_reached_through_a_second_path_keeps_its_alias() {
+    let dir = tempfile::tempdir().expect("a temporary project directory");
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).expect("the module directory");
+    std::fs::write(real.join("m.mi"), "public fn bump() int\n    return 3\n").expect("the module");
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).expect("the second path");
+    let main = dir.path().join("main.mi");
+    std::fs::write(
+        &main,
+        "use local.real.m.{bump as b1}\nuse local.link.m.{bump as b2}\n\nfn main()\n    println(f'{b1()} {b2()}')\n",
+    )
+    .expect("the program");
+    let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/stdlib");
+    let output = crate::utils::miri_cmd()
+        .env("MIRI_STDLIB_PATH", stdlib)
+        .current_dir(dir.path())
+        .arg("run")
+        .arg(&main)
+        .output()
+        .expect("run miri");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("3 3"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -97,6 +97,10 @@ impl TypeChecker {
             self.report_shadowed_type_conflicts(&shadowed, &path_str, path.span);
             self.restore_visibility_for_module(&path_str, &import_kind);
             self.replay_module_visibility(&path_str, &import_kind);
+            // A module loaded once is imported again without its aliases
+            // being lost: the names it binds are bound on every import.
+            self.register_item_aliases(&path_str, &import_kind);
+            self.register_module_alias(&path_str, alias);
             return;
         }
 
@@ -106,6 +110,10 @@ impl TypeChecker {
             }
             self.restore_visibility_for_module(&path_str, &import_kind);
             self.replay_module_visibility(&path_str, &import_kind);
+            // A module loaded once is imported again without its aliases
+            // being lost: the names it binds are bound on every import.
+            self.register_item_aliases(&path_str, &import_kind);
+            self.register_module_alias(&path_str, alias);
             return;
         }
 
@@ -328,7 +336,7 @@ impl TypeChecker {
         // shares with something already in scope is no conflict.
         if alias.is_none() {
             self.detect_namespace_collisions(
-                &Self::selected_import_names(import_kind),
+                &Self::unaliased_selected_names(import_kind),
                 path_str,
                 &pre_import_globals,
                 span,
@@ -643,7 +651,7 @@ impl TypeChecker {
 
         self.filter_scope_symbols(pre_import_globals, &should_be_visible, context);
         self.filter_type_definitions(pre_import_global_types, &should_be_visible);
-        self.register_item_aliases(import_kind);
+        self.register_item_aliases(path_str, import_kind);
         self.validate_selected_exports(&selected_names, module_name, span);
     }
 
@@ -657,6 +665,25 @@ impl TypeChecker {
             items
                 .iter()
                 .filter_map(|(expr, _alias)| match &expr.node {
+                    ExpressionKind::Identifier(name, _) => Some((name.clone(), expr.span)),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// The names a selective import brings in under their own name; an item
+    /// imported `as` another name is reached by that name only, so it
+    /// collides with nothing. `None` for an import of the whole module.
+    fn unaliased_selected_names(import_kind: &ImportPathKind) -> Option<HashMap<String, Span>> {
+        let ImportPathKind::Multi(items) = import_kind else {
+            return None;
+        };
+        Some(
+            items
+                .iter()
+                .filter(|(_, alias)| alias.is_none())
+                .filter_map(|(expr, _)| match &expr.node {
                     ExpressionKind::Identifier(name, _) => Some((name.clone(), expr.span)),
                     _ => None,
                 })
@@ -767,13 +794,24 @@ impl TypeChecker {
         }
     }
 
-    fn register_item_aliases(&mut self, import_kind: &ImportPathKind) {
+    /// Bind each `name as alias` a selective import of `module_path` writes to
+    /// the module's own `name` — read from the symbols its load recorded, so
+    /// a same-named declaration another import made global is not the one
+    /// bound — or, for a module reached under another path, to the global one.
+    fn register_item_aliases(&mut self, module_path: &str, import_kind: &ImportPathKind) {
         if let ImportPathKind::Multi(ref items) = import_kind {
             for (name_expr, item_alias_opt) in items {
                 if let ExpressionKind::Identifier(orig_name, _) = &name_expr.node {
                     if let Some(alias_box) = item_alias_opt {
                         if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
-                            if let Some(info) = self.type_table.global_scope.get(orig_name).cloned()
+                            let declared = self
+                                .modules
+                                .module_symbols
+                                .get(module_path)
+                                .and_then(|symbols| symbols.get(orig_name))
+                                .cloned();
+                            if let Some(info) = declared
+                                .or_else(|| self.type_table.global_scope.get(orig_name).cloned())
                             {
                                 let mut aliased = info;
                                 aliased.original_name = Some(orig_name.clone());
