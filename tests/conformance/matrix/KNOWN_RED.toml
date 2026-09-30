@@ -18,14 +18,6 @@ cells = [
 # Set element and Map key identity: equals and hash
 [B]
 cells = [
-    "map_key/array_string/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "map_key/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "map_key/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
-    "map_key/array_string/dedup/mono", # wrong value: got `2`, expected `1`
-    "set_element/array_string/dedup/generic_class", # wrong value: got `2`, expected `1`
-    "set_element/array_string/dedup/generic_fn", # wrong value: got `2`, expected `1`
-    "set_element/array_string/dedup/inherited", # wrong value: got `2`, expected `1`
-    "set_element/array_string/dedup/mono", # wrong value: got `2`, expected `1`
 ]
 
 # generic instantiation read after substitution

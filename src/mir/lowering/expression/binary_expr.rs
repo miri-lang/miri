@@ -789,8 +789,13 @@ fn is_equality_operator(op: &crate::ast::operator::BinaryOp) -> bool {
 }
 
 /// True when the type needs structural equality comparison.
+///
+/// An `Atomic<T>` is declared as a struct but occupies exactly its `T` in a
+/// slot, with no struct behind it to walk, so two are compared as the values
+/// they hold.
 fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
     match kind {
+        TypeKind::Custom(name, _) if name == crate::ast::types::ATOMIC_TYPE_NAME => false,
         TypeKind::Custom(name, _) => matches!(
             ctx.type_checker.type_definitions().get(name),
             Some(crate::type_checker::context::TypeDefinition::Enum(_))
