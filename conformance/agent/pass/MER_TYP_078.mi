@@ -1,0 +1,13 @@
+// summary: Accepted counterpart of MER_TYP_078: the call is wrapped in a lambda.
+// expect-stdout: 4
+use system.io
+
+class K
+    n int
+    fn a() int
+        return self.n
+
+fn main()
+    let k = K(n: 4)
+    let g = fn() int: k.a()
+    println(f"{g()}")

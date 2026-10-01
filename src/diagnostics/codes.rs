@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (77 codes: 001-077)
+    // TYP — Type checker (78 codes: 001-078)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1030,6 +1030,13 @@ diagnostics!(
     "077",
     TypNonPositiveValueArgument,
     "Non-Positive Value Argument",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "078",
+    TypMethodUsedAsValue,
+    "Method Used As A Value",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

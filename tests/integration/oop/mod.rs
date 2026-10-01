@@ -22,6 +22,7 @@ pub mod inherited_traits;
 pub mod instance_allocation;
 pub mod invalid_targets;
 pub mod method_resolution_order;
+pub mod method_values;
 pub mod static_members;
 pub mod super_calls;
 pub mod tensor;
