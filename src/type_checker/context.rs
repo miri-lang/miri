@@ -77,6 +77,10 @@ pub struct SymbolInfo {
     /// that other functions and modules observe, so changing it from `let` to `var`
     /// is api-changing and requires human approval.
     pub module_scope: bool,
+    /// For a local binding written without a type, the id of the initializer
+    /// its type was inferred from. A later store that binds an argument the
+    /// initializer left open refines the binding through it.
+    pub inferred_from: Option<usize>,
 }
 
 impl SymbolInfo {
@@ -104,6 +108,7 @@ impl SymbolInfo {
             is_parameter: false,
             declaration_keyword_start: None,
             module_scope: false,
+            inferred_from: None,
         }
     }
 

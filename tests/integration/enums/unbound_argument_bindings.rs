@@ -7,9 +7,10 @@
 //! whose payload slots are wider — cannot share a location with it. Where the
 //! two meet in one expression (the branches of a conditional or a match, the
 //! elements of a literal) the whole expression takes the type binding both,
-//! and every part is built at it. Where a location already holds one and is
-//! handed the other later (an assignment, a push), the program is refused and
-//! asked to declare the type.
+//! and every part is built at it. Where a binding written without a type is
+//! handed the other later (an assignment, a push, an index store), the binding
+//! takes the type binding both from its declaration on, as if it were written
+//! there.
 
 use super::super::utils::*;
 
@@ -34,23 +35,24 @@ fn with_e(main: &str) -> String {
 }
 
 #[test]
-fn reassigning_a_binding_a_value_that_binds_its_open_argument_is_refused() {
-    assert_compiler_error(
+fn reassigning_a_binding_a_value_that_binds_its_open_argument_refines_it() {
+    assert_heap_guard_output(
         &with_e(
             r#"
 fn main()
     var e = E.L("s" + "")
+    show(e)
     e = make()
     show(e)
 "#,
         ),
-        "leaves `B` unbound",
+        "l s\nr tu",
     );
 }
 
 #[test]
-fn reassigning_it_on_one_branch_only_is_refused() {
-    assert_compiler_error(
+fn reassigning_it_on_one_branch_only_refines_it() {
+    assert_heap_guard_output(
         &with_e(
             r#"
 fn pick(c bool)
@@ -61,21 +63,57 @@ fn pick(c bool)
 
 fn main()
     pick(true)
+    pick(false)
 "#,
         ),
-        "leaves `B` unbound",
+        "r tu\nl s",
     );
 }
 
 #[test]
-fn pushing_a_value_that_binds_the_elements_open_argument_is_refused() {
-    assert_compiler_error(
+fn pushing_a_value_that_binds_the_elements_open_argument_refines_the_list() {
+    assert_heap_guard_output(
         &with_e(
             r#"
 fn main()
     let xs = List([E.L("s" + "")])
     xs.push(make())
-    println(f"{xs.length()}")
+    for x in xs
+        show(x)
+"#,
+        ),
+        "l s\nr tu",
+    );
+}
+
+#[test]
+fn storing_at_an_index_a_value_that_binds_the_elements_open_argument_refines_the_list() {
+    assert_heap_guard_output(
+        &with_e(
+            r#"
+fn main()
+    var xs = List([E.L("s" + ""), E.L("v" + "")])
+    xs[1] = make()
+    for x in xs
+        show(x)
+"#,
+        ),
+        "l s\nr tu",
+    );
+}
+
+/// A binding at module scope is read by every function, so no single body's
+/// check can settle it; it still asks for the type to be written.
+#[test]
+fn a_module_binding_handed_a_value_that_binds_its_open_argument_is_refused() {
+    assert_compiler_error(
+        &with_e(
+            r#"
+var top = E.L("s" + "")
+
+fn main()
+    top = make()
+    show(top)
 "#,
         ),
         "leaves `B` unbound",
@@ -152,8 +190,8 @@ fn main()
 }
 
 #[test]
-fn a_result_reassigned_a_value_binding_its_open_error_is_refused() {
-    assert_compiler_error(
+fn a_result_reassigned_a_value_binding_its_open_error_is_refined() {
+    assert_heap_guard_output(
         r#"
 fn other() Result<String, String>
     return Result.Err("e" + "f")
@@ -168,7 +206,7 @@ fn main()
         Result.Ok(v): println(v)
         Result.Err(e): println(e)
 "#,
-        "leaves `E` unbound",
+        "s\nef",
     );
 }
 

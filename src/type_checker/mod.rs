@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 pub(crate) mod attributes;
+mod binding_refinement;
 
 use crate::type_checker::attributes::Deprecation;
 pub mod builtins;
@@ -186,6 +187,9 @@ pub struct TypeChecker {
     /// Set while a value returned at a written `Self` is judged: it reaches
     /// the caller at the receiver's own class, so it hands no trait value on.
     pub(crate) returning_at_written_self: bool,
+    /// The refined types of local bindings a later store bound an open type
+    /// argument of, and whether the body being checked needs another pass.
+    pub(crate) binding_refinements: binding_refinement::BindingRefinements,
     /// When true, a `Custom` type name that is not visible in the importing
     /// scope still resolves from `global_type_definitions`.
     ///
@@ -270,6 +274,7 @@ impl TypeChecker {
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
             returning_at_written_self: false,
+            binding_refinements: binding_refinement::BindingRefinements::default(),
             resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,

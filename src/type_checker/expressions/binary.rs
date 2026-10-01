@@ -454,7 +454,8 @@ impl TypeChecker {
                 ),
                 span,
             );
-        } else {
+        } else if !self.refine_binding_for_store(lhs.expression(), &lhs_type, &stored_type, context)
+        {
             self.refuse_binding_an_inference_slot(
                 &lhs_type,
                 &stored_type,

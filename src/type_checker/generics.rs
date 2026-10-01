@@ -1113,6 +1113,20 @@ impl TypeChecker {
         source: &Type,
         context: &Context,
     ) -> Vec<String> {
+        self.inference_slot_bindings(target, source, context)
+            .into_iter()
+            .map(|(slot, _)| slot)
+            .collect()
+    }
+
+    /// Each inference slot of `target` that `source` binds, with the type
+    /// `source` binds it to (see [`Self::inference_slots_bound_by`]).
+    pub(crate) fn inference_slot_bindings(
+        &self,
+        target: &Type,
+        source: &Type,
+        context: &Context,
+    ) -> Vec<(String, Type)> {
         let mut bound = Vec::new();
         self.collect_slots_bound_by(target, source, context, &mut bound);
         bound
@@ -1123,7 +1137,7 @@ impl TypeChecker {
         target: &Type,
         source: &Type,
         context: &Context,
-        bound: &mut Vec<String>,
+        bound: &mut Vec<(String, Type)>,
     ) {
         // A type already reported as wrong binds nothing: a second diagnostic
         // about it would only repeat the first.
@@ -1137,8 +1151,8 @@ impl TypeChecker {
             );
             // A slot filled by another open parameter is still unbound.
             let source_is_open = matches!(source.kind, TypeKind::Generic(..));
-            if !is_declared && !source_is_open && !bound.contains(name) {
-                bound.push(name.clone());
+            if !is_declared && !source_is_open && !bound.iter().any(|(slot, _)| slot == name) {
+                bound.push((name.clone(), source.clone()));
             }
             return;
         }

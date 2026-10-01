@@ -213,8 +213,9 @@ impl TypeChecker {
             .function_out_params
             .insert(declared, out_flags);
 
-        let const_value =
-            self.check_function_body(body, name, &return_type, infer_main_return, span, context);
+        let const_value = self.check_body_refining_bindings(context, |checker, context| {
+            checker.check_function_body(body, name, &return_type, infer_main_return, span, context)
+        });
 
         if const_value.is_some() {
             self.update_const_symbol(name, const_value, context);
