@@ -89,8 +89,19 @@ impl TypeChecker {
             return result;
         }
 
-        // Set call_site_arity when func is a member access (diagnostic-only, for better suggestions)
-        let prev_arity = if matches!(func.node, ExpressionKind::Member(..)) {
+        // Set call_site_arity when func is a member access, bare or with type
+        // arguments written after it (`b.make<String>()`): it tells member
+        // inference the member is called, not read as a value, and sharpens
+        // its suggestions.
+        let is_member_callee = match &func.node {
+            ExpressionKind::Member(..) => true,
+            ExpressionKind::GenericType(base, _, _)
+            | ExpressionKind::TypeDeclaration(base, _, _, _) => {
+                matches!(base.node, ExpressionKind::Member(..))
+            }
+            _ => false,
+        };
+        let prev_arity = if is_member_callee {
             self.call_site_arity.replace(args.len())
         } else {
             None

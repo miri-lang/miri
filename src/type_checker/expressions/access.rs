@@ -744,7 +744,72 @@ impl TypeChecker {
             std::mem::replace(&mut self.member_receiver_is_parameter, is_parameter);
         let member = self.infer_member_dispatch(&obj_type, prop_name, span, context, call_arity);
         self.member_receiver_is_parameter = outer_is_parameter;
+        if call_arity.is_none() && self.member_is_a_method(&obj_type, prop_name) {
+            self.report_method_used_as_value(prop_name, span);
+            return make_type(TypeKind::Error);
+        }
         member
+    }
+
+    /// Whether `prop_name` read off a value of `obj_type` names a method — of
+    /// the class's chain or a trait it implements, of a trait, or of an enum —
+    /// rather than a field.
+    fn member_is_a_method(&self, obj_type: &Type, prop_name: &str) -> bool {
+        use crate::type_checker::context::{class_method_declaration, collect_class_fields_all};
+        let TypeKind::Custom(name, _) = &obj_type.kind else {
+            return false;
+        };
+        let defs = &self.type_table.global_type_definitions;
+        match defs.get(name) {
+            Some(TypeDefinition::Class(class_def)) => {
+                let is_field = collect_class_fields_all(class_def, defs)
+                    .iter()
+                    .any(|(field, _)| *field == prop_name);
+                !is_field
+                    && (class_method_declaration(name, prop_name, defs).is_some()
+                        || class_def
+                            .traits
+                            .iter()
+                            .any(|trait_name| self.trait_declares(trait_name, prop_name)))
+            }
+            Some(TypeDefinition::Trait(_)) => self.trait_declares(name, prop_name),
+            Some(TypeDefinition::Enum(enum_def)) => enum_def.methods.contains_key(prop_name),
+            Some(
+                TypeDefinition::Struct(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_),
+            )
+            | None => false,
+        }
+    }
+
+    /// Whether the trait `trait_name`, or a trait it extends, declares
+    /// `method_name`.
+    fn trait_declares(&self, trait_name: &str, method_name: &str) -> bool {
+        let defs = &self.type_table.global_type_definitions;
+        let mut pending = vec![trait_name.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            if let Some(TypeDefinition::Trait(trait_def)) = defs.get(&current) {
+                if trait_def.methods.contains_key(method_name) {
+                    return true;
+                }
+                pending.extend(trait_def.parent_traits.iter().cloned());
+            }
+        }
+        false
+    }
+
+    /// Refuse a method read as a value: it is a call waiting for its
+    /// receiver, and nothing binds the receiver to it.
+    fn report_method_used_as_value(&mut self, method: &str, span: Span) {
+        self.report_error_with_help(
+            DiagnosticCode::TypMethodUsedAsValue,
+            format!("the method `{method}` is read as a value, but a method can only be called"),
+            span,
+            METHOD_VALUE_HELP.to_string(),
+        );
     }
 
     /// Whether `expr` names a parameter of the function being checked, other
@@ -2284,3 +2349,7 @@ fn inherited_member_candidates<'a>(
     }
     candidates
 }
+
+/// The help a method read as a value is refused with.
+const METHOD_VALUE_HELP: &str =
+    "call it, or wrap the call in a lambda to hand it on as a value: `fn() int: obj.method()`";

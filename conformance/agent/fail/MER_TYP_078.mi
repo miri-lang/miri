@@ -1,0 +1,13 @@
+// expect: MER_TYP_078
+// summary: Triggers MER_TYP_078: a method is read as a value without a call.
+use system.io
+
+class K
+    n int
+    fn a() int
+        return self.n
+
+fn main()
+    let k = K(n: 4)
+    let g = k.a
+    println(f"{g()}")

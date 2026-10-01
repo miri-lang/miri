@@ -107,6 +107,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_075 | Triggers MER_TYP_075: a struct with no ordering is compared with `<`. |
 | MER_TYP_076 | Triggers MER_TYP_076: a value argument is computed from a binding known only while the program runs. |
 | MER_TYP_077 | Triggers MER_TYP_077: a value argument is zero. |
+| MER_TYP_078 | Triggers MER_TYP_078: a method is read as a value without a call. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -233,6 +234,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_075 | Accepted counterpart of MER_TYP_075: the ordered member is compared. |
 | MER_TYP_076 | Accepted counterpart of MER_TYP_076: the value argument is computed from a `const`. |
 | MER_TYP_077 | Accepted counterpart of MER_TYP_077: the value argument is one. |
+| MER_TYP_078 | Accepted counterpart of MER_TYP_078: the call is wrapped in a lambda. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

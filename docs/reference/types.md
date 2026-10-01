@@ -10,6 +10,7 @@ The type checker validates that all types in the program are well-formed and con
 - Invalid generic arguments or type bounds
 - A value argument (the `3` in `Buf<T, 3>`) with an operand that is not a compile-time constant: each operand must be an integer literal, a constant, or a generic parameter of the enclosing declaration
 - A value argument that is zero or negative: a value argument counts what each instance holds, so it is at least 1
+- A method read as a value without a call (`let g = k.a`): a method needs its receiver; wrap the call in a lambda to hand it on
 - Non-exhaustive match expressions
 - Immutable variable assignments
 - Field or method access on incompatible types
