@@ -595,18 +595,31 @@ pub(crate) fn lower_binary_expr(
 /// An open type parameter, an alias and an enum are left to the instruction:
 /// the first stands for whatever the instantiation binds, and the others may
 /// be machine values.
+///
+/// An `Atomic<T>` is a marker for a device buffer's element, which host code
+/// never holds, so any operator on one in host code — equality included — is
+/// a body nothing checked: a collection method compiled at an
+/// `Array<Atomic<u32>, N>` instance.
 fn reaches_machine_op_unchecked(
     ctx: &LoweringContext,
     op: &crate::ast::operator::BinaryOp,
     lhs: &Expression,
     rhs: &Expression,
 ) -> bool {
-    ctx.body.execution_model == crate::mir::ExecutionModel::Cpu
-        && !is_equality_operator(op)
-        && [lhs, rhs].into_iter().any(|operand| {
-            ctx.recorded_type(operand.id)
-                .is_some_and(|ty| is_never_a_machine_value(ctx, &ty.kind))
+    if ctx.body.execution_model != crate::mir::ExecutionModel::Cpu {
+        return false;
+    }
+    [lhs, rhs].into_iter().any(|operand| {
+        ctx.recorded_type(operand.id).is_some_and(|ty| {
+            is_device_marker(&ty.kind)
+                || (!is_equality_operator(op) && is_never_a_machine_value(ctx, &ty.kind))
         })
+    })
+}
+
+/// Whether `kind` is `Atomic<T>`, which only device code holds.
+fn is_device_marker(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::Custom(name, _) if name == crate::ast::types::ATOMIC_TYPE_NAME)
 }
 
 /// Whether a value of `kind` is always a reference to a heap object, never a
@@ -790,12 +803,11 @@ fn is_equality_operator(op: &crate::ast::operator::BinaryOp) -> bool {
 
 /// True when the type needs structural equality comparison.
 ///
-/// An `Atomic<T>` is declared as a struct but occupies exactly its `T` in a
-/// slot, with no struct behind it to walk, so two are compared as the values
-/// they hold.
+/// An `Atomic<T>` is declared as a struct but has no struct behind it to
+/// walk; host code never compares one (see [`reaches_machine_op_unchecked`]).
 fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
     match kind {
-        TypeKind::Custom(name, _) if name == crate::ast::types::ATOMIC_TYPE_NAME => false,
+        TypeKind::Custom(_, _) if is_device_marker(kind) => false,
         TypeKind::Custom(name, _) => matches!(
             ctx.type_checker.type_definitions().get(name),
             Some(crate::type_checker::context::TypeDefinition::Enum(_))

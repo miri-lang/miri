@@ -501,7 +501,8 @@ fn lower_collection_element_access(
     let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, &args[0], None)?;
 
-    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), obj_ty.clone(), *span);
+    let alias_ty = receiver_alias_type(ctx, &obj_op, &obj_ty);
+    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
     let index_local = materialize_index_local(ctx, index_op, args[0].span);
 
     let mut indexed_place = Place::new(obj_local);
@@ -527,6 +528,31 @@ fn lower_collection_element_access(
         ctx.emit_temp_drop(src_local, obj_watermark, *span);
     }
     Ok(op)
+}
+
+/// The type the temporary holding a collection receiver read from `obj_op`
+/// is declared at.
+///
+/// A receiver read straight out of a local declared at the bare collection
+/// class — `self` in a collection's own shared body, typed `List` — keeps that
+/// type: the temporary is an alias of the local, and reference counting must
+/// judge the two alike, or the alias is released without the copy ever being
+/// retained. Any other receiver is declared at `obj_ty`, the type its element
+/// width is read from.
+fn receiver_alias_type(ctx: &LoweringContext, obj_op: &Operand, obj_ty: &Type) -> Type {
+    let (Operand::Copy(place) | Operand::Move(place)) = obj_op else {
+        return obj_ty.clone();
+    };
+    let declared = &ctx.body.local_decls[place.local.0].ty;
+    let is_bare_collection = matches!(
+        &declared.kind,
+        TypeKind::Custom(name, None) if BuiltinCollectionKind::from_name(name).is_some()
+    );
+    if place.projection.is_empty() && is_bare_collection {
+        declared.clone()
+    } else {
+        obj_ty.clone()
+    }
 }
 
 /// Substitute a generic class's type parameters into a collection type's
@@ -1097,7 +1123,8 @@ fn lower_collection_set(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let item_op_src = operand_src_local(&item_op);
 
-    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), obj_ty.clone(), *span);
+    let alias_ty = receiver_alias_type(ctx, &obj_op, obj_ty);
+    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
     let index_local = materialize_index_local(ctx, index_op, index_arg.span);
     let mut indexed_place = Place::new(obj_local);
     indexed_place

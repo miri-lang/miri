@@ -43,7 +43,7 @@ public class Array<T, Size> implements Equatable, Queryable<T>, Iterable<T>, Clo
         if len != other.length(): return false
         var i = 0
         while i < len
-            if self[i] != other[i]: return false
+            if self.element_at(i) != other.element_at(i): return false
             i += 1
         return true
 
