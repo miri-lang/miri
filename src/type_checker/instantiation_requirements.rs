@@ -566,15 +566,6 @@ impl TypeChecker {
         );
     }
 
-    /// Record that the trait default being checked hands its `self` on as a
-    /// value; see [`Obligation::SelfConversion`].
-    pub(crate) fn record_self_conversion(&mut self, context: &Context) {
-        let Some(owner) = context.current_class.clone() else {
-            return;
-        };
-        self.record_self_conversion_of(&owner, context);
-    }
-
     /// Record that the trait default being checked hands on a value of the
     /// trait `trait_name`, which may be its `self` when the default belongs
     /// to that trait or to one below it.
