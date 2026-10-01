@@ -725,3 +725,37 @@ fn main()
         "true",
     );
 }
+
+/// A default that reads its `self` without handing it on as a trait value —
+/// a local alias, a `match` on it — converts nothing: a method invalid at
+/// the instance and only ever called through the trait on another class is
+/// not pinned at that instance.
+#[test]
+fn a_default_reading_its_self_without_handing_it_on_pins_nothing() {
+    let rest = r#"
+class Box<T> implements Lt
+    v T
+    fn a() bool
+        return self.v < 10
+
+class Other implements Lt
+    fn a() bool
+        return true
+
+fn call(t Lt) bool
+    return t.a()
+
+fn main()
+    let b = Box<String>(v: "x")
+    println(f"{b.go()} {call(Other())}")
+"#;
+    for default in [
+        "    fn go() int\n        let s = self\n        return 1\n",
+        "    fn go() int\n        match self\n            _: 1\n",
+    ] {
+        assert_runs_with_output(
+            &format!("trait Lt\n    fn a() bool\n{default}\n{rest}"),
+            "1 true",
+        );
+    }
+}
