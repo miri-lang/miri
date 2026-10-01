@@ -64,6 +64,8 @@ impl TypeChecker {
 
         self.resolve_lambda_generics(generics, context);
         let expected_return_type = self.setup_return_type_context(return_type_expr, context);
+        // A lambda returns at its own type, whatever the enclosing method does.
+        let outer_returns_self = std::mem::replace(&mut context.returns_written_self, false);
         let old_loop_depth = context.loop_depth;
         context.loop_depth = 0;
         let old_gpu_for_depth = context.gpu_for_depth;
@@ -85,6 +87,7 @@ impl TypeChecker {
             context.inferred_return_types.pop();
         }
 
+        context.returns_written_self = outer_returns_self;
         context.loop_depth = old_loop_depth;
         context.gpu_for_depth = old_gpu_for_depth;
         context.exit_scope();

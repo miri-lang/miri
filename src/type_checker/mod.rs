@@ -183,6 +183,9 @@ pub struct TypeChecker {
     /// its diagnostics emitted) later in the body pass; suppressing here avoids
     /// duplicate or premature errors from that speculative first inference.
     pub(crate) suppress_diagnostics: bool,
+    /// Set while a value returned at a written `Self` is judged: it reaches
+    /// the caller at the receiver's own class, so it hands no trait value on.
+    pub(crate) returning_at_written_self: bool,
     /// When true, a `Custom` type name that is not visible in the importing
     /// scope still resolves from `global_type_definitions`.
     ///
@@ -266,6 +269,7 @@ impl TypeChecker {
             deferred_gpu_int_literal_ranges: Vec::new(),
             hoisted_top_level: HashSet::new(),
             suppress_diagnostics: false,
+            returning_at_written_self: false,
             resolving_declared_signature: false,
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,

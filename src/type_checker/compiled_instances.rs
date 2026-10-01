@@ -80,6 +80,7 @@ impl TypeChecker {
                     .collect(),
                 span,
                 caller_parameters: Vec::new(),
+                reached_because: None,
             })
             .collect();
         // The methods these bodies run on what they pin — an element's

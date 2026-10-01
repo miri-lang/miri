@@ -144,6 +144,18 @@ pub const CLONE_METHOD_NAME: &str = "clone";
 /// the reserved-name checks share one spelling.
 pub const SELF_TYPE_NAME: &str = "Self";
 
+/// Whether the type expression `expr` is written `Self`.
+pub fn is_written_self(expr: &crate::ast::expression::Expression) -> bool {
+    use crate::ast::expression::ExpressionKind;
+    match &expr.node {
+        ExpressionKind::Type(ty, _) => {
+            matches!(&ty.kind, TypeKind::Custom(name, None) if name == SELF_TYPE_NAME)
+        }
+        ExpressionKind::Identifier(name, _) => name == SELF_TYPE_NAME,
+        _ => false,
+    }
+}
+
 /// Canonical name for the built-in `Linear<T>` ownership wrapper type.
 ///
 /// `TypeKind::Linear(t)` is created by `resolve_builtin_type_alias` when
