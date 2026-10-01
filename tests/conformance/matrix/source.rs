@@ -447,6 +447,17 @@ fn captured_write_body(operation: Operation, s: &Spelling) -> (String, Vec<Strin
     )
 }
 
+/// A generic trait declaring the cell's method abstractly over `T`, and the
+/// header of a class implementing it at `concrete` whose own `run` — written
+/// at `params`, the concrete signature — holds the body.
+fn trait_through(id: usize, concrete: &str, returns: &str, params: &str) -> (String, String) {
+    let declared_returns = if returns == concrete { "T" } else { returns };
+    let declared =
+        format!("trait Op{id}<T>\n    fn run(a T, b T, ea T, eb T) {declared_returns}\n\n");
+    let implemented = format!("class Impl{id} implements Op{id}<{concrete}>\n    fn run{params}\n");
+    (declared, implemented)
+}
+
 /// Emits the function, class or trait holding `body` for the cell's context
 /// into `items`, and returns the call that runs it.
 fn wrap_in_context(
@@ -494,6 +505,37 @@ fn wrap_in_context(
             format!("Impl{id}().run(a, b, ea, eb)"),
             format!("class Impl{id} implements Op{id}<{concrete}>\n"),
         ),
+        Context::GenericEnumMethod => (
+            format!("enum Cell{id}<T>\n    Only(T)\n\n    fn run{params}\n"),
+            2,
+            format!("Cell{id}.Only(a).run(a, b, ea, eb)"),
+            String::new(),
+        ),
+        Context::TraitTypedParameter => {
+            let (declared, implemented) = trait_through(id, concrete, returns, &params);
+            (
+                implemented,
+                2,
+                format!("via{id}(Impl{id}(), a, b, ea, eb)"),
+                format!(
+                    "{declared}fn via{id}(o Op{id}<{concrete}>, a {concrete}, b {concrete}, \
+                     ea {concrete}, eb {concrete}) {returns}\n    return o.run(a, b, ea, eb)\n"
+                ),
+            )
+        }
+        Context::TraitBoundedParameter => {
+            let (declared, implemented) = trait_through(id, concrete, returns, &params);
+            (
+                implemented,
+                2,
+                format!("go{id}(Impl{id}(), a, b, ea, eb)"),
+                format!(
+                    "{declared}fn go{id}<X implements Op{id}<{concrete}>>(x X, a {concrete}, \
+                     b {concrete}, ea {concrete}, eb {concrete}) {returns}\n    \
+                     return x.run(a, b, ea, eb)\n"
+                ),
+            )
+        }
     };
     items.push_str(&header);
     let indent = "    ".repeat(depth);

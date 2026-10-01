@@ -85,6 +85,14 @@ pub enum Context {
     /// A default method of a generic trait, reached through a non-generic
     /// class that implements the trait at the type.
     TraitDefault,
+    /// A method of a generic enum instantiated at the type.
+    GenericEnumMethod,
+    /// A class's own method, reached through a parameter declared at the
+    /// generic trait the class implements at the type.
+    TraitTypedParameter,
+    /// A class's own method, reached through a generic function's parameter
+    /// bounded by the trait the class implements at the type.
+    TraitBoundedParameter,
 }
 
 pub const SLOTS: &[Slot] = &[
@@ -133,6 +141,9 @@ pub const CONTEXTS: &[Context] = &[
     Context::GenericClassMethod,
     Context::InheritedMethod,
     Context::TraitDefault,
+    Context::GenericEnumMethod,
+    Context::TraitTypedParameter,
+    Context::TraitBoundedParameter,
 ];
 
 impl Slot {
@@ -226,19 +237,40 @@ impl Context {
             Context::GenericClassMethod => "generic_class",
             Context::InheritedMethod => "inherited",
             Context::TraitDefault => "trait_default",
+            Context::GenericEnumMethod => "generic_enum",
+            Context::TraitTypedParameter => "trait_param",
+            Context::TraitBoundedParameter => "trait_bound",
         }
     }
 
+    /// Whether the cell's body is written against the type parameter `T`
+    /// rather than the concrete type. A body reached through a trait is the
+    /// implementing class's own method, written at the concrete type.
     pub fn is_generic(self) -> bool {
-        !matches!(self, Context::Monomorphic)
+        !matches!(
+            self,
+            Context::Monomorphic | Context::TraitTypedParameter | Context::TraitBoundedParameter
+        )
     }
 
     /// Whether the context is judged in `slot`. A trait default body is
     /// compiled per implementor whatever the slot, so the local slot alone
     /// covers it; running it everywhere would only repeat the local verdict
-    /// at the cost of a program per crashing cell.
+    /// at the cost of a program per crashing cell. The enum and trait
+    /// contexts differ from the others in how the body is reached, not in
+    /// where the value is kept, so a scalar-held slot and a collection
+    /// element cover them.
     fn covers(self, slot: Slot) -> bool {
-        self != Context::TraitDefault || slot == Slot::Local
+        match self {
+            Context::TraitDefault => slot == Slot::Local,
+            Context::GenericEnumMethod
+            | Context::TraitTypedParameter
+            | Context::TraitBoundedParameter => matches!(slot, Slot::Local | Slot::ListElement),
+            Context::Monomorphic
+            | Context::GenericFunction
+            | Context::GenericClassMethod
+            | Context::InheritedMethod => true,
+        }
     }
 }
 
