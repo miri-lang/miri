@@ -138,6 +138,119 @@ fn main()
     );
 }
 
+/// `int` is a type of its own, not a stand-in for every integer: a list of
+/// another width read as a `List<int>` would be read at the wrong stride.
+#[test]
+fn a_list_of_another_integer_width_is_not_a_list_of_int() {
+    for element in ["i32", "i64", "i128", "u8"] {
+        assert_compiler_error(
+            &format!(
+                r#"
+use system.collections.list
+
+fn show(xs List<int>)
+    println(f"{{xs[0]}}")
+
+fn main()
+    let xs List<{element}> = List([1, 2, 3])
+    show(xs)
+"#
+            ),
+            &format!("expected List<int>, got List<{element}>"),
+        );
+    }
+}
+
+/// A `float` argument is no more a stand-in for every float width.
+#[test]
+fn a_list_of_another_float_width_is_not_a_list_of_float() {
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+fn show(xs List<float>)
+    println(f"{xs[0]}")
+
+fn main()
+    let xs List<f32> = List([1.5, 2.5])
+    show(xs)
+"#,
+        "expected List<float>, got List<f32>",
+    );
+}
+
+const WIDE: &str = r#"
+enum E<A, B>
+    L(A)
+    R(B, A)
+"#;
+
+/// An enum argument fixes its payload slot width the same way.
+#[test]
+fn an_enum_at_another_integer_argument_is_refused_either_way() {
+    for (param, value) in [("int", "i128"), ("i8", "int")] {
+        assert_compiler_error(
+            &format!(
+                r#"{WIDE}
+fn show(e E<String, {param}>)
+    match e
+        E.R(n, s): println(f"r {{s}} {{n}}")
+        E.L(s): println(f"l {{s}}")
+
+fn make(n {value}) E<String, {value}>
+    return E.R(n, "t" + "u")
+
+fn main()
+    show(make(7))
+"#
+            ),
+            &format!("expected E<String, {param}>, got E<String, {value}>"),
+        );
+    }
+}
+
+/// A literal payload is built where it is written, so the variant takes the
+/// width the location declares; a payload read from elsewhere does not.
+#[test]
+fn a_literal_payload_takes_the_declared_argument_width() {
+    assert_heap_guard_output(
+        &format!(
+            r#"{WIDE}
+fn show(e E<String, i128>)
+    match e
+        E.R(n, s): println(f"r {{s}} {{n}}")
+        E.L(s): println(f"l {{s}}")
+
+fn make() E<String, i128>
+    return E.R(5, "t" + "u")
+
+fn main()
+    let e E<String, i128> = E.R(-5000000000, "m" + "n")
+    show(e)
+    show(make())
+    show(E.R(7, "c" + "d"))
+"#
+        ),
+        "r mn -5000000000\nr tu 5\nr cd 7",
+    );
+}
+
+#[test]
+fn a_variable_payload_does_not_take_the_declared_argument_width() {
+    assert_compiler_error(
+        &format!(
+            r#"{WIDE}
+fn make(n int) E<String, i128>
+    return E.R(n, "t" + "u")
+
+fn main()
+    let e = make(5)
+"#
+        ),
+        "Type Mismatch",
+    );
+}
+
 /// An optional element is laid out wider than the value it wraps.
 #[test]
 fn a_list_of_values_is_not_a_list_of_optionals() {

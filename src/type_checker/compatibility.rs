@@ -252,6 +252,28 @@ impl TypeChecker {
         second: &Type,
         context: &Context,
     ) -> bool {
+        // A scalar argument fixes the width of every value the type holds at
+        // it, so two agree only when they are the same scalar. The widening
+        // and literal rules a single value is stored under would let an
+        // `int` argument agree with every integer, and a `List<i32>` be read
+        // as a `List<int>` at twice its element width.
+        if crate::ast::types::scalar_width(&first.kind).is_some()
+            && crate::ast::types::scalar_width(&second.kind).is_some()
+        {
+            return first.kind == second.kind;
+        }
+        self.are_compatible(first, second, context) && self.are_compatible(second, first, context)
+    }
+
+    /// Whether a parameter or result type of two function types agree.
+    ///
+    /// TODO: two scalars agree here under the widening and literal rules, so a
+    /// `fn(x i32) i32` is stored where a `fn(x int) int` is declared and called
+    /// at the wider layout. GPU folds (`reduce(0, fn(a i32, b i32) i32: ...)`
+    /// over an array of `int` literals) rely on it, because a device `int` is
+    /// 32 bits; making signatures as strict as stored type arguments needs that
+    /// convention settled first.
+    fn signature_types_agree(&self, first: &Type, second: &Type, context: &Context) -> bool {
         self.are_compatible(first, second, context) && self.are_compatible(second, first, context)
     }
 
@@ -498,8 +520,8 @@ impl TypeChecker {
         Some(false)
     }
 
-    /// Checks inner type compatibility for collections.
-    fn is_float_kind(kind: &TypeKind) -> bool {
+    /// Whether `kind` is a floating-point type, `float` included.
+    pub(crate) fn is_float_kind(kind: &TypeKind) -> bool {
         matches!(
             kind,
             TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64
@@ -670,7 +692,7 @@ impl TypeChecker {
                 let t2 = self
                     .extract_type_from_expression(&p2.typ)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
-                if !self.type_arguments_agree(&t1, &t2, context) {
+                if !self.signature_types_agree(&t1, &t2, context) {
                     return Some(false);
                 }
             }
@@ -687,7 +709,7 @@ impl TypeChecker {
                 .and_then(|r| self.extract_type_from_expression(r).ok())
                 .unwrap_or(crate::ast::factory::make_type(TypeKind::Void));
 
-            return Some(self.type_arguments_agree(&r1, &r2, context));
+            return Some(self.signature_types_agree(&r1, &r2, context));
         }
         None
     }

@@ -111,6 +111,16 @@ impl TypeChecker {
             {
                 return fits;
             }
+            if let Some((expr, widened)) = expr.and_then(|expr| {
+                self.literal_payloads_widen_to(expected, actual, expr, context)
+                    .map(|widened| (expr, widened))
+            }) {
+                // Lowering lays the variant out at the type recorded for it,
+                // whatever location it is written into.
+                self.type_table.types.insert(expr.id, widened);
+                self.settle_value_at(expr, expected, context);
+                return true;
+            }
             if let Some(expr) = expr.filter(|expr| self.open_generic_calls.contains(expr.id)) {
                 self.note_open_call_mismatch(expr.id, expected);
             }
@@ -205,6 +215,97 @@ impl TypeChecker {
         }
         self.type_table.types.insert(expr.id, built);
         Some(true)
+    }
+
+    /// The type `expr`, a variant constructor inferred as `actual`, is built at
+    /// where `expected` is declared, when the two differ only in scalar type
+    /// arguments that `actual` took from a literal payload.
+    ///
+    /// `E.R(5, s)` is inferred `E<String, int>`: the literal's own type is the
+    /// argument. Built where an `E<String, i128>` is declared, the literal is
+    /// written at the declared width, as a literal is wherever it is stored. A
+    /// payload read from elsewhere (`E.R(n, s)` with `n` an `int`) is already
+    /// laid out at its own width, so its argument must agree exactly.
+    ///
+    /// TODO: only a constructor written at the location is widened. One nested
+    /// in another value built in place (`Some(E.R(9, s))` at an
+    /// `E<String, i128>?`, the elements of `List([E.R(3, s)])` at a
+    /// `List<E<String, i128>>`) is refused, though its literal could be built
+    /// at the declared width the same way.
+    fn literal_payloads_widen_to(
+        &self,
+        expected: &Type,
+        actual: &Type,
+        expr: &Expression,
+        context: &Context,
+    ) -> Option<Type> {
+        let ExpressionKind::Call(callee, arguments) = &expr.node else {
+            return None;
+        };
+        if !self.constructs_a_variant(callee, context) {
+            return None;
+        }
+        let payload_reads_a_scalar = arguments.iter().any(|argument| {
+            let value = match &argument.node {
+                ExpressionKind::NamedArgument(_, value) => value.as_ref(),
+                _ => argument,
+            };
+            let is_literal = match &value.node {
+                ExpressionKind::Literal(..) => true,
+                ExpressionKind::Unary(_, operand) => {
+                    matches!(operand.node, ExpressionKind::Literal(..))
+                }
+                _ => false,
+            };
+            !is_literal
+                && self
+                    .get_type(value.id)
+                    .is_some_and(|ty| matches!(ty.kind, TypeKind::Int | TypeKind::Float))
+        });
+        if payload_reads_a_scalar {
+            return None;
+        }
+        let widened = self.literal_arguments_widened(actual, expected);
+        (widened != *actual && self.are_compatible(expected, &widened, context)).then_some(widened)
+    }
+
+    /// `actual` with each type argument it holds as a literal's own type, `int` or
+    /// `float`, replaced by the integer or float type `expected` spells there.
+    fn literal_arguments_widened(&self, actual: &Type, expected: &Type) -> Type {
+        let (
+            TypeKind::Custom(name, Some(arguments)),
+            TypeKind::Custom(expected_name, Some(declared)),
+        ) = (&actual.kind, &expected.kind)
+        else {
+            return actual.clone();
+        };
+        if name != expected_name || arguments.len() != declared.len() {
+            return actual.clone();
+        }
+        let widened = arguments
+            .iter()
+            .zip(declared)
+            .map(|(argument, declared)| {
+                let (
+                    ExpressionKind::Type(argument_ty, false),
+                    ExpressionKind::Type(declared_ty, false),
+                ) = (&argument.node, &declared.node)
+                else {
+                    return argument.clone();
+                };
+                let takes_declared = match argument_ty.kind {
+                    TypeKind::Int => self.is_integer(declared_ty),
+                    TypeKind::Float => Self::is_float_kind(&declared_ty.kind),
+                    _ => false,
+                };
+                if takes_declared {
+                    declared.clone()
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect();
+        Type::new(TypeKind::Custom(name.clone(), Some(widened)), actual.span)
     }
 
     /// Whether the tuple literal `expr`, with elements `values`, may be built
