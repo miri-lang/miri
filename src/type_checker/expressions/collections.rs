@@ -124,6 +124,11 @@ impl TypeChecker {
 
     /// Settle `expr` at `expected` and report each value it reads that was
     /// built elsewhere at a layout `expected` does not hold.
+    ///
+    /// TODO: a read of a local binding written without a type is refused here
+    /// even though the binding could be refined to `expected` the way a later
+    /// store refines it (`refine_binding_for_store`), so `let e = E.L(s)` then
+    /// `show(e)` at a type binding the open argument asks for a written type.
     pub(crate) fn settle_value_at(
         &mut self,
         expr: &Expression,

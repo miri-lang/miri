@@ -216,8 +216,8 @@ fn main()
 }
 
 #[test]
-fn a_named_argument_binding_a_receivers_open_argument_is_refused() {
-    assert_compiler_error(
+fn a_named_argument_binding_a_receivers_open_argument_refines_the_receiver() {
+    assert_heap_guard_output(
         &with_e(
             r#"
 fn make() E<String, i128>
@@ -226,10 +226,11 @@ fn make() E<String, i128>
 fn main()
     let xs = List([E.L("s" + "")])
     xs.push(item: make())
-    println(f"{xs.length()}")
+    for x in xs
+        show(x)
 "#,
         ),
-        "leaves `B` unbound",
+        "l s\nr tu",
     );
 }
 

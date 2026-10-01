@@ -52,6 +52,15 @@ pub enum LeftHandSideExpression {
 }
 
 impl LeftHandSideExpression {
+    /// The expression the target is written as.
+    pub fn expression(&self) -> &Expression {
+        match self {
+            LeftHandSideExpression::Identifier(e)
+            | LeftHandSideExpression::Member(e)
+            | LeftHandSideExpression::Index(e) => e,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             LeftHandSideExpression::Identifier(e) => e.span,

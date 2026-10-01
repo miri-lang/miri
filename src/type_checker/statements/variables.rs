@@ -264,6 +264,9 @@ impl TypeChecker {
         // Track whether this binding is at module scope (public API surface).
         let is_at_module_scope = context.scopes.len() == 1;
         info.module_scope = is_at_module_scope;
+        if decl.typ.is_none() && !is_at_module_scope {
+            info.inferred_from = decl.initializer.as_ref().map(|init| init.id);
+        }
 
         if is_at_module_scope {
             self.type_table
@@ -545,6 +548,23 @@ impl TypeChecker {
     ///
     /// When both are present, validates compatibility and returns the declared type.
     /// Warns when immutable variables are unnecessarily declared optional.
+    /// The type of a binding a later store refined to `refined`: its
+    /// initializer, inferred at `inferred`, is built at the refined type as it
+    /// would be at a written one, so lowering sizes the binding to hold both.
+    fn settle_refined_binding(
+        &mut self,
+        init: &Expression,
+        refined: Type,
+        inferred: Type,
+        context: &mut Context,
+    ) -> Type {
+        if !self.accepts_value_at(&refined, &inferred, Some(init), context) {
+            return inferred;
+        }
+        self.type_table.types.insert(init.id, refined.clone());
+        refined
+    }
+
     pub(crate) fn determine_variable_type(
         &mut self,
         decl: &VariableDeclaration,
@@ -567,6 +587,14 @@ impl TypeChecker {
             // than a type spelled in the callee's own parameters.
             if decl.typ.is_none() && self.refuse_open_generic_calls_since(open_calls) {
                 return make_type(TypeKind::Error);
+            }
+            if let Some(refined) = decl
+                .typ
+                .is_none()
+                .then(|| self.refined_binding_type(init))
+                .flatten()
+            {
+                return self.settle_refined_binding(init, refined, inferred, context);
             }
             inferred
         } else if let Some(type_expr) = &decl.typ {
