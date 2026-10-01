@@ -572,7 +572,7 @@ impl TypeChecker {
                 .iter()
                 .any(|slot| slots.contains(slot));
             if binds_a_receiver_slot
-                && !self.refine_binding_for_store(receiver, &param_ty, arg_ty, context)
+                && !self.refine_binding_to_hold(receiver, &param_ty, arg_ty, context)
             {
                 self.refuse_binding_an_inference_slot(
                     &param_ty,
