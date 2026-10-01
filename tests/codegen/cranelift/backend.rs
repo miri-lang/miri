@@ -125,9 +125,17 @@ fn test_set_runtime_imports() {
 
     backend.set_runtime_imports(vec![import]);
 
+    // An object with no code has no sections, which a Mach-O reader refuses
+    // to parse, so the module carries one empty body beside the import.
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
+    let mut block = BasicBlockData::new(None);
+    block.terminator = Some(Terminator::new(TerminatorKind::Return, Span::default()));
+    body.basic_blocks.push(block);
+
     let options = CraneliftOptions::default();
     let artifact = backend
-        .compile(&[], &options)
+        .compile(&[("test_runtime_import_host", &body)], &options)
         .expect("Compilation with runtime imports should succeed");
 
     assert_eq!(artifact.format, ArtifactFormat::ObjectFile);
