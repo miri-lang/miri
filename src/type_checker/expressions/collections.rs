@@ -123,12 +123,9 @@ impl TypeChecker {
     }
 
     /// Settle `expr` at `expected` and report each value it reads that was
-    /// built elsewhere at a layout `expected` does not hold.
-    ///
-    /// TODO: a read of a local binding written without a type is refused here
-    /// even though the binding could be refined to `expected` the way a later
-    /// store refines it (`refine_binding_for_store`), so `let e = E.L(s)` then
-    /// `show(e)` at a type binding the open argument asks for a written type.
+    /// built elsewhere at a layout `expected` does not hold, unless it reads a
+    /// local binding written without a type, which is refined to hold
+    /// `expected` instead.
     pub(crate) fn settle_value_at(
         &mut self,
         expr: &Expression,
@@ -138,6 +135,9 @@ impl TypeChecker {
         let mut built_elsewhere = Vec::new();
         self.settle_at_expected(expr, expected, context, &mut built_elsewhere);
         for (read, read_type) in built_elsewhere {
+            if self.refine_binding_to_hold(read, &read_type, expected, context) {
+                continue;
+            }
             let unbound = self
                 .inference_slots_bound_by(&read_type, expected, context)
                 .join("`, `");

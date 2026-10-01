@@ -235,10 +235,10 @@ fn main()
 }
 
 #[test]
-fn a_value_already_built_with_the_argument_open_is_refused_where_it_is_bound() {
-    // `e` was built as an `E<String, B>`, at the narrower layout; it cannot be
-    // rebuilt now, so passing it where an `E<String, i128>` is read is refused.
-    assert_compiler_error(
+fn a_binding_read_where_its_open_argument_is_bound_is_built_at_that_type() {
+    // `e` is written without a type, so reading it as an `E<String, i128>`
+    // refines it: it is built at the wider layout from its declaration on.
+    assert_heap_guard_output(
         &with_e(
             r#"
 fn main()
@@ -246,7 +246,27 @@ fn main()
     show(e)
 "#,
         ),
-        "leaves `B` unbound",
+        "l a",
+    );
+}
+
+#[test]
+fn a_binding_read_at_two_bindings_of_its_open_argument_is_refused() {
+    assert_compiler_error(
+        &with_e(
+            r#"
+fn show_narrow(e E<String, i8>)
+    match e
+        E.R(n, s): println(f"r {s}")
+        E.L(s): println(f"l {s}")
+
+fn main()
+    let e = E.L("a" + "")
+    show(e)
+    show_narrow(e)
+"#,
+        ),
+        "expected E<String, i8>, got E<String, i128>",
     );
 }
 

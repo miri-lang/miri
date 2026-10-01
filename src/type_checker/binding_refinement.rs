@@ -5,13 +5,14 @@
 //! and a variant constructor leaves open every type argument its payload does
 //! not name: `var e = E.L(s)` is an `E<String, B>`. A value of that type is laid
 //! out without `B`. When a later store into the binding binds `B` — `e = make()`
-//! with an `E<String, i128>`, or `xs.push(make())` into a list of them — the
-//! binding has to hold the wider layout from its declaration on, or the stored
-//! value and the one already there disagree about where their fields are.
+//! with an `E<String, i128>`, or `xs.push(make())` into a list of them — or a
+//! read hands it where `B` is bound (`show(e)` for a parameter typed
+//! `E<String, i128>`), the binding has to hold the wider layout from its
+//! declaration on, or the two values disagree about where their fields are.
 //!
-//! Types are settled in one forward pass, so the store is reached after the
+//! Types are settled in one forward pass, so the use is reached after the
 //! declaration was recorded. Rather than patching what that pass recorded, the
-//! store records the binding's refined type and the function body is checked
+//! use records the binding's refined type and the function body is checked
 //! again, with the declaration taking the refined type as if it were written
 //! there. Every expression the body records — the initializer, each read of the
 //! binding, each value built from one — is then recorded at the refined type
@@ -118,11 +119,16 @@ impl TypeChecker {
         self.binding_refinements.refined.get(&init.id).cloned()
     }
 
-    /// Refine the local binding `place` is rooted in so that it can hold
-    /// `source`, a value that binds the inference slots of `target`, the type
-    /// the store reads `place` at. Returns whether it was refined, in which
-    /// case the body is checked again and the store needs no refusal.
-    pub(crate) fn refine_binding_for_store(
+    /// Refine the local binding `place` is rooted in so that it holds what
+    /// `source` binds the inference slots of `target`, the type `place` is
+    /// read at: `source` is the value a store writes there, or the type a
+    /// read of `place` is used at. Returns whether it was refined, in which
+    /// case the body is checked again and the use needs no refusal.
+    ///
+    /// A binding refined earlier in the pass keeps what it was refined to: a
+    /// second use that binds the same argument differently is judged against
+    /// that type on the next pass, and refused there as a mismatch.
+    pub(crate) fn refine_binding_to_hold(
         &mut self,
         place: &Expression,
         target: &Type,
@@ -145,7 +151,13 @@ impl TypeChecker {
         if bound.is_empty() {
             return false;
         }
-        let refined = self.substitute_type(&info.ty, &bound);
+        let base = self
+            .binding_refinements
+            .refined
+            .get(&init_id)
+            .cloned()
+            .unwrap_or_else(|| info.ty.clone());
+        let refined = self.substitute_type(&base, &bound);
         if refined == info.ty {
             return false;
         }
