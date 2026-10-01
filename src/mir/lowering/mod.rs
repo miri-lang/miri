@@ -799,7 +799,10 @@ pub fn monomorphized_self_type(
     span: crate::error::syntax::Span,
 ) -> Type {
     let generics = match tc.type_definitions().get(class_name) {
-        Some(crate::type_checker::context::TypeDefinition::Class(cd)) => cd.generics.as_deref(),
+        Some(
+            definition @ (crate::type_checker::context::TypeDefinition::Class(_)
+            | crate::type_checker::context::TypeDefinition::Enum(_)),
+        ) => definition.generics(),
         _ => None,
     };
     let Some(generics) = generics.filter(|g| !g.is_empty()) else {

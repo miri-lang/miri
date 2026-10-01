@@ -366,3 +366,32 @@ fn main()
         "true,false",
     );
 }
+
+/// A generic enum's method is compiled at each instantiation it is called
+/// at, so a managed `T` it hands back is retained for the caller and a
+/// narrow scalar `T` is passed at its own width.
+#[test]
+fn a_generic_enum_method_runs_at_each_instantiation() {
+    assert_heap_guard_output(
+        r#"
+enum Cell<T>
+    Only(T)
+
+    fn pick(a T, b T) T
+        return b
+
+fn main()
+    let s = Cell.Only("a" + "").pick("b" + "", "c" + "")
+    let one u8 = 1
+    let two u8 = 2
+    let three u8 = 3
+    let small = Cell.Only(one).pick(two, three)
+    let low i128 = 1
+    let high i128 = 170141183460469231731687303715884105727
+    let wide = Cell.Only(low).pick(low, high)
+    let flag = Cell.Only(true).pick(true, false)
+    println(f"{s} {small} {flag} {wide == high}")
+"#,
+        "c 3 false true",
+    );
+}

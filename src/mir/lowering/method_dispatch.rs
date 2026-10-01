@@ -824,6 +824,9 @@ pub(crate) fn instantiated_callee(
     resolved: &[Type],
     method_name: &str,
 ) -> Option<InstantiatedCallee> {
+    if let Some(TypeDefinition::Enum(enum_def)) = defs.get(name) {
+        return instantiated_enum_callee(defs, name, enum_def, resolved, method_name);
+    }
     let Some(TypeDefinition::Class(class_def)) = defs.get(name) else {
         return None;
     };
@@ -854,6 +857,35 @@ pub(crate) fn instantiated_callee(
         owner,
         owner_subs,
         symbol,
+    })
+}
+
+/// The per-instantiation body of `method_name` on the generic enum `name` at
+/// `resolved`, or `None` when the enum declares no parameters or `resolved`
+/// has no monomorphized spelling.
+///
+/// An enum has no ancestors, so the body is its own method compiled at its
+/// own arguments: a shared body reads a managed `T` as an unmanaged word and a
+/// narrow scalar at the wrong width.
+fn instantiated_enum_callee(
+    defs: &HashMap<String, TypeDefinition>,
+    name: &str,
+    enum_def: &crate::type_checker::context::EnumDefinition,
+    resolved: &[Type],
+    method_name: &str,
+) -> Option<InstantiatedCallee> {
+    let gens = enum_def.generics.as_ref()?;
+    if !super::is_monomorphized_instantiation(resolved, gens.len(), defs) {
+        return None;
+    }
+    Some(InstantiatedCallee {
+        owner: name.to_string(),
+        owner_subs: gens
+            .iter()
+            .zip(resolved)
+            .map(|(g, t)| (g.name.clone(), t.clone()))
+            .collect(),
+        symbol: Symbol::method(name, resolved, method_name, &[]).link_name(),
     })
 }
 
@@ -893,10 +925,14 @@ fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(Strin
         return None;
     };
     let defs = &ctx.type_checker.type_definitions();
-    let Some(TypeDefinition::Class(class_def)) = defs.get(name.as_str()) else {
+    let definition = defs.get(name.as_str())?;
+    if !matches!(
+        definition,
+        TypeDefinition::Class(_) | TypeDefinition::Enum(_)
+    ) {
         return None;
-    };
-    let Some(gens) = class_def.generics.as_ref() else {
+    }
+    let Some(gens) = definition.generics() else {
         return Some((name.clone(), Vec::new()));
     };
     let resolved = super::monomorphized_arguments(arg_exprs.as_ref()?, gens.len(), defs)?;

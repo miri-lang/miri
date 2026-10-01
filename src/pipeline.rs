@@ -1792,12 +1792,16 @@ impl Pipeline {
         class_name: &str,
         admits: &dyn Fn(&TypeKind) -> bool,
     ) -> Vec<InstantiationSub> {
-        let Some(TypeDefinition::Class(def)) =
-            result.type_checker.type_definitions().get(class_name)
-        else {
+        let definition = result.type_checker.type_definitions().get(class_name);
+        let Some(definition) = definition.filter(|definition| {
+            matches!(
+                definition,
+                TypeDefinition::Class(_) | TypeDefinition::Enum(_)
+            )
+        }) else {
             return Vec::new();
         };
-        let Some(generics) = def.generics.as_ref() else {
+        let Some(generics) = definition.generics() else {
             return Vec::new();
         };
         let Some(instantiations) = result
@@ -1935,18 +1939,11 @@ impl Pipeline {
     ) -> Vec<WantedMethod> {
         let mut wanted = Vec::new();
         for (class_site, stmt) in statements_with_sites(result) {
-            let StatementKind::Class(class_data) = &stmt.node else {
+            let Some((class_name, methods)) =
+                Self::methods_compiled_per_instance(result, reach, stmt)
+            else {
                 continue;
             };
-            let Some(class_name) = Self::identifier_name(&class_data.name) else {
-                continue;
-            };
-            let methods = Self::methods_compiled_under_class_name(
-                result,
-                &reach.trait_defaults,
-                class_data,
-                class_name,
-            );
             for (class_subs, mangle_args) in
                 Self::monomorphizable_instantiation_subs(result, class_name)
             {
@@ -1994,17 +1991,12 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let Some(StatementKind::Class(class_data)) =
-            wanted.class_site.statement(result).map(|stmt| &stmt.node)
-        else {
+        let Some(stmt) = wanted.class_site.statement(result) else {
             return Ok(());
         };
-        let methods = Self::methods_compiled_under_class_name(
-            result,
-            &reach.trait_defaults,
-            class_data,
-            &wanted.class_name,
-        );
+        let Some((_, methods)) = Self::methods_compiled_per_instance(result, reach, stmt) else {
+            return Ok(());
+        };
         let Some(&(method_stmt, _)) = methods.get(wanted.method_index) else {
             return Ok(());
         };
@@ -2030,6 +2022,46 @@ impl Pipeline {
             symbols,
             compilation_ids,
         )
+    }
+
+    /// The type `stmt` declares and the methods it compiles once per
+    /// instantiation, in a stable order: a class's own methods and the trait
+    /// defaults its clauses supply, or a generic enum's methods. `None` for
+    /// any other statement, and for an enum that declares no parameters,
+    /// whose methods are compiled once.
+    fn methods_compiled_per_instance<'r>(
+        result: &'r PipelineResult,
+        reach: &ReachTables,
+        stmt: &'r Statement,
+    ) -> Option<(&'r str, Vec<(&'r Statement, &'r str)>)> {
+        match &stmt.node {
+            StatementKind::Class(class_data) => {
+                let class_name = Self::identifier_name(&class_data.name)?;
+                let methods = Self::methods_compiled_under_class_name(
+                    result,
+                    &reach.trait_defaults,
+                    class_data,
+                    class_name,
+                );
+                Some((class_name, methods))
+            }
+            StatementKind::Enum(name_expr, Some(_), _, methods, _, _) => {
+                let enum_name = Self::identifier_name(name_expr)?;
+                let methods = methods
+                    .iter()
+                    .filter_map(|method_stmt| {
+                        let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                            return None;
+                        };
+                        decl.body
+                            .is_some()
+                            .then_some((method_stmt, decl.name.as_str()))
+                    })
+                    .collect();
+                Some((enum_name, methods))
+            }
+            _ => None,
+        }
     }
 
     /// Every method with a body `class_data` compiles under its own name: the
@@ -2111,10 +2143,15 @@ impl Pipeline {
         use crate::ast::types::ORDERING_TRAIT_NAME;
         use crate::type_checker::context::{class_implements_trait, class_method_declaration};
         let definitions = result.type_checker.type_definitions();
+        let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
+        // An enum's own `equals` is what `==` on it, and a set or map holding
+        // it, compare through: the synthesized structural equality calls it.
+        if let Some(TypeDefinition::Enum(enum_def)) = definitions.get(class_name) {
+            return method_name == equals && enum_def.methods.contains_key(equals);
+        }
         if !matches!(definitions.get(class_name), Some(TypeDefinition::Class(_))) {
             return false;
         }
-        let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
         if method_name == ordering {
             return class_implements_trait(class_name, ORDERING_TRAIT_NAME, definitions);
         }
