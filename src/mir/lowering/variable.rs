@@ -279,9 +279,53 @@ fn lower_single_variable(
 
     if let Some(init_expr) = init_expr_opt {
         assign_variable_initializer(ctx, local, init_expr, pre_lowered_op, &var_ty_kind, span)?;
+        clear_moved_resource_source(ctx, init_expr, *span);
     }
     ctx.bind_local_name(decl.name.clone(), local);
     Ok(())
+}
+
+/// Leave the local a resource was moved out of holding nothing.
+///
+/// `var b = a` moves a value with a drop hook: the type checker consumes `a`,
+/// so nothing reads it again. The copy into `b` shares the reference, and were
+/// `a` to keep its own, `b.drop()` would not release the last one and the hook
+/// would run only when `a`'s scope ends. Clearing `a`'s slot hands its
+/// reference to `b`, and the release at `a`'s scope exit finds nothing. A
+/// parameter's reference belongs to the caller, so moving one out of a
+/// parameter leaves it alone.
+fn clear_moved_resource_source(ctx: &mut LoweringContext, init_expr: &Expression, span: Span) {
+    let ExpressionKind::Identifier(name, _) = &init_expr.node else {
+        return;
+    };
+    let Some(source) = ctx
+        .variable_map
+        .get(name.as_str())
+        .copied()
+        .filter(|local| local.0 > ctx.body.arg_count)
+    else {
+        return;
+    };
+    let source_ty = ctx.body.local_decls[source.0].ty.clone();
+    if !crate::type_checker::utils::runs_drop_hook(
+        &source_ty.kind,
+        ctx.type_checker.type_definitions(),
+    ) {
+        return;
+    }
+    let null = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: source_ty,
+        literal: Literal::None,
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::DecRef(Place::new(source)),
+        span,
+    });
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(source), Rvalue::Use(null)),
+        span,
+    });
 }
 
 /// Apply shared-storage and host/gpu residency metadata to a freshly-declared

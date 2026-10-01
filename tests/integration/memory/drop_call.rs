@@ -79,6 +79,63 @@ fn main()
     );
 }
 
+/// A move hands the reference on: `drop()` on the binding it was moved to is
+/// the last release, so the hook runs at the call, not when the binding it
+/// was moved out of leaves scope.
+#[test]
+fn test_drop_call_on_a_moved_local_runs_the_hook_at_the_call() {
+    assert_both_spellings_print(
+        r#"
+fn main()
+    var h = Handle(id: 1)
+    var g = h
+    var k = g
+    k.drop()
+    println("end")
+"#,
+        "dropped 1\nend",
+    );
+}
+
+/// A move that happens on one path only leaves the other path's value to be
+/// released at its scope exit, once.
+#[test]
+fn test_a_move_on_one_branch_releases_once_on_either_path() {
+    assert_both_spellings_print(
+        r#"
+fn run(c bool)
+    var h = Handle(id: 2)
+    if c
+        var g = h
+        g.drop()
+        println("moved")
+    println("end")
+
+fn main()
+    run(true)
+    run(false)
+"#,
+        "dropped 2\nmoved\nend\nend\ndropped 2",
+    );
+}
+
+/// The binding a resource was moved out of may be given a new one, which it
+/// then releases on its own.
+#[test]
+fn test_a_moved_out_binding_given_a_new_value_releases_only_that_value() {
+    assert_both_spellings_print(
+        r#"
+fn main()
+    var h = Handle(id: 3)
+    var g = h
+    h = Handle(id: 4)
+    g.drop()
+    println("mid")
+"#,
+        "dropped 3\nmid\ndropped 4",
+    );
+}
+
 #[test]
 fn test_drop_call_on_let_binding_runs_the_hook_once() {
     assert_both_spellings_print(

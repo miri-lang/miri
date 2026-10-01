@@ -66,13 +66,9 @@ fn release_call_result(
 }
 
 /// Releases a local the scope declared and clears its slot, so the release at
-/// the end of its scope finds nothing to release.
-///
-/// TODO: the release runs the hook only when this local holds the last
-/// reference. After `var g = h` the moved-from `h` still holds a retained copy
-/// until its own scope ends, so `g.drop()` runs the hook there instead of at the
-/// call: still once, but later than written. A resource move has to leave its
-/// source holding nothing for `drop()` to release on the spot.
+/// the end of its scope finds nothing to release. A local a resource was moved
+/// into holds its only reference, since the move cleared its source, so the
+/// hook runs here.
 ///
 /// A parameter's reference belongs to the caller, and a projection's to its
 /// container; releasing either here would release it twice. The type checker
