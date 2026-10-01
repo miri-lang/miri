@@ -130,6 +130,28 @@ impl TypeChecker {
         inferred.clone()
     }
 
+    /// The type of `operand`, typed `ty`, once an equality has bound the
+    /// generic call it is from `other`, the type of the operand it is compared
+    /// with: `x == none_of()` with `x` an `int?` builds `none_of` at `int`,
+    /// as storing its result where an `int?` is declared would. An operand
+    /// that is no open call, or one compared with another open call, keeps
+    /// its type.
+    fn bound_by_other_operand(
+        &mut self,
+        operand: &Expression,
+        ty: Type,
+        other: &Type,
+        context: &Context,
+    ) -> Type {
+        if !self.open_generic_calls.contains(operand.id)
+            || crate::type_checker::call_instantiation::holds_an_inference_slot(other)
+        {
+            return ty;
+        }
+        self.bind_open_call_from_expected(operand.id, other, context);
+        self.get_type(operand.id).cloned().unwrap_or(ty)
+    }
+
     pub(crate) fn infer_binary(
         &mut self,
         left: &Expression,
@@ -140,6 +162,13 @@ impl TypeChecker {
     ) -> Type {
         let left_ty = self.infer_expression(left, context);
         let right_ty = self.infer_expression(right, context);
+        let (left_ty, right_ty) = if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
+            let left_bound = self.bound_by_other_operand(left, left_ty.clone(), &right_ty, context);
+            let right_bound = self.bound_by_other_operand(right, right_ty, &left_ty, context);
+            (left_bound, right_bound)
+        } else {
+            (left_ty, right_ty)
+        };
 
         if let Some(error) = self.detect_residency_mismatch(left, op, right, context) {
             self.report_error(DiagnosticCode::TarGpuResidencyViolation, error, span);
