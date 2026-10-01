@@ -598,6 +598,26 @@ fn main()
     );
 }
 
+/// The refusal lands on a call that never names the failing method, so its
+/// help says which default handed the instance on and through which trait the
+/// method is reached.
+#[test]
+fn a_refusal_reached_by_handing_self_on_names_the_hand_off() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    let t = b.me()
+    println(f"{t.a()}")
+"#,
+        ),
+        "'me' hands its 'self', a 'Box<String>', on as a 'Tr', and 'a' is called through 'Tr', \
+         so 'a' is compiled at 'Box<String>'",
+    );
+}
+
 #[test]
 fn a_default_calling_through_an_alias_of_its_self_is_refused_at_the_instances_argument() {
     assert_compiler_error(
@@ -727,7 +747,8 @@ fn main()
 }
 
 /// A default that reads its `self` without handing it on as a trait value —
-/// a local alias, a `match` on it — converts nothing: a method invalid at
+/// a local alias, a `match` on it, a return at a written `Self`, which the
+/// caller reads at the receiver's own class — converts nothing: a method invalid at
 /// the instance and only ever called through the trait on another class is
 /// not pinned at that instance.
 #[test]
@@ -752,6 +773,7 @@ fn main()
     for default in [
         "    fn go() int\n        let s = self\n        return 1\n",
         "    fn go() int\n        match self\n            _: 1\n",
+        "    fn me2() Self\n        return self\n    fn go() int\n        let m = self.me2()\n        return 1\n",
     ] {
         assert_runs_with_output(
             &format!("trait Lt\n    fn a() bool\n{default}\n{rest}"),

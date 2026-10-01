@@ -298,6 +298,9 @@ pub(crate) struct PinningSite {
     /// Each pinned parameter of `callee`, by the name `callee` declares it with.
     pub(super) pins: HashMap<String, Pin>,
     pub(super) span: Span,
+    /// Why the program reaches `callee` here when no call to it is written at
+    /// `span`, said in a sentence a refusal at this site adds to its help.
+    pub(super) reached_because: Option<String>,
     /// The generic parameters of `caller` the site's pinned types spell, read
     /// while `caller`'s scope was the one being checked. A site derived from
     /// this one while answering reads a type argument as one of these
@@ -906,6 +909,7 @@ impl TypeChecker {
             pins,
             span,
             caller_parameters,
+            reached_because: None,
         })
     }
 
@@ -1036,7 +1040,7 @@ impl TypeChecker {
             crate::ast::formatter::helpers::unary_operator(written.op),
             parameter
         );
-        self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, site.span, help);
+        self.report_at_site(DiagnosticCode::TypTypeMismatch, message, site, help);
     }
 
     /// Report `site` when it pins the parameter a cast reads to a type that is
@@ -1056,13 +1060,13 @@ impl TypeChecker {
              a number",
             site.callee.1, parameter, written.target
         );
-        self.report_error_with_help(
+        self.report_at_site(
             DiagnosticCode::TypInvalidCast,
             format!(
                 "cannot cast from non-numeric type '{}' to '{}'",
                 source, written.target
             ),
-            site.span,
+            site,
             help,
         );
     }
@@ -1102,7 +1106,7 @@ impl TypeChecker {
             crate::ast::formatter::helpers::binary_operator(written.op),
             parameter
         );
-        self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, site.span, help);
+        self.report_at_site(DiagnosticCode::TypTypeMismatch, message, site, help);
     }
 
     /// Whether an ordering operator is refused at these pinned operands because
@@ -1182,6 +1186,22 @@ impl TypeChecker {
         spells_a_type(&ty.kind, &unsettled)
     }
 
+    /// Report a refusal at `site`, adding to `help` why the program reaches
+    /// the site's body when no call to it is written there.
+    fn report_at_site(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        site: &PinningSite,
+        help: String,
+    ) {
+        let help = match &site.reached_because {
+            Some(reason) => format!("{help}; {reason}"),
+            None => help,
+        };
+        self.report_error_with_help(code, message, site.span, help);
+    }
+
     /// Report `site` when it pins `parameter` to a type carrying no ordering.
     fn answer_ordering(&mut self, parameter: &str, site: &PinningSite) {
         let Some(Pin::Concrete(pinned)) = site.pins.get(parameter) else {
@@ -1190,10 +1210,10 @@ impl TypeChecker {
         if self.orders_its_values(pinned) {
             return;
         }
-        self.report_error_with_help(
+        self.report_at_site(
             DiagnosticCode::TypOrderingNotSupported,
             missing_ordering_at_instantiation_message(pinned),
-            site.span,
+            site,
             format!(
                 "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
                  define 'compare'",
@@ -1434,6 +1454,7 @@ mod tests {
                 .collect(),
             span: Span::new(0, 0),
             caller_parameters: Vec::new(),
+            reached_because: None,
         }
     }
 

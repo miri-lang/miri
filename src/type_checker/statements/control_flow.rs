@@ -1325,12 +1325,18 @@ impl TypeChecker {
             })
             .unwrap_or(actual_return_type);
 
-        if !self.accepts_value_at(
+        let outer = std::mem::replace(
+            &mut self.returning_at_written_self,
+            context.returns_written_self,
+        );
+        let accepted = self.accepts_value_at(
             &expected_return_type,
             &actual_return_type,
             expr_opt.as_deref(),
             context,
-        ) {
+        );
+        self.returning_at_written_self = outer;
+        if !accepted {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,
                 format!(

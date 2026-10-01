@@ -153,6 +153,12 @@ impl TypeChecker {
         let return_type = self.resolve_function_return_type(return_type_expr, context);
         context.return_types.push(return_type.clone());
         context.inferred_return_types.push(None);
+        let outer_returns_self = std::mem::replace(
+            &mut context.returns_written_self,
+            return_type_expr
+                .as_deref()
+                .is_some_and(crate::ast::types::is_written_self),
+        );
 
         let old_loop_depth = context.loop_depth;
         context.loop_depth = 0;
@@ -234,6 +240,7 @@ impl TypeChecker {
         context.exit_scope();
         context.return_types.pop();
         context.inferred_return_types.pop();
+        context.returns_written_self = outer_returns_self;
     }
 
     fn register_function_symbol(&mut self, declaration: RegisteredFunction, context: &mut Context) {

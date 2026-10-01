@@ -633,6 +633,10 @@ pub struct Context {
     pub return_types: Vec<Type>,
     /// Stack of inferred return types (used for lambdas/functions without explicit return type).
     pub inferred_return_types: Vec<Option<Vec<(Type, Span)>>>,
+    /// Whether the function being checked writes its return type as `Self`.
+    /// A value returned there reaches the caller at the receiver's own class,
+    /// not as a trait value, so returning `self` hands nothing on.
+    pub returns_written_self: bool,
     /// Current depth of nested loops (used to validate break/continue).
     pub loop_depth: usize,
     /// Current depth of nested `forall` bodies. Used to give a clearer error
@@ -680,6 +684,7 @@ impl Context {
             type_definitions: vec![HashMap::new()],
             return_types: Vec::new(),
             inferred_return_types: Vec::new(),
+            returns_written_self: false,
             loop_depth: 0,
             gpu_for_depth: 0,
             in_gpu_function: false,

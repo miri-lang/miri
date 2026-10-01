@@ -272,6 +272,9 @@ impl TypeChecker {
     /// counting it too can pin a method nothing reaches, never leave one
     /// reached unpinned.
     fn record_trait_value_handed_on(&mut self, declared: &str, actual: &Type, context: &Context) {
+        if self.returning_at_written_self {
+            return;
+        }
         let definitions = &self.type_table.global_type_definitions;
         if !matches!(
             definitions.get(declared),
@@ -477,24 +480,21 @@ impl TypeChecker {
                 let Some((class_name, substitution)) = self.class_instance(pinned) else {
                     continue;
                 };
-                let mut methods: Vec<String> = stated
-                    .iter()
-                    .filter_map(|obligation| obligation.method_run_on(parameter))
-                    .map(str::to_string)
-                    .collect();
-                if parameter == SELF_PIN {
-                    methods.extend(self.methods_called_through_self(stated, site));
-                }
-                methods.sort_unstable();
-                methods.dedup();
-                for method in &methods {
+                let methods = self.methods_run_on_pin(stated, site, parameter, pinned);
+                for (method, reason) in &methods {
                     let use_of = MethodUse {
                         class_name: &class_name,
                         method,
                         instance: pinned,
                         substitution: &substitution,
                     };
-                    derived.extend(self.derive_method_use(parent, site, &use_of, derivation));
+                    let reached = self.derive_method_use(parent, site, &use_of, derivation);
+                    derived.extend(reached.into_iter().map(|(mut reached_site, origin)| {
+                        if reason.is_some() {
+                            reached_site.reached_because = reason.clone();
+                        }
+                        (reached_site, origin)
+                    }));
                 }
             }
         }
@@ -506,15 +506,50 @@ impl TypeChecker {
         grew
     }
 
-    /// Every method a default pinned at `site` runs on its `self` by handing
-    /// it on as a trait value: each one the program calls through a receiver
-    /// of that trait, or of one above it, at arguments that agree with what
-    /// the site pins the trait's own parameters to.
+    /// Each method the body `site` pins runs on `pinned`, the instance it
+    /// pins `parameter` to, once, with why the program reaches it: `None` for
+    /// one the body runs on the parameter itself, which the site's call shows.
+    fn methods_run_on_pin(
+        &self,
+        stated: &[Obligation],
+        site: &PinningSite,
+        parameter: &str,
+        pinned: &Type,
+    ) -> Vec<(String, Option<String>)> {
+        let mut methods: Vec<(String, Option<String>)> = stated
+            .iter()
+            .filter_map(|obligation| obligation.method_run_on(parameter))
+            .map(|method| (method.to_string(), None))
+            .collect();
+        if parameter == SELF_PIN {
+            methods.extend(
+                self.methods_called_through_self(stated, site, pinned)
+                    .into_iter()
+                    .map(|(method, reason)| (method, Some(reason))),
+            );
+        }
+        methods.sort_unstable();
+        methods.dedup_by(|later, kept| later.0 == kept.0);
+        methods
+    }
+
+    /// Every method a default pinned at `site` runs on its `self`, the
+    /// `instance`, by handing it on as a trait value: each one the program
+    /// calls through a receiver of that trait, or of one above it, at
+    /// arguments that agree with what the site pins the trait's own
+    /// parameters to. Each comes with the sentence saying so.
+    ///
+    /// TODO: a `self` handed to one body's trait-typed parameter pins every
+    /// method called through the trait anywhere, not only those that body
+    /// reaches on the parameter, so a method invalid at the instance and
+    /// called through the trait only on another class is refused. Pinning
+    /// precisely needs the receiving body and slot on the obligation.
     fn methods_called_through_self(
         &self,
         stated: &[Obligation],
         site: &PinningSite,
-    ) -> Vec<String> {
+        instance: &Type,
+    ) -> Vec<(String, String)> {
         let pinned: HashMap<String, Type> = site
             .pins
             .iter()
@@ -534,7 +569,14 @@ impl TypeChecker {
                     *name == call.trait_name && Self::arguments_agree(arguments, &call.arguments)
                 })
             });
-            methods.extend(called.map(|call| call.method.clone()));
+            methods.extend(called.map(|call| {
+                let reason = format!(
+                    "'{}' hands its 'self', a '{instance}', on as a '{trait_name}', and '{}' is \
+                     called through '{}', so '{}' is compiled at '{instance}'",
+                    site.callee.1, call.method, call.trait_name, call.method
+                );
+                (call.method.clone(), reason)
+            }));
         }
         methods
     }
@@ -824,6 +866,7 @@ fn derived_site(
         pins,
         span: parent.span,
         caller_parameters: parent.caller_parameters.clone(),
+        reached_because: parent.reached_because.clone(),
     }
 }
 
