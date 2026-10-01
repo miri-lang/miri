@@ -30,6 +30,13 @@ pub enum Slot {
     ClosureCapture,
     /// The field of a generic struct instantiated at the type.
     GenericField,
+    /// An element of a `List` handed to a generic function as a `List<U>`
+    /// parameter and read back there.
+    GenericListParameter,
+    /// The first field of a base class with three type parameters, reached
+    /// through a subclass that `extends` it at the type, an `int` and a
+    /// `String`.
+    TripleInheritedField,
 }
 
 /// What is done to the value in its slot.
@@ -95,6 +102,8 @@ pub const SLOTS: &[Slot] = &[
     Slot::Return,
     Slot::ClosureCapture,
     Slot::GenericField,
+    Slot::GenericListParameter,
+    Slot::TripleInheritedField,
 ];
 
 pub const OPERATIONS: &[Operation] = &[
@@ -143,6 +152,8 @@ impl Slot {
             Slot::Return => "return",
             Slot::ClosureCapture => "closure_capture",
             Slot::GenericField => "generic_field",
+            Slot::GenericListParameter => "generic_list_parameter",
+            Slot::TripleInheritedField => "triple_inherited_field",
         }
     }
 
@@ -158,6 +169,7 @@ impl Slot {
             | Slot::StructField
             | Slot::ClassField
             | Slot::InheritedField
+            | Slot::TripleInheritedField
             | Slot::GenericField
             | Slot::ListElement
             | Slot::ArrayElement
@@ -167,6 +179,7 @@ impl Slot {
             | Slot::SetElement
             | Slot::MapKey
             | Slot::Parameter
+            | Slot::GenericListParameter
             | Slot::Return => false,
         }
     }

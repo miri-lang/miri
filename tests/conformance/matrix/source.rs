@@ -204,6 +204,22 @@ fn placement(slot: Slot, s: &Spelling) -> Placement {
                 Some("h.v"),
             )
         },
+        Slot::GenericListParameter => Placement {
+            items: format!("fn first{id}<U>(xs List<U>) U\n    return xs[0]\n"),
+            ..simple(
+                vec![format!("var l = List<{t}>()"), "l.push(a)".into()],
+                &format!("first{id}(l)"),
+                None,
+            )
+        },
+        Slot::TripleInheritedField => Placement {
+            items: triple_inherited_holder(s),
+            ..simple(
+                vec![format!("var h = HC3{id}{g}(v: a, w: 7, x: \"x\" + \"y\")")],
+                "h.v",
+                Some("h.v"),
+            )
+        },
     }
 }
 
@@ -220,6 +236,18 @@ fn inherited_holder(s: &Spelling) -> String {
          fn init(v {t}, n int, s String)\n        self.v = v\n        self.n = n\n        \
          self.s = s\n\nclass HC{id}{g} extends HB{id}{g}\n    \
          fn init(v {t}, n int, s String)\n        super.init(v, n, s)\n"
+    )
+}
+
+/// A base class generic over three parameters, holding the value in the
+/// first, and a subclass binding them to the type, `int` and `String`.
+fn triple_inherited_holder(s: &Spelling) -> String {
+    let (t, g, id) = (s.t, s.g, s.id);
+    format!(
+        "class HB3{id}<A, B, C>\n    public v A\n    public w B\n    public x C\n\n    \
+         fn init(v A, w B, x C)\n        self.v = v\n        self.w = w\n        \
+         self.x = x\n\nclass HC3{id}{g} extends HB3{id}<{t}, int, String>\n    \
+         fn init(v {t}, w int, x String)\n        super.init(v, w, x)\n"
     )
 }
 
