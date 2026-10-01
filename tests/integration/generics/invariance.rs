@@ -235,6 +235,55 @@ fn main()
     );
 }
 
+/// A literal-payload variant nested in another value built in place takes
+/// the declared width too: the payload of an optional, and the elements of a
+/// literal a typed collection constructor copies.
+#[test]
+fn a_nested_literal_payload_takes_the_declared_argument_width() {
+    assert_heap_guard_output(
+        &format!(
+            r#"{WIDE}
+use system.collections.list
+
+fn show(e E<String, i128>)
+    match e
+        E.R(n, s): println(f"r {{s}} {{n}}")
+        E.L(s): println(f"l {{s}}")
+
+fn opt(o Option<E<String, i128>>)
+    match o
+        Some(e): show(e)
+        None: println("none")
+
+fn main()
+    opt(Some(E.R(9, "s" + "")))
+    let wrapped Option<E<String, i128>> = Some(E.R(8, "w" + ""))
+    opt(wrapped)
+    let xs = List<E<String, i128>>([E.R(3, "a" + ""), E.R(4, "b" + "")])
+    for x in xs
+        show(x)
+"#
+        ),
+        "r s 9\nr w 8\nr a 3\nr b 4",
+    );
+}
+
+#[test]
+fn a_nested_variable_payload_does_not_take_the_declared_argument_width() {
+    assert_compiler_error(
+        &format!(
+            r#"{WIDE}
+fn opt(o Option<E<String, i128>>)
+    println("x")
+
+fn pass(n int)
+    opt(Some(E.R(n, "s" + "")))
+"#
+        ),
+        "Type Mismatch",
+    );
+}
+
 #[test]
 fn a_variable_payload_does_not_take_the_declared_argument_width() {
     assert_compiler_error(

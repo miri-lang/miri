@@ -115,9 +115,7 @@ impl TypeChecker {
                 self.literal_payloads_widen_to(expected, actual, expr, context)
                     .map(|widened| (expr, widened))
             }) {
-                // Lowering lays the variant out at the type recorded for it,
-                // whatever location it is written into.
-                self.type_table.types.insert(expr.id, widened);
+                self.record_widened_payloads(expr, widened);
                 self.settle_value_at(expr, expected, context);
                 return true;
             }
@@ -227,11 +225,8 @@ impl TypeChecker {
     /// payload read from elsewhere (`E.R(n, s)` with `n` an `int`) is already
     /// laid out at its own width, so its argument must agree exactly.
     ///
-    /// TODO: only a constructor written at the location is widened. One nested
-    /// in another value built in place (`Some(E.R(9, s))` at an
-    /// `E<String, i128>?`, the elements of `List([E.R(3, s)])` at a
-    /// `List<E<String, i128>>`) is refused, though its literal could be built
-    /// at the declared width the same way.
+    /// `Some(E.R(9, s))` where an `E<String, i128>?` is declared widens through
+    /// the optional to the constructor it wraps.
     fn literal_payloads_widen_to(
         &self,
         expected: &Type,
@@ -244,6 +239,16 @@ impl TypeChecker {
         };
         if !self.constructs_a_variant(callee, context) {
             return None;
+        }
+        if let (TypeKind::Option(actual_payload), TypeKind::Option(expected_payload)) =
+            (&actual.kind, &expected.kind)
+        {
+            let [payload] = arguments.as_slice() else {
+                return None;
+            };
+            let widened =
+                self.literal_payloads_widen_to(expected_payload, actual_payload, payload, context)?;
+            return Some(Type::new(TypeKind::Option(Box::new(widened)), actual.span));
         }
         let payload_reads_a_scalar = arguments.iter().any(|argument| {
             let value = match &argument.node {
@@ -267,6 +272,21 @@ impl TypeChecker {
         }
         let widened = self.literal_arguments_widened(actual, expected);
         (widened != *actual && self.are_compatible(expected, &widened, context)).then_some(widened)
+    }
+
+    /// Record `expr`, a constructor [`Self::literal_payloads_widen_to`] widened,
+    /// at `widened`, and the constructor an optional wraps at its payload type:
+    /// lowering lays a variant out at the type recorded for it, whatever
+    /// location it is written into.
+    fn record_widened_payloads(&mut self, expr: &Expression, widened: Type) {
+        if let (TypeKind::Option(payload_type), ExpressionKind::Call(_, arguments)) =
+            (&widened.kind, &expr.node)
+        {
+            if let [payload] = arguments.as_slice() {
+                self.record_widened_payloads(payload, payload_type.as_ref().clone());
+            }
+        }
+        self.type_table.types.insert(expr.id, widened);
     }
 
     /// `actual` with each type argument it holds as a literal's own type, `int` or
@@ -371,8 +391,11 @@ impl TypeChecker {
         let mut arguments = arguments;
         if let Some(first) = arguments.first_mut() {
             *first = self.create_type_expression(element.clone());
+            // Every element was accepted at `element`, so the literal is
+            // built at it, a scalar argument it took from its literals
+            // included, not only an argument it left open.
             let settled = make_type(TypeKind::Custom(name, Some(arguments)));
-            self.record_joined_type(expr, &settled, context);
+            self.type_table.types.insert(expr.id, settled);
         }
         true
     }
