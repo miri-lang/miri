@@ -52,6 +52,9 @@ pub enum Operation {
     Reversed,
     /// Builds the collection from both elements at once.
     Construct,
+    /// Builds the collection from both elements spelled out at the
+    /// construction site, so each literal takes its type from the collection.
+    ConstructLiteral,
     /// Reads a map value through `get` rather than indexing.
     Get,
     CompoundAssign,
@@ -108,6 +111,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation::RemoveAt,
     Operation::Reversed,
     Operation::Construct,
+    Operation::ConstructLiteral,
     Operation::Get,
     Operation::CompoundAssign,
     Operation::Add,
@@ -184,6 +188,7 @@ impl Operation {
             Operation::RemoveAt => "remove_at",
             Operation::Reversed => "reversed",
             Operation::Construct => "construct",
+            Operation::ConstructLiteral => "construct_literal",
             Operation::Get => "get",
             Operation::CompoundAssign => "compound_assign",
             Operation::Add => "add",
@@ -327,6 +332,7 @@ pub fn outcome_of(
         | Operation::First
         | Operation::RemoveAt
         | Operation::Construct
+        | Operation::ConstructLiteral
         | Operation::Get => Outcome::Runs(Expected::Value(&ty.a)),
     })
 }
@@ -359,6 +365,10 @@ fn applies(slot: Slot, operation: Operation, context: Context) -> bool {
         Operation::Dedup => slot.is_keyed(),
         Operation::Sort | Operation::First | Operation::Last | Operation::Construct => {
             matches!(slot, Slot::ListElement | Slot::ArrayElement)
+        }
+        Operation::ConstructLiteral => {
+            context == Context::Monomorphic
+                && matches!(slot, Slot::ListElement | Slot::ArrayElement)
         }
         Operation::Pop | Operation::RemoveAt | Operation::Reversed => slot == Slot::ListElement,
         Operation::Get => slot == Slot::MapValue,

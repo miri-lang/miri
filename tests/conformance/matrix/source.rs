@@ -107,6 +107,7 @@ fn operation_body(cell: &Cell, s: &Spelling) -> (String, Vec<String>) {
         | Operation::RemoveAt
         | Operation::Reversed
         | Operation::Construct
+        | Operation::ConstructLiteral
         | Operation::Get
         | Operation::Add => unreachable!(
             "`{}` exists only in the slots `slot_specific_body` writes",
@@ -252,6 +253,7 @@ fn slot_specific_body(cell: &Cell, s: &Spelling) -> Option<(String, Vec<String>)
         | Operation::RemoveAt
         | Operation::Reversed
         | Operation::Construct => sequence_body(cell.slot, cell.operation, s),
+        Operation::ConstructLiteral => literal_construction_body(cell, s),
         Operation::Get => Some(vec![
             format!("var m = Map<int, {}>()", s.t),
             "m[1] = a".into(),
@@ -330,6 +332,23 @@ fn dedup_body(slot: Slot, s: &Spelling) -> Option<Vec<String>> {
 
 /// The ordered-collection operations, on a list or an array holding `a` then
 /// `b` (or `b` then `a`, for sorting).
+/// The collection built from both elements spelled out where it is
+/// constructed, read back at its first position.
+fn literal_construction_body(cell: &Cell, s: &Spelling) -> Option<Vec<String>> {
+    let (t, a, b) = (s.t, cell.ty.a.expr, cell.ty.b.expr);
+    match cell.slot {
+        Slot::ListElement => Some(vec![
+            format!("var l = List<{t}>([{a}, {b}])"),
+            "return l[0]".into(),
+        ]),
+        Slot::ArrayElement => Some(vec![
+            format!("var arr = Array<{t}, 2>({a}, {b})"),
+            "return arr[0]".into(),
+        ]),
+        _ => None,
+    }
+}
+
 fn sequence_body(slot: Slot, operation: Operation, s: &Spelling) -> Option<Vec<String>> {
     let t = s.t;
     let list = format!("var l = List<{t}>()");
