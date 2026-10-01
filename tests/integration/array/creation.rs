@@ -552,3 +552,29 @@ fn main()
         "expected int, got String",
     );
 }
+
+/// A `u64` element written as a literal above `i64::MAX` is parsed at 128 bits
+/// but stored at the element's 64-bit width: stored at its parsed width it ran
+/// eight bytes past the array, and the next allocation crashed.
+#[test]
+fn test_array_of_u64_built_from_wide_literals_stays_inside_its_buffer() {
+    assert_heap_guard_output(
+        "
+use system.collections.array
+
+fn lits() u64
+    var arr = Array<u64, 2>(5000000000000000000, 10000000000000000000)
+    return arr[1]
+
+fn wide() u128
+    let a u128 = 18446744073709551616
+    var arr = [a]
+    return arr[0]
+
+fn main()
+    println(f\"{lits()}\")
+    println(f\"{wide()}\")
+",
+        "10000000000000000000\n18446744073709551616",
+    );
+}

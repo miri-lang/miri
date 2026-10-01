@@ -1751,21 +1751,13 @@ impl<'a> FunctionTranslator<'a> {
             let hi_val = builder.ins().iconst(cl_types::I64, hi);
             return Ok(builder.ins().iconcat(lo_val, hi_val));
         }
+        // A literal parsed at 128 bits because of its magnitude — `10000000000000000000`
+        // does not fit an `i64` — but recorded at a narrower declared type is
+        // materialized at that type: the checker has already judged it fits,
+        // and a 128-bit value stored into a 64-bit slot writes past it.
         match int_lit {
-            IntegerLiteral::I128(v) => {
-                let lo = (*v as u128 & 0xFFFF_FFFF_FFFF_FFFF) as i64;
-                let hi = ((*v as u128) >> 64) as i64;
-                let lo_val = builder.ins().iconst(cl_types::I64, lo);
-                let hi_val = builder.ins().iconst(cl_types::I64, hi);
-                Ok(builder.ins().iconcat(lo_val, hi_val))
-            }
-            IntegerLiteral::U128(v) => {
-                let lo = (*v & 0xFFFF_FFFF_FFFF_FFFF) as i64;
-                let hi = (*v >> 64) as i64;
-                let lo_val = builder.ins().iconst(cl_types::I64, lo);
-                let hi_val = builder.ins().iconst(cl_types::I64, hi);
-                Ok(builder.ins().iconcat(lo_val, hi_val))
-            }
+            IntegerLiteral::I128(v) => Ok(builder.ins().iconst(cl_type, *v as i64)),
+            IntegerLiteral::U128(v) => Ok(builder.ins().iconst(cl_type, *v as i64)),
             IntegerLiteral::I8(v) => Ok(builder.ins().iconst(cl_type, *v as i64)),
             IntegerLiteral::I16(v) => Ok(builder.ins().iconst(cl_type, *v as i64)),
             IntegerLiteral::I32(v) => Ok(builder.ins().iconst(cl_type, *v as i64)),
