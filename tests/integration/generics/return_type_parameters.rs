@@ -476,3 +476,31 @@ fn main()
         "none",
     );
 }
+
+/// A collection built from a literal of open calls — `List([make(), make()])`
+/// stored where a `List<Box<String>>` is declared — takes the element type
+/// from the declaration: the literal it is built from is settled as an array
+/// of `Box<String>`, so nothing reaches lowering still naming an open slot.
+#[test]
+fn a_list_built_from_open_calls_takes_its_elements_from_the_binding() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+class Box<T>
+    v T?
+    fn put(a T) T
+        self.v = a
+        return a
+
+fn make<T>() Box<T>
+    return Box<T>(v: None)
+
+fn main()
+    let xs List<Box<String>> = List([make(), make()])
+    let r = xs[0].put("a" + "b")
+    println(f"{xs.length()} {r}")
+"#,
+        "2 ab",
+    );
+}

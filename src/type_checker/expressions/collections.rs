@@ -524,7 +524,9 @@ impl TypeChecker {
         if self.names_a_collection(callee, expected) {
             self.record_joined_type(expr, expected, context);
             for arg in args {
-                self.settle_at_expected(arg, expected, context, built_elsewhere);
+                let arg_expected = self.source_collection_at(arg, expected);
+                let arg_expected = arg_expected.as_ref().unwrap_or(expected);
+                self.settle_at_expected(arg, arg_expected, context, built_elsewhere);
             }
         } else if self.is_variant_constructor(callee, context) {
             self.record_joined_type(expr, expected, context);
@@ -543,6 +545,29 @@ impl TypeChecker {
         } else {
             self.note_built_elsewhere(expr, expected, context, built_elsewhere);
         }
+    }
+
+    /// The type the collection `source` a constructor of `collection` is
+    /// built from holds once its elements are settled at `collection`'s
+    /// element type: `[make()]` handed to a `List<Box<String>>` is an
+    /// `Array<Box<String>, 1>`. `None` when `source` is not a collection, or
+    /// `collection` names no element type.
+    fn source_collection_at(&self, source: &Expression, collection: &Type) -> Option<Type> {
+        let element = self.literal_element_type(collection)?;
+        let recorded = self.get_type(source.id)?;
+        let TypeKind::Custom(name, Some(args)) = &recorded.kind else {
+            return None;
+        };
+        BuiltinCollectionKind::from_name(name)?;
+        let (first, rest) = args.split_first()?;
+        let held = self.extract_type_from_expression(first).ok()?;
+        let filled = fill_open_arguments(&held, &element);
+        let mut settled_args = vec![self.create_type_expression(filled)];
+        settled_args.extend(rest.iter().cloned());
+        Some(Type::new(
+            TypeKind::Custom(name.clone(), Some(settled_args)),
+            recorded.span,
+        ))
     }
 
     /// Note `expr`, which reads a value already built at its own type, when
