@@ -26,6 +26,7 @@ pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod inherited_instantiation;
+pub mod instance_demand;
 pub mod instantiation_limits;
 pub mod kernel_launch;
 pub mod loops;
