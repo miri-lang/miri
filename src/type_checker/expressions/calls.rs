@@ -2529,8 +2529,15 @@ impl TypeChecker {
                 self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type);
                 self.narrow_sequence_argument_elements(arg_expr, arg_type, &elem_type, context);
                 let elements_fit = self.literal_elements_fit(arg_expr, &elem_type, context);
+                // A literal argument is recorded at the element type once its
+                // elements fit there, so it is judged at what it is built as.
+                let arg_type = self
+                    .get_type(arg_expr.id)
+                    .cloned()
+                    .unwrap_or(arg_type.clone());
                 if !elements_fit
-                    || !self.sequence_argument_fits_element(&elem_type, arg_expr, arg_type, context)
+                    || !self
+                        .sequence_argument_fits_element(&elem_type, arg_expr, &arg_type, context)
                 {
                     self.report_error(
                         DiagnosticCode::TypBuiltinConstructor,
