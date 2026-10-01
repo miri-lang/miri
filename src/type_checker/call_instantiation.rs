@@ -91,6 +91,11 @@ impl OpenGenericCalls {
         self.calls.contains_key(&call_id)
     }
 
+    /// The id of every call still open.
+    fn ids(&self) -> Vec<usize> {
+        self.calls.keys().copied().collect()
+    }
+
     fn open(&mut self, call_id: usize, call: GenericCall, errors_at_open: usize) {
         let opened = self.opened;
         self.opened += 1;
@@ -359,8 +364,15 @@ impl TypeChecker {
             .into_iter()
             .map(str::to_string)
             .collect();
+        // A parameter an argument bound to another open call's slot learns
+        // what that slot is from the location too: `pass(make())` stored at a
+        // `Box<String>` binds `make`'s parameter through `pass`'s.
+        let mut slots = HashMap::new();
         for (name, ty) in inferred {
             if unbound.contains(&name) && self.names_only_types_in_scope(&ty, context) {
+                if let Some(held) = open.call.bound.get(&name) {
+                    self.infer_generic_types(held, &ty, &mut slots);
+                }
                 open.call.bound.insert(name, ty);
             }
         }
@@ -368,6 +380,40 @@ impl TypeChecker {
             self.complete_call_instantiation(call_id, &open.call, context);
         } else {
             self.open_generic_calls.restore(call_id, open);
+        }
+        self.bind_open_call_slots(&slots, context);
+    }
+
+    /// Bind each open call's parameter whose slot `slots` names a type for,
+    /// and settle each call that leaves no parameter unbound.
+    fn bind_open_call_slots(&mut self, slots: &HashMap<String, Type>, context: &Context) {
+        let slots: HashMap<&String, &Type> = slots
+            .iter()
+            .filter(|(name, ty)| is_inference_slot(name) && !holds_an_inference_slot(ty))
+            .collect();
+        if slots.is_empty() {
+            return;
+        }
+        for call_id in self.open_generic_calls.ids() {
+            let Some(mut open) = self.open_generic_calls.take(call_id) else {
+                continue;
+            };
+            for name in open.call.parameters.clone() {
+                let slot = inference_slot_name(&name, call_id);
+                let unbound = open
+                    .call
+                    .bound
+                    .get(&name)
+                    .is_none_or(holds_an_inference_slot);
+                if let (true, Some(ty)) = (unbound, slots.get(&slot)) {
+                    open.call.bound.insert(name, (*ty).clone());
+                }
+            }
+            if open.call.unbound_parameters().is_empty() {
+                self.complete_call_instantiation(call_id, &open.call, context);
+            } else {
+                self.open_generic_calls.restore(call_id, open);
+            }
         }
     }
 
@@ -382,9 +428,42 @@ impl TypeChecker {
             } else {
                 expected
             };
+        let declared = self
+            .declared_return_as(&call.declared_return, expected)
+            .unwrap_or_else(|| call.declared_return.clone());
         let mut inferred = HashMap::new();
-        self.infer_generic_types(&call.declared_return, expected, &mut inferred);
+        self.infer_generic_types(&declared, expected, &mut inferred);
         inferred
+    }
+
+    /// `declared`, a class or trait the callee returns, read as the type
+    /// above it that `expected` names, at the arguments its `extends`,
+    /// `implements` and parent-trait clauses reach that type at: a `make<T>`
+    /// returning an `Impl<T>` stored where an `Op<String>` is declared binds
+    /// `T` through `class Impl<T> implements Op<T>`. `None` when `expected`
+    /// names the same type, or one not above it.
+    fn declared_return_as(&self, declared: &Type, expected: &Type) -> Option<Type> {
+        let (TypeKind::Custom(sub, sub_arguments), TypeKind::Custom(sup, _)) =
+            (&declared.kind, &expected.kind)
+        else {
+            return None;
+        };
+        if sub == sup {
+            return None;
+        }
+        let arguments = self
+            .supertype_arguments(sub, sub_arguments.as_deref(), sup)?
+            .into_iter()
+            .collect::<Option<Vec<Type>>>()?;
+        let arguments = arguments
+            .into_iter()
+            .map(|ty| self.create_type_expression(ty))
+            .collect::<Vec<_>>();
+        let arguments = (!arguments.is_empty()).then_some(arguments);
+        Some(Type::new(
+            TypeKind::Custom(sup.clone(), arguments),
+            declared.span,
+        ))
     }
 
     /// Record that the open call `call_id` was refused at a location of type

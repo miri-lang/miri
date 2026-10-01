@@ -504,3 +504,87 @@ fn main()
         "2 ab",
     );
 }
+
+#[test]
+fn a_lambdas_declared_return_pins_the_call_its_expression_body_ends_on() {
+    let code = format!(
+        "{BOX}
+fn main()
+    let f = fn() Box<String>: make()
+    println(f().put(\"a\" + \"b\"))
+"
+    );
+    assert_heap_guard_output(&code, "ab");
+}
+
+/// The location's type flows through a generic call to the open call handed
+/// to it: `pass` is bound at `String`, and so is the `make` it was given.
+#[test]
+fn a_declared_binding_pins_an_open_call_through_a_generic_call() {
+    let code = format!(
+        "{BOX}
+fn pass<T>(b Box<T>) Box<T>
+    return b
+
+fn main()
+    let b Box<String> = pass(make())
+    println(b.put(\"a\" + \"b\"))
+"
+    );
+    assert_heap_guard_output(&code, "ab");
+}
+
+/// An equality binds an open call on one side from the type of the other.
+#[test]
+fn an_equality_pins_an_open_call_from_the_other_operand() {
+    assert_heap_guard_output(
+        r#"
+fn none_of<T>() T?
+    return None
+
+fn main()
+    var x int? = 3
+    println(f"{x == none_of()} {none_of() != x}")
+    x = None
+    println(f"{x == none_of()}")
+"#,
+        "false true\ntrue",
+    );
+}
+
+/// A declared supertype binds the call through the class's clauses: `Impl<T>`
+/// read as the `Op<String>` it implements binds `T` to `String`.
+#[test]
+fn a_declared_supertype_pins_a_returned_subclass_through_its_clauses() {
+    assert_heap_guard_output(
+        r#"
+trait Op<T>
+    fn keep(a T) T
+
+class Impl<T> implements Op<T>
+    fn keep(a T) T
+        return a
+
+fn make<T>() Impl<T>
+    return Impl<T>()
+
+fn main()
+    let o Op<String> = make()
+    println(o.keep("a" + "b"))
+"#,
+        "ab",
+    );
+}
+
+/// Two open calls compared bind nothing: neither side names a type.
+#[test]
+fn an_equality_of_two_open_calls_is_refused() {
+    let code = r#"
+fn none_of<T>() T?
+    return None
+
+fn main()
+    println(f"{none_of() == none_of()}")
+"#;
+    assert_compiler_error(code, "Cannot infer type argument `T` of `none_of`");
+}

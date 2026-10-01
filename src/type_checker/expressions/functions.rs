@@ -241,9 +241,15 @@ impl TypeChecker {
                 );
             }
         } else if matches!(expected.kind, TypeKind::Void) {
-        } else if self.are_compatible(expected, implicit_return_type, context) {
+        } else if self.accepts_value_at(
+            expected,
+            implicit_return_type,
+            lambda_tail_expression(body),
+            context,
+        ) {
             // The value the body ends on is returned at the declared type,
-            // which converts an instance returned as a trait.
+            // which converts an instance returned as a trait, and binds a
+            // generic call it ends on that its arguments left open.
             self.record_trait_conversion(expected, implicit_return_type, body.span, context);
         } else {
             self.report_error(
@@ -335,5 +341,18 @@ impl TypeChecker {
             }
         }
         candidate
+    }
+}
+
+/// The expression a lambda's body ends on, which is the value it returns: the
+/// body itself, or the last statement of a block when that is an expression.
+fn lambda_tail_expression(body: &Statement) -> Option<&Expression> {
+    match &body.node {
+        StatementKind::Expression(expr) => Some(expr),
+        StatementKind::Block(statements) => match &statements.last()?.node {
+            StatementKind::Expression(expr) => Some(expr),
+            _ => None,
+        },
+        _ => None,
     }
 }
