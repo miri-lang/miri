@@ -159,6 +159,16 @@ fn matrix_inherited_field() {
 }
 
 #[test]
+fn matrix_triple_inherited_field() {
+    check_slot(Slot::TripleInheritedField);
+}
+
+#[test]
+fn matrix_generic_list_parameter() {
+    check_slot(Slot::GenericListParameter);
+}
+
+#[test]
 fn matrix_enum_payload() {
     check_slot(Slot::EnumPayload);
 }
