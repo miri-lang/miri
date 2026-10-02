@@ -30,7 +30,7 @@ assert_output_contains = ["gpu forall"]
 type = "ReplaceFn"
 file = "program.mi"
 fn_name = "main"
-body = "gpu let arr = [0, 1, 2, 3]\nlet sum = arr.reduce(0, fn(acc i32, x i32) i32: acc + x)\n"
+body = "gpu let arr = [0, 1, 2, 3]\nlet sum = arr.reduce(0, fn(acc int, x int) int: acc + x)\n"
 must_succeed = true
 assert_file_changed = ["program.mi"]
 

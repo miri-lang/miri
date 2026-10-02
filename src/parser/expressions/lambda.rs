@@ -3,13 +3,17 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
+    /// An anonymous function. Its span covers the signature, from its first
+    /// modifier or `fn` through the result type: a refusal of the function as
+    /// a value is about what the signature promises, not the body.
     pub(crate) fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let start = self.lookahead.as_ref().map_or(0, |(_, span)| span.start);
         let properties = self.function_modifiers(MemberVisibility::Public)?;
 
         self.eat_token(&Token::Fn)?;
@@ -17,6 +21,7 @@ impl<'source> Parser<'source> {
         let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
+        let signature = Span::new(start, self.last_consumed_end);
 
         let body_parsing_error = self.error_unexpected_lookahead_token(
             "a body after ':' on this line, or an indented block on the lines below",
@@ -39,13 +44,10 @@ impl<'source> Parser<'source> {
             _ => return Err(body_parsing_error),
         };
 
-        Ok(ast::lambda_expression(
-            generic_types,
-            parameters,
-            return_type,
-            body,
-            properties,
-        ))
+        let mut lambda =
+            ast::lambda_expression(generic_types, parameters, return_type, body, properties);
+        lambda.span = signature;
+        Ok(lambda)
     }
 
     /// The block that opens on the line after an anonymous function's

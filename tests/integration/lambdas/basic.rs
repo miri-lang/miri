@@ -62,3 +62,20 @@ fn main()
         "36",
     );
 }
+
+/// A refused anonymous function is reported at its own signature, not at the
+/// start of the file.
+#[test]
+fn a_refused_lambda_argument_is_reported_at_its_signature() {
+    assert_compiler_error(
+        r#"
+fn ap(f fn(x int) int) int
+    return f(1)
+
+fn main()
+    let s = ap(fn(x String) String: x)
+    println(f"{s}")
+"#,
+        "let s = ap(fn(x String) String: x)\n   |                ^^^^^^^^^^^^^^^^^^^ Type mismatch",
+    );
+}

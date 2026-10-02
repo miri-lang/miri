@@ -16,11 +16,12 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::types::{
-    element_layout, is_vector_component, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
-    TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
-    GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
-    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
-    SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
+    element_layout, is_vector_component, scalar_width, vec_dim, vec_type_dim,
+    BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
+    DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
+    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
+    RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES,
+    WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -3015,6 +3016,18 @@ impl TypeChecker {
                         Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
                     )
             );
+        if let Some(signature) = self.lambda_rewritten_at_widths(value, expected) {
+            self.report_error_with_help(
+                DiagnosticCode::TypTypeMismatch,
+                message,
+                value.span,
+                format!(
+                    "a function value is called at the type it is stored at, and a scalar type \
+                     agrees only with itself; write the function as `{signature}`"
+                ),
+            );
+            return;
+        }
         if !wants_a_collection_of_the_literal {
             self.report_error(DiagnosticCode::TypTypeMismatch, message, value.span);
             return;
@@ -3029,6 +3042,60 @@ impl TypeChecker {
             value.span,
             format!("`[...]` is an array literal; build the {collection} from it with `{collection}([...])`"),
         );
+    }
+
+    /// The signature `value`, an anonymous function refused for the function
+    /// type `expected`, is accepted at, when the two differ only in the width
+    /// of scalar parameters or result: the function's own parameter names at
+    /// the expected types, as `fn(a int, b int) int`.
+    fn lambda_rewritten_at_widths(&self, value: &Expression, expected: &Type) -> Option<String> {
+        let (ExpressionKind::Lambda(lambda), TypeKind::Function(wanted)) =
+            (&value.node, &expected.kind)
+        else {
+            return None;
+        };
+        if lambda.params.len() != wanted.params.len() {
+            return None;
+        }
+        let written = |ty: Option<&Expression>| match ty {
+            Some(ty) => self.extract_type_from_expression(ty).ok(),
+            None => Some(make_type(TypeKind::Void)),
+        };
+        let only_widths_differ = |own: Option<Type>, wanted: Option<Type>| match (own, wanted) {
+            (Some(own), Some(wanted)) => {
+                own.kind == wanted.kind
+                    || (scalar_width(&own.kind).is_some()
+                        && scalar_width(&wanted.kind).is_some()
+                        && Self::is_float_kind(&own.kind) == Self::is_float_kind(&wanted.kind))
+            }
+            _ => false,
+        };
+        let parameters_agree = lambda
+            .params
+            .iter()
+            .zip(&wanted.params)
+            .all(|(own, wanted)| {
+                only_widths_differ(written(Some(&own.typ)), written(Some(&wanted.typ)))
+            });
+        let result_agrees = only_widths_differ(
+            written(lambda.return_type.as_deref()),
+            written(wanted.return_type.as_deref()),
+        );
+        if !parameters_agree || !result_agrees {
+            return None;
+        }
+        let parameters: Vec<String> = lambda
+            .params
+            .iter()
+            .zip(&wanted.params)
+            .map(|(own, wanted)| format!("{} {}", own.name, wanted.typ.node))
+            .collect();
+        let result = wanted
+            .return_type
+            .as_ref()
+            .map(|ty| format!(" {}", ty.node))
+            .unwrap_or_default();
+        Some(format!("fn({}){result}", parameters.join(", ")))
     }
 
     /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
