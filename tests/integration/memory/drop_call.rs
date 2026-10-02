@@ -353,3 +353,67 @@ fn main()
         assert_compiler_error(&code, BORROWED_DROP);
     }
 }
+
+/// A trait declaring the hook, either abstract (`Handle` declares it) or with
+/// a default (`Handle` runs the trait's).
+fn trait_handles(main: &str) -> [(String, &'static str); 2] {
+    let abstract_hook = format!(
+        r#"
+trait Closable
+    fn drop(self)
+
+class Handle implements Closable
+    public var id int
+
+    public fn drop(self)
+        println(f"dropped {{self.id}}")
+
+{main}"#
+    );
+    let default_hook = format!(
+        r#"
+trait Closable
+    fn drop(self)
+        println("dropped")
+
+class Handle implements Closable
+    public var id int
+
+{main}"#
+    );
+    [(abstract_hook, "dropped 1"), (default_hook, "dropped")]
+}
+
+/// `drop()` on a local held at a trait declaring the hook releases it at the
+/// call, which runs the instance's own hook once through its vtable.
+#[test]
+fn test_drop_call_on_a_trait_typed_local_runs_the_hook_once_at_the_call() {
+    for (code, dropped) in trait_handles(
+        r#"
+fn main()
+    var c Closable = Handle(id: 1)
+    c.drop()
+    println("end")
+"#,
+    ) {
+        assert_heap_guard_output(&code, &format!("{dropped}\nend"));
+    }
+}
+
+/// A trait-typed parameter is borrowed like any other, so `drop()` on it is
+/// refused rather than run here and again by the caller's release.
+#[test]
+fn test_drop_call_on_a_trait_typed_parameter_is_refused() {
+    for (code, _) in trait_handles(
+        r#"
+fn shut(x Closable)
+    x.drop()
+
+fn main()
+    let h = Handle(id: 1)
+    shut(h)
+"#,
+    ) {
+        assert_compiler_error(&code, BORROWED_DROP);
+    }
+}

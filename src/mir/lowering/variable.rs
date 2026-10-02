@@ -307,10 +307,12 @@ fn clear_moved_resource_source(ctx: &mut LoweringContext, init_expr: &Expression
         return;
     };
     let source_ty = ctx.body.local_decls[source.0].ty.clone();
-    if !crate::type_checker::utils::runs_drop_hook(
-        &source_ty.kind,
-        ctx.type_checker.type_definitions(),
-    ) {
+    let definitions = ctx.type_checker.type_definitions();
+    // A value held at a trait is shared, not moved, so its source keeps it.
+    let held_at_a_trait = matches!(&source_ty.kind, TypeKind::Custom(name, _)
+        if crate::type_checker::utils::trait_declares_drop_hook(name, definitions));
+    if held_at_a_trait || !crate::type_checker::utils::runs_drop_hook(&source_ty.kind, definitions)
+    {
         return;
     }
     let null = Operand::Constant(Box::new(crate::mir::Constant {
