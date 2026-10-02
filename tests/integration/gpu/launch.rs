@@ -790,7 +790,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
     println(f'{sum}')
 ";
     assert_gpu_runs_with_output(source, "36");
@@ -810,7 +810,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let product = a.reduce(1, fn(acc i32, x i32) i32: acc * x)
+    let product = a.reduce(1, fn(acc int, x int) int: acc * x)
     println(f'{product}')
 ";
     assert_gpu_runs_with_output(source, "24");
@@ -832,7 +832,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4, 5]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
     println(f'{sum}')
 ";
     assert_gpu_runs_with_output(source, "15");
@@ -883,7 +883,7 @@ fn main()
                  271, 272, 273, 274, 275, 276, 277, 278, 279, 280,
                  281, 282, 283, 284, 285, 286, 287, 288, 289, 290,
                  291, 292, 293, 294, 295, 296, 297, 298, 299, 300]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
     println(f'{sum}')
 ";
     // 1+2+...+300 = 300*301/2 = 45150
@@ -902,7 +902,7 @@ use system.collections.array
 
 fn main()
     let a = [1, 2, 3, 4, 5]
-    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    let s = a.reduce(0, fn(x int, y int) int: x + y)
     println(f'{s}')
 ",
         "15",
@@ -924,7 +924,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
-    let p = a.reduce(1.0, fn(x f32, y f32) f32: x * y)
+    let p = a.reduce(1.0, fn(x float, y float) float: x * y)
     println(f'{p}')
 ",
         "24",
@@ -946,7 +946,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [0 - 5, 0 - 3, 2, 8]
-    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    let s = a.reduce(0, fn(x int, y int) int: x + y)
     println(f'{s}')
 ",
         "2",
@@ -968,7 +968,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let s = a.reduce(100, fn(x i32, y i32) i32: x + y)
+    let s = a.reduce(100, fn(x int, y int) int: x + y)
     println(f'{s}')
 ",
         "110",
@@ -990,7 +990,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [42]
-    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    let s = a.reduce(0, fn(x int, y int) int: x + y)
     println(f'{s}')
 ",
         "42",
@@ -1037,7 +1037,7 @@ fn main()
                  231, 232, 233, 234, 235, 236, 237, 238, 239, 240,
                  241, 242, 243, 244, 245, 246, 247, 248, 249, 250,
                  251, 252, 253, 254, 255, 256]
-    let s = a.reduce(0, fn(x i32, y i32) i32: x + y)
+    let s = a.reduce(0, fn(x int, y int) int: x + y)
     println(f'{s}')
 ";
     // 1+2+...+256 = 256*257/2 = 32896

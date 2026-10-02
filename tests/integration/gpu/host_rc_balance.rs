@@ -21,7 +21,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
     println(f'{sum}')
 ",
     );
@@ -36,7 +36,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    gpu let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    gpu let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
     let host_sum = sum
     println(f'{host_sum}')
 ",

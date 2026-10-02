@@ -2062,7 +2062,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + x)
 ";
         assert_gpu_wgsl_valid(source);
 
@@ -2115,7 +2115,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc + 1)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc + 1)
 ",
             "reduce fold operands must be the two fold parameters",
         );
@@ -2131,7 +2131,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc)
 ",
             "reduce fold body must be a single binary operation",
         );
@@ -2148,7 +2148,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let sum = a.reduce(0, fn(acc i32, x i32) i32: acc - x)
+    let sum = a.reduce(0, fn(acc int, x int) int: acc - x)
 ",
             "reduce fold must use an associative binary operator (+ or *)",
         );

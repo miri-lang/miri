@@ -118,7 +118,7 @@ fn gpu_resident_array_reduce_method_still_allowed() {
         "
 use system.collections.array
 
-fn add(a int, b int) int
+fn add(a i32, b i32) i32
     a + b
 
 fn main()

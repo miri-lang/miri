@@ -529,3 +529,76 @@ fn main()
         "Type Mismatch",
     );
 }
+
+#[test]
+fn a_function_with_narrower_scalar_parameters_is_refused_where_int_is_declared() {
+    assert_compiler_error(
+        r#"
+fn narrow(x i32) i32
+    return x + 1
+
+fn apply(f fn(x int) int, v int) int
+    return f(v)
+
+fn main()
+    println(f"{apply(narrow, 5000000000)}")
+"#,
+        "expected Function(int) -> int, got Function(i32) -> i32",
+    );
+}
+
+#[test]
+fn a_function_with_wider_scalar_parameters_is_refused_where_i32_is_declared() {
+    assert_compiler_error(
+        r#"
+use system.collections.array
+
+fn add(a int, b int) int
+    return a + b
+
+fn main()
+    let xs = Array<i32, 2>(1, 2)
+    println(f"{xs.reduce(0, add)}")
+"#,
+        "expected Function(i32, i32) -> i32, got Function(int, int) -> int",
+    );
+}
+
+/// A fold written at a narrower width than its collection's elements is
+/// refused at the lambda, whose signature the help rewrites at the element
+/// type.
+#[test]
+fn a_fold_at_a_narrower_width_is_refused_with_the_signature_to_write() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let xs = [3000000000, 3000000000]
+    println(f"{xs.reduce(0, fn(x i32, y i32) i32: x + y)}")
+"#,
+        "write the function as `fn(x int, y int) int`",
+    );
+}
+
+#[test]
+fn a_fold_at_the_element_type_runs() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let xs = [3000000000, 3000000000]
+    println(f"{xs.reduce(0, fn(x int, y int) int: x + y)}")
+"#,
+        "6000000000",
+    );
+}
+
+#[test]
+fn a_float_fold_at_f32_is_refused_where_float_is_declared() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let xs = [1.5, 2.5]
+    println(f"{xs.reduce(0.0, fn(x f32, y f32) f32: x + y)}")
+"#,
+        "write the function as `fn(x float, y float) float`",
+    );
+}

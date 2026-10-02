@@ -18,9 +18,9 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let sum = a.reduce(0, fn(x i32) i32: x)
+    let sum = a.reduce(0, fn(x int) int: x)
 ",
-        "expected Function(int, int) -> int, got Function(i32) -> i32",
+        "expected Function(int, int) -> int, got Function(int) -> int",
     );
 }
 
@@ -35,9 +35,9 @@ use system.collections.array
 
 fn main()
     gpu let a = [1, 2, 3, 4]
-    let sum = a.reduce(0, fn(acc i32, x i32, y i32) i32: acc + x)
+    let sum = a.reduce(0, fn(acc int, x int, y int) int: acc + x)
 ",
-        "expected Function(int, int) -> int, got Function(i32, i32, i32) -> i32",
+        "expected Function(int, int) -> int, got Function(int, int, int) -> int",
     );
 }
 
@@ -112,7 +112,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    let s = data.reduce(0, fn(a i32, b i32) i32: a + a)
+    let s = data.reduce(0, fn(a int, b int) int: a + a)
 ",
         "reduce fold operands must be the two fold parameters",
     );
@@ -128,7 +128,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    let s = data.reduce(1, fn(a i32, b i32) i32: b * b)
+    let s = data.reduce(1, fn(a int, b int) int: b * b)
 ",
         "reduce fold operands must be the two fold parameters",
     );
@@ -144,7 +144,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    let s = data.reduce(0, fn(a i32, b i32) i32: b + a)
+    let s = data.reduce(0, fn(a int, b int) int: b + a)
 ",
     );
 }

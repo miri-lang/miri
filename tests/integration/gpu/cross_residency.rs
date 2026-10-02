@@ -412,7 +412,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    gpu let total = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    gpu let total = data.reduce(0, fn(a int, b int) int: a + b)
 
     var assigned = 0
     assigned = total

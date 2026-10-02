@@ -21,7 +21,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    gpu let sum = data.reduce(0, fn(a int, b int) int: a + b)
     let host_sum = sum
     println(f'{host_sum}')
 ",
@@ -46,7 +46,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1.5, 2.5, 3.0, 4.0]
-    gpu let total = data.reduce(0.0, fn(a f32, b f32) f32: a + b)
+    gpu let total = data.reduce(0.0, fn(a float, b float) float: a + b)
     let host_total = total
     println(f'{host_total}')
 ",
@@ -70,7 +70,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    let sum = data.reduce(0, fn(a int, b int) int: a + b)
     println(f'{sum}')
 ",
         "10",
@@ -93,7 +93,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    gpu let sum = data.reduce(0, fn(a int, b int) int: a + b)
     let result = sum + 5
 ",
         "gpu-resident",
@@ -115,7 +115,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1, 2, 3, 4]
-    gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    gpu let sum = data.reduce(0, fn(a int, b int) int: a + b)
     gpu var result = [0, 0, 0, 0]
     gpu forall i in 0..4
         result[i] = i
@@ -144,7 +144,7 @@ use system.collections.array
 fn main()
     gpu var data = [1, 2, 3, 4]
     gpu_reset_telemetry()
-    gpu let sum = data.reduce(0, fn(a i32, b i32) i32: a + b)
+    gpu let sum = data.reduce(0, fn(a int, b int) int: a + b)
     println(f'{gpu_readbacks()}')
 ",
         "0",
