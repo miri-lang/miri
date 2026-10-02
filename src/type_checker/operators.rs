@@ -9,8 +9,8 @@
 use super::context::{class_implements_trait, class_method_declaration, Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{
-    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, ORDERING_TRAIT_NAME,
-    STRING_TYPE_NAME,
+    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
+    ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
@@ -703,6 +703,97 @@ impl TypeChecker {
     /// True when the named type supplies an `equals` — its own, or for a class
     /// one a class it extends declares — which the operator lowering dispatches
     /// to in place of a derived structural comparison.
+    /// The name of the type that keeps a value of `ty` from being hashed
+    /// consistently with how `==` compares it, or `None` when every part of
+    /// it can be.
+    ///
+    /// A hash is derived wherever equality is: a scalar, a string, an
+    /// optional, a struct or enum compared field by field, and a class
+    /// without `equals`, compared by identity. A type that writes its own
+    /// `equals` decides alone which of its values are equal, so only a `hash`
+    /// of its own can agree with it, and one without is the answer. A type
+    /// parameter is answered where it is pinned.
+    pub(crate) fn type_lacking_hash(&self, ty: &Type) -> Option<String> {
+        self.part_lacking_hash(&ty.kind, &mut Vec::new())
+    }
+
+    fn part_lacking_hash(&self, kind: &TypeKind, visiting: &mut Vec<String>) -> Option<String> {
+        match kind {
+            TypeKind::Option(inner) | TypeKind::Linear(inner) => {
+                self.part_lacking_hash(&inner.kind, visiting)
+            }
+            TypeKind::Result(ok, err) => [ok, err].into_iter().find_map(|expr| match &expr.node {
+                crate::ast::expression::ExpressionKind::Type(ty, _) => {
+                    self.part_lacking_hash(&ty.kind, visiting)
+                }
+                _ => None,
+            }),
+            TypeKind::Custom(name, args) => {
+                self.named_type_lacking_hash(name, args.as_deref(), visiting)
+            }
+            _ => None,
+        }
+    }
+
+    fn named_type_lacking_hash(
+        &self,
+        name: &str,
+        args: Option<&[crate::ast::expression::Expression]>,
+        visiting: &mut Vec<String>,
+    ) -> Option<String> {
+        if self.type_declares_method(name, HASH_METHOD_NAME) {
+            return None;
+        }
+        if self.type_supplies_equality(name) {
+            return Some(name.to_string());
+        }
+        if visiting.iter().any(|seen| seen == name) {
+            return None;
+        }
+        let member_types: Vec<Type> = match self.type_table.global_type_definitions.get(name) {
+            Some(TypeDefinition::Enum(enum_def)) => enum_def
+                .variants
+                .values()
+                .flatten()
+                .map(|payload_ty| {
+                    Type::new(
+                        crate::type_checker::generics::substitute_generic_field_kind(
+                            &payload_ty.kind,
+                            args,
+                            enum_def.generics.as_ref(),
+                        ),
+                        payload_ty.span,
+                    )
+                })
+                .collect(),
+            Some(TypeDefinition::Struct(struct_def)) => struct_def
+                .fields
+                .iter()
+                .map(|field| field.1.clone())
+                .collect(),
+            _ => return None,
+        };
+        visiting.push(name.to_string());
+        let lacking = member_types
+            .iter()
+            .find_map(|member| self.part_lacking_hash(&member.kind, visiting));
+        visiting.pop();
+        lacking
+    }
+
+    /// Whether the class or enum `name` declares `method` itself, or a class
+    /// or trait it takes methods from does.
+    pub(crate) fn type_declares_method(&self, name: &str, method: &str) -> bool {
+        let definitions = &self.type_table.global_type_definitions;
+        match definitions.get(name) {
+            Some(TypeDefinition::Class(_)) => {
+                class_method_declaration(name, method, definitions).is_some()
+            }
+            Some(TypeDefinition::Enum(enum_def)) => enum_def.methods.contains_key(method),
+            _ => false,
+        }
+    }
+
     fn type_supplies_equality(&self, name: &str) -> bool {
         let definitions = &self.type_table.global_type_definitions;
         match definitions.get(name) {

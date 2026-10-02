@@ -766,6 +766,25 @@ pub mod ffi {
         (*ptr).key_identity.set_equals_fn(fn_ptr);
     }
 
+    /// Hashes keys through `fn_ptr`, an
+    /// [`crate::element_identity::ElementHashFn`] the compiler generates from
+    /// the key type's `hash`, consistent with the registered equality.
+    ///
+    /// Registered before the first entry is stored, on the same contract as
+    /// [`miri_rt_map_set_key_equals_fn`].
+    ///
+    /// # Safety
+    /// - `ptr` must be a valid pointer to a `MiriMap`, or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_key_hash_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() {
+            return;
+        }
+        (*ptr).key_identity.set_hash_fn(fn_ptr);
+    }
+
     /// Hands the key at the nth occupied slot (0-based sequential index) to
     /// the caller's `payload`-byte storage at `out`.
     ///

@@ -618,7 +618,7 @@ fn reaches_machine_op_unchecked(
 }
 
 /// Whether `kind` is `Atomic<T>`, which only device code holds.
-fn is_device_marker(kind: &TypeKind) -> bool {
+pub(super) fn is_device_marker(kind: &TypeKind) -> bool {
     matches!(kind, TypeKind::Custom(name, _) if name == crate::ast::types::ATOMIC_TYPE_NAME)
 }
 

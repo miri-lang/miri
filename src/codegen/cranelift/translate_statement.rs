@@ -417,6 +417,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementIdentitySetters {
                 set_kind: FunctionTranslator::call_rt_map_set_key_kind,
                 set_equals_fn: FunctionTranslator::call_rt_map_set_key_equals_fn,
+                set_hash_fn: FunctionTranslator::call_rt_map_set_key_hash_fn,
             },
         )?;
 
@@ -501,6 +502,7 @@ impl<'a> FunctionTranslator<'a> {
             ElementIdentitySetters {
                 set_kind: FunctionTranslator::call_rt_set_set_elem_kind,
                 set_equals_fn: FunctionTranslator::call_rt_set_set_elem_equals_fn,
+                set_hash_fn: FunctionTranslator::call_rt_set_set_elem_hash_fn,
             },
         )?;
         FunctionTranslator::emit_set_drop_fn_for_elem_kind(

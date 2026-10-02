@@ -19,4 +19,5 @@
 /// with their names kept private, so a literal resolves while naming the type
 /// still requires an explicit `use system.collections.*`.
 use system.io
+use system.ops
 use system.string

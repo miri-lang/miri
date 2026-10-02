@@ -412,6 +412,8 @@ class Box<T>
     v T
     public fn equals(_other Self) bool
         return self.v == 10
+    public fn hash() int
+        return 0
 "#;
 
 #[test]
@@ -482,6 +484,8 @@ class Box<T>
         if self.v < 0
             return false
         return self.v == o.v
+    public fn hash() int
+        return 0
 "#;
 
 #[test]
@@ -763,11 +767,15 @@ class Inner<U>
         if self.u < 0
             return false
         return true
+    public fn hash() int
+        return 0
 
 class Box<T>
     v T
     public fn equals(o Self) bool
         return self.v == o.v
+    public fn hash() int
+        return self.v.hash()
 
 fn main()
     let b = Box<Inner<String>>(v: Inner<String>(u: "x"))

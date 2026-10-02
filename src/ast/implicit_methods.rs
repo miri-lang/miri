@@ -17,7 +17,9 @@ use crate::ast::types::{
     Type, TypeKind, ADDING_TRAIT_NAME, EQUALITY_TRAIT_NAME, ORDERING_TRAIT_NAME,
     REPEATING_TRAIT_NAME,
 };
-pub use crate::ast::types::{CLONE_METHOD_NAME, EQUALS_METHOD_NAME, ORDERING_METHOD_NAME};
+pub use crate::ast::types::{
+    CLONE_METHOD_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_METHOD_NAME,
+};
 
 /// The method a construction runs to initialise an instance.
 pub const INIT_METHOD_NAME: &str = "init";
@@ -30,10 +32,11 @@ pub const CONSTRUCTION_METHOD_NAMES: [&str; 2] = [INIT_METHOD_NAME, DROP_HOOK_NA
 pub const ELEMENT_METHOD_NAMES: [&str; 2] = [ORDERING_METHOD_NAME, EQUALS_METHOD_NAME];
 
 /// The methods a runtime thunk calls on a class instance, besides its drop
-/// hook.
-pub const THUNK_METHOD_NAMES: [&str; 3] = {
+/// hook: a container copies, orders, matches and hashes its elements through
+/// them.
+pub const THUNK_METHOD_NAMES: [&str; 4] = {
     let [ordering, equals] = ELEMENT_METHOD_NAMES;
-    [CLONE_METHOD_NAME, ordering, equals]
+    [CLONE_METHOD_NAME, ordering, equals, HASH_METHOD_NAME]
 };
 
 /// The method `+` dispatches to on a type that defines it, the string type

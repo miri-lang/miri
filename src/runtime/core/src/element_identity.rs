@@ -15,7 +15,8 @@
 //! - an element whose bytes point at a string is the same element when the two
 //!   strings hold the same content, wherever each was allocated;
 //! - an element whose type defines its own equality is compared through a
-//!   callback the compiler generates from that type's `equals`.
+//!   callback the compiler generates from that type's `equals`, and hashed
+//!   through one it generates from the same type's `hash`.
 //!
 //! An optional element applies none of these to itself: its bytes are the
 //! address of its `Some` box, and two separately built `Some(2)`s hold that
@@ -35,6 +36,12 @@ use crate::string::MiriString;
 /// that is the pointer to the value, matching what the drop and clone callbacks
 /// are handed. Returns nonzero when the two are the same element.
 pub type ElementEqualsFn = unsafe extern "C" fn(*const u8, *const u8) -> u8;
+
+/// A hash over one element value, as the compiler generates it, consistent
+/// with the [`ElementEqualsFn`] registered beside it: two values that one
+/// calls equal, this hashes alike. The argument is the value the element slot
+/// holds, as the equality is handed it.
+pub type ElementHashFn = unsafe extern "C" fn(*const u8) -> i64;
 
 /// The element's bytes are its value.
 pub const BY_BYTES: usize = 0;
@@ -106,6 +113,9 @@ pub(crate) struct ElementIdentity {
     /// Address of an [`ElementEqualsFn`], or zero when the element type defines
     /// no equality of its own.
     equals_fn: usize,
+    /// Address of the [`ElementHashFn`] consistent with `equals_fn`, or zero
+    /// when there is none.
+    hash_fn: usize,
 }
 
 impl ElementIdentity {
@@ -113,6 +123,7 @@ impl ElementIdentity {
     pub(crate) const BYTES: Self = Self {
         kind: BY_BYTES,
         equals_fn: 0,
+        hash_fn: 0,
     };
 
     /// Selects the rule, as packed by [`through_optionals`].
@@ -123,6 +134,12 @@ impl ElementIdentity {
     /// Routes equality through the element type's own `equals`.
     pub(crate) fn set_equals_fn(&mut self, equals_fn: usize) {
         self.equals_fn = equals_fn;
+    }
+
+    /// Routes hashing through the element type's own `hash`, the one
+    /// consistent with the `equals` it is matched through.
+    pub(crate) fn set_hash_fn(&mut self, hash_fn: usize) {
+        self.hash_fn = hash_fn;
     }
 
     /// The rule settling two resolved values.
@@ -170,13 +187,10 @@ impl ElementIdentity {
 
     /// Hashes the element stored at `elem`, whose slot spans `slot_size` bytes.
     ///
-    /// An element compared through a callback hashes to one constant: the
-    /// element type states when two values are equal but not how to hash one,
-    /// and any hash taken from the bytes would separate equal values.
-    ///
-    /// TODO: a set or map of such elements therefore probes every entry on each
-    /// lookup. Hashing them in constant time needs the element type to supply
-    /// a hash consistent with its `equals`, which no trait declares yet.
+    /// An element compared through a callback is hashed through the callback
+    /// registered beside it; without one it hashes to one constant, since any
+    /// hash taken from the bytes would separate values the callback calls
+    /// equal. The compiler registers both, so the constant is only a fallback.
     ///
     /// # Safety
     ///
@@ -198,7 +212,12 @@ impl ElementIdentity {
     /// Hashes the value at `at`, which the settling rule reads over `size` bytes.
     unsafe fn hash_value(&self, at: *const u8, size: usize) -> u64 {
         if self.equals_fn != 0 {
-            return 0;
+            if self.hash_fn == 0 {
+                return 0;
+            }
+            let hash: ElementHashFn = std::mem::transmute(self.hash_fn);
+            let value = hash(*(at as *const *const u8)).to_ne_bytes();
+            return crate::hash::fnv1a(value.as_ptr(), value.len());
         }
         if self.rule() == BY_STRING_CONTENT {
             let (data, len) = string_content(at);
@@ -273,7 +292,7 @@ unsafe fn string_content(slot: *const u8) -> (*const u8, usize) {
 /// every NaN as the one quiet NaN of its width. Two floats a set or map treats
 /// as one element have equal results, which is what both hashing and matching
 /// compare.
-unsafe fn float_value_bits(at: *const u8, size: usize) -> u64 {
+pub(crate) unsafe fn float_value_bits(at: *const u8, size: usize) -> u64 {
     match size {
         2 => normalized_float_bits(
             u64::from((at as *const u16).read_unaligned()),

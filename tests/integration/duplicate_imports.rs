@@ -115,3 +115,19 @@ fn main()
 "#;
     assert_imports_are_not_duplicates(code);
 }
+
+/// A second selective import of a module already loaded brings in its own
+/// names, as the first one did.
+#[test]
+fn test_two_selections_from_one_module_each_bring_their_names() {
+    let code = r#"
+use system.testing.{assert_eq}
+use system.testing.{assert_ne}
+
+fn main()
+    assert_eq(1, 1)
+    assert_ne(1, 2)
+    println("ran")
+"#;
+    assert_runs_with_output(code, "ran");
+}

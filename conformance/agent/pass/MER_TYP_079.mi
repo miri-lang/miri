@@ -1,0 +1,18 @@
+// summary: Accepted counterpart of MER_TYP_079: the class implements Hashable beside equals.
+// expect-stdout: 1
+use system.io
+use system.collections.set
+
+class Point implements Equatable, Hashable
+    x int
+    y int
+    fn equals(other Point) bool
+        return self.x == other.x and self.y == other.y
+    fn hash() int
+        return hash_combine(self.x.hash(), self.y.hash())
+
+fn main()
+    let points = Set<Point>()
+    points.add(Point(x: 1, y: 2))
+    points.add(Point(x: 1, y: 2))
+    println(f"{points.length()}")

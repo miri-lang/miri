@@ -351,6 +351,21 @@ pub mod ffi {
         }
     }
 
+    /// Hashes elements through `fn_ptr`, an
+    /// [`crate::element_identity::ElementHashFn`] the compiler generates from
+    /// the element type's `hash`, consistent with the registered equality.
+    ///
+    /// Registered before the first element is added, on the same contract as
+    /// [`miri_rt_set_set_elem_kind`].
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_set_elem_hash_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        guard::guard_check(ptr as *mut u8);
+        if !ptr.is_null() {
+            (*ptr).elem_identity.set_hash_fn(fn_ptr);
+        }
+    }
+
     /// Returns the number of elements in the set.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]

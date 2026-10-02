@@ -624,7 +624,7 @@ fn emit_tagged_union_equality(
 ///
 /// Returns the per-variant blocks in discriminant order and the block reached
 /// by a discriminant outside the declared set.
-fn emit_variant_switch(
+pub(super) fn emit_variant_switch(
     ctx: &mut LoweringContext,
     discr: crate::mir::Local,
     variant_count: usize,
@@ -713,7 +713,7 @@ fn emit_discriminant_agreement(
 /// A member declared at a type parameter is stored at whatever the value was
 /// instantiated with, so comparing it at the declared spelling would recurse on
 /// a bare parameter, which carries no layout and no comparison of its own.
-fn substituted_member_types(
+pub(super) fn substituted_member_types(
     declared_types: &[Type],
     type_args: Option<&[crate::ast::expression::Expression]>,
     generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
@@ -818,7 +818,7 @@ fn emit_variant_payload_equality(
 /// reads it at the base slot's width — which renders a float payload as its
 /// own bit pattern. Materializing through a typed temp first is what keeps the
 /// read at the payload's width.
-fn materialize_field(
+pub(super) fn materialize_field(
     ctx: &mut LoweringContext,
     base: &Place,
     field: PlaceElem,
@@ -836,7 +836,11 @@ fn materialize_field(
 }
 
 /// Read an enum's discriminant, held at the first slot, into an `int` temp.
-fn read_discriminant(ctx: &mut LoweringContext, place: &Place, span: Span) -> crate::mir::Local {
+pub(super) fn read_discriminant(
+    ctx: &mut LoweringContext,
+    place: &Place,
+    span: Span,
+) -> crate::mir::Local {
     materialize_field(
         ctx,
         place,
@@ -862,7 +866,7 @@ fn assign_bool(ctx: &mut LoweringContext, local: crate::mir::Local, value: bool,
 }
 
 /// Abort on a discriminant outside the enum's declared variant set.
-fn emit_corrupt_discriminant_panic(
+pub(super) fn emit_corrupt_discriminant_panic(
     ctx: &mut LoweringContext,
     enum_name: &str,
     final_bb: crate::mir::BasicBlock,
@@ -1027,7 +1031,7 @@ fn emit_scalar_equality(
 }
 
 /// Helper to construct an identifier Constant operand.
-fn identifier_constant(name: &str, span: Span) -> Operand {
+pub(super) fn identifier_constant(name: &str, span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span,
         ty: Type::new(TypeKind::Identifier, span),

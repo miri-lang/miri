@@ -97,6 +97,7 @@ impl TypeChecker {
             self.report_shadowed_type_conflicts(&shadowed, &path_str, path.span);
             self.restore_visibility_for_module(&path_str, &import_kind);
             self.replay_module_visibility(&path_str, &import_kind);
+            self.restore_module_symbols(&path_str, &import_kind, context);
             // A module loaded once is imported again without its aliases
             // being lost: the names it binds are bound on every import.
             self.register_item_aliases(&path_str, &import_kind);
@@ -559,6 +560,39 @@ impl TypeChecker {
         self.modules
             .module_symbols
             .insert(path_str.to_string(), symbols);
+    }
+
+    /// Brings back into scope the names an import of the already-loaded
+    /// module at `path_str` selects, or all it exports for a whole-module
+    /// import. A module first loaded as another module's dependency has its
+    /// names taken out of scope again when that module's load ends, so a
+    /// later import of it has to put them back, as a first load would.
+    ///
+    /// A name something else holds in scope keeps its holder, which is what a
+    /// first load leaves it to as well.
+    fn restore_module_symbols(
+        &mut self,
+        path_str: &str,
+        import_kind: &ImportPathKind,
+        context: &mut Context,
+    ) {
+        let Some(symbols) = self.modules.module_symbols.get(path_str) else {
+            return;
+        };
+        let selected = Self::extract_selected_names(import_kind);
+        let restored: Vec<(String, SymbolInfo)> = symbols
+            .iter()
+            .filter(|(_, info)| !matches!(info.visibility, MemberVisibility::Private))
+            .filter(|(name, _)| selected.as_ref().is_none_or(|names| names.contains(*name)))
+            .filter(|(name, _)| !self.type_table.global_scope.contains_key(*name))
+            .map(|(name, info)| (name.clone(), info.clone()))
+            .collect();
+        for (name, info) in restored {
+            if let Some(scope) = context.scopes.last_mut() {
+                scope.entry(name.clone()).or_insert_with(|| info.clone());
+            }
+            self.type_table.global_scope.insert(name, info);
+        }
     }
 
     fn record_module_declared_names(&mut self, path_str: &str, module_ast: &Program) {

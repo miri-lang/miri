@@ -16,6 +16,8 @@ class Base<T>
 
     public fn equals(other Base<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 class Child<T> extends Base<T>
     fn init(value T)
@@ -125,6 +127,8 @@ class Plain
 
     public fn equals(other Plain) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 class Kid<T> extends Plain
     fn init(value String)
@@ -152,6 +156,8 @@ abstract class Base<T>
 
     public fn equals(other Base<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
     public abstract fn tag() String
 
@@ -184,6 +190,8 @@ class Base<T>
 
     public fn equals(other Base<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 class Child<T> extends Base<T>
     fn init(value T)
@@ -191,6 +199,8 @@ class Child<T> extends Base<T>
 
     public fn equals(other Base<T>) bool
         return false
+    public fn hash() int
+        return 0
 
 fn main()
     let a = Child<String>("PEAR".to_lower())
@@ -213,6 +223,8 @@ class Base<T>
 
     public fn equals(other Base<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 class Middle<T> extends Base<T>
     fn init(value T)

@@ -1,0 +1,15 @@
+// expect: MER_TYP_079
+// summary: Triggers MER_TYP_079: a class with its own equals and no hash is a Set element.
+use system.io
+use system.collections.set
+
+class Point implements Equatable
+    x int
+    y int
+    fn equals(other Point) bool
+        return self.x == other.x and self.y == other.y
+
+fn main()
+    let points = Set<Point>()
+    points.add(Point(x: 1, y: 2))
+    println(f"{points.length()}")

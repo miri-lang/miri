@@ -69,6 +69,8 @@ pub(crate) struct ElementIdentitySetters {
     pub(crate) set_kind: ContainerSetter,
     /// Routes matching through a generated `equals` thunk.
     pub(crate) set_equals_fn: ContainerSetter,
+    /// Routes hashing through the generated `hash` thunk consistent with it.
+    pub(crate) set_hash_fn: ContainerSetter,
 }
 
 /// The rule by which a container recognises two of its elements, or a map two
@@ -493,6 +495,13 @@ impl<'a> FunctionTranslator<'a> {
         };
         if let ElementRule::OwnEquals(addr) = rule {
             (setters.set_equals_fn)(builder, ctx, container_ptr, addr)?;
+            if let Some(thunk) =
+                crate::mir::dispatch::element_hash_symbol(value_kind, type_ctx.facts.definitions())
+            {
+                let hash =
+                    Self::get_element_hash_thunk_addr(builder, ctx, &thunk, type_ctx.ptr_type)?;
+                (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
+            }
         }
         let Some(word) = Self::element_identity_kind(rule, depth, value_kind, type_ctx.ptr_type)
         else {

@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (78 codes: 001-078)
+    // TYP — Type checker (79 codes: 001-079)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1037,6 +1037,13 @@ diagnostics!(
     "078",
     TypMethodUsedAsValue,
     "Method Used As A Value",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "079",
+    TypHashingNotSupported,
+    "Type Has No Hash",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

@@ -52,6 +52,62 @@ pub fn synthesized_equality_symbol(
     Some(Symbol::type_thunk(ThunkKind::Equals, name, &args))
 }
 
+/// The symbol of the hash a set of `ty` elements, or a map of `ty` keys,
+/// places them by; `None` when `ty` is not matched through an `equals`
+/// callback, and so is placed by the hash of its bytes, string or number.
+///
+/// Every type matched through a callback gets one, consistent with it: a
+/// struct or enum hashes the parts its synthesized equality compares, and a
+/// class, list or array calls the `hash` it declares beside its `equals`.
+pub fn element_hash_symbol(
+    ty: &TypeKind,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<Symbol> {
+    let (name, args): (&str, Option<Vec<crate::ast::expression::Expression>>) = match ty {
+        TypeKind::Custom(name, args) => (name.as_str(), args.clone()),
+        TypeKind::List(element) => (
+            BuiltinCollectionKind::List.name(),
+            Some(vec![element.as_ref().clone()]),
+        ),
+        TypeKind::Array(element, size) => (
+            BuiltinCollectionKind::Array.name(),
+            Some(vec![element.as_ref().clone(), size.as_ref().clone()]),
+        ),
+        _ => return None,
+    };
+    if vec_dim(name).is_some() {
+        return None;
+    }
+    let generics = match type_defs.get(name) {
+        Some(TypeDefinition::Struct(definition)) => &definition.generics,
+        Some(TypeDefinition::Enum(definition)) => &definition.generics,
+        Some(TypeDefinition::Class(definition))
+            if crate::type_checker::context::class_method_declaration(
+                name,
+                crate::ast::types::EQUALS_METHOD_NAME,
+                type_defs,
+            )
+            .is_some() =>
+        {
+            &definition.generics
+        }
+        Some(
+            TypeDefinition::Class(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => return None,
+    };
+    let arity = generics.as_ref().map_or(0, Vec::len);
+    let args = match args.as_deref() {
+        Some(exprs) if arity > 0 => monomorphized_arguments(exprs, arity, type_defs)?,
+        _ if arity > 0 => return None,
+        _ => Vec::new(),
+    };
+    Some(Symbol::type_thunk(ThunkKind::Hash, name, &args))
+}
+
 /// The element and key types of every set and map `ty` spells, at any depth,
 /// with the optionals around each opened: the types a container of them
 /// matches.
