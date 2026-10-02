@@ -94,9 +94,8 @@ impl TypeChecker {
         // letting it reach codegen as an internal compiler error.
         self.reject_non_drop_struct_methods(&name, methods);
 
-        // TODO: a struct that implements a trait supplying a default `drop`
-        // compiles and never runs that default; only a hook the struct declares
-        // itself counts.
+        // Only a hook the struct declares itself runs; a trait default `drop`
+        // is refused in `check_struct_trait_methods`.
         let has_drop = methods.iter().any(is_struct_drop_method);
         self.check_struct_trait_methods(&name, &trait_names, &trait_args, has_drop, name_expr);
         let struct_def = StructDefinition {
@@ -132,6 +131,22 @@ impl TypeChecker {
             let mut substitutions = HashMap::new();
             let methods =
                 self.collect_trait_methods_resolved(trait_name, trait_args, &mut substitutions);
+            if !has_drop {
+                if let Some((_, origin)) = methods
+                    .get(DROP_HOOK_NAME)
+                    .filter(|(info, _)| !info.is_abstract)
+                {
+                    self.report_error(
+                        DiagnosticCode::TypTraitDefinition,
+                        format!(
+                            "Struct '{name}' takes `drop` from the default in trait '{origin}', \
+                             which a struct never runs: a struct runs only a hook it declares, so \
+                             declare `fn drop(self)` on '{name}' or implement the trait on a class"
+                        ),
+                        name_expr.span,
+                    );
+                }
+            }
             let mut missing: Vec<(String, String)> = methods
                 .into_iter()
                 .filter(|(method, (info, _))| {

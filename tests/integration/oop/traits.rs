@@ -1061,3 +1061,43 @@ fn main()
 "#,
     );
 }
+
+/// A struct runs only a drop hook it declares itself, so a trait supplying a
+/// default `drop` would have it compile and never run. It is refused at the
+/// struct; a hook the struct declares, which runs, is accepted beside it.
+#[test]
+fn test_a_struct_taking_drop_from_a_trait_default_is_refused() {
+    let trait_decl = r#"
+trait Closable
+    fn drop(self)
+        println("trait drop")
+"#;
+    assert_compiler_error(
+        &format!(
+            "{trait_decl}
+struct P implements Closable
+    x int
+
+fn main()
+    let p = P(x: 1)
+"
+        ),
+        "Struct 'P' takes `drop` from the default in trait 'Closable', which a struct never runs",
+    );
+    assert_heap_guard_output(
+        &format!(
+            "{trait_decl}
+struct P implements Closable
+    x int
+
+    fn drop(self)
+        println(\"own drop\")
+
+fn main()
+    let p = P(x: 1)
+    println(\"made\")
+"
+        ),
+        "made\nown drop",
+    );
+}

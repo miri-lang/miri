@@ -739,7 +739,7 @@ class AppLogger implements Logger
 
 ### The `drop` Hook
 
-A class or struct may declare `fn drop(self)` (on a class, `fn drop()` means the same). Releasing the last reference to an instance is meant to run it exactly once. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own.
+A class or struct may declare `fn drop(self)` (on a class, `fn drop()` means the same). Releasing the last reference to an instance is meant to run it exactly once. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own. A struct runs only a hook it declares itself, so a struct implementing a trait that supplies a default `drop` without declaring its own is refused.
 
 ### `Self` Type
 
