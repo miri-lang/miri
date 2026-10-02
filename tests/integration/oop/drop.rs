@@ -889,3 +889,53 @@ fn main()
         "trait drop\nend",
     );
 }
+
+/// A class with a hook and no fields is still an instance: releasing it runs
+/// the hook, at scope exit and through `drop()` alike.
+#[test]
+fn test_a_fieldless_class_runs_its_drop_hook() {
+    let class = r#"
+class Handle
+    fn drop(self)
+        println("closed")
+"#;
+    assert_heap_guard_output(
+        &format!(
+            "{class}
+fn main()
+    let h = Handle()
+    println(\"end\")
+"
+        ),
+        "end\nclosed",
+    );
+    assert_heap_guard_output(
+        &format!(
+            "{class}
+fn main()
+    var h = Handle()
+    h.drop()
+    println(\"end\")
+"
+        ),
+        "closed\nend",
+    );
+}
+
+/// The `MER_OWN_001` explain page's fix closes its fieldless resource: the
+/// program it shows runs the hook it promises.
+#[test]
+fn test_the_mer_own_001_explain_example_runs_its_drop_hook() {
+    let page = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docs/diagnostics/MER_OWN_001.md"
+    ))
+    .expect("the explain page exists");
+    let after = page
+        .split("## After")
+        .nth(1)
+        .and_then(|section| section.split("```miri").nth(1))
+        .and_then(|block| block.split("```").next())
+        .expect("the page has an After example");
+    assert_heap_guard_output(after, "Closing file");
+}

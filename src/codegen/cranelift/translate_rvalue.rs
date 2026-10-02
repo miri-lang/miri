@@ -714,7 +714,11 @@ impl<'a> FunctionTranslator<'a> {
 
         let vtable_symbol = Self::class_vtable_symbol(kind, type_ctx);
         let needs_vtable_alloc = vtable_symbol.is_some();
-        if operands.is_empty() && !needs_vtable_alloc {
+        // A class instance is always allocated, fields or none: it is what a
+        // release finds to run the class's drop hook on, and a null one is
+        // skipped by every release.
+        let is_class = matches!(kind, AggregateKind::Class(_));
+        if operands.is_empty() && !needs_vtable_alloc && !is_class {
             return Ok(builder.ins().iconst(ptr_type, 0));
         }
 

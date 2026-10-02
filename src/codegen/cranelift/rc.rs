@@ -2529,19 +2529,9 @@ impl<'a> FunctionTranslator<'a> {
     /// so a subclass reaches its base's hook (or its own copy, when the base is
     /// abstract) and the hook this thunk declares is the method body lowered for
     /// it. A struct is not a class chain and names its own hook. The pipeline
-    /// reads the same answer to compile the body this names.
-    ///
-    /// TODO: a class that declares `fn drop(self)` and no fields never runs the
-    /// hook — `let h = Handle()` leaving scope prints nothing, and neither does
-    /// `h.drop()`. A class with one field runs it. Where the fieldless instance
-    /// loses its release (allocation, the managed-type predicate, or this thunk)
-    /// is not yet traced.
-    ///
-    /// TODO: the hook is resolved from the static type of the reference being
-    /// released, so a resource released through a trait-typed reference
-    /// (`let c Closable = Handle(id: 1)`, or a temporary passed as a `Closable`
-    /// argument) never runs its hook, and `x.drop()` on a trait-typed receiver
-    /// calls the hook as a method and lets the owner's release run it again.
+    /// reads the same answer to compile the body this names. A value released
+    /// through a trait-typed or base-class reference reaches its own class's
+    /// hook through the vtable's drop slot instead.
     pub fn resolve_drop_hook_name(type_name: &str, facts: &TypeFacts) -> Option<String> {
         facts.drop_hook_symbol(type_name)
     }
