@@ -1299,7 +1299,7 @@ impl TypeChecker {
         };
         let receiver = make_type(TypeKind::Custom(name.to_string(), type_args.clone()));
         self.record_receiver_method_sites(name, prop_name, &pinned, &receiver, span, context);
-        self.record_trait_method_call(name, prop_name, type_args.as_deref());
+        self.record_trait_method_call(name, prop_name, type_args.as_deref(), span);
         self.record_self_method_requirement(name, prop_name, context);
 
         if let Some(ty) =
@@ -1807,7 +1807,7 @@ impl TypeChecker {
     ) -> Type {
         let pinned = self.build_trait_method_mapping(trait_def, type_args);
         self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
-        self.record_trait_method_call(name, prop_name, type_args.as_deref());
+        self.record_trait_method_call(name, prop_name, type_args.as_deref(), span);
         self.record_self_method_requirement(name, prop_name, context);
         let mut to_check: Vec<String> = vec![name.to_string()];
         let mut visited = std::collections::HashSet::new();
