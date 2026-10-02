@@ -456,3 +456,98 @@ let b i128 = 9223372036854775808
         vec![("a", type_u64()), ("b", type_i128())],
     );
 }
+
+#[test]
+fn test_integer_u128_literal_out_of_range() {
+    type_checker_error_test(
+        "let x i128 = 340282366920938463463374607431768211455",
+        "Integer literal '340282366920938463463374607431768211455' is out of range for i128 (max 170141183460469231731687303715884105727)",
+    );
+}
+
+#[test]
+fn test_integer_negated_boundary_limits() {
+    type_checker_vars_type_test(
+        "
+let a i8 = -128
+let b i16 = -32768
+let c i32 = -2147483648
+let d i64 = -9223372036854775808
+let e i128 = -170141183460469231731687303715884105728
+",
+        vec![
+            ("a", type_i8()),
+            ("b", type_i16()),
+            ("c", type_i32()),
+            ("d", type_i64()),
+            ("e", type_i128()),
+        ],
+    );
+
+    type_checker_error_test(
+        "let x i8 = -129",
+        "Integer literal '-129' is out of range for i8 (max 127)",
+    );
+    type_checker_error_test(
+        "let x i16 = -32769",
+        "Integer literal '-32769' is out of range for i16 (max 32767)",
+    );
+    type_checker_error_test(
+        "let x i32 = -2147483649",
+        "Integer literal '-2147483649' is out of range for i32 (max 2147483647)",
+    );
+    type_checker_error_test(
+        "let x i64 = -9223372036854775809",
+        "Integer literal '-9223372036854775809' is out of range for i64 (max 9223372036854775807)",
+    );
+    type_checker_error_test(
+        "let x i128 = -170141183460469231731687303715884105729",
+        "Integer literal '-170141183460469231731687303715884105729' is out of range for i128 (max 170141183460469231731687303715884105727)",
+    );
+}
+
+#[test]
+fn test_integer_bitwise_not_invalid_types() {
+    type_checker_error_test(
+        "let x = ~1.5",
+        "Bitwise NOT requires integer type, got float",
+    );
+    type_checker_error_test(
+        "let x = ~true",
+        "Bitwise NOT requires integer type, got bool",
+    );
+    type_checker_error_test(
+        "let x = ~\"hello\"",
+        "Bitwise NOT requires integer type, got String",
+    );
+}
+
+#[test]
+fn test_gpu_integer_literal_unsigned_u32_boundary_and_overflow() {
+    type_checker_test(
+        "
+gpu fn my_kernel()
+    let x u32 = 4294967295
+",
+    );
+
+    type_checker_error_test(
+        "
+gpu fn my_kernel()
+    let x u32 = 4294967296
+",
+        "Integer literal '4294967296' is out of range for GPU 32-bit unsigned integer (u32 range is 0 to 4294967295)",
+    );
+}
+
+#[test]
+fn test_integer_unary_increment_decrement_non_numeric() {
+    type_checker_error_test(
+        "var x = true\n++x",
+        "Unary operator requires numeric type, got bool",
+    );
+    type_checker_error_test(
+        "var x = \"abc\"\n--x",
+        "Unary operator requires numeric type, got String",
+    );
+}
