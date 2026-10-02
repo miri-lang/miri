@@ -174,6 +174,8 @@ class Code implements Keyed
 
     public fn equals(other Self) bool
         return self.v % 10 == other.v % 10
+    public fn hash() int
+        return (self.v % 10).hash()
 
 fn main()
     let a = Code(3)
@@ -206,6 +208,8 @@ class Code implements Keyed
 
     public fn equals(other Self) bool
         return self.v % 10 == other.v % 10
+    public fn hash() int
+        return (self.v % 10).hash()
 
 fn main()
     var s = Set<Code>()

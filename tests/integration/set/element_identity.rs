@@ -194,6 +194,8 @@ class Point
 
     public fn equals(other Point) bool
         return self.x == other.x and self.y == other.y
+    public fn hash() int
+        return hash_combine(self.x.hash(), self.y.hash())
 
 fn main()
     var s = Set<Point>()
@@ -220,6 +222,8 @@ class Tag
 
     public fn equals(other Tag) bool
         return self.name == other.name
+    public fn hash() int
+        return self.name.hash()
 
 fn main()
     let s = {Tag("A".to_lower()), Tag("A".to_lower()), Tag("B".to_lower())}
@@ -246,6 +250,8 @@ class Tagged<T>
 
     public fn equals(other Self) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 fn main()
     let first = Tagged<String>("PEAR".to_lower())
@@ -302,6 +308,8 @@ class Point
 
     public fn equals(other Point) bool
         return self.x == other.x
+    public fn hash() int
+        return self.x.hash()
 
 fn main()
     var s = Set<Point>()
@@ -441,6 +449,8 @@ enum Holder<T>
 
     fn equals(other Holder<T>) bool
         return self.size() == other.size()
+    fn hash() int
+        return self.size().hash()
 "#;
 
 /// An enum that declares `equals` has that method decide which elements are

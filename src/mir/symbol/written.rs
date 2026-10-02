@@ -107,6 +107,7 @@ fn thunk_role(kind: ThunkKind) -> &'static str {
         ThunkKind::Clone => crate::ast::implicit_methods::CLONE_METHOD_NAME,
         ThunkKind::Compare => crate::ast::implicit_methods::ORDERING_METHOD_NAME,
         ThunkKind::Equals => crate::ast::implicit_methods::EQUALS_METHOD_NAME,
+        ThunkKind::Hash => crate::ast::types::HASH_METHOD_NAME,
     }
 }
 

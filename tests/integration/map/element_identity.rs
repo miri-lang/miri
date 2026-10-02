@@ -265,6 +265,8 @@ class Tag
         self.name = name
     fn equals(other Tag) bool
         return self.name == other.name
+    fn hash() int
+        return self.name.hash()
 
 fn main()
     var s = Set<Tag?>()

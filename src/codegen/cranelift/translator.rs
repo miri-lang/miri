@@ -1115,6 +1115,16 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_map_set_key_hash_fn(map_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_map_set_key_hash_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::MAP_SET_KEY_HASH_FN, map_ptr, fn_ptr)
+    }
+
     /// Calls `miri_rt_map_set_key_equals_fn(map_ptr, fn_ptr)`.
     pub(crate) fn call_rt_map_set_key_equals_fn(
         builder: &mut FunctionBuilder,
@@ -1133,6 +1143,16 @@ impl<'a> FunctionTranslator<'a> {
         kind: Value,
     ) -> Result<(), CodegenError> {
         Self::call_rt_container_setter(builder, ctx, rt::SET_SET_ELEM_KIND, set_ptr, kind)
+    }
+
+    /// Calls `miri_rt_set_set_elem_hash_fn(set_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_set_set_elem_hash_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        set_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), CodegenError> {
+        Self::call_rt_container_setter(builder, ctx, rt::SET_SET_ELEM_HASH_FN, set_ptr, fn_ptr)
     }
 
     /// Calls `miri_rt_set_set_elem_equals_fn(set_ptr, fn_ptr)`.
@@ -1372,6 +1392,28 @@ impl<'a> FunctionTranslator<'a> {
     /// Used as the element equality of a Set, or the key equality of a Map,
     /// holding elements whose type defines `equals`. The function is generated
     /// by `generate_element_method_thunk` with Export linkage.
+    /// The address of the hash thunk `thunk`, `(value) -> int`, which the
+    /// pipeline lowered for the element type a container hashes through it.
+    pub(crate) fn get_element_hash_thunk_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        thunk: &Symbol,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, CodegenError> {
+        let hash_name = thunk.link_name();
+        let sig = Signature {
+            params: vec![AbiParam::new(ptr_type)],
+            returns: vec![AbiParam::new(cranelift_codegen::ir::types::I64)],
+            call_conv: builder.func.signature.call_conv,
+        };
+        let func_id = ctx
+            .module
+            .declare_function(&hash_name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::declare_function(hash_name.clone(), e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
+    }
+
     pub(crate) fn get_custom_equals_thunk_addr(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,

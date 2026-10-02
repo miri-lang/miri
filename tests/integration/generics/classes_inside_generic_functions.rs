@@ -36,6 +36,8 @@ class Tagged<T>
 
     public fn equals(other Tagged<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 "#;
 
 fn with_tagged(program: &str) -> String {
@@ -224,6 +226,8 @@ class Tagged<T>
 
     public fn equals(other Self) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 fn distinct<T>(a T, b T) int
     var s = Set<Tagged<T>>()

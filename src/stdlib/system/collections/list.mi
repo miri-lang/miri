@@ -23,7 +23,7 @@ use system.accelerator
 ///     l.push(20)
 ///     println(f"{l.length()}")  // 2
 ///     println(f"{l.get(0)}")    // 10
-public class List<T> implements Equatable, Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
+public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)
@@ -53,6 +53,17 @@ public class List<T> implements Equatable, Queryable<T>, Iterable<T>, Cloneable,
             if self.element_at(i) != other.element_at(i): return false
             i += 1
         return true
+
+    /// A hash consistent with `equals`: lists holding equal elements in the
+    /// same order hash alike.
+    public fn hash() int
+        let len = self.length()
+        var hash = len
+        var i = 0
+        while i < len
+            hash = hash_combine(hash, self.element_at(i).hash())
+            i += 1
+        return hash
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in list`.

@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 93
+## Error fixtures (`fail/`) — 94
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -108,6 +108,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_076 | Triggers MER_TYP_076: a value argument is computed from a binding known only while the program runs. |
 | MER_TYP_077 | Triggers MER_TYP_077: a value argument is zero. |
 | MER_TYP_078 | Triggers MER_TYP_078: a method is read as a value without a call. |
+| MER_TYP_079 | Triggers MER_TYP_079: a class with its own equals and no hash is a Set element. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -129,7 +130,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 104
+## Accepted fixtures (`pass/`) — 105
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -235,6 +236,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_076 | Accepted counterpart of MER_TYP_076: the value argument is computed from a `const`. |
 | MER_TYP_077 | Accepted counterpart of MER_TYP_077: the value argument is one. |
 | MER_TYP_078 | Accepted counterpart of MER_TYP_078: the call is wrapped in a lambda. |
+| MER_TYP_079 | Accepted counterpart of MER_TYP_079: the class implements Hashable beside equals. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

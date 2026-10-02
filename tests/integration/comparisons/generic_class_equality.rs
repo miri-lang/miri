@@ -20,6 +20,8 @@ class Tagged<T>
 
     public fn equals(other Tagged<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 "#;
 
 fn with_tagged(main: &str) -> String {
@@ -107,6 +109,8 @@ class Tagged<T>
 
     public fn equals(other Self) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 fn main()
     let t = Tagged<String>("PEAR".to_lower())
@@ -128,6 +132,8 @@ class Tagged<T>
 
     public fn equals(other Self) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
     public fn me() Self
         let copy Self = Tagged<T>(self.value)
@@ -204,6 +210,8 @@ class Pair<K, V> implements Equatable
 
     public fn equals(other Self) bool
         return self.key == other.key and self.val == other.val
+    public fn hash() int
+        return hash_combine(self.key.hash(), self.val.hash())
 
     public fn copy() Self
         return Pair<K, V>(self.key, self.val)
@@ -347,6 +355,8 @@ class Tagged<T>
 
     public fn equals(other Tagged) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
     public fn me() Tagged
         return Tagged<T>(self.value)
@@ -461,6 +471,8 @@ class Label
 
     public fn equals(other Label) bool
         return self.text == other.text
+    public fn hash() int
+        return self.text.hash()
 
 fn main()
     let a = Label("PEAR".to_lower())
@@ -522,6 +534,8 @@ class Tagged<T> implements Equatable
 
     public fn equals(other Tagged) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 fn main()
     let a = Tagged<String>("PEAR".to_lower())

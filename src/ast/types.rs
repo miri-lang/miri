@@ -43,6 +43,14 @@ pub const REPEATING_TRAIT_NAME: &str = "Multiplicable";
 /// The trait whose `equals` answers `==` and `!=`.
 pub const EQUALITY_TRAIT_NAME: &str = "Equatable";
 
+/// The trait whose `hash` places a value in a Set or a Map consistently with
+/// its `equals`.
+pub const HASHING_TRAIT_NAME: &str = "Hashable";
+
+/// The method [`HASHING_TRAIT_NAME`] declares. Every type `==` compares
+/// structurally answers it too, with a hash derived from the same parts.
+pub const HASH_METHOD_NAME: &str = "hash";
+
 /// The method [`ORDERING_TRAIT_NAME`] declares: it answers which of two values
 /// sorts first, as a negative, zero or positive number.
 pub const ORDERING_METHOD_NAME: &str = "compare";

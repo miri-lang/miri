@@ -34,7 +34,7 @@ use crate::ast::implicit_methods::{
     operator_method_name, operator_receiver, CLONE_METHOD_NAME, CONSTRUCTION_METHOD_NAMES,
     EQUALS_METHOD_NAME,
 };
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
@@ -160,17 +160,36 @@ impl TypeChecker {
         );
     }
 
-    /// Record the `equals` a set or map built from, or asked about, values of
-    /// `element` runs: the runtime matches two class elements, or keys, only
-    /// through the class's own `equals`, and an optional one through the
-    /// `equals` of the value it holds.
+    /// Record the `equals` and `hash` a set or map built from, or asked about,
+    /// values of `element` runs: the runtime matches two class elements, or
+    /// keys, only through the class's own `equals` and places them by its
+    /// `hash`, and an optional one through those of the value it holds.
+    ///
+    /// An element whose type writes `equals` without `hash` is refused here:
+    /// no hash taken from its parts could agree with an equality it decides.
     pub(crate) fn record_element_matching(
         &mut self,
         element: &Type,
         span: Span,
         context: &Context,
     ) {
-        self.record_element_method_use(held_value(element), EQUALS_METHOD_NAME, span, context);
+        let held = held_value(element);
+        self.record_element_method_use(held, EQUALS_METHOD_NAME, span, context);
+        if !self.record_hash_requirement(held, context) {
+            self.report_value_lacking_hash(held, span);
+        }
+        if let Some((class_name, substitution)) = self.class_instance(held) {
+            if self.type_declares_method(&class_name, HASH_METHOD_NAME) {
+                self.record_receiver_method_sites(
+                    &class_name,
+                    HASH_METHOD_NAME,
+                    &substitution,
+                    held,
+                    span,
+                    context,
+                );
+            }
+        }
     }
 
     /// Record the `clone` a collection of type `container` runs on its
@@ -920,7 +939,7 @@ fn derived_site(
 
 /// The value an optional of `ty`, at any depth of nesting, holds, or `ty`
 /// itself when it is no optional.
-fn held_value(ty: &Type) -> &Type {
+pub(super) fn held_value(ty: &Type) -> &Type {
     let mut held = ty;
     while let TypeKind::Option(inner) = &held.kind {
         held = inner;

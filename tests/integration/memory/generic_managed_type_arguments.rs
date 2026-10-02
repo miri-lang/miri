@@ -202,6 +202,8 @@ class Tagged<T>
 
     public fn equals(other Tagged<T>) bool
         return self.value == other.value
+    public fn hash() int
+        return self.value.hash()
 
 fn main()
     var s = Set<Tagged<String>>()

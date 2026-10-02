@@ -35,6 +35,8 @@ class Measure implements Equatable
 
     public fn equals(other Self) bool
         return self.value % 10 == other.value % 10
+    public fn hash() int
+        return (self.value % 10).hash()
 "#;
 
 const CLONEABLE_MEASURE: &str = r#"

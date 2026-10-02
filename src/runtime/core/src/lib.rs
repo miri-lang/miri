@@ -63,6 +63,7 @@ pub use string::MiriString;
 pub use alloc::ffi::*;
 pub use array::ffi::*;
 pub use fs::ffi::*;
+pub use hash::ffi::*;
 pub use int128::ffi::*;
 pub use io::ffi::*;
 pub use list::ffi::*;

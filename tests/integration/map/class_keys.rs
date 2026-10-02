@@ -25,6 +25,8 @@ class Point
 
     public fn equals(other Point) bool
         return self.x == other.x and self.y == other.y
+    public fn hash() int
+        return hash_combine(self.x.hash(), self.y.hash())
 
 fn main()
     var m = Map<Point, int>()
@@ -52,6 +54,8 @@ class Tag
 
     public fn equals(other Tag) bool
         return self.name == other.name
+    public fn hash() int
+        return self.name.hash()
 
 fn main()
     let m = {Tag("A".to_lower()): 1, Tag("B".to_lower()): 2}
@@ -77,6 +81,8 @@ class Point
 
     public fn equals(other Point) bool
         return self.x == other.x
+    public fn hash() int
+        return self.x.hash()
 
 fn main()
     var m = Map<Point, int>()

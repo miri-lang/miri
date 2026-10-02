@@ -167,6 +167,7 @@ fn thunk_prefix(kind: ThunkKind) -> &'static str {
         ThunkKind::Clone => "__clone_",
         ThunkKind::Compare => "__compare_",
         ThunkKind::Equals => "__equals_",
+        ThunkKind::Hash => "__hash_",
     }
 }
 

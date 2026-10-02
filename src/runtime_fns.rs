@@ -143,11 +143,18 @@ pub mod rt {
     pub const MAP_SET_KEY_KIND: &str = "miri_rt_map_set_key_kind";
     /// Compiler-internal: matches keys through the key type's `equals`, not in stdlib.
     pub const MAP_SET_KEY_EQUALS_FN: &str = "miri_rt_map_set_key_equals_fn";
+    /// Compiler-internal: hashes keys through the key type's `hash`, not in stdlib.
+    pub const MAP_SET_KEY_HASH_FN: &str = "miri_rt_map_set_key_hash_fn";
     pub const MAP_CLONE: &str = "miri_rt_map_clone";
     /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
     pub const MAP_COW: &str = "miri_rt_map_cow";
     /// Compiler-internal: decrements the RC of a map element, not in stdlib.
     pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
+
+    // ── Hash ─────────────────────────────────────────────────────────────────
+    pub const HASH_COMBINE: &str = "miri_rt_hash_combine";
+    /// Compiler-internal: the hash a derived `hash` takes of a float, not in stdlib.
+    pub const FLOAT_HASH: &str = "miri_rt_float_hash";
 
     // ── Set ──────────────────────────────────────────────────────────────────
     pub const SET_NEW: &str = "miri_rt_set_new";
@@ -170,6 +177,8 @@ pub mod rt {
     pub const SET_SET_ELEM_KIND: &str = "miri_rt_set_set_elem_kind";
     /// Compiler-internal: matches elements through the element type's `equals`, not in stdlib.
     pub const SET_SET_ELEM_EQUALS_FN: &str = "miri_rt_set_set_elem_equals_fn";
+    /// Compiler-internal: hashes elements through the element type's `hash`, not in stdlib.
+    pub const SET_SET_ELEM_HASH_FN: &str = "miri_rt_set_set_elem_hash_fn";
     /// Compiler-internal: decrements the RC of a set element, not in stdlib.
     pub const SET_DECREF_ELEMENT: &str = "miri_rt_set_decref_element";
 
@@ -215,6 +224,7 @@ pub mod rt {
     pub const STRING_CONCAT: &str = "miri_rt_string_concat";
     pub const STRING_CLONE: &str = "miri_rt_string_clone";
     pub const STRING_EQUALS: &str = "miri_rt_string_equals";
+    pub const STRING_HASH: &str = "miri_rt_string_hash";
     pub const STRING_COMPARE: &str = "miri_rt_string_compare";
     pub const STRING_CONTAINS: &str = "miri_rt_string_contains";
     pub const STRING_STARTS_WITH: &str = "miri_rt_string_starts_with";
@@ -404,6 +414,7 @@ pub mod rt {
         MAP_SET_VAL_CLONE_FN,
         MAP_SET_KEY_KIND,
         MAP_SET_KEY_EQUALS_FN,
+        MAP_SET_KEY_HASH_FN,
         MAP_DECREF_ELEMENT,
         // Set
         SET_NEW,
@@ -421,6 +432,10 @@ pub mod rt {
         SET_SET_ELEM_CLONE_FN,
         SET_SET_ELEM_KIND,
         SET_SET_ELEM_EQUALS_FN,
+        SET_SET_ELEM_HASH_FN,
+        // Hash
+        HASH_COMBINE,
+        FLOAT_HASH,
         SET_DECREF_ELEMENT,
         // IO
         PRINT,
@@ -469,6 +484,7 @@ pub mod rt {
         STRING_CONCAT,
         STRING_CLONE,
         STRING_EQUALS,
+        STRING_HASH,
         STRING_COMPARE,
         STRING_CONTAINS,
         STRING_STARTS_WITH,

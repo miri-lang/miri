@@ -630,6 +630,42 @@ fn test_set_with_an_equals_callback_matches_through_it() {
     }
 }
 
+static HASHED_ELEMENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A hash consistent with [`boxed_ints_equal`], standing in for a compiled
+/// `hash` thunk, that counts how often the set asks for one.
+unsafe extern "C" fn boxed_int_hash(value: *const u8) -> i64 {
+    HASHED_ELEMENTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *(value as *const i64)
+}
+
+#[test]
+fn test_set_with_a_hash_callback_places_elements_through_it() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_equals_fn(set, boxed_ints_equal as usize);
+        miri_rt_set_set_elem_hash_fn(set, boxed_int_hash as usize);
+        let before = HASHED_ELEMENTS.load(std::sync::atomic::Ordering::SeqCst);
+        let values: Vec<Box<i64>> = (0..40).map(|i| Box::new(i % 10)).collect();
+        for value in &values {
+            miri_rt_set_add(set, &**value as *const i64 as usize);
+        }
+        assert_eq!(miri_rt_set_len(set), 10);
+        assert!(
+            HASHED_ELEMENTS.load(std::sync::atomic::Ordering::SeqCst) >= before + 40,
+            "every added element is hashed through the callback"
+        );
+        let probe = Box::new(7i64);
+        let missing = Box::new(70i64);
+        assert_eq!(miri_rt_set_contains(set, &*probe as *const i64 as usize), 1);
+        assert_eq!(
+            miri_rt_set_contains(set, &*missing as *const i64 as usize),
+            0
+        );
+        miri_rt_set_free(set);
+    }
+}
+
 static RELEASED_DUPLICATES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 unsafe extern "C" fn count_release(_elem: *mut u8) {

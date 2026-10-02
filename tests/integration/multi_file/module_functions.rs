@@ -314,3 +314,39 @@ fn an_imported_structs_drop_hook_runs_once() {
         "2\nres gone\nend",
     );
 }
+
+/// A module first loaded as another module's dependency has its functions
+/// taken out of scope when that load ends; importing it afterwards brings
+/// them back, as a first load would.
+#[test]
+fn test_importing_a_module_another_import_loaded_first_brings_its_functions() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.parts.outer\n",
+                    "use local.parts.inner\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f\"{wrapped()} {base()}\")\n",
+                ),
+            ),
+            (
+                "parts/outer.mi",
+                concat!(
+                    "use local.parts.inner\n",
+                    "\n",
+                    "public fn wrapped() int\n",
+                    "    return base() + 1\n",
+                ),
+            ),
+            (
+                "parts/inner.mi",
+                concat!("public fn base() int\n", "    return 41\n"),
+            ),
+        ],
+        "42 41",
+    );
+}

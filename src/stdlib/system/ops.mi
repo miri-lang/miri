@@ -21,6 +21,35 @@
 public trait Equatable
     public fn equals(other Self) bool
 
+/// Gives a type's values a hash consistent with its `equals`, which a Set
+/// places its elements by and a Map its keys.
+///
+/// Two values `equals` calls equal must return the same hash; values that
+/// are not equal should, but need not, return different ones. A type whose
+/// equality is derived — a struct, an enum, a tuple of them — derives its hash
+/// too, so only a type that writes its own `equals` writes `hash`, and such a
+/// type is refused as a Set element or Map key until it does. `hash_combine`
+/// folds the hashes of the fields `equals` compares into one.
+///
+/// Example:
+///     class Point implements Equatable, Hashable
+///         x int
+///         y int
+///         label String
+///         public fn equals(other Self) bool
+///             return self.x == other.x and self.y == other.y
+///         public fn hash() int
+///             return hash_combine(self.x.hash(), self.y.hash())
+public trait Hashable
+    public fn hash() int
+
+runtime "core" fn miri_rt_hash_combine(seed int, value int) int
+
+/// `seed` with `value` mixed into it, so a hash built from several parts
+/// depends on every part and on their order.
+public fn hash_combine(seed int, value int) int
+    return miri_rt_hash_combine(seed, value)
+
 /// Enables ordering comparison (`<`, `<=`, `>`, `>=`) for types that implement it.
 ///
 /// `compare` returns a negative number when `self` sorts before `other`, zero

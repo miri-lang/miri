@@ -43,6 +43,7 @@ pub mod set_expr;
 
 pub mod structmember_expr;
 pub mod structural_equality;
+pub mod structural_hash;
 pub mod super_expr;
 pub mod testing_intrinsic;
 pub mod tuple_expr;

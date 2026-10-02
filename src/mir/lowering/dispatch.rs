@@ -82,6 +82,19 @@ pub fn lower_call(
     }
 
     if let ExpressionKind::Member(obj, method) = &func.node {
+        if let Some(op) = super::derived_hash_call::try_lower_derived_hash_call(
+            ctx,
+            span,
+            obj,
+            method,
+            args,
+            dest.as_ref(),
+        )? {
+            return Ok(op);
+        }
+    }
+
+    if let ExpressionKind::Member(obj, method) = &func.node {
         if let Some(op) = super::method_dispatch::try_lower_method_call(
             ctx,
             span,

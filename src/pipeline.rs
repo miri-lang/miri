@@ -2059,8 +2059,8 @@ impl Pipeline {
     ///
     /// A List or Array sorts through the ordering method of a class that orders
     /// its values, a Set or Map matches elements through the `equals` a class
-    /// defines, and every container copies a `Cloneable` class's elements
-    /// through its `clone`. Both are reached through a thunk codegen registers on the
+    /// defines and places them by the `hash` it defines beside it, and every
+    /// container copies a `Cloneable` class's elements through its `clone`. Both are reached through a thunk codegen registers on the
     /// container, which is a reference no MIR body carries — so scanning call
     /// sites never finds it, and the instantiation it needs has to be emitted on
     /// the strength of the class declaring the capability.
@@ -2075,8 +2075,10 @@ impl Pipeline {
         let [ordering, equals] = mir::lowering::dispatch_symbols::ELEMENT_METHOD_NAMES;
         // An enum's own `equals` is what `==` on it, and a set or map holding
         // it, compare through: the synthesized structural equality calls it.
+        let hash = crate::ast::types::HASH_METHOD_NAME;
         if let Some(TypeDefinition::Enum(enum_def)) = definitions.get(class_name) {
-            return method_name == equals && enum_def.methods.contains_key(equals);
+            return (method_name == equals || method_name == hash)
+                && enum_def.methods.contains_key(method_name);
         }
         if !matches!(definitions.get(class_name), Some(TypeDefinition::Class(_))) {
             return false;
@@ -2091,7 +2093,8 @@ impl Pipeline {
                 definitions,
             );
         }
-        method_name == equals && class_method_declaration(class_name, equals, definitions).is_some()
+        let declares = |method| class_method_declaration(class_name, method, definitions).is_some();
+        (method_name == equals || method_name == hash) && declares(equals) && declares(method_name)
     }
 
     /// The shared body of every method a built-in collection is compiled with:
@@ -2237,7 +2240,8 @@ impl Pipeline {
     }
 
     /// Lower the equality each set or map in `bodies` matches its struct
-    /// elements or keys through, once per instantiation.
+    /// elements or keys through, and the hash it places every element matched
+    /// through an `equals` by, once per instantiation.
     fn lower_element_equalities(
         result: &PipelineResult,
         bodies: &mut Vec<(Symbol, mir::Body)>,
@@ -2255,24 +2259,31 @@ impl Pipeline {
             if let Some(symbol) =
                 mir::dispatch::synthesized_equality_symbol(&element.kind, type_defs)
             {
+                wanted.entry(symbol.link_name()).or_insert((
+                    symbol,
+                    element.clone(),
+                    ElementBody::Equality,
+                ));
+            }
+            if let Some(symbol) = mir::dispatch::element_hash_symbol(&element.kind, type_defs) {
                 wanted
                     .entry(symbol.link_name())
-                    .or_insert((symbol, element));
+                    .or_insert((symbol, element, ElementBody::Hash));
             }
         }
-        for (_, (symbol, element)) in wanted {
+        for (_, (symbol, element, kind)) in wanted {
             if !symbols
                 .claim_at(&symbol, element.span)
                 .map_err(CompilerError::Lowering)?
             {
                 continue;
             }
-            let body = mir::lowering::element_equality::lower_element_equality(
-                &result.type_checker,
-                &element,
-                element.span,
-            )
-            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+            let lower = match kind {
+                ElementBody::Equality => mir::lowering::element_equality::lower_element_equality,
+                ElementBody::Hash => mir::lowering::element_equality::lower_element_hash,
+            };
+            let body = lower(&result.type_checker, &element, element.span)
+                .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
             bodies.push((symbol, body));
         }
         Ok(())
@@ -4142,4 +4153,13 @@ mod gpu_telemetry_report_tests {
             None
         );
     }
+}
+
+/// Which body a set or map asks of its elements a pipeline pass lowers.
+#[derive(Clone, Copy)]
+enum ElementBody {
+    /// The equality synthesized from a struct's or enum's `==`.
+    Equality,
+    /// The hash consistent with an element's equality.
+    Hash,
 }

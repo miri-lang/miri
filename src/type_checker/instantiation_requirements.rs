@@ -31,6 +31,7 @@
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::function_analysis::ModuleId;
 use super::operators::{is_ordering_op, missing_ordering_at_instantiation_message};
+use super::used_methods::held_value;
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
@@ -101,6 +102,10 @@ pub(crate) enum Obligation {
     /// program calls through that trait, or one above it, runs that class's
     /// own method, as a conversion of the instance to the trait would.
     SelfConversion { trait_name: String },
+    /// The body hashes a value whose type spells one of its own parameters
+    /// (`x.hash()`, or a set or map of them), which every type answers that
+    /// does not write its own `equals` without a `hash` beside it.
+    Hash { value: Type },
 }
 
 /// A unary operator a body applied, with its operand as that body wrote it.
@@ -262,6 +267,9 @@ impl Obligation {
             // `self` is pinned to the instance at every site that pins a
             // default, so the conversion is answered there, never handed on.
             Obligation::SelfConversion { .. } => None,
+            Obligation::Hash { value } => {
+                delegated_operand_of(value, pins).map(|value| Obligation::Hash { value })
+            }
         }
     }
 }
@@ -362,6 +370,10 @@ impl Obligation {
                 parameter: called,
                 method,
             } => (called == parameter).then_some(method.as_str()),
+            Obligation::Hash { value } => {
+                let hashed = generic_parameter_name(&held_value(value).kind)?;
+                (hashed == parameter).then_some(crate::ast::types::HASH_METHOD_NAME)
+            }
             Obligation::Unary(_) | Obligation::Cast(_) | Obligation::SelfConversion { .. } => None,
         }
     }
@@ -375,8 +387,8 @@ impl Obligation {
 /// body it is recorded against, and the program declares finitely many; an
 /// [`Obligation::ParameterMethod`] names one of those and a method the program
 /// writes, and an [`Obligation::SelfConversion`] a trait it declares. The
-/// three that carry types — [`Obligation::Binary`], [`Obligation::Unary`]
-/// and [`Obligation::Cast`] — carry operands that could grow around a
+/// four that carry types — [`Obligation::Binary`], [`Obligation::Unary`],
+/// [`Obligation::Cast`] and [`Obligation::Hash`] — carry operands that could grow around a
 /// delegation cycle; every one of them hands an operand on through
 /// [`delegated_operand`], which passes only a bare parameter name or a type
 /// written in the program and drops any that would be built larger. A cast's
@@ -1020,6 +1032,7 @@ impl TypeChecker {
                 Obligation::Binary(written) => self.answer_binary(written, site, context),
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
+                Obligation::Hash { value } => self.answer_hash(value, site),
                 Obligation::ParameterMethod { .. } | Obligation::SelfConversion { .. } => {}
             }
         }
@@ -1080,6 +1093,64 @@ impl TypeChecker {
             ),
             site,
             help,
+        );
+    }
+
+    /// Report `site` when the value its body hashes is pinned to a type that
+    /// writes its own `equals` without a `hash` consistent with it.
+    fn answer_hash(&mut self, value: &Type, site: &PinningSite) {
+        let pinned = concretely_pinned(&site.pins);
+        let hashed = self.substitute_type(value, &pinned);
+        if self.is_unsettled(&hashed) {
+            return;
+        }
+        let Some(lacking) = self.type_lacking_hash(&hashed) else {
+            return;
+        };
+        let Some(parameter) = pinned_parameter_spelled_in(&[value], &site.pins) else {
+            return;
+        };
+        let help = format!(
+            "'{}' hashes its '{}' parameter, so the type it is instantiated with has to have a \
+             hash; {}",
+            site.callee.1,
+            parameter,
+            hash_help(&lacking)
+        );
+        self.report_at_site(
+            DiagnosticCode::TypHashingNotSupported,
+            lacking_hash_message(&lacking),
+            site,
+            help,
+        );
+    }
+
+    /// Record that the body being checked hashes a value of `value`, when the
+    /// type spells one of that body's own generic parameters.
+    pub(crate) fn record_hash_requirement(&mut self, value: &Type, context: &Context) -> bool {
+        let Some(body) = self.body_stating_a_requirement_about(value, context) else {
+            return false;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::Hash {
+                value: value.clone(),
+            },
+        );
+        true
+    }
+
+    /// Report at `span` that a value of `ty` is hashed, when a type in it
+    /// writes its own `equals` without a `hash`.
+    pub(crate) fn report_value_lacking_hash(&mut self, ty: &Type, span: Span) {
+        let Some(lacking) = self.type_lacking_hash(ty) else {
+            return;
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypHashingNotSupported,
+            lacking_hash_message(&lacking),
+            span,
+            hash_help(&lacking),
         );
     }
 
@@ -1667,4 +1738,17 @@ mod tests {
         assert_eq!(substitution.len(), 1);
         assert_eq!(kind_of(&substitution, "V"), Some(TypeKind::Float));
     }
+}
+
+/// The refusal of a value whose type `lacking` writes `equals` without `hash`.
+pub(crate) fn lacking_hash_message(lacking: &str) -> String {
+    format!("'{lacking}' defines its own 'equals' but no 'hash' consistent with it")
+}
+
+/// What to write so `lacking` can be hashed.
+pub(crate) fn hash_help(lacking: &str) -> String {
+    format!(
+        "implement 'Hashable' on '{lacking}' with a 'hash()' that returns the same value for any \
+         two values its 'equals' calls equal"
+    )
 }

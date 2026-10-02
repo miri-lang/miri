@@ -140,7 +140,7 @@ const BOX: Decl = Decl {
 
 const SHAPE: Decl = Decl {
     name: "Sh",
-    text: "enum Sh\n    Num(int)\n    Label(String)\n\n    fn equals(other Sh) bool\n        return show_sh(self) == show_sh(other)\n",
+    text: "enum Sh\n    Num(int)\n    Label(String)\n\n    fn equals(other Sh) bool\n        return show_sh(self) == show_sh(other)\n\n    fn hash() int\n        return show_sh(self).hash()\n",
 };
 
 const SHOW_SHAPE: Decl = Decl {

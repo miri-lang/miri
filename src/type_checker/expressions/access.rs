@@ -46,8 +46,8 @@ use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, RESULT_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME,
-    WARP_CONTEXT_TYPE_NAME,
+    BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME, RESULT_TYPE_NAME, STRING_TYPE_NAME,
+    TUPLE_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::*;
 use crate::diagnostics::repair::RepairRequest;
@@ -832,6 +832,11 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
+        if prop_name == HASH_METHOD_NAME {
+            if let Some(member) = self.derived_hash_member(obj_type, span, context) {
+                return member;
+            }
+        }
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
         self.record_parameter_method_requirement(obj_type, prop_name, context);
 
@@ -881,6 +886,62 @@ impl TypeChecker {
                 );
                 make_type(TypeKind::Error)
             }
+        }
+    }
+
+    /// The `hash()` a value of `obj_type` answers without declaring one: the
+    /// hash derived from the parts `==` compares. `None` when the type declares
+    /// its own, which is read like any other method.
+    ///
+    /// A value whose type spells a type parameter is answered where the
+    /// parameter is pinned; one whose type writes `equals` without `hash` is
+    /// refused, since no derived hash could agree with that equality.
+    fn derived_hash_member(
+        &mut self,
+        obj_type: &Type,
+        span: Span,
+        context: &Context,
+    ) -> Option<Type> {
+        if self.declares_hash_member(obj_type) {
+            return None;
+        }
+        if !self.record_hash_requirement(obj_type, context) {
+            if let Some(lacking) = self.type_lacking_hash(obj_type) {
+                self.report_error_with_help(
+                    DiagnosticCode::TypHashingNotSupported,
+                    crate::type_checker::instantiation_requirements::lacking_hash_message(&lacking),
+                    span,
+                    crate::type_checker::instantiation_requirements::hash_help(&lacking),
+                );
+                return Some(make_type(TypeKind::Error));
+            }
+        }
+        Some(make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![],
+            return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
+                make_type(TypeKind::Int),
+            ))),
+        }))))
+    }
+
+    /// Whether a value of `obj_type` reads `hash` as a method its type, or
+    /// the trait bounding it, declares.
+    fn declares_hash_member(&self, obj_type: &Type) -> bool {
+        match &obj_type.kind {
+            TypeKind::Custom(name, _) => {
+                self.type_declares_method(name, HASH_METHOD_NAME)
+                    || self.trait_declares(name, HASH_METHOD_NAME)
+            }
+            TypeKind::Generic(_, Some(constraint), _) => self.declares_hash_member(constraint),
+            TypeKind::String => self.type_declares_method(STRING_TYPE_NAME, HASH_METHOD_NAME),
+            TypeKind::List(_) => {
+                self.type_declares_method(BuiltinCollectionKind::List.name(), HASH_METHOD_NAME)
+            }
+            TypeKind::Array(_, _) => {
+                self.type_declares_method(BuiltinCollectionKind::Array.name(), HASH_METHOD_NAME)
+            }
+            _ => false,
         }
     }
 

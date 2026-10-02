@@ -323,7 +323,7 @@ Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, 
 
 The `get` method returns an option type (`V?`) — use pattern matching to handle missing keys safely.
 
-Two keys are the same key when `==` says so: strings match by content, arrays and lists match element by element, a class that defines or inherits `equals` matches through that method, and a value type matches by value. A class with no `equals` of its own or from a class it extends matches only the same instance. A float key matches by the number it holds: `-0.0` and `0.0` are one key, and every NaN is one key — a NaN never equals itself under `==`, but a NaN stored in a map or set can be found and removed again. A type `==` cannot compare — a function value, or a type holding one — is refused as a key, and as a set element (MER_TYP_002).
+Two keys are the same key when `==` says so: strings match by content, arrays and lists match element by element, a class that defines or inherits `equals` matches through that method, and a value type matches by value. A class with no `equals` of its own or from a class it extends matches only the same instance. A float key matches by the number it holds: `-0.0` and `0.0` are one key, and every NaN is one key — a NaN never equals itself under `==`, but a NaN stored in a map or set can be found and removed again. A type `==` cannot compare — a function value, or a type holding one — is refused as a key, and as a set element (MER_TYP_002). Keys are placed by their `hash()`, which agrees with `==`: two keys `==` calls equal hash alike. A type that writes its own `equals` must write a `hash` beside it (see `Hashable`), and one that does not is refused as a key, and as a set element (MER_TYP_079).
 
 ### Set
 
@@ -763,10 +763,13 @@ The `system.ops` module defines built-in traits used by the language:
 | Trait | Used for |
 |-------|----------|
 | `Equatable` | `==` and `!=` operators |
+| `Hashable` | placing a value in a `Set` or as a `Map` key, consistently with `==` |
 | `Comparable` | `<`, `<=`, `>` and `>=` operators |
 | `Addable` | `+` operator |
 | `Multiplicable` | `*` operator (repetition) |
 | `Iterable` | `for x in collection` loops |
+
+`Hashable` requires one method, `hash() int`, returning the same value for any two values `equals` calls equal. Every value answers `hash()`: a type whose equality is derived derives its hash from the same parts — a number its value (a float its number, so `-0.0` and `0.0` hash alike), a string its content, an optional its payload or a constant for `None`, a struct its fields, an enum its variant and that variant's payloads, a class without `equals` its identity — and `List` and `Array` implement it over their elements. A type that writes its own `equals` decides alone which of its values are equal, so only a `hash` of its own can agree with it: until it implements `Hashable`, it is refused as a set element or map key and wherever its `hash()` is called (MER_TYP_079), including through a generic body that hashes a parameter it is bound to. `hash_combine(seed, value)` folds the hashes of the parts `equals` compares into one: `return hash_combine(self.x.hash(), self.y.hash())`.
 
 `Comparable` requires one method, `compare(other Self) int`, returning a negative number when `self` sorts first, zero when neither does, and a positive number when `self` sorts last. Each of the four ordering operators is derived from it by comparing that result against zero. The numeric types and `bool` order by value without it, and `String` implements it, so strings order by content. A named type that implements nothing is refused under an ordering operator (`MER_TYP_075`) rather than compared some other way. A generic parameter is accepted inside the body that declares it, the way arithmetic on a parameter is.
 
