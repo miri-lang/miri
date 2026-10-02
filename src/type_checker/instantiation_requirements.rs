@@ -36,6 +36,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
+use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
 
@@ -299,8 +300,8 @@ pub(crate) struct PinningSite {
     pub(super) pins: HashMap<String, Pin>,
     pub(super) span: Span,
     /// Why the program reaches `callee` here when no call to it is written at
-    /// `span`, said in a sentence a refusal at this site adds to its help.
-    pub(super) reached_because: Option<String>,
+    /// `span`, which a refusal at this site adds to its help.
+    pub(super) reached_because: Option<ReachedBecause>,
     /// The generic parameters of `caller` the site's pinned types spell, read
     /// while `caller`'s scope was the one being checked. A site derived from
     /// this one while answering reads a type argument as one of these
@@ -316,6 +317,17 @@ impl PinningSite {
             ..self.clone()
         }
     }
+}
+
+/// Why the program reaches a site's body when no call to it is written where
+/// the site is.
+#[derive(Debug, Clone)]
+pub(crate) struct ReachedBecause {
+    /// The sentence a refusal at the site adds to its help.
+    pub(super) sentence: String,
+    /// The call through a trait that runs the body, when it is written in the
+    /// program's own source, as the note a refusal points at it with.
+    pub(super) call: Option<RelatedNote>,
 }
 
 /// The parameter a trait default's site pins to the instance the default runs
@@ -1195,11 +1207,17 @@ impl TypeChecker {
         site: &PinningSite,
         help: String,
     ) {
-        let help = match &site.reached_because {
-            Some(reason) => format!("{help}; {reason}"),
-            None => help,
+        let Some(reason) = &site.reached_because else {
+            self.report_error_with_help(code, message, site.span, help);
+            return;
         };
-        self.report_error_with_help(code, message, site.span, help);
+        let help = format!("{help}; {}", reason.sentence);
+        let in_own_source = self.modules.current_source_override.is_none();
+        let notes = match &reason.call {
+            Some(call) if in_own_source => vec![call.clone()],
+            _ => Vec::new(),
+        };
+        self.report_error_with_related(code, message, site.span, Some(help), notes, None);
     }
 
     /// Report `site` when it pins `parameter` to a type carrying no ordering.

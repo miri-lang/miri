@@ -619,6 +619,22 @@ fn main()
 }
 
 #[test]
+fn a_refusal_reached_by_handing_self_on_points_at_the_call_through_the_trait() {
+    assert_compiler_error(
+        &with(
+            HANDS_ON,
+            r#"
+fn main()
+    let b = Box<String>(v: "x" + "y")
+    let t = b.me()
+    println(f"{t.a()}")
+"#,
+        ),
+        "'a' is called through 'Tr' here",
+    );
+}
+
+#[test]
 fn a_default_calling_through_an_alias_of_its_self_is_refused_at_the_instances_argument() {
     assert_compiler_error(
         &with(
@@ -780,4 +796,87 @@ fn main()
             "1 true",
         );
     }
+}
+
+/// A conversion to a trait compiles, at the converted instance, every method
+/// the program calls through that trait, wherever the call is written and
+/// whichever instance it runs on: whether a conversion is accepted does not
+/// depend on where its value flows.
+const CALLED_ELSEWHERE: &str = r#"
+use system.io
+
+trait Lt
+    fn a() bool
+    fn b() bool
+
+fn only_a(o Lt) bool
+    return o.a()
+
+class Box<T> implements Lt
+    v T
+    fn a() bool
+        return true
+    fn b() bool
+        return self.v < 10
+
+class Other implements Lt
+    k int
+    fn a() bool
+        return true
+    fn b() bool
+        return true
+"#;
+
+#[test]
+fn a_conversion_is_refused_for_a_method_called_through_the_trait_only_on_another_instance() {
+    assert_compiler_error(
+        &with(
+            CALLED_ELSEWHERE,
+            r#"
+fn main()
+    let o Lt = Other(k: 1)
+    let b = Box<String>(v: "x" + "y")
+    println(f"{o.b()} {only_a(b)}")
+"#,
+        ),
+        CANNOT_COMPARE,
+    );
+}
+
+/// The refusal lands on the conversion, which never names the failing method,
+/// so its help says why the method is compiled there and a note points at the
+/// call through the trait that requires it.
+#[test]
+fn a_refusal_reached_by_a_conversion_names_the_rule_and_the_call_through_the_trait() {
+    let program = with(
+        CALLED_ELSEWHERE,
+        r#"
+fn main()
+    let o Lt = Other(k: 1)
+    let b = Box<String>(v: "x" + "y")
+    println(f"{o.b()} {only_a(b)}")
+"#,
+    );
+    assert_compiler_error(
+        &program,
+        "converting a 'Box<String>' to 'Lt' compiles every method the program calls through \
+         'Lt', and 'b' is one, so 'b' is compiled at 'Box<String>'",
+    );
+    assert_compiler_error(&program, "'b' is called through 'Lt' here");
+}
+
+#[test]
+fn a_conversion_is_accepted_when_nothing_calls_the_invalid_method_through_the_trait() {
+    assert_heap_guard_output(
+        &with(
+            CALLED_ELSEWHERE,
+            r#"
+fn main()
+    let o Lt = Other(k: 1)
+    let b = Box<String>(v: "x" + "y")
+    println(f"{o.a()} {only_a(b)}")
+"#,
+        ),
+        "true true",
+    );
 }

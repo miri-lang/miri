@@ -26,7 +26,7 @@
 use super::context::{resolve_method_source, Context, TypeDefinition};
 use super::instantiation_requirements::{
     spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
-    PinningSite, SELF_PIN,
+    PinningSite, ReachedBecause, SELF_PIN,
 };
 use super::TypeChecker;
 use crate::ast::expression::Expression;
@@ -37,6 +37,7 @@ use crate::ast::implicit_methods::{
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
+use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
 
@@ -50,6 +51,9 @@ pub(crate) struct TraitConversion {
     /// The trait converted to and each trait above it, with the arguments
     /// the conversion pins each one's parameters to, in declaration order.
     reached: Vec<(String, Vec<Option<Type>>)>,
+    /// The converted instance's own type.
+    instance: Type,
+    trait_name: String,
 }
 
 /// A class instance converted to a trait, as the conversion is recorded.
@@ -67,11 +71,37 @@ struct InstanceConversion<'c> {
 /// A method called through a receiver whose type is a trait or a class,
 /// which runs the vtable slot of whatever instance converted to that type the
 /// receiver holds.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct TraitMethodCall {
     trait_name: String,
     method: String,
     arguments: Vec<Option<Type>>,
+    /// Where the first such call is written, when it is in the program's own
+    /// source rather than a module it imports.
+    span: Option<Span>,
+}
+
+impl TraitMethodCall {
+    /// Why a conversion of `instance` to `trait_name` reaches this method.
+    fn reached_by_conversion(&self, instance: &Type, trait_name: &str) -> ReachedBecause {
+        ReachedBecause {
+            sentence: format!(
+                "converting a '{instance}' to '{trait_name}' compiles every method the program \
+                 calls through '{}', and '{}' is one, so '{}' is compiled at '{instance}'",
+                self.trait_name, self.method, self.method
+            ),
+            call: self.note(),
+        }
+    }
+
+    /// The note pointing at where the call is written, when it is known.
+    fn note(&self) -> Option<RelatedNote> {
+        let message = format!(
+            "'{}' is called through '{}' here",
+            self.method, self.trait_name
+        );
+        self.span.map(|span| RelatedNote::at(message, span))
+    }
 }
 
 impl TypeChecker {
@@ -393,28 +423,43 @@ impl TypeChecker {
             return;
         }
         let reached = self.traits_reached(conversion.trait_name, conversion.trait_substitution);
-        self.trait_conversions
-            .push(TraitConversion { sites, reached });
+        self.trait_conversions.push(TraitConversion {
+            sites,
+            reached,
+            instance: conversion.instance.clone(),
+            trait_name: conversion.trait_name.to_string(),
+        });
     }
 
     /// Record a call to `method` through a receiver of the trait or class
-    /// `trait_name` at `type_args`.
+    /// `trait_name` at `type_args`, written at `span`.
     pub(crate) fn record_trait_method_call(
         &mut self,
         trait_name: &str,
         method: &str,
         type_args: Option<&[Expression]>,
+        span: Span,
     ) {
         if self.suppress_diagnostics {
             return;
         }
-        let call = TraitMethodCall {
-            trait_name: trait_name.to_string(),
-            method: method.to_string(),
-            arguments: self.instance_arguments(trait_name, type_args),
-        };
-        if !self.trait_method_calls.contains(&call) {
-            self.trait_method_calls.push(call);
+        let arguments = self.instance_arguments(trait_name, type_args);
+        let span = self
+            .modules
+            .current_source_override
+            .is_none()
+            .then_some(span);
+        let recorded = self.trait_method_calls.iter_mut().find(|call| {
+            call.trait_name == trait_name && call.method == method && call.arguments == arguments
+        });
+        match recorded {
+            Some(call) => call.span = call.span.or(span),
+            None => self.trait_method_calls.push(TraitMethodCall {
+                trait_name: trait_name.to_string(),
+                method: method.to_string(),
+                arguments,
+                span,
+            }),
         }
     }
 
@@ -423,9 +468,13 @@ impl TypeChecker {
     /// at arguments that agree with the conversion's, the class's copy of the
     /// method is used at the converted instance's arguments.
     ///
-    /// A call through a receiver whose arguments are still parameters agrees
-    /// with every conversion, which can pin a slot nothing reaches at run
-    /// time; it never leaves one reached unpinned.
+    /// A conversion pins every method the program calls through the trait,
+    /// not only those called on receivers the converted value can reach: the
+    /// language states it so, which keeps whether a conversion is accepted
+    /// independent of where its value flows. A call through a receiver whose
+    /// arguments are still parameters agrees with every conversion. Either can
+    /// pin a slot nothing reaches at run time; neither leaves one reached
+    /// unpinned.
     pub(super) fn sites_reached_through_trait_slots(&self) -> Vec<PinningSite> {
         let mut sites = Vec::new();
         for conversion in &self.trait_conversions {
@@ -434,12 +483,12 @@ impl TypeChecker {
                     *name == call.trait_name && Self::arguments_agree(arguments, &call.arguments)
                 });
                 if agrees {
-                    sites.extend(
-                        conversion
-                            .sites
-                            .iter()
-                            .map(|site| site.for_method(&call.method)),
-                    );
+                    let reason =
+                        call.reached_by_conversion(&conversion.instance, &conversion.trait_name);
+                    sites.extend(conversion.sites.iter().map(|site| PinningSite {
+                        reached_because: Some(reason.clone()),
+                        ..site.for_method(&call.method)
+                    }));
                 }
             }
         }
@@ -515,8 +564,8 @@ impl TypeChecker {
         site: &PinningSite,
         parameter: &str,
         pinned: &Type,
-    ) -> Vec<(String, Option<String>)> {
-        let mut methods: Vec<(String, Option<String>)> = stated
+    ) -> Vec<(String, Option<ReachedBecause>)> {
+        let mut methods: Vec<(String, Option<ReachedBecause>)> = stated
             .iter()
             .filter_map(|obligation| obligation.method_run_on(parameter))
             .map(|method| (method.to_string(), None))
@@ -528,7 +577,7 @@ impl TypeChecker {
                     .map(|(method, reason)| (method, Some(reason))),
             );
         }
-        methods.sort_unstable();
+        methods.sort_by(|first, second| first.0.cmp(&second.0));
         methods.dedup_by(|later, kept| later.0 == kept.0);
         methods
     }
@@ -537,19 +586,14 @@ impl TypeChecker {
     /// `instance`, by handing it on as a trait value: each one the program
     /// calls through a receiver of that trait, or of one above it, at
     /// arguments that agree with what the site pins the trait's own
-    /// parameters to. Each comes with the sentence saying so.
-    ///
-    /// TODO: a `self` handed to one body's trait-typed parameter pins every
-    /// method called through the trait anywhere, not only those that body
-    /// reaches on the parameter, so a method invalid at the instance and
-    /// called through the trait only on another class is refused. Pinning
-    /// precisely needs the receiving body and slot on the obligation.
+    /// parameters to, as every conversion to a trait does. Each comes with
+    /// why it is reached.
     fn methods_called_through_self(
         &self,
         stated: &[Obligation],
         site: &PinningSite,
         instance: &Type,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<(String, ReachedBecause)> {
         let pinned: HashMap<String, Type> = site
             .pins
             .iter()
@@ -570,11 +614,15 @@ impl TypeChecker {
                 })
             });
             methods.extend(called.map(|call| {
-                let reason = format!(
+                let sentence = format!(
                     "'{}' hands its 'self', a '{instance}', on as a '{trait_name}', and '{}' is \
                      called through '{}', so '{}' is compiled at '{instance}'",
                     site.callee.1, call.method, call.trait_name, call.method
                 );
+                let reason = ReachedBecause {
+                    sentence,
+                    call: call.note(),
+                };
                 (call.method.clone(), reason)
             }));
         }
