@@ -104,15 +104,45 @@ fn is_drop_hook_signature(method: &MethodInfo) -> bool {
     method.params.is_empty() && !method.is_static
 }
 
+/// Whether the trait `trait_name`, or a trait it extends, declares the drop
+/// hook. A value held at such a trait runs its own class's hook when it is
+/// released, through the vtable's drop slot.
+pub fn trait_declares_drop_hook(
+    trait_name: &str,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    let mut pending = vec![trait_name];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if !seen.insert(name) {
+            continue;
+        }
+        let Some(TypeDefinition::Trait(def)) = type_definitions.get(name) else {
+            continue;
+        };
+        if def
+            .methods
+            .get(DROP_HOOK_NAME)
+            .is_some_and(is_drop_hook_signature)
+        {
+            return true;
+        }
+        pending.extend(def.parent_traits.iter().map(String::as_str));
+    }
+    false
+}
+
 /// Whether a value of this type runs a drop hook, so that `value.drop()` calls
 /// that hook rather than an ordinary method. A generic parameter runs the hook
-/// its bound runs.
+/// its bound runs, and a value held at a trait declaring the hook runs its own
+/// class's.
 pub fn runs_drop_hook(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
     if let TypeKind::Custom(name, _) = kind {
-        return has_drop_hook(name, type_definitions);
+        return has_drop_hook(name, type_definitions)
+            || trait_declares_drop_hook(name, type_definitions);
     }
     if let TypeKind::Generic(_, Some(constraint), _) = kind {
         return runs_drop_hook(&constraint.kind, type_definitions);
