@@ -395,7 +395,7 @@ fn test_chain_inherited_field_store_walks_to_base_class() {
     // Child inherits `store` from Base. Calling `c.store(xs)` on a Child instance
     // must (a) consume `xs` (the inherited summary is found through the base_class
     // walk) and (b) render the chain naming the **base class** as the sink — the
-    // method is defined on Base, not Child, so the field-store sink is Base_store.
+    // method is defined on Base, not Child, so the field-store sink is Base.store.
     assert_compiler_error(
         r#"
 use system.collections.list
@@ -418,6 +418,6 @@ let xs = List([1, 2, 3])
 c.store(xs)
 println(f"{xs.length()}")
 "#,
-        "Base_store",
+        "Base.store",
     );
 }

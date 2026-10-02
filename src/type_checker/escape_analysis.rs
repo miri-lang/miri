@@ -104,12 +104,12 @@ impl FunctionId {
 }
 
 /// How a diagnostic names the function: a free function by its name, a method
-/// as `{owner}_{method}`.
+/// as the source spells a call to it, `{owner}.{method}`.
 impl fmt::Display for FunctionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FunctionId::Free(name) => f.write_str(name),
-            FunctionId::Method { owner, method } => write!(f, "{owner}_{method}"),
+            FunctionId::Method { owner, method } => write!(f, "{owner}.{method}"),
         }
     }
 }
