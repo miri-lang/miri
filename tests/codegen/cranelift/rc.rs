@@ -327,10 +327,8 @@ fn test_concrete_element_kinds_are_resolved() {
 fn test_all_type_definition_variants_are_resolved_for_custom_kind() {
     let struct_def = TypeDefinition::Struct(StructDefinition {
         generics: None,
-        traits: Vec::new(),
         fields: Vec::new(),
         module: String::new(),
-        has_drop: false,
     });
     let enum_d = TypeDefinition::Enum(enum_def([("A", vec![])]));
     let alias_d = alias_to(TypeKind::Int);
@@ -649,10 +647,8 @@ fn test_non_class_definitions_do_not_implement_cloneable() {
             "Point",
             TypeDefinition::Struct(StructDefinition {
                 generics: None,
-                traits: Vec::new(),
                 fields: vec![("x".to_string(), ty(TypeKind::Int), MemberVisibility::Public)],
                 module: String::new(),
-                has_drop: false,
             }),
         ),
         ("Shape", TypeDefinition::Enum(enum_def([("A", vec![])]))),

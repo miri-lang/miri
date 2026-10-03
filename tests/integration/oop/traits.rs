@@ -1014,40 +1014,41 @@ fn main()
     );
 }
 
-/// A struct declares no method but `drop`, so a trait method it leaves
-/// abstract is refused as a class missing it is, however the struct is
-/// written; accepted, a call through the trait would jump to no body.
+/// A struct holds data only, so it implements no trait, whichever way it is
+/// declared and whatever the trait asks of it.
 #[test]
-fn test_a_struct_missing_a_trait_method_is_refused() {
-    for declaration in [
-        "type Z implements Named",
-        "struct Z implements Named\n    v int",
+fn test_a_struct_implementing_a_trait_is_refused() {
+    for (declaration, refusal) in [
+        (
+            "type Z implements Named",
+            "'Z' cannot implement trait 'Named': a type declared with 'type' is a struct",
+        ),
+        (
+            "struct Z implements Named\n    v int",
+            "Struct 'Z' cannot implement trait 'Named': a struct holds data only",
+        ),
     ] {
         assert_compiler_error(
             &format!(
                 r#"
 trait Named
     fn name() String
+        return "n"
 
 {declaration}
 
-fn take(o Named) String
-    return o.name()
-
 fn main()
-    let z = Z()
-    let s = take(z)
+    println("x")
 "#
             ),
-            "Struct 'Z' must implement method 'name' from trait 'Named'",
+            refusal,
         );
     }
 }
 
-/// A trait whose only method has a default asks nothing of a struct.
 #[test]
-fn test_a_struct_implementing_a_trait_with_only_defaults_is_accepted() {
-    assert_type_checks(
+fn test_a_struct_implementing_a_trait_is_told_to_be_a_class() {
+    assert_compiler_error(
         r#"
 trait Tagged
     fn tag() String
@@ -1059,45 +1060,28 @@ struct Z implements Tagged
 fn main()
     let z = Z(v: 1)
 "#,
+        "make 'Z' a class to implement 'Tagged'",
     );
 }
 
-/// A struct runs only a drop hook it declares itself, so a trait supplying a
-/// default `drop` would have it compile and never run. It is refused at the
-/// struct; a hook the struct declares, which runs, is accepted beside it.
 #[test]
-fn test_a_struct_taking_drop_from_a_trait_default_is_refused() {
-    let trait_decl = r#"
-trait Closable
-    fn drop(self)
-        println("trait drop")
-"#;
+fn test_a_struct_stored_at_a_trait_type_is_told_to_be_a_class() {
     assert_compiler_error(
-        &format!(
-            "{trait_decl}
-struct P implements Closable
-    x int
+        r#"
+trait Tagged
+    fn tag() int
+        return 1
+
+struct Res
+    id int
+
+fn show(t Tagged)
+    println(f"{t.tag()}")
 
 fn main()
-    let p = P(x: 1)
-"
-        ),
-        "Struct 'P' takes `drop` from the default in trait 'Closable', which a struct never runs",
-    );
-    assert_heap_guard_output(
-        &format!(
-            "{trait_decl}
-struct P implements Closable
-    x int
-
-    fn drop(self)
-        println(\"own drop\")
-
-fn main()
-    let p = P(x: 1)
-    println(\"made\")
-"
-        ),
-        "made\nown drop",
+    show(Res(id: 2))
+"#,
+        "a struct holds data only and implements no trait; make 'Res' a class implementing \
+         'Tagged' to hold it as one",
     );
 }

@@ -726,22 +726,21 @@ impl TypeChecker {
                 TypeDefinition::Struct(StructDefinition {
                     fields: vec![],
                     generics: None,
-                    traits: vec![],
-                    has_drop: false,
                     module: self.modules.current_module.clone(),
                 }),
             );
 
-            // `type Z implements Named` declares a struct with no fields and
-            // no methods, so every method the trait leaves abstract is one it
-            // does not provide.
+            // `type Z implements Named` declares a struct with no fields, and a
+            // struct holds data only, so it implements no trait.
             if *kind == TypeDeclarationKind::Implements {
-                self.check_struct_trait_methods(
-                    name,
-                    std::slice::from_ref(&target_name),
-                    &std::collections::HashMap::new(),
-                    false,
-                    target,
+                self.report_error_with_help(
+                    DiagnosticCode::TypStructDefinition,
+                    format!(
+                        "'{name}' cannot implement trait '{target_name}': a type declared with \
+                         'type' is a struct, which holds data only"
+                    ),
+                    target.span,
+                    format!("declare '{name}' as a class to implement '{target_name}'"),
                 );
             }
 

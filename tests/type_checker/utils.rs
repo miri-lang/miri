@@ -342,16 +342,6 @@ pub fn count_warnings_with_code(source: &str, code: &str) -> usize {
         .count()
 }
 
-fn struct_def(has_drop: bool) -> TypeDefinition {
-    TypeDefinition::Struct(StructDefinition {
-        fields: vec![],
-        generics: None,
-        traits: vec![],
-        module: "test".to_string(),
-        has_drop,
-    })
-}
-
 /// A class `C`, declaring the drop hook `fn drop(self)` when `has_drop`.
 fn class_def(has_drop: bool) -> TypeDefinition {
     let methods = if has_drop {
@@ -476,19 +466,6 @@ fn generic_bounded_by_resource_class_is_resource() {
     let mut defs = HashMap::new();
     defs.insert("Conn".to_string(), class_def(true));
     let bound = make_type(TypeKind::Custom("Conn".to_string(), None));
-    let g = TypeKind::Generic(
-        "T".to_string(),
-        Some(Box::new(bound)),
-        TypeDeclarationKind::Extends,
-    );
-    assert!(is_resource(&g, &defs));
-}
-
-#[test]
-fn generic_bounded_by_resource_struct_is_resource() {
-    let mut defs = HashMap::new();
-    defs.insert("Handle".to_string(), struct_def(true));
-    let bound = make_type(TypeKind::Custom("Handle".to_string(), None));
     let g = TypeKind::Generic(
         "T".to_string(),
         Some(Box::new(bound)),
@@ -700,9 +677,7 @@ fn boolean_is_kernel_only_not_bindable() {
 // (`accelerable_byte_size`).
 
 use miri::ast::common::MemberVisibility;
-use miri::ast::types::{
-    BuiltinCollectionKind, ACCELERABLE_TRAIT_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
-};
+use miri::ast::types::{BuiltinCollectionKind, VEC3_TYPE_NAME, VEC4_TYPE_NAME};
 use miri::type_checker::context::AliasDefinition;
 use miri::type_checker::utils::{
     accelerable_binding_kind, accelerable_byte_size, AcceleratorBindingKind,
@@ -894,9 +869,7 @@ fn byte_size_struct_sums_field_widths_from_the_type_table() {
                 ),
             ],
             generics: None,
-            traits: vec![ACCELERABLE_TRAIT_NAME.to_string()],
             module: String::new(),
-            has_drop: false,
         }),
     );
     assert_eq!(

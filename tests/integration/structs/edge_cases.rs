@@ -45,9 +45,8 @@ fn main()
 
 #[test]
 fn test_struct_non_drop_method_is_rejected() {
-    // Structs are data types: they may define only `drop`. A standalone method
-    // is not supported and must be a clear compile error, not an internal
-    // compiler error (ICE) at code generation.
+    // Structs hold data only: a method is a clear compile error naming the
+    // class it should be, not an internal compiler error at code generation.
     assert_compiler_error(
         r#"
 struct P
@@ -58,15 +57,15 @@ struct P
 fn main()
     let p = P(v: 42)
 "#,
-        "cannot define methods",
+        "Struct 'P' cannot define method 'get': a struct holds data only",
     );
 }
 
 #[test]
-fn test_struct_drop_method_still_allowed() {
-    // `drop` remains a valid struct method, and defining it leaves the struct's
-    // own fields readable.
-    assert_runs_with_output(
+fn test_struct_drop_method_is_rejected_with_the_class_it_should_be() {
+    // A type that runs code when it is released is a resource, and a resource
+    // is a class.
+    assert_compiler_error(
         r#"
 struct Res
     id int
@@ -77,6 +76,6 @@ fn main()
     let r = Res(id: 1)
     println(f"id={r.id}")
 "#,
-        "id=1",
+        "make 'Res' a class to give it a drop hook",
     );
 }

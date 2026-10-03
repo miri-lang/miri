@@ -28,8 +28,6 @@ cells = [
 # drop hooks, release paths and ownership transfer
 [D]
 cells = [
-    "resource/struct/release_through_trait/generic_fn", # error[MER_TYP_002]: Type Mismatch
-    "resource/struct/release_through_trait/mono", # error[MER_TYP_002]: Type Mismatch
 ]
 
 # operator-to-trait dispatch

@@ -1,11 +1,12 @@
 ## Rule
 
-A type does not implement the `Accelerable` trait and cannot be GPU-resident. Only numeric primitives, booleans, and types explicitly marked as `Accelerable` may be stored in `gpu let` buffers. Custom types that contain non-accelerable fields are not allowed on the GPU.
+A type cannot be GPU-resident. Only device-storable numbers, vectors, structs whose every field is accelerable, and classes marked `Accelerable` may be stored in `gpu let` buffers. A struct needs no marker: it is data, so whether it can live on the GPU is decided by its fields. A type that contains a non-accelerable field is not allowed on the GPU.
 
 ## Messages
 
 - `'{type}' does not implement 'Accelerable' and cannot be gpu-resident.`
 - `'{type}' implements 'Accelerable' but field '{field}' has type '{fieldType}', which is not accelerable; every field of an 'Accelerable' type must itself be accelerable.`
+- `'{type}' is a struct whose field '{field}' has type '{fieldType}', which is not accelerable; a struct is gpu-resident when every field is accelerable.`
 
 ## Before
 

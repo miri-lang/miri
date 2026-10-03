@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::RuntimeKind;
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
@@ -2729,11 +2729,8 @@ impl Pipeline {
                         }
                     }
                 }
-                StatementKind::Struct(name_expr, _generics, _fields, methods, _vis, _) => {
-                    Self::lower_struct_methods(
-                        result, name_expr, methods, is_release, bodies, symbols,
-                    )?;
-                }
+                // A struct holds data only and declares no methods to lower.
+                StatementKind::Struct(..) => {}
                 StatementKind::Enum(
                     name_expr,
                     _generics,
@@ -2782,46 +2779,6 @@ impl Pipeline {
                 }
                 _ => {}
             }
-        }
-        Ok(())
-    }
-
-    /// Lower the methods with bodies a struct declares — its drop hook
-    /// included — as `StructName.methodName`, for a struct the program or an
-    /// imported module declares.
-    ///
-    /// Uses `lower_function`, not `lower_class_method`: a struct method declares
-    /// `self` explicitly in its parameter list, which `lower_class_method`
-    /// would add a second time.
-    fn lower_struct_methods(
-        result: &PipelineResult,
-        name_expr: &Expression,
-        methods: &[Statement],
-        is_release: bool,
-        bodies: &mut Vec<(Symbol, mir::Body)>,
-        symbols: &mut SymbolTable,
-    ) -> Result<(), CompilerError> {
-        let Some(struct_name) = Self::identifier_name(name_expr) else {
-            return Ok(());
-        };
-        for method_stmt in methods {
-            let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node else {
-                continue;
-            };
-            if method_decl.body.is_none() {
-                continue;
-            }
-            let symbol = Symbol::method(struct_name, &[], &method_decl.name, &[]);
-            if !symbols
-                .claim_at(&symbol, method_stmt.span)
-                .map_err(CompilerError::Lowering)?
-            {
-                continue;
-            }
-            let (mir_body, lambdas) =
-                mir::lowering::lower_function(method_stmt, &result.type_checker, is_release, true)
-                    .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-            Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
         }
         Ok(())
     }
@@ -2911,11 +2868,8 @@ impl Pipeline {
                         }
                     }
                 }
-                StatementKind::Struct(name_expr, _generics, _fields, methods, _vis, _) => {
-                    Self::lower_struct_methods(
-                        result, name_expr, methods, is_release, bodies, symbols,
-                    )?;
-                }
+                // A struct holds data only and declares no methods to lower.
+                StatementKind::Struct(..) => {}
                 StatementKind::Enum(
                     name_expr,
                     _generics,

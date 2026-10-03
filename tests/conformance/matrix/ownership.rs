@@ -20,21 +20,20 @@ use tempfile::NamedTempFile;
 /// A program that runs longer than this is treated as hung.
 const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// A kind of named type a drop hook can be declared on.
+/// A kind of named type a drop hook can be declared on. A struct holds data
+/// only and declares none.
 #[derive(Clone, Copy)]
 pub enum Resource {
     Class,
-    Struct,
     Enum,
 }
 
 impl Resource {
-    const ALL: [Resource; 3] = [Resource::Class, Resource::Struct, Resource::Enum];
+    const ALL: [Resource; 2] = [Resource::Class, Resource::Enum];
 
     fn token(self) -> &'static str {
         match self {
             Resource::Class => "class",
-            Resource::Struct => "struct",
             Resource::Enum => "enum",
         }
     }
@@ -48,10 +47,6 @@ impl Resource {
                  class Res implements Tr\n    public var id int\n    fn init(id int)\n        self.id = id\n    \
                  fn drop(self)\n        println(f\"drop {self.id}\")\n"
             }
-            Resource::Struct => {
-                "trait Tr\n    fn tag() int\n        return 1\n\n\
-                 struct Res implements Tr\n    id int\n    fn drop(self)\n        println(f\"drop {self.id}\")\n"
-            }
             Resource::Enum => {
                 "enum Res\n    Tag(int)\n\n    fn drop(self)\n        match self\n            \
                  Res.Tag(n): println(f\"drop {n}\")\n"
@@ -63,13 +58,12 @@ impl Resource {
     fn make(self, id: u32) -> String {
         match self {
             Resource::Class => format!("Res({id})"),
-            Resource::Struct => format!("Res(id: {id})"),
             Resource::Enum => format!("Res.Tag({id})"),
         }
     }
 
     fn implements_a_trait(self) -> bool {
-        !matches!(self, Resource::Enum)
+        matches!(self, Resource::Class)
     }
 }
 

@@ -604,9 +604,7 @@ fn auto_copy_struct_param_does_not_escape() {
                 ),
             ],
             generics: None,
-            traits: vec![],
             module: "test".to_string(),
-            has_drop: false,
         }),
     );
     let point_ty = make_type(TypeKind::Custom("Point".to_string(), None));

@@ -217,7 +217,7 @@ fn test_user_drop_hook_called_at_scope_exit() {
     assert_runs_with_output(
         r#"
 
-struct Res
+class Res
     handle int
     fn drop(self)
         println("dropped")
@@ -234,7 +234,7 @@ fn test_user_drop_hook_called_before_parent_returns() {
     assert_runs_with_output(
         r#"
 
-struct Token
+class Token
     id int
     fn drop(self)
         println("token gone")
@@ -252,11 +252,11 @@ fn main()
 }
 
 #[test]
-fn test_struct_drop_hook_reads_its_fields() {
+fn test_a_drop_hook_reads_its_fields() {
     assert_runs_with_output(
         r#"
 
-struct Token
+class Token
     id int
     fn drop(self)
         println(f"token {self.id} gone")
@@ -269,11 +269,11 @@ fn main()
 }
 
 #[test]
-fn test_struct_drop_hook_body_is_type_checked() {
+fn test_a_drop_hook_body_is_type_checked() {
     assert_compiler_error(
         r#"
 
-struct Token
+class Token
     id int
     fn drop(self)
         let label String = self.id
@@ -292,7 +292,7 @@ fn test_user_drop_hook_multiple_fields_access() {
     assert_runs_with_output(
         r#"
 
-struct Handle
+class Handle
     fd int
     flags int
     fn drop(self)
@@ -313,7 +313,7 @@ fn test_scope_exit_warning_emitted_for_unconsumed_resource() {
     assert_compiler_warning(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -332,7 +332,7 @@ fn test_scope_exit_warning_suppressed_when_resource_consumed() {
     assert_type_checks(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -353,7 +353,7 @@ fn test_scope_exit_warning_in_nested_scope() {
     assert_compiler_warning(
         r#"
 
-struct Token
+class Token
     id int
     fn drop(self)
         return
@@ -853,20 +853,20 @@ fn main()
 }
 
 #[test]
-fn test_struct_drop_without_self_names_the_hook_spelling() {
+fn test_a_struct_declaring_a_drop_hook_is_refused() {
     assert_compiler_error(
         r#"
 struct Point
     x int
 
-    fn drop()
+    fn drop(self)
         println("struct drop")
 
 fn main()
     let p = Point(x: 1)
     println(f"{p.x}")
 "#,
-        "Struct 'Point' declares its drop hook as 'fn drop(self)'",
+        "Struct 'Point' cannot define method 'drop': a struct holds data only",
     );
 }
 
