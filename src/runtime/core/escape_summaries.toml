@@ -15,7 +15,7 @@
 # mutators below) are NOT listed — they are unmanaged and escape analysis
 # tracks only Miri-level managed types.
 
-# ── Collection mutators ────────────────────────────────────────────────────────
+# Collection mutators
 # These store their element argument inside the collection; the element escapes.
 
 [miri_rt_list_push]
@@ -39,7 +39,7 @@ direct_escapes = [1, 2]
 # add(ptr *MiriSet, elem usize) — elem (param 1) is stored in the set
 direct_escapes = [1]
 
-# ── Collection read-only accessors ────────────────────────────────────────────
+# Collection read-only accessors
 # These take a managed-type key/element param but only read it for comparison;
 # they do NOT store the argument. Explicit empty entries prevent the conservative
 # "all managed params escape" fallback from triggering false positives.
@@ -64,14 +64,14 @@ direct_escapes = []
 # remove(ptr *MiriSet, elem usize) bool — elem (param 1) used for removal, not stored
 direct_escapes = []
 
-# ── Array mutator ─────────────────────────────────────────────────────────────
+# Array mutator
 # miri_rt_array_set_val stores the value argument into the array; it escapes.
 
 [miri_rt_array_set_val]
 # set_val(ptr *MiriArray, index usize, val usize) u8 — val (param 2) is stored
 direct_escapes = [2]
 
-# ── IO sinks ──────────────────────────────────────────────────────────────────
+# IO sinks
 # These read their argument but do not store it; no parameters escape.
 # Explicit entries are required so the analysis does not fall back to the
 # conservative "all managed params escape" default for unknown FFI functions.
@@ -88,7 +88,7 @@ direct_escapes = []
 [miri_rt_eprintln]
 direct_escapes = []
 
-# ── Environment variable queries ──────────────────────────────────────────────
+# Environment variable queries
 # These read their string arguments but do not store them.
 
 [miri_rt_env_has]
